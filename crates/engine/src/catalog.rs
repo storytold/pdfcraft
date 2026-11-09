@@ -147,7 +147,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Link", "link-2", "edit.link", Ready),
                     item("Bates numbering", "hash", "edit.bates", Ready),
                     menu_item("Background", "palette", &["edit.background", "edit.background.update", "edit.background.remove"]),
-                    item("Attach file", "paperclip", "edit.attach", Planned("M12")),
+                    item("Attach file", "paperclip", "edit.attach", Ready),
                 ],
             },
         ],
@@ -265,9 +265,9 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             items: &[
                 item("In this file", "scan-text", "ocr.recognize", Ready),
                 item("In multiple files", "files", "ocr.recognize_batch", Ready),
-                item("Enhance scanned file", "sparkles", "ocr.enhance", Planned("M10")),
+                item("Enhance scanned file", "sparkles", "ocr.enhance", Ready),
                 item("Enhance camera image", "camera", "ocr.enhance_camera", Ready),
-                item("Correct recognized text", "text-select", "ocr.correct", Planned("M10")),
+                item("Correct recognized text", "text-select", "ocr.correct", Ready),
             ],
         }],
     },
@@ -412,7 +412,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Convert colors", "palette", "prepress.convert_colors", Planned("M11")),
                 item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
                 item("Add printer marks", "ruler", "prepress.marks", Planned("M11")),
-                item("Fix hairlines", "minus", "prepress.hairlines", Planned("M11")),
+                item("Fix hairlines", "minus", "prepress.hairlines", Ready),
             ],
         }],
     },
@@ -550,6 +550,23 @@ pub fn group(id: &str) -> Option<&'static ToolGroup> {
     TOOL_GROUPS.iter().find(|g| g.id == id)
 }
 
+/// A heading of the expanded All tools view, as Acrobat files its tools under "Create & Edit",
+/// "Forms & Signatures" and so on. Every group belongs to exactly one category.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolCategory {
+    pub label: &'static str,
+    /// [`ToolGroup::id`]s, in display order.
+    pub groups: &'static [&'static str],
+}
+
+pub static TOOL_CATEGORIES: &[ToolCategory] = &[
+    ToolCategory { label: "Create & Edit", groups: &["create", "edit", "export", "combine", "organize", "scan", "compress"] },
+    ToolCategory { label: "Review & Compare", groups: &["comment", "stamp", "compare", "measure"] },
+    ToolCategory { label: "Forms & Signatures", groups: &["fill_sign", "form", "certificate"] },
+    ToolCategory { label: "Protect & Standardize", groups: &["protect", "redact", "accessibility", "standards", "print_production"] },
+    ToolCategory { label: "Customize & Automate", groups: &["actions", "javascript", "search_index", "ai"] },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +579,18 @@ mod tests {
             assert!(seen.insert(g.id), "duplicate group id {}", g.id);
             assert!(g.sections.iter().any(|s| !s.items.is_empty()), "{} has no items", g.id);
         }
+    }
+
+    #[test]
+    fn every_group_is_in_exactly_one_category() {
+        let mut seen = HashSet::new();
+        for c in TOOL_CATEGORIES {
+            for id in c.groups {
+                assert!(group(id).is_some(), "{} lists unknown group {id}", c.label);
+                assert!(seen.insert(*id), "{id} is in two categories");
+            }
+        }
+        assert_eq!(seen.len(), TOOL_GROUPS.len(), "a group is in no category");
     }
 
     #[test]
@@ -594,6 +623,19 @@ mod tests {
         }
         // Watermark, Header and footer, Background: Add / Update / Remove each (Acrobat's menu).
         assert!(menus >= 3);
+    }
+
+    // Regression test for #2028: Edit text & images sat under "Add content", though it changes
+    // what is already on the page; it belongs first under "Modify page".
+    #[test]
+    fn edit_text_and_images_is_the_first_item_under_modify_page() {
+        let edit = group("edit").expect("the Edit a PDF tool");
+        let section_of = |command: &str| edit.sections.iter().find(|s| s.items.iter().any(|i| i.command == command)).map(|s| s.title);
+        assert_eq!(section_of("edit.edit_text"), Some("Modify page"), "Edit text & images is a Modify page tool");
+        let modify = edit.sections.iter().find(|s| s.title == "Modify page").expect("a Modify page section");
+        assert_eq!(modify.items.first().map(|i| i.command), Some("edit.edit_text"), "and the first one, so it is not below the fold");
+        let add = edit.sections.iter().find(|s| s.title == "Add content").expect("an Add content section");
+        assert!(add.items.iter().all(|i| i.command != "edit.edit_text"), "it adds nothing, so it is not listed under Add content");
     }
 
     #[test]

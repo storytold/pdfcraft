@@ -1,7 +1,10 @@
 //! Compare files: the text differences between two open documents, a report, and the
 //! differences marked as comments in the newer one.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use pdfcraft_cos::ObjRef;
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
@@ -9,6 +12,10 @@ pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 pub use pdfcraft_edit::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
 
 use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Shape};
+
+/// Most bytes of encoded pictures one Office export prepares, counting each image object once
+/// (the Word and PowerPoint writers keep at most 512 MiB of them as well).
+pub const MAX_EXPORT_IMAGE_BYTES: usize = 512 << 20;
 
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
 pub fn colour(kind: Kind) -> crate::Rgb {
@@ -46,11 +53,23 @@ impl crate::Document {
 }
 
 impl Session {
-    /// Compare files: the text differences from document `old` to document `new`.
+    /// Compare files: the text differences from document `old` to document `new`. The result
+    /// carries both documents' text, so both must allow copying it.
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
+        a.check_copying()?;
+        b.check_copying()?;
         Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+    }
+
+    /// [`Session::compare`], keeping the changes on `pages` of `new` (0-based; empty: every page).
+    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
+        let mut c = self.compare(old, new)?;
+        if !pages.is_empty() {
+            c.changes.retain(|ch| pages.iter().any(|page| (ch.new.page..=ch.new.last_page).contains(page)));
+        }
+        Ok(c)
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
@@ -85,7 +104,12 @@ impl Session {
 
     /// The compare report as a new PDF (not opened).
     pub fn compare_report(&self, old: DocId, new: DocId) -> Result<Arc<Vec<u8>>, EditError> {
-        let c = self.compare(old, new)?;
+        self.compare_report_of(old, new, &[])
+    }
+
+    /// [`Session::compare_report`] of the changes on `pages` ([`Session::compare_pages`]).
+    pub fn compare_report_of(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        let c = self.compare_pages(old, new, pages)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
         self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
     }
@@ -94,7 +118,12 @@ impl Session {
     /// (blue, green) and a note where text was deleted (red), authored "Compare". One undoable
     /// step; returns how many comments were added.
     pub fn mark_differences(&mut self, old: DocId, new: DocId) -> Result<usize, EditError> {
-        let c = self.compare(old, new)?;
+        self.mark_differences_of(old, new, &[])
+    }
+
+    /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
+    pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
+        let c = self.compare_pages(old, new, pages)?;
         let mut edits = Vec::new();
         for ch in &c.changes {
             let color = colour(ch.kind);
@@ -130,7 +159,10 @@ pub enum OfficeFormat {
     Docx,
     Pptx,
     Html,
+    /// CSS-free HTML that preserves text and inline images but drops colours and layout styling.
+    HtmlSimple,
     Rtf,
+    Markdown,
 }
 
 impl OfficeFormat {
@@ -139,7 +171,9 @@ impl OfficeFormat {
             OfficeFormat::Docx => "docx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
+            OfficeFormat::HtmlSimple => "html",
             OfficeFormat::Rtf => "rtf",
+            OfficeFormat::Markdown => "md",
         }
     }
 
@@ -149,34 +183,71 @@ impl OfficeFormat {
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
+            "md" | "markdown" => Some(OfficeFormat::Markdown),
             _ => None,
         }
     }
 }
 
-/// A Word, PowerPoint, HTML or RTF export ([`crate::Document::export_office_checked`]).
+/// A Word, PowerPoint, HTML, RTF or Markdown export ([`crate::Document::export_office_checked`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OfficeExport {
     /// The exported file.
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
-    /// than [`MAX_FORM_VISITS`]: export stops reading there to stay bounded on hostile files, so
-    /// the text and images of those forms are missing from `bytes`.
+    /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
+    /// may decode: export stops reading there to stay bounded on hostile files, so the text and images of those forms, or
+    /// those pictures, are missing from `bytes`.
     pub truncated_pages: Vec<usize>,
+}
+
+/// An image object prepared for Office export: its file extension and encoded bytes, or why it is
+/// left out (`Err(true)`: past [`MAX_EXPORT_IMAGE_BYTES`], or what the export may decode;
+/// `Err(false)`: it can't be encoded).
+type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
+
+/// Displayed points per user-space unit on `info`'s page (`/UserUnit`), 1 when the page has no
+/// usable size.
+pub(crate) fn display_unit(info: &pdfcraft_render::PageInfo) -> f64 {
+    let crop_width = f64::from(info.crop[2] - info.crop[0]);
+    let display_width = f64::from(if info.rotation.is_multiple_of(180) { info.width } else { info.height });
+    if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 }
+}
+
+/// Bold and italic as a font's name says them (`Arial-BoldItalicMT`).
+pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
+    let f = base_font.to_ascii_lowercase();
+    (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
 }
 
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
     /// form XObjects draw.
     pub fn export_pages(&self) -> Vec<pdfcraft_export::Page> {
-        self.export_pages_checked().0
+        self.export_pages_checked(true, MAX_EXPORT_IMAGE_BYTES).0
     }
 
-    /// [`Self::export_pages`], and the pages whose forms were left partly unread
-    /// ([`OfficeExport::truncated_pages`]).
-    fn export_pages_checked(&self) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+    /// [`Self::export_pages`], and the pages whose forms were left partly unread or whose
+    /// pictures went past `image_budget` bytes ([`OfficeExport::truncated_pages`]). Without
+    /// `images` no picture is prepared.
+    pub(crate) fn export_pages_checked(&self, images: bool, image_budget: usize) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        let Some(editor) = self.editor.as_ref() else { return (Vec::new(), Vec::new()) };
+        self.export_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos))
+    }
+
+    /// [`Self::export_pages_checked`], its pictures decoded within `image_work`, which is shared
+    /// by the whole export: a picture past it is left out like one past `image_budget`.
+    pub(crate) fn export_pages_within(
+        &self,
+        images: bool,
+        image_budget: usize,
+        image_work: &mut pdfcraft_cos::ImageBudget,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
+        // Each image object is encoded once and shared by every place that draws it.
+        let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
+        let mut image_bytes = image_budget;
         let pages = self
             .info
             .pages
@@ -190,37 +261,46 @@ impl crate::Document {
                     let b = info.user_to_view(r[2] as f32, r[3] as f32);
                     [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
                 };
-                let crop_width = f64::from(info.crop[2] - info.crop[0]);
-                let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
-                let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
+                let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
-                if reading.truncated {
-                    truncated.push(i);
-                }
+                let forms_unread = reading.truncated;
                 let blocks = reading
                     .blocks
                     .into_iter()
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
-                        let f = b.base_font.to_ascii_lowercase();
+                        let (bold, italic) = weight_and_slant(&b.base_font);
+                        // `text` is trimmed; the editor text keeps the source's own spaces.
+                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                         pdfcraft_export::Block {
+                            space_around,
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
-                            bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
+                            bold,
+                            italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
                         }
                     })
                     .collect();
-                let images = pdfcraft_edit::reading_images(cos, i)
-                    .unwrap_or_default()
+                let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
+                let mut over_budget = false;
+                let images = placed
                     .iter()
                     .filter_map(|im| {
-                        let (ext, bytes) = pdfcraft_create::image_file(cos, im.object?).ok()?;
+                        let object = im.object?;
+                        let prepared = encoded.entry(object).or_insert_with(|| {
+                            let refused = image_work.refused();
+                            let (ext, bytes) =
+                                pdfcraft_create::image_file_within(cos, object, &mut *image_work).map_err(|_| image_work.refused() > refused)?;
+                            image_bytes = image_bytes.checked_sub(bytes.len()).ok_or(true)?;
+                            Ok((if ext == "jpg" { "jpg" } else { "png" }, Arc::from(bytes)))
+                        });
+                        over_budget |= matches!(prepared, Err(true));
+                        let (ext, bytes) = prepared.clone().ok()?;
                         Some(pdfcraft_export::Image {
-                            ext: if ext == "jpg" { "jpg" } else { "png" },
+                            ext,
                             bytes,
                             rect: visible_rect(im.rect),
                             size: [im.matrix[0].hypot(im.matrix[1]) * unit, im.matrix[2].hypot(im.matrix[3]) * unit],
@@ -228,9 +308,14 @@ impl crate::Document {
                         })
                     })
                     .collect();
+                if forms_unread || over_budget {
+                    truncated.push(i);
+                }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background }
+                // The ruled lines tell a drawn table from text that merely lines up (#5149).
+                let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
             })
             .collect();
         (pages, truncated)
@@ -244,13 +329,19 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        let (pages, truncated_pages) = self.export_pages_checked();
+        // RTF and Markdown leave pictures out.
+        let (pages, truncated_pages) =
+            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it.
+        let language = self.initial_view().language;
         let bytes = match format {
-            OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Docx => pdfcraft_export::docx_with_language(&pages, &title, language.as_deref()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
-            OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
+            OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
     }

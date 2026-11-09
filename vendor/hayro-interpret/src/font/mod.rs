@@ -87,6 +87,8 @@ impl Glyph<'_> {
     /// 1. `ToUnicode` cmap
     /// 2. Glyph name → Unicode (via Adobe Glyph List)
     /// 3. Unicode naming conventions (e.g., "uni0041", "u0041")
+    /// 4. PdfCraft patch (100), Type1 and CFF fonts only: a name that only numbers its glyph, as
+    ///    for Type3 fonts below
     ///
     /// **For CID Fonts (Type0):**
     /// 1. `ToUnicode` cmap
@@ -94,6 +96,12 @@ impl Glyph<'_> {
     ///
     /// **For Type3 Fonts:**
     /// 1. `ToUnicode` cmap
+    /// 2. PdfCraft patch: the `/Encoding` glyph name → Unicode (an Annex D.2 alias code reads as
+    ///    the ordinary character)
+    /// 3. PdfCraft patch: a printable ASCII code (32–126) as itself
+    /// 4. PdfCraft patch (100): above 126, a name that only numbers its glyph (`C174`) as the
+    ///    code's Latin-1 character, when the number is that code and every numbered name in the
+    ///    font names its own code
     ///
     /// Returns `None` if the Unicode value could not be determined.
     ///
@@ -179,6 +187,19 @@ impl OutlineGlyph {
         self.font.glyph_advance_width(self.char_code)
     }
 
+    /// PdfCraft patch: for a glyph of a vertical-writing Type0 font, its width w0 (the
+    /// horizontal displacement from `/W` or `/DW`), which is how wide the glyph sits across the
+    /// column (ISO 32000-2 §9.7.4.3). `None` for horizontal writing, where
+    /// [`advance_width`](Self::advance_width) gives it.
+    pub fn vertical_glyph_width(&self) -> Option<f32> {
+        match &self.font {
+            OutlineFont::Type0(font) if !font.is_horizontal() => {
+                Some(font.code_horizontal_width(self.char_code))
+            }
+            _ => None,
+        }
+    }
+
     /// Get the cache key for this glyph's font.
     ///
     /// This identifies the font uniquely, even when `font_data()` returns `None`
@@ -216,9 +237,11 @@ impl<'a> Type3Glyph<'a> {
             .render_glyph(self, transform, glyph_transform, paint, device);
     }
 
-    /// Returns the Unicode code point for this glyph, if available.
+    /// Returns the Unicode code point for this glyph, if available: the `ToUnicode` cmap, then
+    /// the `/Encoding` glyph name, a printable ASCII code, and a numbered glyph name at its own
+    /// code (PdfCraft patches).
     ///
-    /// Note: Type3 fonts can only provide Unicode via `ToUnicode` cmap.
+    /// See [`Glyph::as_unicode`] for details on the fallback chain used.
     pub fn as_unicode(&self) -> Option<BfString> {
         self.font.char_code_to_unicode(self.char_code)
     }
@@ -244,8 +267,14 @@ impl<'a> Font<'a> {
         font_resolver: &FontResolverFn,
         cmap_resolver: &CMapResolverFn,
     ) -> Option<Self> {
-        let f_type = match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
-            TYPE1 | MM_TYPE1 => {
+        // PdfCraft patch (94): a font dictionary whose `/Subtype` is missing or the empty name
+        // (`/Subtype /`) is read as a Type 1 font, so its `/BaseFont` still picks the font: a
+        // `/Courier-Bold` was drawn in the Helvetica fallback (PDFBOX-1988). `/Subtype` is
+        // required (ISO 32000-2 §9.6.2.1, Table 109); other readers fall back to Type 1 this way.
+        let subtype = dict.get::<Name<'_>>(SUBTYPE);
+        let subtype: &[u8] = subtype.as_deref().unwrap_or(b"");
+        let f_type = match subtype {
+            b"" | TYPE1 | MM_TYPE1 => {
                 FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
             }
             // PDFBOX-5463: PDF viewers seem to accept OpenType as well.
@@ -269,6 +298,12 @@ impl<'a> Font<'a> {
         let cache_key = dict.cache_key();
 
         Some(Self(cache_key, f_type))
+    }
+
+    /// PdfCraft patch (90): whether this is a Type 3 font without `/Widths` (or
+    /// `/FirstChar`/`/LastChar`), whose glyphs advance by their `d0`/`d1` widths.
+    pub(crate) fn type3_widths_missing(&self) -> bool {
+        matches!(&self.1, FontType::Type3(t) if t.widths_missing())
     }
 
     pub(crate) fn new_standard(
@@ -564,6 +599,13 @@ pub struct FallbackFontQuery {
 
 impl FallbackFontQuery {
     pub(crate) fn new(dict: &Dict<'_>) -> Self {
+        Self::with_descriptor(dict, dict.get::<Dict<'_>>(FONT_DESC))
+    }
+
+    /// PdfCraft patch: the query for the font `dict` names, with its style read from
+    /// `descriptor`. A Type 0 font has no font descriptor of its own; its descendant CIDFont
+    /// has it (ISO 32000-2 §9.7.4.1, §9.7.6.1).
+    pub(crate) fn with_descriptor(dict: &Dict<'_>, descriptor: Option<Dict<'_>>) -> Self {
         let post_script_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -573,7 +615,7 @@ impl FallbackFontQuery {
             ..Default::default()
         };
 
-        if let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) {
+        if let Some(descriptor) = descriptor {
             data.font_name = dict
                 .get::<Name<'_>>(FONT_NAME)
                 .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -662,7 +704,7 @@ pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<char> {
         return unicode_str.chars().next();
     }
 
-    unicode_from_name(name).or_else(|| {
+    agl_unicode_from_name(name).or_else(|| {
         warn!("failed to map glyph name {} to unicode", name);
 
         None
@@ -712,6 +754,99 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
     }
 }
 
+/// PdfCraft patch: the numbers a glyph name that only numbers its glyph gives (`C39`, `G27`,
+/// `MT174`: one to three ASCII letters, then one to six decimal or hexadecimal digits), for
+/// every split into letters and digits, read in decimal and in hexadecimal (`GA9` is `G` with
+/// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
+/// `glyph_name_to_text` drops it.
+fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+    let base = name.split('.').next().unwrap_or_default();
+    (1..=3).flat_map(move |prefix| {
+        // `from_str_radix` would also take a leading `+`: the number is digits only, and at
+        // most six of them (a code is under 256, leading zeros as in `C0032`).
+        let digits = base
+            .get(..prefix)
+            .zip(base.get(prefix..))
+            .and_then(|(letters, digits)| {
+                (letters.bytes().all(|b| b.is_ascii_alphabetic())
+                    && (1..=6).contains(&digits.len())
+                    && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then_some(digits)
+            });
+        digits.into_iter().flat_map(|d| {
+            [10, 16]
+                .into_iter()
+                .filter_map(move |radix| u32::from_str_radix(d, radix).ok())
+        })
+    })
+}
+
+/// PdfCraft patch: whether every glyph name in a simple font's encoding that only numbers its
+/// glyph (see `glyph_name_numbers`) names the very code it sits at, in decimal or hexadecimal.
+/// Names the glyph list or its `uni`/`u` forms read are not numbered names. A font whose names
+/// number something else (`/Differences [1 /C70 /C105 …]`, a glyph's order in the subset)
+/// fails, and so does one where a single name numbers another code: there a name that happens
+/// to match its code (`/MT40` at 0x40, `/C1` at 233 beside `/C70` at 70, review on #3239) is a
+/// coincidence, not evidence. A subset that counts its glyphs in order of first use from code 1
+/// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
+/// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
+/// control code (below 32), which no text shows, gives such a counter away and fails the font.
+pub(crate) fn numbered_names_name_their_codes<'a>(
+    names: impl IntoIterator<Item = (u8, &'a str)>,
+) -> bool {
+    names
+        .into_iter()
+        .filter(|(_, name)| {
+            glyph_names::get(name).is_none()
+                && unicode_from_name(name).is_none()
+                && glyph_name_to_text(name).is_none()
+        })
+        .all(|(code, name)| {
+            let mut numbers = glyph_name_numbers(name).peekable();
+            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
+        })
+}
+
+/// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
+/// (see `glyph_name_numbers`) when that number is the very code the glyph is shown with: the
+/// code's Latin-1 character, for codes above 127 too (`C174` reads `®`), as pdftotext, PDFium
+/// and MuPDF read it. The name and the code then agree, so nothing is guessed from an
+/// encoding table. A number naming another code (`/C1` at 233, review on #3239) and a control
+/// character read as nothing. Callers apply it only in a font where
+/// `numbered_names_name_their_codes` holds.
+pub(crate) fn numbered_glyph_name_at_its_code(name: &str, code: u8) -> Option<BfString> {
+    let c = char::from(code);
+    if c.is_control() {
+        return None;
+    }
+    glyph_name_numbers(name)
+        .any(|n| n == u32::from(code))
+        .then_some(BfString::Char(c))
+}
+
+/// PdfCraft patch (92): the character a `uniXXXX` or `uXXXX` to `uXXXXXX` glyph name stands
+/// for, by the Adobe Glyph List Specification: `uni` and exactly four uppercase hex digits, or
+/// `u` and four to six; a value in the surrogate range or past U+10FFFF is no character. The
+/// text of a glyph goes by this rule, so `uni65`, `uni20ac` and `u41` read as nothing, as they
+/// do in [`glyph_name_to_text`].
+pub(crate) fn agl_unicode_from_name(name: &str) -> Option<char> {
+    let upper_hex = |d: &str| d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
+    let digits = name
+        .strip_prefix("uni")
+        .filter(|d| d.len() == 4)
+        .or_else(|| {
+            name.strip_prefix('u')
+                .filter(|d| (4..=6).contains(&d.len()))
+        })
+        .filter(|d| upper_hex(d))?;
+    u32::from_str_radix(digits, 16)
+        .ok()
+        .and_then(char::from_u32)
+}
+
+/// Upstream's lenient reading of a `uni…` or `u…` name (any number of hex digits, either case),
+/// kept for finding a glyph in a font: PdfCraft patch (92) reads text by
+/// [`agl_unicode_from_name`] instead.
 pub(crate) fn unicode_from_name(name: &str) -> Option<char> {
     let convert = |input: &str| u32::from_str_radix(input, 16).ok().and_then(char::from_u32);
 

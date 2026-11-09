@@ -57,29 +57,127 @@ impl PdfString {
     /// non-ASCII bytes (written by some producers) is read as UTF-8 rather than as
     /// PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are removed.
     pub fn to_text(&self) -> String {
-        let s = match self.bytes.as_slice() {
+        self.text_chars().collect()
+    }
+
+    /// The characters [`PdfString::to_text`] decodes, one at a time, without building a string.
+    pub fn text_chars(&self) -> TextChars<'_> {
+        let decode = match self.bytes.as_slice() {
             [0xFE, 0xFF, rest @ ..] => {
-                let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
-                String::from_utf16_lossy(&units)
+                let units: fn(&[u8; 2]) -> u16 = |c| u16::from_be_bytes(*c);
+                Decode::Utf16(char::decode_utf16(rest.as_chunks::<2>().0.iter().map(units)))
             }
-            [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+            [0xEF, 0xBB, 0xBF, rest @ ..] => Decode::Utf8Lossy { chunks: rest.utf8_chunks(), valid: "".chars(), replace: false },
             b => match std::str::from_utf8(b) {
                 // Pure ASCII is identical either way; only non-ASCII UTF-8 needs the switch.
-                Ok(utf8) if !b.is_ascii() => utf8.to_owned(),
-                _ => b.iter().map(|&c| pdfcraft_crypt::pdfdoc_char(c)).collect(),
+                Ok(utf8) if !b.is_ascii() => Decode::Utf8(utf8.chars()),
+                _ => Decode::PdfDoc(b.iter()),
             },
         };
-        if s.starts_with('\u{FEFF}') { s.trim_start_matches('\u{FEFF}').to_owned() } else { s }
+        TextChars { decode, leading: true }
+    }
+
+    /// Whether the string decodes to `s` ([`PdfString::to_text`]), compared without allocating.
+    pub fn text_eq(&self, s: &str) -> bool {
+        self.text_chars().eq(s.chars())
+    }
+}
+
+/// The characters of a text string: [`PdfString::text_chars`].
+pub struct TextChars<'a> {
+    decode: Decode<'a>,
+    /// Still at the start, where stray U+FEFF (doubled BOMs) are dropped.
+    leading: bool,
+}
+
+/// The UTF-16BE code units after a BOM (an odd last byte is left out).
+type Utf16Units<'a> = std::iter::Map<std::slice::Iter<'a, [u8; 2]>, fn(&[u8; 2]) -> u16>;
+
+enum Decode<'a> {
+    Utf16(std::char::DecodeUtf16<Utf16Units<'a>>),
+    /// After a UTF-8 BOM: each invalid sequence is one U+FFFD, as `String::from_utf8_lossy` has it.
+    Utf8Lossy {
+        chunks: std::str::Utf8Chunks<'a>,
+        valid: std::str::Chars<'a>,
+        replace: bool,
+    },
+    Utf8(std::str::Chars<'a>),
+    PdfDoc(std::slice::Iter<'a, u8>),
+}
+
+impl Iterator for Decode<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        match self {
+            Decode::Utf16(units) => units.next().map(|u| u.unwrap_or(char::REPLACEMENT_CHARACTER)),
+            Decode::Utf8Lossy { chunks, valid, replace } => loop {
+                if let Some(c) = valid.next() {
+                    return Some(c);
+                }
+                if *replace {
+                    *replace = false;
+                    return Some(char::REPLACEMENT_CHARACTER);
+                }
+                let chunk = chunks.next()?;
+                *valid = chunk.valid().chars();
+                *replace = !chunk.invalid().is_empty();
+            },
+            Decode::Utf8(chars) => chars.next(),
+            Decode::PdfDoc(bytes) => bytes.next().map(|&c| pdfcraft_crypt::pdfdoc_char(c)),
+        }
+    }
+}
+
+impl Iterator for TextChars<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        loop {
+            let c = self.decode.next()?;
+            if self.leading && c == '\u{FEFF}' {
+                continue;
+            }
+            self.leading = false;
+            return Some(c);
+        }
     }
 }
 
 /// A name object (without the leading `/`, with `#xx` escapes already decoded).
 pub type Name = Vec<u8>;
 
+#[cfg(test)]
+thread_local! {
+    /// Key comparisons and index lookups made by [`Dict`] on this thread.
+    static KEY_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Entries from which a [`Dict`] keeps a key index. Smaller dictionaries (nearly all of them)
+/// search their entries; a parsed file controls the key count, and a linear search per
+/// inserted key would make a dictionary of many distinct keys quadratic to build.
+const INDEX_FROM: usize = 32;
+
 /// An ordered dictionary.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub struct Dict {
     entries: Vec<(Name, Object)>,
+    /// Key to position in `entries`, kept once the dictionary reaches [`INDEX_FROM`] entries.
+    /// Boxed so that every `Dict`, and so every `Object`, grows by one pointer, not by a map.
+    #[allow(clippy::box_collection)]
+    index: Option<Box<std::collections::HashMap<Name, usize>>>,
+}
+
+impl PartialEq for Dict {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl std::fmt::Debug for Dict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dict").field("entries", &self.entries).finish()
+    }
 }
 
 impl Dict {
@@ -87,26 +185,53 @@ impl Dict {
         Self::default()
     }
 
+    fn position(&self, key: &[u8]) -> Option<usize> {
+        if let Some(index) = &self.index {
+            #[cfg(test)]
+            KEY_COMPARES.with(|c| c.set(c.get() + 1));
+            return index.get(key).copied();
+        }
+        self.entries.iter().position(|(k, _)| {
+            #[cfg(test)]
+            KEY_COMPARES.with(|c| c.set(c.get() + 1));
+            k == key
+        })
+    }
+
     pub fn get(&self, key: &[u8]) -> Option<&Object> {
-        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.position(key).and_then(|i| self.entries.get(i)).map(|(_, v)| v)
     }
 
     pub fn get_mut(&mut self, key: &[u8]) -> Option<&mut Object> {
-        self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
+        let i = self.position(key)?;
+        self.entries.get_mut(i).map(|(_, v)| v)
     }
 
     /// Insert or replace, keeping the position of an existing key.
     pub fn set(&mut self, key: impl Into<Name>, value: impl Into<Object>) {
         let key = key.into();
         let value = value.into();
-        match self.entries.iter_mut().find(|(k, _)| *k == key) {
+        match self.position(&key).and_then(|i| self.entries.get_mut(i)) {
             Some((_, v)) => *v = value,
-            None => self.entries.push((key, value)),
+            None => {
+                let at = self.entries.len();
+                if let Some(index) = &mut self.index {
+                    index.insert(key.clone(), at);
+                } else if at + 1 >= INDEX_FROM {
+                    let index = self.entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).chain([(key.clone(), at)]).collect();
+                    self.index = Some(Box::new(index));
+                }
+                self.entries.push((key, value));
+            }
         }
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Option<Object> {
-        let i = self.entries.iter().position(|(k, _)| k == key)?;
+        let i = self.position(key)?;
+        if let Some(index) = &mut self.index {
+            index.remove(key);
+            index.values_mut().filter(|at| **at > i).for_each(|at| *at -= 1);
+        }
         Some(self.entries.remove(i).1)
     }
 
@@ -159,6 +284,12 @@ pub struct Stream {
 /// Upper bound for a single decoded stream (decompression-bomb defence).
 pub const MAX_DECODED: usize = 1 << 30;
 
+/// The most an image's `/JBIG2Globals` stream may decode to: the symbol and pattern dictionaries an
+/// encoder shares between pages, themselves coded, so far less than any stream may decode to
+/// ([`MAX_DECODED`]). They are decoded before the image's JBIG2 page is read, so the page's size
+/// can't bound them: they have a limit of their own.
+pub const MAX_JBIG2_GLOBALS: usize = 32 << 20;
+
 impl Stream {
     /// A new stream from already-encoded bytes (`/Length` is set at write time).
     pub fn from_raw(dict: Dict, raw: Vec<u8>) -> Self {
@@ -204,6 +335,21 @@ impl Stream {
             .collect()
     }
 
+    /// [`Stream::filters`], or an error when `/Filter` is present but is not a name or an
+    /// array of names (an indirect reference, say): the data is not unfiltered, so it must not
+    /// read as decoded.
+    pub(crate) fn readable_filters(&self) -> Result<Vec<(Filter, Params)>, pdfcraft_filters::FilterError> {
+        let readable = match self.dict.get(b"Filter") {
+            None | Some(Object::Null | Object::Name(_)) => true,
+            Some(Object::Array(a)) => a.iter().all(|f| f.as_name().is_some()),
+            Some(_) => false,
+        };
+        if !readable {
+            return Err(pdfcraft_filters::FilterError::Unsupported("/Filter is not a name or an array of names".into()));
+        }
+        Ok(self.filters())
+    }
+
     /// Decoded data, tolerating truncated or corrupt encodings the way viewers do (the data
     /// decoded before the damage is returned). Streams with image codecs fail with
     /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
@@ -214,26 +360,87 @@ impl Stream {
     /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
     /// [`MAX_DECODED`]: decoding past `max` bytes is an error.
     pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
-        let chain = self.filters();
+        let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
+            pdfcraft_filters::decode_tolerant(chain, data, max).map(|(v, _)| (v, 0)).map_err(|e| (e, 0))
+        };
+        self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
+    }
+
+    /// [`Stream::decoded_within`] for a caller charging an allowance: the filter error is kept
+    /// typed, so a caller can tell a spent limit from corrupt data, `max` bounds all filter
+    /// stages together, and the result gives whether the data stopped at damage (it is then what
+    /// decoded before it) and the bytes the stages decoded (the work done, on success and on
+    /// failure).
+    pub(crate) fn decoded_within_counted(&self, max: usize) -> Result<(Vec<u8>, bool, usize), (pdfcraft_filters::FilterError, usize)> {
+        let mut damaged = false;
+        let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
+            pdfcraft_filters::decode_tolerant_counted(chain, data, max).map(|(v, partial, spent)| {
+                damaged = partial;
+                (v, spent)
+            })
+        };
+        self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
+    }
+
+    /// [`Stream::decoded_within`] spending from `work`, what an operation may still do across a
+    /// document's images ([`pdfcraft_filters::decode_tolerant_within`]).
+    pub(crate) fn decoded_spending(&self, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = self.readable_filters().map_err(filter)?;
+        pdfcraft_filters::decode_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), work).map_err(filter)
+    }
+
+    /// [`Stream::decoded_spending`] for the samples of an image `rows` high (its `/Height`):
+    /// [`pdfcraft_filters::decode_image_tolerant_within`].
+    pub(crate) fn decoded_image_rows_spending(&self, max: usize, rows: u32, work: &mut u64) -> Result<Vec<u8>, CosError> {
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = self.readable_filters().map_err(filter)?;
+        pdfcraft_filters::decode_image_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), rows, work).map_err(filter)
+    }
+
+    /// The stream decoded through its filters by `decode`, or copied when it has none, within
+    /// `max` and [`MAX_DECODED`].
+    fn decode_chain(
+        &self,
+        max: usize,
+        decode: impl FnOnce(&[(Filter, Params)], &[u8], usize) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)>,
+    ) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)> {
+        let max = max.min(MAX_DECODED);
+        let chain = self.readable_filters().map_err(|e| (e, 0))?;
         if chain.is_empty() {
-            return self.raw_within(max);
+            return self
+                .raw_within_typed(max)
+                .map(|v| {
+                    let n = v.len();
+                    (v, n)
+                })
+                .map_err(|e| (e, 0));
         }
-        pdfcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
+        decode(&chain, &self.raw, max)
     }
 
     /// Decoded data, bounded by [`MAX_DECODED`]; any corruption is an error.
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
-        let chain = self.filters();
-        if chain.is_empty() {
-            return self.raw_within(MAX_DECODED);
-        }
-        pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
+        self.decoded_strict_within(MAX_DECODED)
+    }
+
+    /// Like [`Stream::decoded_strict`], bounded by `max` (and [`MAX_DECODED`]): for data that
+    /// will be copied elsewhere, where a damaged stream must not pass for a shorter one.
+    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
+        let decode = |chain: &[(Filter, Params)], data: &[u8], max| pdfcraft_filters::decode(chain, data, max).map(|v| (v, 0)).map_err(|e| (e, 0));
+        self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
+    }
+
+    /// [`Stream::decoded_strict`] bounded by `max` and counted like
+    /// [`Stream::decoded_within_counted`].
+    pub(crate) fn decoded_strict_within_counted(&self, max: usize) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)> {
+        self.decode_chain(max, pdfcraft_filters::decode_counted)
     }
 
     /// Data after the first filter alone, bounded by `max`: the rest of the chain stays encoded.
     /// Any corruption in that first filter is an error.
     pub fn decoded_first_filter_strict(&self, max: usize) -> Result<Vec<u8>, CosError> {
-        let mut chain = self.filters();
+        let mut chain = self.readable_filters().map_err(|e| CosError::Filter(e.to_string()))?;
         chain.truncate(1);
         if chain.is_empty() {
             return self.raw_within(max);
@@ -242,11 +449,15 @@ impl Stream {
     }
 
     fn raw_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
+        self.raw_within_typed(max).map_err(|e| CosError::Filter(e.to_string()))
+    }
+
+    fn raw_within_typed(&self, max: usize) -> Result<Vec<u8>, pdfcraft_filters::FilterError> {
         let max = max.min(MAX_DECODED);
         // An empty decoder chain still produces an owned output buffer: check its limit
         // before cloning, including streams whose /Crypt filter was applied on load.
         if self.raw.len() > max {
-            return Err(CosError::Filter(pdfcraft_filters::FilterError::LimitExceeded(max).to_string()));
+            return Err(pdfcraft_filters::FilterError::LimitExceeded(max));
         }
         Ok(self.raw.to_vec())
     }
@@ -383,6 +594,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_filter_that_is_not_a_direct_name_is_not_decoded_as_absent() {
+        let stream = |filter: Object| {
+            let mut d = Dict::new();
+            d.set(b"Filter".to_vec(), filter);
+            Stream::from_raw(d, b"48 69>".to_vec())
+        };
+        let hex = Object::Name(b"ASCIIHexDecode".to_vec());
+        assert_eq!(stream(hex.clone()).decoded_strict().ok(), Some(b"Hi".to_vec()));
+        assert_eq!(stream(Object::Array(vec![hex.clone()])).decoded().ok(), Some(b"Hi".to_vec()));
+        assert_eq!(stream(Object::Null).decoded_strict().ok(), Some(b"48 69>".to_vec()));
+        for filter in [
+            Object::Ref(ObjRef::new(5, 0)),
+            Object::Array(vec![Object::Ref(ObjRef::new(5, 0))]),
+            Object::Int(3),
+            Object::Array(vec![hex, Object::Int(1)]),
+        ] {
+            let s = stream(filter.clone());
+            assert!(s.decoded_strict().is_err(), "{filter:?}");
+            assert!(s.decoded().is_err(), "{filter:?}");
+            assert!(s.decoded_first_filter_strict(1 << 20).is_err(), "{filter:?}");
+        }
+    }
+
+    #[test]
+    fn parsing_many_distinct_keys_is_not_quadratic() {
+        let n = 20_000;
+        let body: String = (0..n).map(|i| format!("/K{i} {i} ")).collect();
+        let text = format!("<< {body}/K7 true >>");
+        KEY_COMPARES.with(|c| c.set(0));
+        let Ok(Object::Dict(d)) = crate::parser::Lexer::new(text.as_bytes(), 0).object() else { panic!("not a dict") };
+        let compares = KEY_COMPARES.with(|c| c.get());
+        assert!(compares < 8 * n, "{compares} key comparisons for {n} keys");
+        // Order and replace-in-place semantics stay those of a plain ordered dictionary.
+        assert_eq!(d.len(), n);
+        assert_eq!(d.iter().next().map(|(k, _)| k.as_slice()), Some(&b"K0"[..]));
+        assert_eq!(d.get(b"K7"), Some(&Object::Bool(true)));
+        assert_eq!(d.iter().nth(7).map(|(_, v)| v), Some(&Object::Bool(true)));
+        let mut d = d;
+        assert_eq!(d.remove(b"K3"), Some(Object::Int(3)));
+        assert_eq!(d.get(b"K4"), Some(&Object::Int(4)));
+        assert_eq!(d.iter().nth(3).map(|(k, _)| k.as_slice()), Some(&b"K4"[..]));
+        d.set(b"K3".to_vec(), Object::Null);
+        assert_eq!(d.iter().last().map(|(k, _)| k.as_slice()), Some(&b"K3"[..]));
+        assert!(d.get(b"K20000").is_none());
+    }
+
+    #[test]
     fn text_strings_round_trip() {
         for s in ["Plain ASCII", "Café — naïve", "日本語", "emoji 📄"] {
             assert_eq!(PdfString::text(s).to_text(), s);
@@ -413,6 +671,33 @@ mod tests {
         assert_eq!(PdfString::literal(vec![0xFE, 0xFF, 0x00, b'A', 0x00]).to_text(), "A");
         assert_eq!(PdfString::literal(vec![0xFE, 0xFF]).to_text(), "");
         assert_eq!(PdfString::literal(Vec::new()).to_text(), "");
+    }
+
+    #[test]
+    fn text_eq_compares_what_to_text_decodes() {
+        let utf16 = |s: &str| [0xFE, 0xFF].into_iter().chain(s.encode_utf16().flat_map(u16::to_be_bytes)).collect::<Vec<u8>>();
+        // Each invalid UTF-8 sequence is one U+FFFD, as String::from_utf8_lossy has it.
+        let lossy = [0xEF, 0xBB, 0xBF, 0xC3, 0x28, b'x', 0xF0, 0x9F, 0x92, 0xFF];
+        assert_eq!(PdfString::literal(lossy.to_vec()).to_text(), String::from_utf8_lossy(&lossy[3..]));
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"Plain".to_vec(),
+            vec![b'C', b'a', b'f', 0xE9, 0x18],
+            "目录".as_bytes().to_vec(),
+            utf16("第一章"),
+            vec![0xFE, 0xFF, 0xD8, 0x00, 0x00, b'A'],
+            vec![0xFE, 0xFF, 0xFE, 0xFF, 0x00, b'A', 0xFE, 0xFF],
+            lossy.to_vec(),
+        ];
+        for bytes in cases {
+            let s = PdfString::literal(bytes);
+            let text = s.to_text();
+            assert!(s.text_eq(&text), "{text:?}");
+            assert!(!s.text_eq(&format!("{text}x")), "{text:?}");
+            assert!(text.is_empty() || !s.text_eq(&text[..text.len() - text.chars().last().map_or(0, char::len_utf8)]), "{text:?}");
+        }
+        // A U+FEFF after the first character is text and stays.
+        assert!(PdfString::literal(utf16("A\u{FEFF}")).text_eq("A\u{FEFF}"));
     }
 
     #[test]

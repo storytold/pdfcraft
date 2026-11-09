@@ -5,6 +5,16 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 #[test]
+fn file_id_is_a_one_way_16_byte_identifier() {
+    let seed = [7u8; 32];
+    let id = file_id(&seed);
+    assert_eq!(id.len(), 16);
+    assert_eq!(id, file_id(&seed));
+    assert_ne!(id, seed[..16]);
+    assert_ne!(id, file_id(&[8u8; 32]));
+}
+
+#[test]
 fn rc4_reference_vectors() {
     assert_eq!(rc4(b"Key", b"Plaintext"), hex("bbf316e8d940af0ad3"));
     assert_eq!(rc4(b"Wiki", b"pedia"), hex("1021bf0420"));
@@ -121,6 +131,32 @@ fn strings_and_streams_round_trip_and_are_scrambled() {
     }
 }
 
+thread_local! {
+    /// Crypt filter names compared or looked up, on this thread.
+    pub(crate) static FILTER_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn crypt_filters_are_looked_up_once_per_handler() {
+    let plain = new(Algorithm::Aes128, "", "o", -1);
+    let mut d = plain.dict().clone();
+    let n = 5_000;
+    let mut filters: Vec<_> = (0..n).map(|i| (format!("F{i}").into_bytes(), Method::Identity)).collect();
+    filters.append(&mut d.crypt_filters);
+    d.crypt_filters = filters;
+    FILTER_COMPARES.with(|c| c.set(0));
+    let h = SecurityHandler::open(d, ID, None).unwrap();
+    let strings = 1_000;
+    let enc = plain.encrypt_string(7, 0, b"secret");
+    for _ in 0..strings {
+        assert_eq!(h.decrypt_string(7, 0, &enc), b"secret");
+        assert_eq!(h.decrypt_stream(7, 0, &plain.encrypt_stream(7, 0, b"s", StreamKind::Normal), StreamKind::Normal), b"s");
+    }
+    assert_eq!(h.decrypt_stream(7, 0, b"x", StreamKind::Named(b"F3")), b"x");
+    let compares = FILTER_COMPARES.with(|c| c.get());
+    assert!(compares <= 2 * n + 3 * strings, "{compares} filter name comparisons");
+}
+
 #[test]
 fn identity_crypt_filters_leave_data_alone() {
     let mut d = new(Algorithm::Aes256, "", "o", -1).dict().clone();
@@ -204,11 +240,11 @@ fn unsupported_handlers_are_reported() {
 
 #[test]
 fn permission_bits_follow_table_22() {
-    let p = Permissions { bits: -3904, owner: false }; // 0xFFFFF0C0: only reserved bits set
+    let p = Permissions { bits: -3904, owner: false, revision: 3 }; // 0xFFFFF0C0: only reserved bits set
     assert!(!p.print() && !p.modify() && !p.copy() && !p.annotate() && !p.assemble());
-    let p = Permissions { bits: -1, owner: false };
+    let p = Permissions { bits: -1, owner: false, revision: 3 };
     assert!(p.print() && p.modify() && p.copy() && p.annotate() && p.assemble() && p.fill_forms());
-    let p = Permissions { bits: 0, owner: true };
+    let p = Permissions { bits: 0, owner: true, revision: 3 };
     assert!(p.modify(), "owners ignore /P");
 }
 
@@ -241,6 +277,69 @@ proptest::proptest! {
                                           r in 0i64..9, len in -10i64..300) {
         let d = EncryptDict { filter: b"Standard".to_vec(), v: 4, r, length_bits: len, o, u, p: -1, encrypt_metadata: true, ..Default::default() };
         let _ = SecurityHandler::open(d, ID, Some("x"));
+    }
+}
+
+/// A `/V 4` RC4 crypt filter with a 40- or 48-bit key, as Acrobat writes it (pdf.js issue 19484):
+/// the file key is extended to 16 bytes with zeros before Algorithm 1, so each object's key is
+/// all 16 bytes of MD5(key, zeros, object, generation). Everything else keeps Algorithm 1 as the
+/// standard has it, n + 5 bytes (at most 16) of MD5(key, object, generation[, "sAlT"]): a `/V 2`
+/// file with the same short key, a full 128-bit `/V 4` RC4 key, and AESV2, short (88 bits) or
+/// full. Each object key is computed here by hand; data written with it must decrypt.
+#[test]
+fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
+    let text = b"Page tree in an object stream".to_vec();
+    let cases =
+        [(4, 40, Method::Rc4), (4, 48, Method::Rc4), (2, 40, Method::Rc4), (4, 128, Method::Rc4), (4, 88, Method::Aes128), (4, 128, Method::Aes128)];
+    for (v, bits, method) in cases {
+        let mut d = EncryptDict {
+            filter: b"Standard".to_vec(),
+            v,
+            r: if v == 4 { 4 } else { 3 },
+            length_bits: bits,
+            o: vec![7; 32],
+            p: -3392,
+            encrypt_metadata: v != 4,
+            ..Default::default()
+        };
+        if v == 4 {
+            d.crypt_filters = vec![(b"StdCF".to_vec(), method)];
+            d.stm_f = b"StdCF".to_vec();
+            d.str_f = b"StdCF".to_vec();
+        }
+        let key = file_key_r4(&d, ID, b"");
+        assert_eq!(key.len(), (bits / 8) as usize);
+        d.u = u_value_r4(&d, ID, &key);
+        let h = SecurityHandler::open(d, ID, None).unwrap();
+        let (num, generation) = (13u32, 0u16);
+        let extended = v == 4 && method == Method::Rc4 && key.len() < 16;
+        let mut md5 = Md5::new();
+        md5.update(&key);
+        if extended {
+            md5.update(vec![0u8; 16 - key.len()]);
+        }
+        md5.update(&num.to_le_bytes()[..3]);
+        md5.update(generation.to_le_bytes());
+        if method == Method::Aes128 {
+            md5.update(b"sAlT");
+        }
+        let digest = md5.finalize();
+        let n = if extended { 16 } else { key.len() };
+        let object_key = digest[..(n + 5).min(16)].to_vec();
+        let case = format!("V{v}, {bits}-bit key, {method:?}");
+        let written = if method == Method::Rc4 {
+            rc4(&object_key, &text)
+        } else {
+            let iv = [3u8; 16];
+            [iv.to_vec(), aes_cbc_encrypt(&object_key, &iv, &text, true)].concat()
+        };
+        assert_eq!(h.decrypt_string(num, generation, &written), text, "{case}");
+        assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text, "{case}");
+        let saved = h.encrypt_stream(num, generation, &text, StreamKind::Normal);
+        if method == Method::Rc4 {
+            assert_eq!(saved, written, "saved as it was read: {case}");
+        }
+        assert_eq!(h.decrypt_stream(num, generation, &saved, StreamKind::Normal), text, "{case}");
     }
 }
 

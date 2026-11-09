@@ -15,6 +15,7 @@ pub mod model;
 pub mod packets;
 pub mod parse;
 pub mod pdf;
+pub mod picture;
 pub mod script;
 pub mod text;
 
@@ -37,6 +38,7 @@ pub(crate) const MAX_XML_DEPTH: usize = 1_024;
 /// cannot under-count a real element; a stray `<` in text is invalid XML and only makes it
 /// over-count, which errs towards refusing the document.
 pub(crate) fn xml_nesting_depth(text: &str) -> usize {
+    /// Where `needle` next starts in `hay` at or after `from`.
     fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
     }
@@ -91,17 +93,19 @@ pub(crate) fn xml_nesting_depth(text: &str) -> usize {
 
 pub use data::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use data::{
-    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, data_path, iso_to_pattern, parse_datasets,
-    pattern_to_iso, read_values, read_values_with, remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets,
-    write_datasets_reusing, write_datasets_with,
+    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, clear_password_values, data_path,
+    has_password_values, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, read_values_with, remove_data_instance, som_to_path,
+    write_data_ops, write_data_value, write_datasets, write_datasets_reusing, write_datasets_with,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
-pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
+pub use pdf::{CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
+pub use picture::typed_date;
 pub use script::{
-    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, field_grows_with_text,
-    fields_by_som, form_tree, has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
+    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
+    field_grows_with_text, field_is_embedded, fields_by_som, form_tree, has_scripts, overrides, path_is_embedded, refresh_value, rerender,
+    set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -165,6 +169,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     let written = pdf::write_form(doc, &form)?;
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
+    if written.usage_rights {
+        warnings.push(crate::pdf::USAGE_RIGHTS_REMOVED.into());
+    }
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }

@@ -5,7 +5,11 @@ use base64::Engine;
 use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
-use crate::model::*;
+use crate::model::{
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
+    Value,
+};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -17,6 +21,10 @@ const MAX_IMAGE: usize = 32 << 20;
 const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
+/// Most content areas kept on one page area. A master page has a handful (the most in the
+/// 500-form corpus is nine); laying a splittable subform out across tens of thousands of them,
+/// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
+const MAX_CONTENT_AREAS: usize = 128;
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -146,7 +154,23 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, fill: parse_fill(child(n, "fill")) })
+    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+}
+
+/// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
+/// bottom-left: one applies to all four, and a corner not given is the last one given. Without
+/// any, the corners are square.
+fn parse_corners(n: XmlNode) -> [Corner; 4] {
+    let given: Vec<Corner> = children(n, "corner")
+        .take(4)
+        .map(|c| Corner {
+            presence: Presence::parse(c.attribute("presence")),
+            radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
+            inverted: c.attribute("inverted") == Some("1"),
+        })
+        .collect();
+    let Some(last) = given.last().copied() else { return [Corner::default(); 4] };
+    std::array::from_fn(|i| given.get(i).copied().unwrap_or(last))
 }
 
 /// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
@@ -178,6 +202,16 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -185,6 +219,7 @@ fn parse_common(n: XmlNode) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -201,7 +236,7 @@ fn parse_common(n: XmlNode) -> Common {
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
-/// embedded fields.
+/// embedded fields; the text of an `<a href>` keeps where it links to.
 fn parse_rich(body: XmlNode) -> RichText {
     #[derive(Clone, Default)]
     struct Style {
@@ -210,6 +245,8 @@ fn parse_rich(body: XmlNode) -> RichText {
         underline: Option<bool>,
         size: Option<f64>,
         h_scale: Option<f64>,
+        /// The `href` of the `<a>` the text is in.
+        link: Option<std::sync::Arc<str>>,
     }
     /// `base` with the CSS declarations in `css` applied: weight, style, underline, size and
     /// `xfa-font-horizontal-scale`. Anything else is ignored.
@@ -254,6 +291,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                             size: style.size,
                             h_scale: style.h_scale,
                             embed: None,
+                            link: style.link.clone(),
                         },
                     );
                 }
@@ -285,6 +323,13 @@ fn parse_rich(body: XmlNode) -> RichText {
                         "b" => st.bold = Some(true),
                         "i" => st.italic = Some(true),
                         "u" => st.underline = Some(true),
+                        // A link's text keeps where it points; an `<a>` without one (a named
+                        // anchor) leaves the text as it was.
+                        "a" => {
+                            if let Some(href) = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()) {
+                                st.link = Some(std::sync::Arc::from(href));
+                            }
+                        }
                         _ => {}
                     }
                     let embed = c.attributes().find(|a| a.name() == "embed").map(|a| a.value().trim_start_matches('#').to_string());
@@ -300,6 +345,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                                 size: st.size,
                                 h_scale: st.h_scale,
                                 embed: Some(e),
+                                link: st.link.clone(),
                             },
                         );
                     }
@@ -378,7 +424,7 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
             "rectangle" => {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
                 b.fill = parse_fill(child(c, "fill"));
-                return Value::Rectangle(b);
+                return Value::Rectangle(Box::new(b));
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
             _ => {}
@@ -397,7 +443,9 @@ fn parse_caption(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Option<Capti
             Some("inline") => Placement::Inline,
             _ => Placement::Left,
         },
-        reserve: attr_measure(n, "reserve").filter(|r| *r >= 0.0),
+        // A reserve of zero or less sizes the caption to its content, as none does (XFA 3.3,
+        // the caption's reserve).
+        reserve: attr_measure(n, "reserve").filter(|r| *r > 0.0),
         presence: Presence::parse(n.attribute("presence")),
         value: parse_value(child(n, "value"), warnings),
         font: parse_font(child(n, "font")),
@@ -478,6 +526,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         }
         _ => ChoiceList::default(),
     };
+    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
     let validate_el = child(n, "validate");
     let validate_message = validate_el
         .and_then(|v| child(v, "message"))
@@ -492,7 +541,8 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
         check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
-        multiline: ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true")),
+        multiline,
+        no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
         items,
@@ -514,6 +564,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         validate_message,
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
 }
 
@@ -563,7 +614,19 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
                     attr_measure(c, "h").unwrap_or(height).clamp(1.0, height),
                 )
             })
+            .take(MAX_CONTENT_AREAS + 1)
             .collect();
+        if content.len() > MAX_CONTENT_AREAS {
+            content.truncate(MAX_CONTENT_AREAS);
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them. It is
+            // kept first, so whether it was said is one comparison, not a scan of every warning
+            // for every page area (nothing else is put first).
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if warnings.first() != Some(&said) {
+                warnings.insert(0, said);
+            }
+        }
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
@@ -599,7 +662,9 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
-    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_none_or(|t| t == "pageArea" || t == "contentArea"));
+    // A break to a page or content area. With no targetType, the default is `auto`: "layout
+    // continues using the current layout container" (XFA 3.3 p. 638), so no break.
+    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
     Subform {
         common,
         layout: Layout::parse(n.attribute("layout")),
@@ -644,15 +709,63 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any.
+/// Which page-number role a field with a layout:ready script plays, if any. On screen every
+/// page is a sheet of its own, so the sheet count is the page count, and the sheet number a form
+/// shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
 fn page_role(f: &Field) -> Option<PageRole> {
-    let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
-        Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
-        Some(PageRole::Number)
-    } else {
-        None
+    // Any of its ready scripts: a field may have one that does something else first.
+    f.scripts.iter().filter(|s| s.activity == "ready" || s.activity == "layoutReady").find_map(|script| {
+        // FormCalc names methods case-insensitively; JavaScript does not.
+        let text: std::borrow::Cow<str> =
+            if script.formcalc { std::borrow::Cow::Owned(script.text.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(&script.text) };
+        let has = |name: &str| if script.formcalc { text.contains(&name.to_ascii_lowercase()) } else { text.contains(name) };
+        // `this` in JavaScript, `$` in FormCalc.
+        let sheet_number = || {
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+        };
+        if has("pageCount") || has("sheetCount") {
+            Some(PageRole::Count)
+        } else if has("layout.page(") || has("layout.absPage(") || sheet_number() {
+            Some(PageRole::Number)
+        } else {
+            None
+        }
+    })
+}
+
+/// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
+/// [`MAX_DEPTH`].
+fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>, depth: usize) {
+    fn of(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Rich(r) = value {
+            out.extend(r.paragraphs.iter().flat_map(|p| p.runs.iter()).filter_map(|r| r.embed.clone()));
+        }
+    }
+    fn field(f: &Field, out: &mut std::collections::BTreeSet<String>) {
+        of(&f.value, out);
+        if let Some(c) = &f.caption {
+            of(&c.value, out);
+        }
+    }
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Draw(d) => of(&d.value, out),
+            Node::Field(f) => field(f, out),
+            Node::ExclGroup(g) => g.fields.iter().for_each(|f| field(f, out)),
+            Node::Subform(s) => {
+                collect_embedded(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_embedded(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_embedded(&a.children, out, depth + 1),
+        }
     }
 }
 
@@ -690,7 +803,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
@@ -700,10 +813,12 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             && n.tag_name().name() == "template"
             && (n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-template")) || children(*n, "subform").next().is_some())
     };
+    // The template is a packet of the XDP itself, a child of its root: one nested deeper is
+    // data (an imported dataset, say), which must not supply the form's scripts.
     let template = if is_template(&root) {
         root
     } else {
-        root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     let mut warnings = Vec::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
@@ -714,7 +829,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root
-        .descendants()
+        .children()
         .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
     if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
         if let Some(p) = saved_root.attribute("presence") {
@@ -723,8 +838,18 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
     let mut page_roles = Vec::new();
-    collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    let root_node = [Node::Subform(Box::new(root_sf.clone()))];
+    collect_page_roles(&root_node, &mut page_roles, 0);
+    let mut embedded = std::collections::BTreeSet::new();
+    collect_embedded(&root_node, &mut embedded, 0);
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default() };
+    let paths = crate::data::fields_with_ids(&tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
+        .collect();
+    tpl.embedded_paths = paths;
+    Ok((tpl, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

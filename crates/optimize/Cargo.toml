@@ -12,12 +12,20 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-annot = { workspace = true }
 thiserror.workspace = true
 # JPEG decoding (zune-jpeg) and encoding, and bicubic resampling; already in the tree.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# The same JPEG decoder, used directly to read samples untransformed (/ColorTransform 0).
+zune-jpeg = "0.5"
+
+# Lets other programs go first while a copy is being made.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+thread-priority = "3.1"
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+proptest.workspace = true

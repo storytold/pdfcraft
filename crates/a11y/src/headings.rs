@@ -37,8 +37,15 @@ struct Walker<'a> {
     visits: usize,
     /// Per page: the text each MCID shows (read once per page).
     texts: HashMap<usize, HashMap<i64, String>>,
+    /// What is left of [`MAX_TITLE_SOURCE_BYTES`].
+    title_left: usize,
     out: Vec<Heading>,
 }
+
+/// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
+/// Titles are cut to [`MAX_TITLE`] characters, but many headings can name one large string, and
+/// each would otherwise be decoded in full first.
+const MAX_TITLE_SOURCE_BYTES: usize = 32 << 20;
 
 /// The headings, in document order. Headings without text or a page are left out.
 pub fn headings(doc: &Document) -> Vec<Heading> {
@@ -52,6 +59,7 @@ pub fn headings(doc: &Document) -> Vec<Heading> {
         seen: HashSet::new(),
         visits: 0,
         texts: HashMap::new(),
+        title_left: MAX_TITLE_SOURCE_BYTES,
         out: Vec::new(),
     };
     if let Some(k) = root.get(b"K") {
@@ -131,15 +139,32 @@ impl Walker<'_> {
             self.marks(kids, pg, depth + 1, &mut marks);
         }
         let Some(page) = pg.or_else(|| marks.iter().find_map(|m| m.0)).and_then(|p| self.page_index.get(&p).copied()) else { return };
-        let doc = self.doc;
-        let attr = |key: &[u8]| d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).filter(|t| !t.trim().is_empty());
-        let title = match attr(b"ActualText") {
+        let title = match self.attr(d, b"ActualText") {
             Some(t) => Some(t),
-            None => self.marked_text(&marks, page).or_else(|| attr(b"Alt")).or_else(|| attr(b"T")),
+            None => match self.marked_text(&marks, page) {
+                Some(t) => Some(t),
+                None => self.attr(d, b"Alt").or_else(|| self.attr(d, b"T")),
+            },
         };
         let Some(title) = title else { return };
         let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TITLE).collect();
         self.out.push(Heading { obj, level, title, page });
+    }
+
+    /// The non-blank text of the string `key` holds, charged against the title allowance by the
+    /// longer of its raw and decoded size (a string that does not fit is not decoded).
+    fn attr(&mut self, d: &Dict, key: &[u8]) -> Option<String> {
+        let o = self.doc.resolve(d.get(key)?);
+        let s = o.as_string()?;
+        // A text string decodes to at most three bytes per raw byte, so one whose worst case does
+        // not fit the remaining allowance is never decoded: the raw check alone let a string at
+        // the raw limit decode to three times it before the allowance was reduced.
+        if s.bytes.len().saturating_mul(3) > self.title_left {
+            return None;
+        }
+        let text = s.to_text();
+        self.title_left = self.title_left.saturating_sub(text.len().max(s.bytes.len()));
+        Some(text).filter(|t| !t.trim().is_empty())
     }
 
     /// The text the marked content shows (`page`: where marks without a page of their own are).
@@ -182,34 +207,42 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
+    // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack: Vec<Option<i64>> = Vec::new();
     let mut out: HashMap<i64, String> = HashMap::new();
     // Where each id's last glyph ended, in user space.
     let mut ends: HashMap<i64, (f64, f64)> = HashMap::new();
     let mut gs = TextState::default();
-    let mut saved: Vec<TextState> = Vec::new();
+    // With each saved state, the text and text line matrices: inside a text object `q`/`Q`
+    // save and restore them too (ISO 32000-2 §9.4.1, as corrected by the PDF Association's
+    // errata, issue 368), as the renderer does.
+    let mut saved: Vec<(TextState, Matrix, Matrix)> = Vec::new();
     let mut unsaved = 0usize;
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
-        let id = stack.iter().rev().find_map(|m| *m);
+        crate::count_mark_reads(1);
+        let id = stack.last().copied().flatten();
         match op.op.as_slice() {
-            b"BMC" => stack.push(None),
-            b"BDC" => stack.push(match op.operands.get(1) {
-                Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
-                Some(Object::Name(n)) => {
-                    props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
+            b"BMC" => stack.push(id),
+            b"BDC" => stack.push(
+                match op.operands.get(1) {
+                    Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
+                    Some(Object::Name(n)) => {
+                        props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
+                    }
+                    _ => None,
                 }
-                _ => None,
-            }),
+                .or(id),
+            ),
             b"EMC" => {
                 stack.pop();
             }
-            b"q" if saved.len() < MAX_SAVED => saved.push(gs.clone()),
+            b"q" if saved.len() < MAX_SAVED => saved.push((gs.clone(), tm, tlm)),
             b"q" => unsaved += 1,
             b"Q" if unsaved > 0 => unsaved -= 1,
             b"Q" => {
                 if let Some(saved) = saved.pop() {
-                    gs = saved;
+                    (gs, tm, tlm) = saved;
                 }
             }
             b"cm" => {
@@ -280,17 +313,17 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             };
             for (code, len) in m.codes(&s.bytes) {
                 let trm = tm.then(&gs.ctm);
+                // A glyph's text is only built while its id still takes more.
                 if let Some(id) = id
+                    && out.get(&id).is_none_or(|t| t.len() < MAX_TITLE * 4)
                     && let Some(glyph) = m.text_of(code)
                 {
                     let text = out.entry(id).or_default();
-                    if text.len() < MAX_TITLE * 4 {
-                        let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
-                        if breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ') {
-                            text.push(' ');
-                        }
-                        text.push_str(&glyph);
+                    let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
+                    if breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ') {
+                        text.push(' ');
                     }
+                    text.push_str(&glyph);
                 }
                 let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
                 tm = Matrix::translate(advance * gs.scale, 0.0).then(&tm);

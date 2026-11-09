@@ -165,6 +165,9 @@ const PROCESSED_EXTENSIONS: [&str; 11] = [
     "1.3.6.1.5.5.7.1.3",
 ];
 
+/// id-kp-timeStamping (RFC 5280 §4.2.1.12), required of a timestamp authority (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
 /// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
 /// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
 /// signing.
@@ -384,6 +387,18 @@ impl Certificate {
         }
     }
 
+    /// Whether this certificate may stamp trusted time (RFC 3161 §2.3): its extended key usage
+    /// includes timeStamping, its key usage (if any) allows digital signatures or
+    /// non-repudiation, and it has no critical extension PdfCraft doesn't process. A certificate
+    /// issued for another purpose proves who signed, not when.
+    pub fn may_timestamp(&self) -> bool {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        self.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_TIME_STAMPING))
+            && self.key_usage.is_none_or(|u| u & SIGNING_BITS != 0)
+            && self.unknown_critical.is_empty()
+    }
+
     /// [`signing_problem`](Self::signing_problem) as a clause that follows the certificate's
     /// name ("it is not issued for signing documents (…)"), for lists of digital IDs.
     pub fn signing_problem_clause(&self) -> Option<String> {
@@ -400,10 +415,19 @@ impl Certificate {
 
     /// Whether `key` verifies this certificate's signature.
     pub fn signed_by(&self, key: &PublicKey) -> bool {
+        self.signed_by_cached(key, &mut None)
+    }
+
+    /// [`Self::signed_by`] keeping the digest of the signed part in `digest`, so checking one
+    /// certificate against many candidate keys hashes it once.
+    fn signed_by_cached(&self, key: &PublicKey, digest: &mut Option<Vec<u8>>) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
         match keys::signature_algorithm(&alg) {
             Ok((scheme @ keys::Scheme::Ed25519, _)) => key.verify_message(scheme, &self.tbs, &self.signature).unwrap_or(false),
-            Ok((scheme, Some(digest))) => key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false),
+            Ok((scheme, Some(d))) => {
+                let hash = digest.get_or_insert_with(|| d.digest(&[&self.tbs]));
+                key.verify(scheme, d, hash, &self.signature).unwrap_or(false)
+            }
             _ => false,
         }
     }
@@ -492,7 +516,8 @@ pub fn subject_of(raw: &[u8]) -> Option<Name> {
 }
 
 /// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
-/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, it
+/// has no critical extension PdfCraft doesn't process (unless it is self-signed), its
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
@@ -517,11 +542,16 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
         let below = chain.len() - 1;
         let mut found = None;
-        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+        let mut digest = None;
+        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by_cached(&c.public_key, &mut digest)) {
             // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
             // two names where it needs them.
             let why = if !c.may_issue() {
                 Some("The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.")
+            } else if !c.unknown_critical.is_empty() && !c.is_self_signed() {
+                // What such an extension limits (name constraints, policy constraints) would
+                // go unchecked. A self-signed root's extensions are the trust store's business.
+                Some("The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.")
             } else if c.path_len.is_some_and(|n| below > n as usize) {
                 Some("The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.")
             } else if at.is_some_and(|t| !c.valid_at(t)) {

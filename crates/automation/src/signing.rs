@@ -119,6 +119,7 @@ impl Automation {
             "page": s.page.map(|p| p + 1),
             "rect": rect,
             "visible": s.visible,
+            "verdict_shown": s.verdict_shown,
             "revision": s.revision,
             "sub_filter": s.sub_filter,
             "algorithm": s.algorithm,
@@ -189,7 +190,7 @@ impl Automation {
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
         }
         let path = self.resolve(a.str("id")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {
             sign::SignError::WrongPassword => bad("the digital ID password is incorrect"),
             e => failed(e),
@@ -309,6 +310,9 @@ impl Automation {
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
         let mut certs: Vec<Certificate> =
             if a.opt_bool("clear")?.unwrap_or(false) { Vec::new() } else { self.session.trusted_certificates().to_vec() };
+        // Which certificates are already in, by their bytes: a set, so a bundle of many distinct
+        // certificates isn't compared against every one before it.
+        let mut known: std::collections::HashSet<Vec<u8>> = certs.iter().map(|c| c.raw.clone()).collect();
         let paths: Vec<String> = match a.get("paths") {
             None => Vec::new(),
             Some(v) => v
@@ -320,7 +324,7 @@ impl Automation {
         };
         for p in paths {
             let path = self.resolve(&p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let bytes = crate::read_input(&path)?;
             let lower = p.to_ascii_lowercase();
             let found = if lower.ends_with(".p12") || lower.ends_with(".pfx") {
                 let id = sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(failed)?;
@@ -329,7 +333,7 @@ impl Automation {
                 sign::x509::load_certificates(&bytes).map_err(failed)?
             };
             for c in found {
-                if !certs.iter().any(|t| t.raw == c.raw) {
+                if known.insert(c.raw.clone()) {
                     certs.push(c);
                 }
             }

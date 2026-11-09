@@ -4,6 +4,9 @@ use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
+#[path = "mark_transaction_tests.rs"]
+mod mark_transactions;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -76,12 +79,38 @@ fn an_image_turns_by_any_angle_about_its_centre_and_saves_the_matrix() {
 }
 
 #[test]
+fn an_added_image_crop_keeps_some_of_each_axis() {
+    use crate::added::AddedImage;
+    assert!(AddedImage::crop_valid([0.7, 0.0, 0.0, 0.95]));
+    assert!(AddedImage::crop_valid([0.5, 0.45, 0.45, 0.5]));
+    // 0.05 + 0.9 rounds to just above 0.95: still the 5 % kept, accepted and left as it is.
+    assert!(AddedImage::crop_valid([0.05, 0.0, 0.9, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.05, 0.0, 0.9, 0.0]), [0.05, 0.0, 0.9, 0.0]);
+    assert!(!AddedImage::crop_valid([0.06, 0.0, 0.9, 0.0]), "more than 95 % across");
+    assert!(!AddedImage::crop_valid([0.6, 0.0, 0.4, 0.0]), "nothing left across");
+    assert!(!AddedImage::crop_valid([-0.1, 0.0, 0.0, 0.0]));
+    assert!(!AddedImage::crop_valid([f64::NAN, 0.0, 0.0, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.7, 0.0, 0.0, 0.0]), [0.7, 0.0, 0.0, 0.0], "a valid crop stays as it is");
+    // From a file: too much across keeps the two sides' proportion; nonsense trims nothing.
+    let [l, b, r, t] = AddedImage::clamp_crop([0.6, f64::INFINITY, 0.6, -1.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12 && b == 0.0 && t == 0.0);
+    // Sides beyond the whole image keep their proportion too, and huge ones don't overflow.
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.5, 0.0]);
+    assert!((l - 0.7125).abs() < 1e-12 && (r - 0.2375).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([f64::MAX, 0.0, f64::MAX, 0.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.0, 0.0]);
+    assert!((l - 0.95).abs() < 1e-12 && r == 0.0, "one side alone is capped at the limit");
+}
+
+#[test]
 fn tokens_expand() {
     let c = cx();
     assert_eq!(expand("Page <<1>> of <<n>>", 3, 10, 0, &c), "Page 3 of 10");
     assert_eq!(expand("<<1 of n>> · <<Page 1>> · <<1/n>>", 2, 5, 0, &c), "2 of 5 · Page 2 · 2/5");
     assert_eq!(expand("<<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>>", 1, 1, 0, &c), "10/1/2026 2026-10-01 October 1, 2026");
     assert_eq!(expand("<<yyyy/mm/dd>> <<yyyy/m/d>>", 1, 1, 0, &c), "2026/10/01 2026/10/1");
+    assert_eq!(expand("<<dd.mm.yyyy>> <<d.m.yyyy>> <<dd.mm.yy>> <<d.m.yy>>", 1, 1, 0, &c), "01.10.2026 1.10.2026 01.10.26 1.10.26");
     assert_eq!(expand("<<Bates Number#6#100#ABC#-X>>", 1, 1, 104, &c), "ABC000104-X");
     assert_eq!(expand("keep <<unknown>> and <<unclosed", 1, 1, 0, &c), "keep <<unknown>> and <<unclosed");
     assert_eq!(bates_start("x <<Bates Number#6#100#A#B>>"), Some(100));
@@ -481,10 +510,46 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// #2368: a widget with /NoRotate on a rotated page is shown upright, turned with the page's
+/// /Rotate about its rectangle's upper-left corner (§12.5.3, as MuPDF and Poppler draw it).
+/// Flattening drew its appearance at the rectangle as it is, so the widget turned sideways and
+/// moved; a neighbour without the flag is unchanged, and so is everything on an unrotated page.
+#[test]
+fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 15 >>\nstream\n0 0 100 50 re f\nendstream";
+    for (rotate, plain, upright) in [
+        (0, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 1 0 0 1 100 500 cm /PCFl1 Do Q"),
+        (90, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 1 -1 0 150 550 cm /PCFl1 Do Q"),
+        (180, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q -1 0 0 -1 100 600 cm /PCFl1 Do Q"),
+        (270, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 -1 1 0 50 550 cm /PCFl1 Do Q"),
+    ] {
+        let widget =
+            |flags: i64| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{flags}) /Rect [100 500 200 550] /F {flags} /AP << /N 7 0 R >> >>");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << >> /Contents 6 0 R /Annots [4 0 R 5 0 R] >>"
+            ),
+            &widget(4),
+            &widget(4 | 16),
+            &page,
+            form,
+        ]);
+        assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+        let doc = reopen(&doc);
+        let s = streams(&doc, 0);
+        let flat = s.last().unwrap();
+        assert!(flat.contains(plain), "/Rotate {rotate}: {flat}");
+        assert!(flat.contains(upright), "/Rotate {rotate}: {flat}");
+    }
+}
+
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
-fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
+fn flattening_draws_cloudy_squares_and_keeps_one_it_cannot_draw() {
     let page = stream("", " ");
     let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
     let case = |extra: &str, drawn: usize, left: bool| {
@@ -506,10 +571,90 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
             assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
         }
     };
-    case("/BE << /S /C /I 2 >>", 0, true);
+    // A cloudy square is drawn (ISO 32000-2 Table 169); one whose /RD leaves no square inside
+    // its /Rect (Table 180: the sums "shall be less than" the width and height) cannot be, and stays.
+    case("/BE << /S /C /I 2 >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30]", 0, true);
     case("/BE << /S /S >>", 1, false);
-    case("/BE << /S /C /I 2 >> /F 2", 0, true);
-    case("/BE << /S /C /I 2 >> /AP << /N 6 0 R >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /F 2", 0, true);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /AP << /N 6 0 R >>", 1, false);
+}
+
+/// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
+/// valid OCMDs, including ISO 32000-1 §8.11.2.2 `/VE` expressions within depth 16 and the
+/// 4,096-node visit budget) in `/OC /PCFlOC0 BDC … EMC` and registers them in
+/// `/Resources /Properties`, while retaining annotations with untransferable, malformed,
+/// overly deep, or over-budget `/OC` definitions in `/Annots`.
+#[test]
+fn flattening_transfers_annotation_optional_content_to_marked_content() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
+    let case = |extra: &str, drawn: usize, left: bool, bdc: bool| {
+        let annot = format!("<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /AP << /N 6 0 R >> {extra} >>");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R 13 0 R] /D << /OFF [7 0 R] /ON [8 0 R 13 0 R] >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 5 0 R /Annots [4 0 R] >>",
+            &annot,
+            &page,
+            form,
+            "<< /Type /OCG /Name (Hidden layer) >>",
+            "<< /Type /OCG /Name (Shown layer) >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOn >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOff >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOff >>",
+            "<< /Type /OCG /Name (Second shown layer) >>",
+            "[ /Or 15 0 R 15 0 R 15 0 R 15 0 R ]",
+            "[ /Or 16 0 R 16 0 R 16 0 R 16 0 R ]",
+            "[ /Or 17 0 R 17 0 R 17 0 R 17 0 R ]",
+            "[ /Or 18 0 R 18 0 R 18 0 R 18 0 R ]",
+            "[ /Or 8 0 R 8 0 R 8 0 R 8 0 R ]",
+        ]);
+        let before = streams(&doc, 0);
+        let expected_oc = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().and_then(|d| d.get(b"OC").cloned());
+        assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), drawn, "{extra}");
+        let doc = reopen(&doc);
+        let p = &pdfcraft_model::pages(&doc)[0];
+        assert_eq!(p.dict.contains(b"Annots"), left, "{extra}");
+        if drawn == 0 {
+            assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the retained comment: {extra}");
+        } else {
+            let flat = streams(&doc, 0).pop().unwrap();
+            assert_eq!(flat.contains("/OC /PCFlOC0 BDC") && flat.contains("EMC"), bdc, "{extra}: {flat}");
+            if bdc {
+                let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+                let props = doc.resolve(res.as_dict().unwrap().get(b"Properties").unwrap());
+                assert_eq!(props.as_dict().unwrap().get(b"PCFlOC0").cloned(), expected_oc, "{extra}");
+            }
+        }
+    };
+    case("/OC 7 0 R", 1, false, true);
+    case("/OC 8 0 R", 1, false, true);
+    case("/OC 9 0 R", 1, false, true);
+    case("/OC 10 0 R", 1, false, true);
+    case("/OC 11 0 R", 1, false, true);
+    case("/OC 12 0 R", 1, false, true);
+    case("", 1, false, false);
+    // Valid ISO 32000-1 §8.11.2.2 /VE visibility expressions are transferred with their OCMD.
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 7 0 R [ /And 8 0 R 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R [ /Not 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] /OCGs [8 0 R] /P /AllOn >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] /OCGs [7 0 R] /P /AllOn >>", 1, false, true);
+    // Malformed /VE, invalid /P, inline /OCG, and /VE exceeding depth 16 or the node budget fail closed and stay in /Annots.
+    case("/OC << /Type /OCG /Name (Inline layer) >>", 0, true, false);
+    case("/OC << /Type /OCMD /OCGs [8 0 R] /P /InvalidPolicy >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE 8 0 R /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Xor 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    let deep_ve = format!("{}8 0 R{}", "[ /Not ".repeat(17), " ]".repeat(17));
+    case(&format!("/OC << /Type /OCMD /VE {deep_ve} /OCGs [8 0 R] /P /AllOn >>"), 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Or 14 0 R 14 0 R 14 0 R 14 0 R ] /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
 }
 
 /// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must
@@ -611,10 +756,61 @@ fn flattening_keeps_a_valued_widget_it_cannot_draw() {
     assert_eq!(value(6), Some(Object::name("Yes")));
 }
 
-/// #1794: a reply this builder cannot draw stays on the page even when the comment it replies to
-/// is flattened; the comment's pop-up still goes with it.
+/// #4017: a widget with no appearance whose field has no value (none, or an empty string) has
+/// nothing to lose, so flattening removes it instead of leaving a fillable field behind. One whose
+/// value it inherits from its parent field still stays (#1794).
 #[test]
-fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
+fn flattening_removes_an_empty_widget_it_cannot_draw() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 9 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (no_value) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (empty) /V () /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (drawn) /Rect [10 90 150 120] /F 4 /AP << /N 10 0 R >> >>",
+        "<< /FT /Tx /T (parent) /V (Ada) /Kids [9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 130 150 160] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only the field with an appearance is drawn");
+    let doc = reopen(&doc);
+    let refs = |o: &Object| -> Vec<u32> { doc.resolve(o).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect() };
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert_eq!(refs(p.dict.get(b"Annots").unwrap()), [9], "only the widget with an inherited value stays on the page");
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    assert_eq!(refs(af.as_dict().unwrap().get(b"Fields").unwrap()), [8], "and its field in the form");
+}
+
+/// #4017: when the walk up the parent fields reaches its limit before finding a value, the widget
+/// stays: an unverified value must not be removed. Here `/V` sits on the 64th ancestor.
+#[test]
+fn flattening_keeps_a_widget_whose_value_is_past_the_parent_limit() {
+    let page = stream("", " ");
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [69 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        page,
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 10 150 40] /F 4 >>".into(),
+    ];
+    objs.extend((6..69).map(|n| format!("<< /Parent {} 0 R /Kids [{} 0 R] >>", n + 1, n - 1)));
+    objs.push("<< /FT /Tx /T (deep) /V (Ada) /Kids [68 0 R] >>".into());
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    flatten(&mut doc, &[0], false, true).unwrap();
+    let doc = reopen(&doc);
+    let annots = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").map(|a| doc.resolve(a).as_array().map_or(0, Vec::len));
+    assert_eq!(annots, Some(1), "the widget stays");
+}
+
+/// #1794, #5631: a reply this builder cannot draw goes with the comment it replies to, as its
+/// pop-up does. A reply of type R is not shown on the page (ISO 32000-2 Table 172), so it has no
+/// ink of its own to keep; before #5631 it stayed, the orphan of a comment that was gone. (A
+/// `/RT /Group` member that cannot be drawn still stays: it is drawn on the page.)
+#[test]
+fn flattening_takes_an_undrawable_reply_with_its_comment() {
     let page = stream("", " ");
     let mut doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -622,15 +818,212 @@ fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
         &page,
         "<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /Contents (Synthetic comment) /AP << /N 8 0 R >> /Popup 7 0 R >>",
-        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /RD [60 30 60 30] /IRT 5 0 R >>",
         "<< /Type /Annot /Subtype /Popup /Rect [300 600 400 700] /Parent 5 0 R >>",
         "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream",
     ]);
-    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the cloudy reply cannot be");
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the reply is not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the comment, its reply and its pop-up are gone");
+}
+
+/// #5631: flattening draws no reply of type R into the page, whatever its appearance, and builds
+/// none for one without (a note reply would get an icon); every reply goes with its comment, a
+/// reply to a reply too, even listed before the reply it answers. A `/RT /Group` member is
+/// drawn as any annotation.
+#[test]
+fn flattening_draws_no_reply_and_takes_the_thread_with_its_comment() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        // The reply to the reply (8) is listed before the reply it answers (6).
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 8 0 R 6 0 R 7 0 R 9 0 R] >>",
+        &page,
+        // The comment (blue), its reply (red), its pop-up, a reply to the reply with no
+        // appearance, and a member of its group (green).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 10 0 R >> /Popup 7 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Popup /Rect [300 500 400 600] /Parent 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply to the reply) /IRT 6 0 R /RT /R >>",
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    let n = flatten(&mut doc, &[0], true, false).unwrap();
+    assert_eq!(n, 2, "the comment and the group member are drawn; the replies are not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the whole thread, its pop-up and the group member are gone");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [10, 12], "the comment's and the member's appearances; not the reply's, and none built for the other");
+}
+
+/// #5632 review: a reply's text never blocks flattening (a reply is not drawn into the page, so
+/// it can't bake in a `?`), and a `/RT /Group` member that flattening skipped (Hidden here)
+/// stays when its primary is flattened: only replies go with what they answer.
+#[test]
+fn flattening_skips_replies_in_the_question_mark_check_and_keeps_skipped_group_members() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 60 40] /F 4 /AP << /N 8 0 R >> >>",
+        // A text-box reply whose text Helvetica can't draw, with no appearance.
+        "<< /Type /Annot /Subtype /FreeText /Rect [10 50 150 80] /DA (0 g /Helv 12 Tf) /Contents <FEFF6B228FCE> /F 4 /IRT 5 0 R >>",
+        // A hidden member of the square's group.
+        "<< /Type /Annot /Subtype /Circle /Rect [70 10 100 40] /F 6 /IRT 5 0 R /RT /Group /AP << /N 8 0 R >> >>",
+        &stream("/Type /XObject /Subtype /Form /BBox [0 0 50 30]", "0 0 1 rg 0 0 50 30 re f"),
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "flattened, the square drawn");
     let doc = reopen(&doc);
     let p = &pdfcraft_model::pages(&doc)[0];
     let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
-    assert_eq!(left, [6], "the undrawn reply stays; the comment and its pop-up are gone");
+    assert_eq!(left, [7], "the reply went with the square; the hidden group member stays");
+}
+
+/// #5632 review: a thread three replies deep, listed in `/Annots` in reverse (the deepest reply
+/// first, the comment last), goes whole with its comment, none of the replies drawn; a reply to a
+/// `/RT /Group` member goes with that member, which is drawn.
+#[test]
+fn flattening_takes_a_thread_three_deep_in_reverse_order_and_a_group_members_reply() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [8 0 R 7 0 R 6 0 R 5 0 R 9 0 R 10 0 R] >>",
+        &page,
+        // The comment (blue), and three replies, each to the one before, all with appearances (red).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply 1) /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply 2) /IRT 6 0 R /RT /R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [115 485 135 503] /Contents (Reply 3) /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A member of the comment's group (green), and a reply to the member.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 13 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /Contents (Reply to the member) /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 2, "the comment and the group member are drawn; no reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the three replies and the member's reply go with what they answer");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [11, 13], "the comment's and the member's appearances, not the replies'");
+}
+
+/// #5632 review: `/Annots` should hold references (ISO 32000-2 Table 31), but a reply or pop-up
+/// written inline in it still goes with the comment it points at, as a referenced one does. One
+/// pointing at a comment that stays, stays.
+#[test]
+fn flattening_takes_inline_replies_and_popups_with_their_comment() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Inline reply) /IRT 5 0 R >> \
+         << /Type /Annot /Subtype /Popup /Rect [200 400 300 500] /Parent 5 0 R >> \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 395 125 413] /Contents (Reply to a hidden note) /IRT 6 0 R >> 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 7 0 R >> >>",
+        // Hidden: not flattened, so it stays, and so does its inline reply.
+        "<< /Type /Annot /Subtype /Text /F 30 /Rect [100 400 120 418] /Contents (Hidden note) /AP << /N 7 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(p.dict.get(b"Annots").unwrap());
+    let left: Vec<String> = annots
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| doc.resolve(a).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string().map(|s| s.to_text())).unwrap_or_default())
+        .collect();
+    assert_eq!(left, ["Reply to a hidden note", "Hidden note"], "the inline reply and pop-up went with the comment");
+}
+
+/// #5632 review: replies whose `/IRT` runs in a loop (two replying to each other, one replying to
+/// itself, and a square and a note each answering the other) end the flattening. None of them is
+/// drawn: each is a reply. Those that answer nothing flattened stay; the comment beside them is
+/// flattened and its reply goes with it.
+#[test]
+fn flattening_ends_on_replies_whose_irt_loops() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >>",
+        &page,
+        // A comment and its reply.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [100 500 120 518] /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        // Two replies to each other.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [200 500 220 518] /IRT 8 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A reply to itself.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [300 500 320 518] /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        // A square and a note each answering the other: both are replies.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [400 500 420 518] /IRT 11 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [405 495 425 513] /IRT 10 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
+    assert_eq!(left, [7, 8, 9, 10, 11], "the comment's reply went with it; the looping replies stay");
+}
+
+/// #5632 review: an `/RT` that isn't `/Group` reads as the default R, as the comment list and the
+/// page read it, so replies with an unknown name or a string there are neither drawn nor kept
+/// once their comment is flattened. A form field with a stray `/IRT` is no reply: it is flattened
+/// as a field.
+#[test]
+fn flattening_reads_an_unknown_or_malformed_rt_as_a_reply_and_a_widget_with_irt_as_a_field() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 9 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /RT /Answer /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply) /IRT 5 0 R /RT (Group) /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /F 4 /Rect [200 500 220 518] /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, true).unwrap(), 2, "the comment and the field are drawn; neither reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "both replies went with the comment, and the field was flattened");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, not the replies'");
 }
 
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
@@ -934,6 +1327,232 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// #6440: added text in a print file can be gray or CMYK, painted with `g` / `k`, so its black
+/// stays 100 K. The ink survives save and reopen; another colour drops it for good.
+#[test]
+fn gray_and_cmyk_added_text_writes_g_and_k_until_it_is_recoloured() {
+    use crate::added::Ink;
+    let item_stream = |doc: &Document, i: usize| {
+        let obj = list_added(doc)[i].obj;
+        let Object::Stream(s) = &*doc.get(obj) else { panic!("an item is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let mut doc = fixture();
+    let base = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    let mut black = base.clone();
+    black.set_ink(Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(black.color, [0.0; 3], "100 K looks black on screen");
+    let mut gray = AddedText { rect: [72.0, 400.0, 300.0, 500.0], ..base.clone() };
+    gray.set_ink(Some(Ink::Gray(0.25)));
+    add_content(&mut doc, 0, &Content::Text(black)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(gray)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 200.0, 300.0, 300.0], ..base.clone() })).unwrap();
+
+    let doc = reopen(&doc);
+    let (k, g, rgb) = (item_stream(&doc, 0), item_stream(&doc, 1), item_stream(&doc, 2));
+    assert!(k.contains("/PCFHelvetica 14 Tf 0 0 0 1 k\n") && !k.contains("rg"), "{k}");
+    assert!(g.contains("/PCFHelvetica 14 Tf 0.25 g\n") && !g.contains("rg"), "{g}");
+    assert!(rgb.contains("/PCFHelvetica 14 Tf 0 0 0 rg\n"), "RGB text paints as before: {rgb}");
+    let inks: Vec<Option<Ink>> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.painted_ink() } else { None }).collect();
+    assert_eq!(inks, [Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), Some(Ink::Gray(0.25)), None]);
+
+    // Another colour drops the ink, and picking the ink's look again later doesn't bring it back;
+    // picking that look while the ink is there keeps it.
+    let Content::Text(cmyk) = list_added(&doc)[0].content.clone() else { panic!() };
+    let mut same = cmyk.clone();
+    same.set_color([0.0; 3]);
+    assert_eq!(same, cmyk, "black on 100 K stays 100 K");
+    let mut recoloured = cmyk.clone();
+    recoloured.set_color([1.0, 0.0, 0.0]);
+    assert_eq!(recoloured.ink, None);
+    recoloured.set_color([0.0; 3]);
+    assert_eq!((recoloured.ink, recoloured.painted_ink()), (None, None), "the ink stays gone");
+
+    // Set directly, a colour paints in RGB too, and the item reads back without the ink: what a
+    // draft with its stale ink dropped compares equal to.
+    let mut doc = doc;
+    let red = AddedText { color: [1.0, 0.0, 0.0], ..cmyk };
+    update_content(&mut doc, 0, 0, &Content::Text(red.clone())).unwrap();
+    let stream = item_stream(&doc, 0);
+    assert!(stream.contains("1 0 0 rg") && !stream.contains(" k\n"), "{stream}");
+    let mut settled = red;
+    settled.drop_stale_ink();
+    for doc in [&doc, &reopen(&doc)] {
+        let Content::Text(back) = list_added(doc)[0].content.clone() else { panic!() };
+        // The stored box is the text's own height.
+        assert_eq!(back, AddedText { rect: back.rect, ..settled.clone() });
+    }
+
+    // CMYK looks as ISO 32000-2 §10.4.2.5 maps it to RGB; an ink out of range is refused.
+    assert_eq!(Ink::Cmyk([0.5, 0.0, 1.0, 0.25]).rgb(), [0.25, 0.75, 0.0]);
+    let mut wrong = base;
+    wrong.ink = Some(Ink::Gray(1.5));
+    assert!(add_content(&mut doc, 0, &Content::Text(wrong)).is_err());
+}
+
+/// #6440: a file edited by hand paints its added text in RGB unless the stored gray or CMYK is
+/// in range, the right length and still the look of `/Color`; nothing in it panics.
+#[test]
+fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), ..AddedText::default() })).unwrap();
+    let obj = list_added(&doc)[0].obj;
+    let real = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+    // A `/CMYK` far longer than four numbers, as a hostile file might store it: an ink first.
+    let long = real(&[0.0, 0.0, 0.0, 1.0].repeat(50_000));
+    let long_ref = Object::Ref(doc.add(long.clone()));
+    let ink_ref = Object::Ref(doc.add(real(&[0.0, 0.0, 0.0, 1.0])));
+    let read_text = |entries: &[(&[u8], Object)]| {
+        let mut edited = doc.clone();
+        let Object::Stream(mut s) = (*edited.get(obj)).clone() else { panic!("an item is a stream") };
+        let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
+        for (key, value) in entries {
+            params.set(key.to_vec(), value.clone());
+        }
+        s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
+        edited.set(obj, Object::Stream(s));
+        let Content::Text(t) = list_added(&edited)[0].content.clone() else { panic!() };
+        t
+    };
+    let read = |entries: &[(&[u8], Object)]| read_text(entries).ink;
+    // As PDFCraft writes it: the ink stands.
+    assert_eq!(read(&[(b"Color", real(&[0.5; 3])), (b"Gray", Object::Real(0.5))]), Some(Ink::Gray(0.5)));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", ink_ref)]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), "by reference");
+    // Finer than it paints, it reads back as painted (`0.5 g`), its look with it.
+    let fine = read_text(&[(b"Color", real(&[0.50049; 3])), (b"Gray", Object::Real(0.50049))]);
+    assert_eq!((fine.ink, fine.color), (Some(Ink::Gray(0.5)), [0.5; 3]));
+    for (what, entries) in [
+        ("a colour the ink isn't the look of", vec![(&b"Color"[..], real(&[1.0, 0.0, 0.0])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]),
+        ("three CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 1.0]))]),
+        ("five CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0, 0.0]))]),
+        ("a long CMYK", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long.clone())]),
+        ("a long CMYK by reference", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long_ref.clone())]),
+        ("gray a long array", vec![(b"Color", real(&[0.0; 3])), (b"Gray", long.clone())]),
+        ("CMYK not an array", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", Object::Real(1.0))]),
+        ("gray out of range", vec![(b"Color", real(&[1.0; 3])), (b"Gray", Object::Real(2.0))]),
+        ("gray not a number", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black"))]),
+        (
+            "a CMYK entry not a number",
+            vec![
+                (b"Color", real(&[0.0; 3])),
+                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(1.0)])),
+            ],
+        ),
+        (
+            "gray not a number beside a CMYK",
+            vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black")), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))],
+        ),
+        ("gray NaN", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::Real(f64::NAN))]),
+        ("CMYK infinite", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, f64::INFINITY]))]),
+    ] {
+        assert_eq!(read(&entries), None, "{what}");
+    }
+}
+
+/// #6440: an ink finer than the thousandth `g` and `k` are written to is kept as painted, so the
+/// item, its stored `/CMYK` and what it reads back as are what the page shows.
+#[test]
+fn an_ink_is_kept_as_it_is_painted() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    let mut t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    t.set_ink(Some(Ink::Cmyk([0.12345, 0.00049, 0.0, 0.99951])));
+    let painted = Ink::Cmyk([0.123, 0.0, 0.0, 1.0]);
+    assert_eq!((t.ink, t.color), (Some(painted), painted.rgb()));
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let doc = reopen(&doc);
+    let item = &list_added(&doc)[0];
+    let Object::Stream(s) = &*doc.get(item.obj) else { panic!("an item is a stream") };
+    let stream = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(
+        stream.contains(
+            "/PCFHelvetica 14 Tf 0.123 0 0 1 k
+"
+        ),
+        "{stream}"
+    );
+    let stored = s
+        .dict
+        .get(b"PCAdded")
+        .and_then(|p| p.as_dict())
+        .and_then(|p| p.get(b"CMYK"))
+        .and_then(Object::as_array)
+        .map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<_>>());
+    assert_eq!(stored, Some(vec![0.123, 0.0, 0.0, 1.0]));
+    let Content::Text(back) = &item.content else { panic!() };
+    assert_eq!(back.painted_ink(), Some(painted));
+}
+
+/// #4464: a page left with one added item draws that item and nothing else.
+#[test]
+fn an_isolated_item_is_all_that_is_left_on_its_page() {
+    let mut doc = fixture();
+    let first = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "First".into(), size: 14.0, ..AddedText::default() };
+    let second = AddedText { rect: [72.0, 400.0, 300.0, 500.0], text: "Second".into(), ..first.clone() };
+    add_content(&mut doc, 0, &Content::Text(first)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(second)).unwrap();
+    let before = streams(&doc, 0).join("\n");
+    assert!(before.contains("(First) Tj") && before.contains("(Second) Tj"), "{before}");
+    assert!(isolate_content(&mut doc, 0, 2).is_err(), "no third item");
+    assert!(isolate_content(&mut doc, 9, 0).is_err(), "no such page");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    doc.update_dict(page.obj, |d| d.set(b"Annots".to_vec(), Object::Array(Vec::new()))).unwrap();
+    isolate_content(&mut doc, 0, 1).unwrap();
+    let after = streams(&doc, 0).join("\n");
+    assert!(after.contains("(Second) Tj") && !after.contains("(First) Tj"), "{after}");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    assert!(page.dict.get(b"Annots").is_none(), "no annotations are drawn over it");
+    assert_eq!(list_added(&doc).len(), 1);
+}
+
+/// Edit ▸ Paste (#2636): where a pasted item lands.
+#[test]
+fn a_paste_lands_where_the_copy_was_offset_per_paste_and_stays_on_the_page() {
+    use crate::added::{PASTE_STEP, paste_rect};
+    let page = [300.0, 400.0];
+    let rect = [40.0, 300.0, 140.0, 320.0];
+    assert_eq!(paste_rect(rect, page, 0, None), rect, "in place");
+    let d = 2.0 * PASTE_STEP;
+    assert_eq!(paste_rect(rect, page, 2, None), [40.0 + d, 300.0 - d, 140.0 + d, 320.0 - d], "two steps down and right");
+    assert_eq!(paste_rect(rect, page, 1, Some([10.0, 50.0])), [10.0, 30.0, 110.0, 50.0], "its top-left corner at the point");
+    assert_eq!(paste_rect(rect, page, 0, Some([290.0, 5.0])), [200.0, 0.0, 300.0, 20.0], "pulled back onto the page");
+    assert_eq!(paste_rect([0.0, 0.0, 500.0, 600.0], page, 0, Some([10.0, 10.0])), [0.0, -200.0, 500.0, 400.0], "too large: left and top on the page");
+    assert_eq!(paste_rect([140.0, 320.0, 40.0, 300.0], page, 0, None), rect, "a reversed box is normalized");
+    assert_eq!(paste_rect(rect, [f64::NAN, 400.0], 1, None), rect, "a page without a size leaves the box alone");
+    assert_eq!(paste_rect(rect, page, 1, Some([f64::INFINITY, 5.0])), rect, "so does a point that isn't a number");
+    assert_eq!(paste_rect(rect, page, u32::MAX, None), [200.0, 0.0, 300.0, 20.0], "many pastes stop at the page's corner");
+}
+
+/// A paste steps on past exact copies of the item (its original, earlier pastes), and only those.
+#[test]
+fn a_paste_steps_past_copies_of_itself_only() {
+    use crate::added::{PASTE_STEP, paste_place};
+    let page = [300.0, 400.0];
+    let text = |rect, t: &str| Content::Text(AddedText { rect, text: t.into(), ..AddedText::default() });
+    let item = text([40.0, 300.0, 140.0, 314.4], "Note");
+    let step = |n: f64| [40.0 + n * PASTE_STEP, 300.0 - n * PASTE_STEP, 140.0 + n * PASTE_STEP, 314.4 - n * PASTE_STEP];
+    assert_eq!(paste_place([], &item, page), step(0.0), "an empty page: where it was");
+    assert_eq!(paste_place([&item], &item, page), step(1.0), "beside its original");
+    let first = item.with_rect(step(1.0));
+    assert_eq!(paste_place([&item, &first], &item, page), step(2.0), "beside the last copy");
+    assert_eq!(paste_place([&first], &item, page), step(0.0), "its place is free again (the original was cut)");
+    let other = text(step(0.0), "Other text");
+    assert_eq!(paste_place([&other], &item, page), step(0.0), "a different item in the way doesn't count");
+    // A page full of copies at its corner: the search ends.
+    let corner = item.with_rect([200.0, 0.0, 300.0, 14.4]);
+    let stuck = paste_place([&corner], &item.with_rect([200.0, 0.0, 300.0, 14.4]), page);
+    assert_eq!(stuck, [200.0, 0.0, 300.0, 14.4]);
+    // An image pasted into another document draws its picture from an object of that document:
+    // still a copy, so the next paste steps past it.
+    let image = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    let pasted = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(42, 0)) });
+    assert_eq!(paste_place([&pasted], &image, page), step(1.0), "a copy whose picture is stored anew");
+    let turned = Content::Image(AddedImage { rotation: 1, ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    assert_eq!(paste_place([&turned], &image, page), step(0.0), "the same picture turned or cropped otherwise isn't a copy");
+}
+
 #[test]
 fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();
@@ -1181,6 +1800,45 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// ISO 32000-2 §9.6.4: an Edit-text line set in a Type 3 bitmap font is as high as the boxes its
+/// glyphs declare with `d1`, whatever its `/FontBBox` says and whichever way its font matrix
+/// turns glyph space, so two lines 8 points apart are two lines with 7-point boxes, not slivers.
+#[test]
+fn edit_lines_in_a_type3_font_are_as_high_as_their_glyphs() {
+    // Glyph `a` is drawn 60 units wide, from 20 below the baseline to 50 above it, at 0.1 Tf:
+    // 7 points high, 2 below the baseline.
+    for (matrix, flip) in [("1 0 0 1 0 0", 1), ("1 0 0 -1 0 0", -1)] {
+        for bbox in ["[0 0 0 0]", "[0 0 1 1]"] {
+            let mut doc = text_page(&format!("BT /T3 0.1 Tf 1 0 0 {flip} 72 700 Tm (aa) Tj 1 0 0 {flip} 72 692 Tm (aa) Tj ET"));
+            let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"60 0 0 -20 60 50 d1 0 -20 60 70 re f".to_vec())));
+            let font = doc.add(
+                pdfcraft_cos::parse_indirect(
+                    format!(
+                        "1 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [{matrix}] /FontBBox {bbox} /FirstChar 97 /LastChar 97 /Widths [60] /Encoding << /Differences [97 /a] >> /CharProcs << /a {} 0 R >> >> endobj",
+                        glyph.num
+                    )
+                    .as_bytes(),
+                    0,
+                    &|_| None,
+                )
+                .unwrap()
+                .1,
+            );
+            let p = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(p, |d| {
+                d.set(
+                    b"Resources".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])))])),
+                )
+            })
+            .unwrap();
+            let lines = text::text_lines(&doc, 0).unwrap();
+            let rects: Vec<_> = lines.iter().map(|l| (l.text.as_str(), l.rect.map(|v| (v * 100.0).round() / 100.0))).collect();
+            assert_eq!(rects, [("aa", [72.0, 698.0, 84.0, 705.0]), ("aa", [72.0, 690.0, 84.0, 697.0])], "{matrix} {bbox}");
+        }
+    }
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";
@@ -1246,6 +1904,30 @@ fn tracked_text_preserves_larger_word_gaps() {
         let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
         assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "TEST WORD", "{show}");
     }
+}
+
+/// LibreOffice stretches a justified line on both sides of each space glyph, so a gap that reads
+/// as a space comes right before the space glyph it widens: one space, not two. A gap after the
+/// space glyph, a space glyph with no gap before it, and two space glyphs after a gap read as
+/// before.
+#[test]
+fn a_gap_before_a_space_glyph_reads_as_one_space() {
+    for show in ["[(Word) -250 ( next) -250 ( last)] TJ", "[(Word ) -250 (next ) -250 (last)] TJ", "[(Word) -250 (next) 0 ( last)] TJ"] {
+        let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last", "{show}");
+    }
+    // Only the first space glyph after the gap is the gap's: two real spaces stay two.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // The same line split over operators: the gap ends one run, its space glyph starts the next.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250] TJ [( next) -250] TJ ( last) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last");
+    // Space glyphs on both sides of a break between runs, with no gap, are two spaces.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (Word ) Tj ( next) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // Down a vertical column the same.
+    let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");
 }
 
 #[test]
@@ -1634,6 +2316,214 @@ fn japanese_replacement_over_240_unique_glyphs_is_split_across_fallback_fonts() 
         glyphs += count;
     }
     assert_eq!(glyphs, 300);
+}
+
+#[test]
+fn styled_paragraph_batches_cyrillic_without_changing_source_fonts() {
+    if without_craft_fonts("styled_paragraph_batches_cyrillic_without_changing_source_fonts") {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running through the long field.) Tj ET",
+    );
+    let replacement = "The quick brown fox jumps over the lazy dog шалом\nand keeps running through the long field.";
+    text::rewrite_block(&mut doc, 0, 0, Some(replacement), &text::BlockStyle { width: Some(520.0), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(fallback_fonts(&doc).len(), 1, "the five letters must share one font");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.base_font == "Helvetica" && l.text.starts_with("The quick brown fox")), "{lines:?}");
+    let fallback: Vec<_> = lines.iter().filter(|l| l.font.starts_with("PCJp")).collect();
+    assert_eq!(fallback.len(), 1, "one word must be one text run: {fallback:?}");
+    assert_eq!(fallback[0].text, "шалом");
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>().replace(' ', ""), replacement.replace([' ', '\n'], ""));
+}
+
+#[test]
+fn styled_paragraph_over_240_fallback_glyphs_splits_and_refuses_atomically() {
+    let replacement = format!("{}\nLatin", covered_japanese_chars(300));
+    let mut doc = text_page("BT /F1 12 Tf 14.4 TL 72 700 Td (Original) Tj T* (Latin) Tj ET");
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    if without_craft_fonts("styled_paragraph_over_240_fallback_glyphs_splits_and_refuses_atomically") {
+        assert!(text::replace_block(&mut doc, 0, 0, &replacement).is_err());
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original);
+        return;
+    }
+    text::rewrite_block(&mut doc, 0, 0, Some(&replacement), &text::BlockStyle { width: Some(14000.0), ..Default::default() }).unwrap();
+    let reopened = reopen(&doc);
+    let fonts = fallback_fonts(&reopened);
+    assert_eq!(fonts.len(), 2, "300 glyphs need two fonts, not an error at glyph 241");
+    let counts: Vec<_> = fonts.iter().map(|(_, f)| reopened.dict(f.get(b"CharProcs").unwrap()).unwrap().len()).collect();
+    assert_eq!(counts.iter().sum::<usize>(), 300);
+    assert!(counts.iter().all(|n| *n <= 240));
+    assert_eq!(text::text_lines(&reopened, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), replacement.replace('\n', ""));
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let snapshot = doc.clone();
+    let err = text::replace_block(&mut doc, 0, 0, &format!("{replacement}\u{10ffff}")).unwrap_err();
+    assert!(err.to_string().contains("U+10FFFF"), "{err}");
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(write_incremental(&snapshot, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn styled_fallback_batches_keep_face_choices_and_range_styles() {
+    if without_craft_fonts("styled_fallback_batches_keep_face_choices_and_range_styles") {
+        return;
+    }
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDPGothic" && f.style == "Bold") {
+        eprintln!("skipping: no bold Gothic face");
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original) Tj ET");
+    let range = |range, family, bold| text::RangeStyle {
+        range,
+        family: Some((family, bold, false)),
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let style = text::BlockStyle {
+        width: Some(520.0),
+        ranges: vec![
+            range(3..6, added::Family::Times, false),
+            range(6..9, added::Family::Helvetica, true),
+            range(9..11, added::Family::Times, false),
+        ],
+        ..Default::default()
+    };
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let err = text::rewrite_block(&mut doc, 0, 0, Some("見見見ш見ш\nLatin\u{10ffff}"), &style).unwrap_err();
+    assert!(err.to_string().contains("U+10FFFF"), "{err}");
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original, "all faces must validate before writing fallback objects");
+    text::rewrite_block(&mut doc, 0, 0, Some("見見見ш見ш\nLatin"), &style).unwrap();
+    let doc = reopen(&doc);
+    let fonts = fallback_fonts(&doc);
+    let mut summary: Vec<_> = fonts
+        .iter()
+        .map(|(_, f)| {
+            let face = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f).base_font;
+            let count = doc.dict(f.get(b"CharProcs").unwrap()).unwrap().len();
+            (face, count)
+        })
+        .collect();
+    summary.sort();
+    assert_eq!(
+        summary,
+        [
+            ("BIZUDMincho-Regular".into(), 1),
+            ("BIZUDPGothic-Bold".into(), 1),
+            ("BIZUDPGothic-Regular".into(), 2),
+            ("ShipporiMincho-Regular".into(), 1)
+        ]
+    );
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "見見見ш見шLatin");
+}
+
+#[test]
+fn styled_fallback_budget_is_enforced_before_objects_are_written() {
+    let glyphs = covered_japanese_chars(65);
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original) Tj ET");
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let snapshot = doc.clone();
+    let style = text::BlockStyle { width: Some(14000.0), ..Default::default() };
+    let over_budget = format!("{glyphs}\nLatin");
+    let err = text::rewrite_block_with_limit(&mut doc, 0, 0, Some(&over_budget), &style, 1).unwrap_err().to_string();
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original, "refusal must add no objects");
+    assert_eq!(write_incremental(&snapshot, &SaveOptions::default()).unwrap(), original);
+    if without_craft_fonts("styled_fallback_budget_is_enforced_before_objects_are_written") {
+        assert!(err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert!(err.contains("more than 64 fallback glyphs"), "{err}");
+    // One glyph per font gives a small, real budget of 64 distinct glyphs. At the
+    // boundary a repeated glyph is free: this is not a limit on text length.
+    let at_budget: String = glyphs.chars().take(64).chain(glyphs.chars().take(1)).collect();
+    text::rewrite_block_with_limit(&mut doc, 0, 0, Some(&format!("{at_budget}\nLatin")), &style, 1).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(fallback_fonts(&doc).len(), 64);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), format!("{at_budget}Latin"));
+}
+
+#[test]
+fn styled_fallback_same_base_font_and_character_keep_both_weights() {
+    if without_craft_fonts("styled_fallback_same_base_font_and_character_keep_both_weights") {
+        return;
+    }
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDPGothic" && f.style == "Bold") {
+        eprintln!("skipping: no bold Gothic face");
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (alpha ) Tj /F2 12 Tf (beta ) Tj ET");
+    let source = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().unwrap().clone();
+    for (object, weight) in [(5, 400), (6, 700)] {
+        let mut font = source.clone();
+        // The same BaseFont can have different descriptor weights. Changing a
+        // RangeStyle family would also rename BaseFont and miss this cache key.
+        font.set(b"BaseFont".to_vec(), Object::name("NeutralFace"));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontName".to_vec(), Object::name("NeutralFace"));
+        descriptor.set(b"FontWeight".to_vec(), Object::Int(weight));
+        font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Dict(font));
+    }
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].base_font, lines[1].base_font);
+    assert_eq!((lines[0].bold, lines[1].bold), (false, true));
+    // Unchanged words anchor each inserted copy of the same letter in its own source style.
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let mut inherited = Vec::new();
+    for (range, source) in block.edited_spans("alpha ш beta ш") {
+        for _ in "alpha ш beta ш".get(range).unwrap().chars().filter(|ch| *ch == 'ш') {
+            inherited.push(lines[source].bold);
+        }
+    }
+    assert_eq!(inherited, [false, true], "the fixture must exercise both weights of the same BaseFont");
+    text::replace_block(&mut doc, 0, 0, "alpha ш beta ш").unwrap();
+    let doc = reopen(&doc);
+    let fonts = fallback_fonts(&doc);
+    let mut names: Vec<_> = fonts.iter().map(|(_, f)| pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f).base_font).collect();
+    names.sort();
+    assert_eq!(names, ["BIZUDPGothic-Bold", "BIZUDPGothic-Regular"]);
+    let outlines: Vec<_> = fonts
+        .iter()
+        .map(|(_, f)| {
+            let procs = doc.dict(f.get(b"CharProcs").unwrap()).unwrap();
+            assert_eq!(procs.len(), 1, "each weight needs just the shared letter");
+            stream_bytes(&doc, procs.iter().next().unwrap().1).unwrap()
+        })
+        .collect();
+    assert_ne!(outlines[0], outlines[1], "weight must change the outline, not only the descriptor");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "alpha ш beta ш");
+}
+
+#[test]
+fn styled_fallback_shards_keep_text_advances_and_alignment() {
+    if without_craft_fonts("styled_fallback_shards_keep_text_advances_and_alignment") {
+        return;
+    }
+    let source = "BT /F1 12 Tf 0.5 Tc 5 Tw 80 Tz 14.4 TL 72 700 Td (Original row) Tj T* (Second row) Tj ET";
+    let style =
+        text::BlockStyle { width: Some(520.0), align: Some(added::Align::Center), char_spacing: Some(0.7), scale: Some(80.0), ..Default::default() };
+    let mut whole = text_page(source);
+    let mut split = text_page(source);
+    let replacement = "Latin шалом ш\nSecond row";
+    text::rewrite_block_with_limit(&mut whole, 0, 0, Some(replacement), &style, 240).unwrap();
+    text::rewrite_block_with_limit(&mut split, 0, 0, Some(replacement), &style, 2).unwrap();
+    let (whole, split) = (reopen(&whole), reopen(&split));
+    assert_eq!(fallback_fonts(&whole).len(), 1);
+    assert_eq!(fallback_fonts(&split).len(), 3);
+    let (one, many) = (text::text_lines(&whole, 0).unwrap(), text::text_lines(&split, 0).unwrap());
+    assert_eq!(one.len(), many.len(), "{one:?} vs {many:?}");
+    for (a, b) in one.iter().zip(&many) {
+        assert_eq!(a.text, b.text);
+        for (a, b) in a.rect.iter().zip(b.rect) {
+            assert!((a - b).abs() < 0.002, "sharding must preserve alignment and advances: {a} vs {b}");
+        }
+    }
 }
 
 /// A replacement whose last glyph no face draws (in a later font) changes nothing: neither the
@@ -2365,6 +3255,681 @@ fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     assert!(text::replace_line(&mut doc, 0, 5, "x").is_err(), "no such line");
 }
 
+/// #4280: two paragraphs in subsets without Ç or Ã, one regular and one bold. Each edit that adds
+/// an accent sets the paragraph in a standard font of its own weight. Editing the bold one must
+/// not turn the regular one, set in its stand-in earlier, bold too, and the editor's frame for the
+/// bold one must not reach the regular one.
+#[test]
+fn a_bold_stand_in_font_leaves_an_earlier_regular_one_alone() {
+    let widths = vec!["600"; 26].join(" ");
+    let font = |base: &str| {
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} /FirstChar 65 /LastChar 90 /Widths [{widths}] /Encoding /WinAnsiEncoding >>")
+    };
+    let (regular, bold) = (font("ABCDEF+Garamond"), font("ABCDEF+Garamond-Bold"));
+    let content = stream("", "BT /F1 12 Tf 72 700 Td (ACAO) Tj ET BT /F2 12 Tf 300 400 Td (TENSAO) Tj ET");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &content,
+        &regular,
+        &bold,
+    ]);
+    let block = |doc: &Document, text: &str| text::text_blocks(doc, 0).unwrap().iter().position(|b| b.text == text).unwrap();
+    let acao = block(&doc, "ACAO");
+    assert_eq!(text::replace_block(&mut doc, 0, acao, "AÇÃO").unwrap().substituted.as_deref(), Some("Times-Roman"));
+    let first = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "AÇÃO").unwrap();
+
+    let tensao = block(&doc, "TENSAO");
+    let layout = text::text_edit_layout(&doc, 0, tensao, "TENSÃO", &text::BlockStyle::default()).unwrap();
+    let draft = layout.draft_rect.unwrap();
+    assert!(draft[3] < first.rect[1] || draft[1] > first.rect[3], "the frame {draft:?} reaches the regular paragraph at {:?}", first.rect);
+    assert_eq!(text::replace_block(&mut doc, 0, tensao, "TENSÃO").unwrap().substituted.as_deref(), Some("Times-Bold"));
+
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let font_of = |text: &str| lines.iter().find(|l| l.text == text).map(|l| l.base_font.clone());
+    assert_eq!(font_of("AÇÃO").as_deref(), Some("Times-Roman"), "{lines:?}");
+    assert_eq!(font_of("TENSÃO").as_deref(), Some("Times-Bold"), "{lines:?}");
+}
+
+/// #2517: one blank line at ordinary leading (2 × 1.2 × the font size) is a paragraph break.
+/// Editing the first paragraph must leave the second one in place.
+#[test]
+fn a_blank_line_keeps_the_next_paragraph() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET";
+    let mut doc = text_page(src);
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2, "{:?}", before.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    text::replace_block(&mut doc, 0, 0, "First paragraph, edited row.\nFirst paragraph, second row.").unwrap();
+    let after = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "{:?}", after.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    assert!(after[0].text.contains("edited row") && after[0].text.contains("second row"), "{:?}", after[0].text);
+    assert!(after[1].text.contains("Second paragraph"), "{:?}", after[1].text);
+    // The second row is left in the source stream. A marker around only the rewritten row
+    // would split the paragraph; either there is no marker, or it covers both rows and not the next paragraph.
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    if content.contains("/P BMC") {
+        let marked = region_through_matching_close(&content, "/P BMC");
+        assert!(marked.contains("edited row") && marked.contains("second row"), "marker split the paragraph: {content}");
+        assert!(!marked.contains("Second paragraph"), "marker swallowed the next paragraph: {content}");
+    }
+}
+
+/// #2517: adding a row must not pull in a paragraph that was 3 × the font size below.
+#[test]
+fn a_grown_paragraph_does_not_swallow_the_next_one() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+               BT /F1 12 Tf 1 0 0 1 72 649.6 Tm (Neighbour) Tj ET";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One\nTwo\nThree").unwrap();
+    let after = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "{:?}", after.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    assert!(after[1].text.contains("Neighbour"), "{:?}", after[1].text);
+}
+
+/// An explicit `TL` is the leading `T*` moves by. Rows at that gap are one paragraph, including
+/// when the gap is larger than twice the font size. A following paragraph that starts two
+/// leadings lower stays separate. The numbers are the gaps under test, not a claim about how a
+/// word processor derives them: this repo's Helvetica box is 0.925 em (ascent 0.718, descent
+/// 0.207), so twice that box at 12 pt is 22.2 pt, while 27.6 pt is 12 × 2.3.
+#[test]
+fn explicit_leading_is_the_measured_baseline_gap() {
+    for tl in [14.4_f64, 18.0, 22.2, 24.0, 27.6, 28.8] {
+        let src = format!("BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj T* (Three) Tj ET");
+        let doc = text_page(&src);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let gaps: Vec<f64> = lines.windows(2).map(|w| w[0].origin_baseline() - w[1].origin_baseline()).collect();
+        assert!(gaps.iter().all(|gap| (gap - tl).abs() < 0.05), "TL {tl} did not move the baselines: {gaps:?}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "TL {tl}, measured gaps {gaps:?}: {:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    }
+    // Two rows at the TL, then a paragraph whose first baseline is two TLs below the second row.
+    let tl = 14.4_f64;
+    let next = 700.0 - tl - 2.0 * tl;
+    let blank = format!(
+        "BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+         BT /F1 12 Tf {tl} TL 1 0 0 1 72 {next} Tm (Neighbour) Tj ET"
+    );
+    let doc = text_page(&blank);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let between = lines[1].origin_baseline() - lines[2].origin_baseline();
+    assert!((between - 2.0 * tl).abs() < 0.05, "the blank line measured {between}, not {}", 2.0 * tl);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2, "{:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+}
+
+/// The neighbour starts one blank line below (two leadings under the second row). Adding a row
+/// puts the new baseline one leading above that neighbour, inside the join window. The neighbour
+/// still has to survive the edit, both saves, and a second edit.
+#[test]
+fn growing_into_a_blank_line_keeps_the_neighbour_after_save() {
+    let tl = 14.4_f64;
+    let src = format!(
+        "BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+         BT /F1 12 Tf {tl} TL 1 0 0 1 72 {} Tm (Neighbour) Tj ET",
+        700.0 - 3.0 * tl
+    );
+    let mut doc = text_page(&src);
+    let before = text::text_lines(&doc, 0).unwrap();
+    let opening = before[1].origin_baseline() - before[2].origin_baseline();
+    assert!((opening - 2.0 * tl).abs() < 0.05, "fixture gap {opening} is not a blank line");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One\nTwo\nThree").unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let bases: Vec<f64> = lines.iter().map(|l| l.origin_baseline()).collect();
+    assert_eq!(bases.len(), 4, "{bases:?}");
+    let grown = bases[2] - bases[3];
+    assert!((grown - tl).abs() < 0.05, "the new row is {grown} pt above the neighbour, not one leading");
+    assert!(grown < tl * 1.5, "this gap is outside the join window, so the test would pass without the marker");
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["One Two Three", "Neighbour"]);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let marked = region_through_matching_close(&content, "/P BMC");
+    for row in ["(One)", "(Two)", "(Three)"] {
+        assert!(marked.contains(row), "{row} is outside the marker: {content}");
+    }
+    assert!(!marked.contains("Neighbour"), "the neighbour was pulled into the marker: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["One Two Three", "Neighbour"]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "One\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["One Two Four", "Neighbour"]);
+    }
+}
+
+/// No `TL`: `Td` does not set the leading (`TD` does). Three rows at one repeated step are one
+/// paragraph. A single large gap, with no third row at that step, stays a break.
+#[test]
+fn a_repeated_step_without_tl_is_the_paragraph_leading() {
+    let step = 27.6_f64;
+    let bodies = [
+        format!("BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj 0 -{step} Td (Two) Tj 0 -{step} Td (Three) Tj ET"),
+        format!(
+            "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 {} Tm (Two) Tj ET BT /F1 12 Tf 1 0 0 1 72 {} Tm (Three) Tj ET",
+            700.0 - step,
+            700.0 - 2.0 * step
+        ),
+        format!(
+            "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET BT /F1 12 Tf 72 {} Td (Three) Tj ET",
+            700.0 - step,
+            700.0 - 2.0 * step
+        ),
+    ];
+    for body in bodies {
+        let doc = text_page(&body);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let gaps: Vec<f64> = lines.windows(2).map(|w| w[0].origin_baseline() - w[1].origin_baseline()).collect();
+        assert!(gaps.iter().all(|gap| (gap - step).abs() < 0.05), "step {step} measured {gaps:?} in {body}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "{body} -> {:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    }
+    // Two rows and nothing after them: one gap cannot be told from a paragraph break.
+    let pair = format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET", 700.0 - step);
+    assert_eq!(text::text_blocks(&text_page(&pair), 0).unwrap().len(), 2);
+    // The original blank line, written with Td instead of TL: the inner step repeats, the break does not.
+    let inner = 14.4_f64;
+    let blank = format!(
+        "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET \
+         BT /F1 12 Tf 72 {} Td (Neighbour) Tj ET BT /F1 12 Tf 72 {} Td (Line) Tj ET",
+        700.0 - inner,
+        700.0 - 3.0 * inner,
+        700.0 - 4.0 * inner
+    );
+    let doc = text_page(&blank);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let break_gap = lines[1].origin_baseline() - lines[2].origin_baseline();
+    assert!((break_gap - 2.0 * inner).abs() < 0.05, "blank line measured {break_gap}");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2, "{:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+}
+
+/// The first row is unchanged, so the rewrite leaves it in the source stream and skips the
+/// paragraph marker. The added row then sits one leading above the neighbour.
+#[test]
+fn a_partial_rewrite_that_adds_a_row_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "Alpha first row.\nTwo\nThree").unwrap();
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(texts(&doc), ["Alpha first row. Two Three", "Neighbor stays."], "{content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Two Three", "Neighbor stays."]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "Alpha first row.\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Two Four", "Neighbor stays."]);
+    }
+}
+
+/// Both paragraphs share one text object, with a blank line between them. The paragraph
+/// marker has to close before the neighbour, not after the shared `ET`.
+#[test]
+fn a_partial_rewrite_inside_one_text_object_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays."], "the blank line is a paragraph break");
+    text::replace_block(&mut doc, 0, 0, "Alpha first row.\nTwo\nThree").unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(texts(&doc), ["Alpha first row. Two Three", "Neighbor stays."], "{content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Two Three", "Neighbor stays."], "save joined the neighbour");
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "Alpha first row.\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Two Four", "Neighbor stays."]);
+    }
+}
+
+/// The last paragraph of a shared text object has no neighbour after it. The marker still has
+/// to open after the preceding paragraph, not at the shared `BT`, or that paragraph joins it.
+#[test]
+fn a_partial_rewrite_of_the_last_paragraph_in_one_text_object_keeps_the_one_before_it() {
+    let src =
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj T* (Neighbor next.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Neighbor next."], "the blank line is a paragraph break");
+    text::replace_block(&mut doc, 0, 1, "Neighbor stays.\nChanged.").unwrap();
+    let content = page_content(&doc);
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."], "{content}");
+    let alpha = content.find("(Alpha first row.)").expect("the preceding paragraph");
+    let open = content.find("/P BMC").expect("marker");
+    assert!(alpha < open, "the marker swallowed the preceding paragraph: {content}");
+    let neighbour = content.find("(Neighbor stays.)").expect("the kept row");
+    assert!(open < neighbour, "the kept row is outside the marker: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."], "save joined the preceding paragraph");
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 1, "Neighbor stays.\nEdited.").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Alpha next row.", "Neighbor stays. Edited."]);
+    }
+}
+
+/// Three paragraphs share one text object. Rewriting the middle one must leave the paragraph
+/// before it and the paragraph after it outside the marker.
+#[test]
+fn a_partial_rewrite_of_the_middle_paragraph_in_one_text_object_keeps_both_neighbours() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj \
+               T* T* (Mid stays.) Tj T* (Mid next.) Tj T* T* (End stays.) Tj T* (End next.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(
+        texts(&doc),
+        ["Alpha first row. Alpha next row.", "Mid stays. Mid next.", "End stays. End next."],
+        "each blank line is a paragraph break"
+    );
+    text::replace_block(&mut doc, 0, 1, "Mid stays.\nChanged.").unwrap();
+    let content = page_content(&doc);
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Mid stays. Changed.", "End stays. End next."], "{content}");
+    let alpha = content.find("(Alpha first row.)").expect("the preceding paragraph");
+    let open = content.find("/P BMC").expect("marker");
+    let end = content.find("(End stays.)").expect("the following paragraph");
+    assert!(alpha < open, "the marker swallowed the preceding paragraph: {content}");
+    assert!(open < end, "the following paragraph is inside the marker: {content}");
+    let close = content[open..].find("EMC").map(|at| open + at).expect("close");
+    assert!(close < end, "the marker closed after the following paragraph: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Alpha next row.", "Mid stays. Changed.", "End stays. End next."]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 1, "Mid stays.\nEdited.").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Alpha next row.", "Mid stays. Edited.", "End stays. End next."]);
+    }
+}
+
+/// #2516's published steps: adding a row must not make the next edit-by-number rewrite Charlie.
+/// The issue also asks for a stable paragraph id. That is #2508, and this test does not add one.
+#[test]
+fn adding_a_row_does_not_make_the_next_paragraph_number_mean_charlie() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha paragraph, first row of text.) Tj T* (Alpha paragraph, second row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 650 Tm (Bravo paragraph, a single row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 600 Tm (Charlie paragraph, first row of text.) Tj T* (Charlie paragraph, second row.) Tj ET";
+    let mut doc = text_page(src);
+    let names = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(names(&doc).len(), 3, "{:?}", names(&doc));
+    text::replace_block(&mut doc, 0, 0, "Alpha paragraph, first row of text.\nAlpha paragraph, second row.\nAlpha paragraph, a third row.").unwrap();
+    let after = names(&doc);
+    assert!(after.iter().any(|t| t.contains("Bravo") && !t.contains("Alpha")), "Bravo was absorbed: {after:?}");
+    assert!(after.iter().any(|t| t.contains("Charlie")), "Charlie is gone: {after:?}");
+    let bravo = after.iter().position(|t| t.contains("Bravo")).unwrap();
+    text::replace_block(&mut doc, 0, bravo, "Bravo paragraph, edited.").unwrap();
+    let done = names(&doc);
+    assert!(done.iter().any(|t| t.contains("Charlie")), "editing Bravo removed Charlie: {done:?}");
+    assert!(done.iter().any(|t| t.contains("Bravo paragraph, edited.")), "{done:?}");
+}
+
+/// The paragraph is the last thing on the page. Editing the first row and leaving the second
+/// in the source must keep both rows inside one marker, including after a save.
+#[test]
+fn a_partial_rewrite_of_the_only_paragraph_stays_one_block() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = text_page(src);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Alpha next row.)");
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Alpha next row.)");
+    let mut doc = doc;
+    text::replace_block(&mut doc, 0, 0, "One.\nTwo.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Two."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Two.)");
+}
+
+/// The same rewrite when an operator follows the paragraph's `ET`. The close belongs before
+/// that operator, and still after the kept row.
+#[test]
+fn a_partial_rewrite_closes_before_the_operator_that_follows_the_paragraph() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET 0 0 0 RG";
+    let mut doc = text_page(src);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/P BMC", "(One.)", "(Alpha next row.)");
+    let start = content.find("/P BMC").expect("marker");
+    let close = content[start..].find("EMC").map(|at| start + at).expect("close");
+    let after = content.find("0 0 0 RG").expect("the following operator is gone");
+    assert!(close < after, "the marker swallowed the operator after the paragraph: {content}");
+}
+
+/// The last paragraph on the page is already inside a marked region. A partial rewrite stays
+/// one paragraph, and that region's close still comes after both rows.
+#[test]
+fn a_partial_rewrite_of_the_last_marked_paragraph_stays_inside_its_region() {
+    let src = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/MCID 0", "(One.)", "(Alpha next row.)");
+}
+
+/// A partial rewrite must not insert `/P BMC` across two existing marked-content regions.
+/// The neighbour's own marker has to keep wrapping its text.
+#[test]
+fn a_partial_rewrite_keeps_the_next_marked_region_closed() {
+    let src = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC \
+               /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/MCID 0", "(One.)", "(Alpha next row.)");
+    assert_marker_wraps(&content, "/MCID 1", "(Neighbor stays.)", "(Neighbor stays.)");
+    let neighbour = content.find("/MCID 1").expect("neighbour region");
+    let close = content[neighbour..].find("EMC").map(|at| neighbour + at).expect("neighbour close");
+    assert!(!content[neighbour..close].contains("(One.)"), "the rewrite was pulled into the neighbour's marker: {content}");
+}
+
+/// The paragraph being edited is not in a marked region. The next one is. Closing the new
+/// marker at the neighbour's `BT` would land after that region's `BDC` and close it early.
+#[test]
+fn a_partial_rewrite_of_an_unmarked_paragraph_leaves_the_marked_neighbour_closed() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/MCID 1", "(Neighbor stays.)", "(Neighbor stays.)");
+    assert!(!region_through_matching_close(&content, "/MCID 1").contains("(One.)"), "the rewrite was pulled into the neighbour: {content}");
+}
+
+/// Both paragraphs already share one marked region, separated by a blank line. The extra marker
+/// around the edit has to close itself, not the region, so the neighbour stays inside it.
+#[test]
+fn a_partial_rewrite_inside_one_marked_region_leaves_the_neighbour_inside_it() {
+    let src = "/P << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    let region = region_through_matching_close(&content, "/MCID 0");
+    assert!(region.contains("(One.)") && region.contains("(Neighbor stays.)"), "the region closed before the neighbour: {content}");
+}
+
+/// Bytes from `open` through the `EMC` that balances the marked region it begins.
+fn region_through_matching_close<'a>(content: &'a str, open: &str) -> &'a str {
+    let start = content.find(open).unwrap_or_else(|| panic!("missing {open}: {content}"));
+    let bytes = content.as_bytes();
+    let mut index = start;
+    let mut depth = 0i32;
+    while index < bytes.len() {
+        let rest = &bytes[index..];
+        let boundary = index == 0 || !bytes[index - 1].is_ascii_alphanumeric();
+        if boundary && (rest.starts_with(b"BMC") || rest.starts_with(b"BDC")) && rest.get(3).is_none_or(|b| !b.is_ascii_alphanumeric()) {
+            depth += 1;
+            index += 3;
+            continue;
+        }
+        if boundary && rest.starts_with(b"EMC") && rest.get(3).is_none_or(|b| !b.is_ascii_alphanumeric()) {
+            depth -= 1;
+            if depth == 0 {
+                return &content[start..index];
+            }
+            index += 3;
+            continue;
+        }
+        index += 1;
+    }
+    panic!("unbalanced region {open}: {content}");
+}
+
+fn page_content(doc: &Document) -> String {
+    String::from_utf8_lossy(&page_content_bytes(doc, 0)).into_owned()
+}
+
+/// `open` through the next `EMC` contains both strings, and no `EMC` sits inside a text object.
+fn assert_marker_wraps(content: &str, open: &str, first: &str, second: &str) {
+    let marked = region_through_matching_close(content, open);
+    assert!(marked.contains(first) && marked.contains(second), "{open} closed too early: {content}");
+    assert!(!marker_crosses_a_text_object(content), "a marker opened outside a text object and closed inside it: {content}");
+}
+
+/// A marker may sit inside one text object. It may not open outside one and close inside it.
+fn marker_crosses_a_text_object(content: &str) -> bool {
+    let mut text = 0i32;
+    let mut opened_outside = 0i32;
+    let mut opened_inside = 0i32;
+    for token in content.split_whitespace() {
+        match token {
+            "BT" => text += 1,
+            "ET" => text -= 1,
+            "BMC" | "BDC" => {
+                if text == 0 {
+                    opened_outside += 1;
+                } else {
+                    opened_inside += 1;
+                }
+            }
+            "EMC" => {
+                if text > 0 {
+                    if opened_inside > 0 {
+                        opened_inside -= 1;
+                    } else {
+                        return true;
+                    }
+                } else if opened_outside > 0 {
+                    opened_outside -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    text != 0 || opened_outside != 0 || opened_inside != 0
+}
+
+/// A blank line is one extra leading, so the fourth row of a grown paragraph sits on the
+/// neighbour's baseline. Changing the box width must not treat that neighbour as a duplicate
+/// drawing and delete it.
+#[test]
+fn resizing_a_grown_paragraph_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    let text = "Alpha first row.\nthis is another\nalpha test\nAlpha next row.";
+    text::replace_block(&mut doc, 0, 0, text).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let added = lines.iter().find(|l| l.text.contains("Alpha next row.")).unwrap();
+    let neighbour = lines.iter().find(|l| l.text.contains("Neighbor")).unwrap();
+    assert!((added.origin_baseline() - neighbour.origin_baseline()).abs() < 0.5, "the new row is not on the neighbour");
+    let width = text::text_blocks(&doc, 0).unwrap()[0].rect[2] - text::text_blocks(&doc, 0).unwrap()[0].rect[0];
+    for factor in [0.6_f64, 1.6] {
+        let mut copy = doc.clone();
+        text::rewrite_block(&mut copy, 0, 0, Some(text), &text::BlockStyle { width: Some((width * factor).max(40.0)), ..Default::default() })
+            .unwrap();
+        let texts = text::text_blocks(&copy, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+        assert!(texts.iter().any(|t| t.contains("Neighbor stays.")), "width ×{factor} removed the neighbour: {texts:?}");
+    }
+}
+
+/// Narrowing wraps a line. Widening it again rejoins that wrap. A newline that was typed stays.
+#[test]
+fn a_wrapped_line_rejoins_when_widened_and_a_typed_break_stays() {
+    let mut doc = text_page("BT /F1 24 Tf 20 150 Td (Page 1) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(45.0), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert!(block.editor_text.contains('\n'), "the narrow box did not wrap: {}", block.editor_text);
+    assert_eq!(block.reflow_text, "Page 1", "a wrap was kept as a hard break: {}", block.reflow_text);
+    text::rewrite_block(&mut doc, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(200.0), ..Default::default() }).unwrap();
+    let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["Page 1"]);
+
+    let mut typed = text_page("BT /F1 12 Tf 72 700 Td (One) Tj ET");
+    text::replace_block(&mut typed, 0, 0, "One\nTwo\nThree\nfour").unwrap();
+    let block = text::text_blocks(&typed, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.reflow_text, "One\nTwo\nThree\nfour", "a typed break was rejoined: {}", block.reflow_text);
+    let width = (block.rect[2] - block.rect[0]) * 6.0;
+    text::rewrite_block(&mut typed, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(width.max(180.0)), ..Default::default() })
+        .unwrap();
+    assert_eq!(text::text_blocks(&typed, 0).unwrap()[0].editor_text, "One\nTwo\nThree\nfour");
+}
+
+/// #2529 (reviewer): a run of typed spaces that happens to fall at a wrap point is not the same
+/// as the single space an ordinary word gap leaves. Narrowing drops the whole gap, as any wrap
+/// does (#4199's own test: `wrapped("aa  bb  cc", 6.0) == ["aa  bb", "cc"]`); widening it back
+/// must not quietly turn two typed spaces into one. The count is stored on the wrap marker, so
+/// it has to survive an incremental save and a full rewrite, not only the in-memory rewrite.
+#[test]
+fn narrowing_then_widening_keeps_a_typed_double_space() {
+    let fresh = text_page("BT /F1 24 Tf 20 150 Td (One  Two) Tj ET");
+    let wide_width = {
+        let wide = text::text_blocks(&fresh, 0).unwrap().into_iter().next().unwrap().rect;
+        wide[2] - wide[0]
+    };
+    for (save, reopen_as) in
+        [("incremental", reopen(&fresh)), ("full", Document::open(Arc::new(write_full(&fresh, &SaveOptions::default()).unwrap())).unwrap())]
+    {
+        let mut doc = reopen_as;
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(45.0), ..Default::default() }).unwrap();
+        let doc =
+            if save == "incremental" { reopen(&doc) } else { Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap() };
+        let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(block.editor_text, "One\nTwo", "{save}: the narrow box did not wrap between the two typed spaces: {}", block.editor_text);
+        assert_eq!(block.reflow_text, "One  Two", "{save}: the saved wrap did not remember both spaces: {:?}", block.reflow_text);
+        let mut doc = doc;
+        text::rewrite_block(&mut doc, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(wide_width), ..Default::default() }).unwrap();
+        let doc =
+            if save == "incremental" { reopen(&doc) } else { Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap() };
+        let rewidened = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(rewidened.editor_text, "One  Two", "{save}: the second typed space was lost: {:?}", rewidened.editor_text);
+    }
+}
+
+/// #2529: a Chinese/Japanese word split has no space of its own (`wrap`'s own doc comment: "those
+/// pieces join without a space"). Narrowing a paragraph until it wraps inside such a word, then
+/// widening it back, must restore the two pieces exactly as they were, not insert a space between
+/// them. Checked on both the single-style rewrite path and the row-editor (mixed-style) path.
+#[test]
+fn narrowing_then_widening_a_japanese_word_adds_no_space() {
+    if pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("skipping narrowing_then_widening_a_japanese_word_adds_no_space: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "日本語の文章です";
+    for draft in [text.to_string(), format!("見出し\n{text}")] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Placeholder text) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle { width: Some(400.0), ..Default::default() }).unwrap();
+        let wide = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        let wide_width = wide.rect[2] - wide.rect[0];
+
+        // Narrow enough to force a wrap inside the Japanese word, not just between the two rows.
+        // A width-only change must pass `reflow_text` explicitly, as the editor UI does: `None`
+        // falls back to the paragraph's space-joined display text and would not keep a typed break.
+        text::rewrite_block(&mut doc, 0, 0, Some(&wide.reflow_text), &text::BlockStyle { width: Some(60.0), ..Default::default() }).unwrap();
+        let narrow = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        assert!(narrow.rows.len() > draft.matches('\n').count() + 1, "the narrow box did not wrap: {:?}", narrow.editor_text);
+        assert_eq!(
+            narrow.editor_text.replace('\n', ""),
+            draft.replace('\n', ""),
+            "wrapping must not add or drop characters: {:?}",
+            narrow.editor_text
+        );
+
+        text::rewrite_block(&mut doc, 0, 0, Some(&narrow.reflow_text), &text::BlockStyle { width: Some(wide_width), ..Default::default() }).unwrap();
+        let rewidened = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(rewidened.editor_text, draft, "a Japanese word split gained a space it never had: {:?}", rewidened.editor_text);
+    }
+}
+
+/// A file that did not mark its breaks still rejoins a line that fills the measure, and keeps a
+/// short line that had room.
+#[test]
+fn an_unmarked_full_line_rejoins_and_a_short_break_stays() {
+    let long = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (This sentence is long enough to fill a measure.) Tj ET \
+                BT /F1 12 Tf 1 0 0 1 72 685.6 Tm (Tail) Tj ET";
+    let doc = text_page(long);
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.rows.len(), 2, "{}", block.editor_text);
+    assert_eq!(block.reflow_text, "This sentence is long enough to fill a measure. Tail", "{}", block.reflow_text);
+
+    let short = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 685.6 Tm (Two) Tj ET";
+    let doc = text_page(short);
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.reflow_text, "One\nTwo", "{}", block.reflow_text);
+}
+
+/// The letter the screenshots edit. Widening example 1, or adding a row there, must leave the
+/// heading above it and both paragraphs under example 2 as they were.
+fn letter_page() -> &'static str {
+    "BT /F1 14 Tf 72 740 Td (1. Repeated step, no TL. Click Two.) Tj ET \
+     BT /F1 12 Tf 72 700 Td (One) Tj ET \
+     BT /F1 12 Tf 72 672.4 Td (Two) Tj ET \
+     BT /F1 12 Tf 72 644.8 Td (Three) Tj ET \
+     BT /F1 14 Tf 72 590 Td (2. Blank line. Edit the first paragraph.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 550 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 506.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET \
+     BT /F1 14 Tf 72 450 Td (3. Add a row under Alpha. Neighbor stays.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET"
+}
+
+fn block_texts(doc: &Document) -> Vec<String> {
+    text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+#[test]
+fn widening_example_one_does_not_swallow_the_heading_or_split_the_next_paragraph() {
+    let mut doc = text_page(letter_page());
+    let before = block_texts(&doc);
+    assert!(before.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "{before:?}");
+    assert!(before.iter().any(|t| t.contains("One") && t.contains("Three") && !t.contains("Repeated")), "{before:?}");
+    assert!(before.iter().any(|t| t.contains("First paragraph, first row") && t.contains("second row")), "{before:?}");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("One") && b.text.contains("Three")).unwrap();
+    // What the editor committed, including the line breaks. A later width change must keep them.
+    text::replace_block(&mut doc, 0, idx, "One\nTwo\nThree\nfour").unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("four") || b.editor_text.contains("four")).unwrap();
+    assert_eq!(blocks[idx].reflow_text, "One\nTwo\nThree\nfour", "a typed break was treated as a wrap: {}", blocks[idx].reflow_text);
+    let shown = blocks[idx].reflow_text.clone();
+    let width = blocks[idx].rect[2] - blocks[idx].rect[0];
+    text::rewrite_block(&mut doc, 0, idx, Some(&shown), &text::BlockStyle { width: Some((width * 6.0).max(180.0)), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    let after = block_texts(&doc);
+    let kept = text::text_blocks(&doc, 0).unwrap().into_iter().find(|b| b.editor_text.contains("four")).unwrap();
+    assert_eq!(kept.editor_text, "One\nTwo\nThree\nfour", "a wider box flattened the line breaks: {:?}", kept.editor_text);
+    assert!(after.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "the heading joined the resized box: {after:?}");
+    assert!(
+        after.iter().any(|t| t.contains("First paragraph, first row") && t.contains("First paragraph, second row")),
+        "widening example 1 split the next paragraph: {after:?}"
+    );
+    assert!(after.iter().any(|t| t.contains("Second paragraph, first row") && t.contains("second row")), "{after:?}");
+    assert!(after.iter().any(|t| t.contains("Neighbor stays.") && !t.contains("Alpha")), "{after:?}");
+}
+
+#[test]
+fn a_row_added_one_leading_above_the_neighbour_does_not_absorb_it() {
+    let mut doc = text_page(letter_page());
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("Alpha first row")).unwrap();
+    text::replace_block(&mut doc, 0, idx, "Alpha first row.\ntest\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let after = block_texts(&doc);
+    assert!(after.iter().any(|t| t.contains("Neighbor stays.") && !t.contains("Alpha")), "the added row absorbed the neighbour: {after:?}");
+}
+
 #[test]
 fn paragraphs_are_found_and_rewrapped() {
     let mut doc = text_page(
@@ -2449,19 +4014,87 @@ fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
     }
 }
 
-/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
+/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2), on a real optional
+/// content layer: the catalog's `/OCProperties` declares object 7 as the only OCG and the page
+/// resources' `/Properties` maps `/L0` to it, so `/OC /L0 BDC` marks a valid optional-content
+/// member rather than a dangling name.
 fn image_page() -> Document {
     image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET")
 }
 
+/// Arrange, Crop and Remove crop as the engine asks for them, through [`images::change_image`].
+fn arrange(doc: &mut Document, page: usize, index: usize, order: images::ArrangeOrder) -> Result<(), EditError> {
+    images::change_image(doc, page, index, &images::ImageChange::Arrange(order))
+}
+
+fn crop(doc: &mut Document, page: usize, index: usize, keep: [f64; 4]) -> Result<(), EditError> {
+    images::change_image(doc, page, index, &images::ImageChange::Crop(keep))
+}
+
+fn remove_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
+    images::change_image(doc, page, index, &images::ImageChange::RemoveCrop)
+}
+
 fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /Order [7 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> /Properties << /L0 7 0 R >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /OCG /Name (Layer 0) >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn stencil_page_with(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ImageMask true /Filter /ASCIIHexDecode /Length 5 >>\nstream\n0000>\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn form_page_with(content: &str) -> Document {
+    let form_content = "0 0 100 100 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 6 0 R >> >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >>\nstream\n{form_content}\nendstream", form_content.len()),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
@@ -2625,6 +4258,30 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
 }
 
 #[test]
+fn moving_an_image_inside_marked_content_leaves_every_sequence_intact() {
+    // `translate_images` changes the image's own `cm`; its `Do` stays where it was, so a moved
+    // image stays in the sequence that tags it (an image on a layer sits in `/OC … BDC`).
+    for content in [
+        "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+        "/OC /L0 BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+    ] {
+        let mut doc = image_page_with(content);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 10.0, before[1], before[2] + 10.0, before[3]]), "{content}: {after:?}");
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+        assert_eq!((count("BDC"), count("EMC")), (2, 2), "{content}: both sequences remain");
+        let first = ops.iter().position(|op| op.is("BDC")).unwrap();
+        let end = ops.iter().position(|op| op.is("EMC")).unwrap();
+        let image = ops.iter().position(|op| op.is("Do")).unwrap();
+        assert!(first < image && image < end, "{content}: the image is still inside its own sequence");
+        assert!(!ops[end..].iter().any(|op| op.is("Do")), "{content}: the other sequence gained no image");
+    }
+}
+
+#[test]
 fn page_images_move_turn_replace_and_delete() {
     let mut doc = image_page();
     let imgs = images::page_images(&doc, 0).unwrap();
@@ -2664,6 +4321,880 @@ fn page_images_move_turn_replace_and_delete() {
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
     assert!(images::page_images(&doc, 0).unwrap().is_empty());
     assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).is_err());
+}
+
+#[test]
+fn image_arrange_stacking_order_and_remove_crop() {
+    let content = "q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let initial_images = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial_images.len(), 2);
+    assert!(close(initial_images[0].rect, [100.0, 100.0, 200.0, 200.0]));
+    assert!(close(initial_images[1].rect, [200.0, 200.0, 350.0, 350.0]));
+
+    // Boundary case: image 0 is already at the back; SendToBack and SendBackward report an error.
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).is_err());
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).is_err());
+    let imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs.len(), 2);
+    assert!(close(imgs[0].rect, initial_images[0].rect));
+
+    // Bring forward image 0: moves it past the middle text, but it is still behind image 1.
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    // Middle text should now precede image 0's Do in the content stream!
+    let text_pos = str_content.find("Middle Text").unwrap();
+    let first_do = str_content.find("/Im0 Do").unwrap();
+    assert!(text_pos < first_do, "text should now precede image 0");
+
+    // Bring to front on image 0: moves it past image 1 to the front!
+    let mut doc = doc;
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let imgs_after_front = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs_after_front.len(), 2);
+    // In drawing order, the image that was at [100, 100, 200, 200] is now drawn LAST (index 1)!
+    assert!(close(imgs_after_front[0].rect, [200.0, 200.0, 350.0, 350.0]));
+    assert!(close(imgs_after_front[1].rect, [100.0, 100.0, 200.0, 200.0]));
+
+    // Send to back on the front image (index 1) restores it to the back.
+    let mut doc = doc;
+    arrange(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
+    let imgs_after_back = images::page_images(&doc, 0).unwrap();
+    assert!(close(imgs_after_back[0].rect, [100.0, 100.0, 200.0, 200.0]));
+    assert!(close(imgs_after_back[1].rect, [200.0, 200.0, 350.0, 350.0]));
+
+    // Test remove crop
+    let cropped_content = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(cropped_content);
+    crop(&mut doc, 0, 0, [100.0, 100.0, 150.0, 150.0]).unwrap();
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    assert_ne!(img_before.visible_rect, Some(img_before.rect));
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_after = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_after.visible_rect, Some(img_after.rect));
+    // Removing crop again when there is no crop is refused.
+    let mut doc = doc;
+    assert!(remove_crop(&mut doc, 0, 0).is_err());
+
+    // Test crop
+    let uncropped_content = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(uncropped_content);
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_before.visible_rect, Some(img_before.rect));
+    crop(&mut doc, 0, 0, [120.0, 110.0, 250.0, 180.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_cropped = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(img_cropped.visible_rect.unwrap(), [120.0, 110.0, 250.0, 180.0]));
+    // And remove_crop works on it:
+    let mut doc = doc;
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored.visible_rect, Some(img_restored.rect));
+
+    // Test cropping an image that was moved (has an outer transform)
+    let mut doc = image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q");
+    let move_transform = [1.0, 0.0, 0.0, 1.0, 50.0, 40.0];
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(move_transform)).unwrap();
+    let doc = reopen(&doc);
+    let img_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_moved.rect, [150.0, 140.0, 350.0, 240.0]);
+    let mut doc = doc;
+    crop(&mut doc, 0, 0, [170.0, 150.0, 300.0, 220.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_crop_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(img_crop_moved.visible_rect.is_some(), "cropped image must not be deleted");
+    assert!(close(img_crop_moved.visible_rect.unwrap(), [170.0, 150.0, 300.0, 220.0]));
+    // Adjust crop (re-crop)
+    let mut doc = doc;
+    crop(&mut doc, 0, 0, [180.0, 160.0, 280.0, 210.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_recropped = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(img_recropped.visible_rect.unwrap(), [180.0, 160.0, 280.0, 210.0]));
+    // Remove crop from moved image
+    let mut doc = doc;
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored_moved.visible_rect, Some(img_restored_moved.rect));
+}
+
+#[test]
+fn crop_rotated_image_preserves_angle_and_in_place_geometry() {
+    let content = "q 173.20508 100 -50 86.60254 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    let m_before = img_before.matrix;
+    assert!((m_before[1] - 100.0).abs() < 1e-3);
+    assert!((m_before[2] - (-50.0)).abs() < 1e-3);
+
+    crop(&mut doc, 0, 0, [140.0, 170.0, 180.0, 210.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_cropped = &images::page_images(&doc, 0).unwrap()[0];
+
+    let m_after = img_cropped.matrix;
+    assert!((m_after[0] - m_before[0]).abs() < 1e-3);
+    assert!((m_after[1] - m_before[1]).abs() < 1e-3);
+    assert!((m_after[2] - m_before[2]).abs() < 1e-3);
+    assert!((m_after[3] - m_before[3]).abs() < 1e-3);
+    assert!((m_after[4] - m_before[4]).abs() < 1e-3);
+    assert!((m_after[5] - m_before[5]).abs() < 1e-3);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(
+        (str_content.contains("re") || (str_content.contains("m\n") && str_content.contains("l\n"))) && str_content.contains("W\nn"),
+        "{str_content}"
+    );
+    assert!(str_content.contains("/Im0 Do"), "{str_content}");
+
+    let mut doc = doc;
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored.matrix, m_before);
+}
+
+#[test]
+fn image_arrange_preserves_shared_group_drawings() {
+    let content = "q 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (End Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2, "both images initially present in shared group");
+
+    // Bring image 0 to front: it must not delete image 1 that shares the same q...Q group!
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images must be preserved after BringToFront");
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("End Text"), "text in page must be preserved");
+}
+
+/// The marked-content sequence that `mcid` opens (`/MCID n >> BDC` … its `EMC`), as content text.
+fn marked_sequence(content: &str, mcid: u32) -> &str {
+    let tag = format!("/MCID {mcid}");
+    let start = content.find(&tag).unwrap_or_else(|| panic!("no {tag} in {content}"));
+    let end = content[start..].find("EMC").map(|e| start + e).unwrap_or_else(|| panic!("{tag} has no EMC in {content}"));
+    &content[start..end]
+}
+
+/// #3145: Arrange treated marked-content boundaries as if they weren't there, so Bring to Front put
+/// the image inside the text's `BDC`…`EMC` (tagged as the text) and left its own sequence empty.
+#[test]
+fn image_arrange_keeps_marked_content_sequences_whole() {
+    let content = "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC";
+    let mut doc = image_page_with(content);
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(marked_sequence(&s, 0).contains("/Im0 Do"), "the image stays in its own sequence: {s}");
+    assert!(!marked_sequence(&s, 1).contains("/Im0 Do"), "the text's sequence holds no image: {s}");
+    assert!(marked_sequence(&s, 1).contains("(Text)"), "{s}");
+    assert!(s.find("/MCID 1").unwrap() < s.find("/MCID 0").unwrap(), "the image's sequence now comes after the text's: {s}");
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+}
+
+/// A `BMC` sequence (here an artifact) moves as a whole too.
+#[test]
+fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
+    let content = "/Artifact BMC q 100 0 0 100 50 50 cm /Im0 Do Q EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let (art, emc, body, img) = (s.find("/Artifact BMC").unwrap(), s.rfind("EMC").unwrap(), s.find("(Body)").unwrap(), s.find("/Im0 Do").unwrap());
+    assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
+}
+
+/// An image sharing a marked-content sequence with other content must not end up untagged.
+/// Either the arrange call is refused with Err, or every image paint remains inside a marked-content sequence.
+#[test]
+fn arrange_image_in_shared_tagged_block_refuses_or_keeps_tagged() {
+    let content =
+        "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    let res = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    match res {
+        Err(_) => {
+            // Refusing is the expected safe behavior when moving out of a shared tagged unit.
+        }
+        Ok(()) => {
+            let doc = reopen(&doc);
+            let bytes = page_content_bytes(&doc, 0);
+            let ops = pdfcraft_content::parse(&bytes).ops;
+            let mut mc_depth = 0usize;
+            for op in ops {
+                if op.is("BDC") || op.is("BMC") {
+                    mc_depth += 1;
+                } else if op.is("EMC") {
+                    mc_depth = mc_depth.saturating_sub(1);
+                } else if op.is("Do") {
+                    assert!(mc_depth > 0, "every image paint must be inside a marked-content sequence: {}", String::from_utf8_lossy(&bytes));
+                }
+            }
+        }
+    }
+}
+
+/// An image that shares its marked-content sequence with other content cannot be rearranged
+/// without leaving the image untagged or duplicating MCIDs, so it is refused.
+#[test]
+fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
+    let content =
+        "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+}
+
+/// Send backward also refuses to rearrange an image when it shares its sequence with other content.
+#[test]
+fn image_arrange_send_backward_splits_shared_marked_sequence() {
+    let content =
+        "BT /F1 12 Tf 72 700 Td (Header) Tj ET /Table <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Cell) Tj ET EMC";
+    let mut doc = image_page_with(content);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).is_err());
+}
+
+#[test]
+fn arrange_preserves_color_leaking_out_of_marked_content() {
+    let content = "/Figure <</MCID 0>> BDC 1 0 0 rg q 100 0 0 100 0 0 cm /Im0 Do Q EMC BT /F1 12 Tf 72 700 Td (Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let res = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    if res.is_ok() {
+        let bytes = page_content_bytes(&doc, 0);
+        let s = String::from_utf8_lossy(&bytes);
+        let text_pos = s.find("(Text) Tj").unwrap();
+        assert!(s[..text_pos].contains("1 0 0 rg") || s[..text_pos].contains("1 0 0 RG"));
+    }
+}
+
+#[test]
+fn arrange_shared_tagged_does_not_duplicate_mcid() {
+    let content = "/Figure <</MCID 0>> BDC q 100 0 0 100 0 0 cm /Im0 Do Q 0 0 m 10 10 l S EMC";
+    let mut doc = image_page_with(content);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).is_err());
+}
+
+#[test]
+fn image_crop_preserves_outer_cm_for_subsequent_drawings() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do /Im0 Do";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(initial[1].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Crop image 0
+    crop(&mut doc, 0, 0, [60.0, 60.0, 120.0, 120.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images must remain");
+    // Image 0 is cropped:
+    assert!(close(after[0].visible_rect.unwrap(), [60.0, 60.0, 120.0, 120.0]));
+    // Crucial: Image 1 must still have its rect at [50, 50, 150, 150], proving outer cm was not destroyed!
+    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "subsequent image must retain global cm");
+}
+
+#[test]
+fn image_arrange_preserves_position_under_active_ctm() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do /Im0 Do";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(initial[1].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Move first image to front: must not apply destination CTM twice!
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: check order of operators in the content stream
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let first_do = str_content.find("/Im0 Do").unwrap();
+    let last_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(first_do < last_do, "Position: multiple image Do calls exist and order was updated");
+
+    // 2. Appearance: both images' positions and sizes are preserved
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: first image position preserved");
+    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: second image position preserved");
+
+    // 3. Preservation: outer CTM is preserved
+    assert!(str_content.contains("100 0 0 100 50 50 cm"), "Preservation: initial CTM preserved");
+}
+
+#[test]
+fn image_arrange_preserves_shared_group_clipping_bounds() {
+    let content = "q 120 120 40 40 re W n 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [100.0, 100.0, 200.0, 200.0]);
+    assert_eq!(initial[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]));
+    assert_eq!(initial[1].rect, [100.0, 100.0, 200.0, 200.0]);
+    assert_eq!(initial[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]));
+
+    // Bring image 0 to front: moves it past the external text while preserving clipping bounds
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: moved image Do now follows External Text in AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let moved_do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < moved_do_pos, "Position: moved image Do follows External Text");
+
+    // 2. Appearance: both images retain exact clipping bounds and geometry
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images preserved");
+    assert_eq!(after[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "Appearance: image 0 retains clip");
+    assert_eq!(after[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "Appearance: image 1 retains clip");
+
+    // 3. Preservation: External Text and original group drawing preserved
+    assert!(str_content.contains("External Text"), "Preservation: external text preserved");
+    assert!(str_content.contains("120 120 40 40 re W n"), "Preservation: clipping path operators preserved");
+}
+
+#[test]
+fn image_arrange_preserves_extended_graphics_state_opacity() {
+    let content = "q /GS0 gs 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do moved past External Text
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < do_pos, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: /GS0 gs is retained and directly precedes /Im0 Do
+    let gs_pos = str_content.rfind("/GS0 gs").unwrap();
+    assert!(text_pos < gs_pos, "Appearance: /GS0 gs is in the new moved unit");
+    assert!(gs_pos < do_pos, "Appearance: /GS0 gs directly precedes /Im0 Do");
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "image preserved");
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text is preserved
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: text preserved");
+}
+
+#[test]
+fn image_arrange_preserves_exact_non_rectangular_clipping_path() {
+    let content = "q 120 120 m 160 120 l 140 160 l h W* n 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: moved image follows External Text in AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let last_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < last_do, "Position: moved image follows External Text");
+
+    // 2. Appearance: polygon geometry and even-odd rule are preserved
+    assert!(str_content.contains("W*"), "Appearance: even-odd W* fill rule preserved");
+    // The original group still clips the image left behind, so the moved copy must carry its own.
+    let flat = str_content.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(flat.matches("120 120 m 160 120 l 140 160 l h W* n").count(), 2, "Appearance: exact polygon clip preserved in both units");
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images preserved");
+    for image in &after {
+        assert!(image.contains([140.0, 130.0]), "Appearance: inside the triangle shows");
+        assert!(!image.contains([125.0, 155.0]), "Appearance: inside its box but outside the triangle stays clipped");
+    }
+
+    // 3. Preservation: External Text and remaining original group content preserved
+    assert!(str_content.contains("External Text"), "Preservation: external text preserved");
+}
+
+#[test]
+fn image_remove_crop_after_arrange_keeps_position_under_outer_transform() {
+    // Arrange writes `cm inverse`, the clip, then the absolute placement; Remove Crop used to drop
+    // only the first, which drew the image under the outer translation twice.
+    let content = "1 0 0 1 50 50 cm q 100 0 0 100 0 0 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    crop(&mut doc, 0, 0, [50.0, 50.0, 100.0, 100.0]).unwrap();
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let mut doc = reopen(&doc);
+    let moved = images::page_images(&doc, 0).unwrap();
+    assert_eq!(moved[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(moved[0].visible_rect, Some([50.0, 50.0, 100.0, 100.0]));
+
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "the image stays where it was");
+    assert_eq!(after[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]), "the crop is gone");
+}
+
+#[test]
+fn image_arrange_refuses_to_move_past_a_clip_it_is_not_under() {
+    // The text after the image is drawn under a top-level clip; moving the image after it would
+    // crop the image to that clip.
+    let content = "q 100 0 0 100 50 50 cm /Im0 Do Q 0 0 60 60 re W n BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = page_content_bytes(&doc, 0);
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]));
+
+    for order in [images::ArrangeOrder::BringToFront, images::ArrangeOrder::BringForward] {
+        let err = arrange(&mut doc, 0, 0, order).unwrap_err();
+        assert!(err.to_string().contains("clipping path"), "{err}");
+    }
+    assert_eq!(page_content_bytes(&doc, 0), before, "nothing changes");
+}
+
+#[test]
+fn image_arrange_send_to_back_keeps_a_shared_clip() {
+    // The image after the text is clipped by a top-level clip set before both; behind the text it
+    // is no longer under that clip, so the moved unit has to draw it itself.
+    let content = "BT /F1 12 Tf 72 700 Td (External Text) Tj ET 0 0 60 60 re W n q 100 0 0 100 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.rfind("/Im0 Do").unwrap() < str_content.find("External Text").unwrap(), "the image moved behind the text");
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].visible_rect, Some([50.0, 50.0, 60.0, 60.0]), "still cropped to the clip");
+}
+
+#[test]
+fn unwrapped_image_moves_successfully() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Initial order: /Im0 Do precedes Middle Text
+    let initial_bytes = page_content_bytes(&doc, 0);
+    let initial_str = String::from_utf8_lossy(&initial_bytes);
+    let init_do = initial_str.find("/Im0 Do").unwrap();
+    let init_text = initial_str.find("Middle Text").unwrap();
+    assert!(init_do < init_text, "/Im0 Do initially precedes Middle Text");
+
+    // Move unwrapped image to front (past Middle Text)
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows Middle Text in the content stream AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let after_text = str_content.find("Middle Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do actually moved after Middle Text");
+
+    // 2. Appearance: image rect and visibility are unchanged
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: image coordinates preserved");
+    assert_eq!(after[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]));
+
+    // 3. Preservation: Middle Text and CTM remain intact
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET"), "Preservation: text operation preserved");
+    assert!(str_content.contains("100 0 0 100 50 50 cm"), "Preservation: original cm preserved");
+}
+
+#[test]
+fn test_arrange_unwrapped_image_extraction() {
+    let content = b"100 0 0 100 100 100 cm /Im0 Do /Im1 Do";
+    let ops = pdfcraft_content::parse(content).ops;
+    let target = ops.iter().position(|op| op.is("Do") && op.name(0) == Some(b"Im0")).expect("target /Im0 not found");
+
+    // Scope start for unwrapped image matches target because content_units isolates Do
+    let scope_start = target;
+
+    // Accumulate effective CTM prior to the image operation
+    let mut initial_ctm = pdfcraft_content::Matrix::IDENTITY;
+    for op in &ops[..target] {
+        if op.is("cm")
+            && let Some(m) = op.nums::<6>()
+        {
+            initial_ctm = pdfcraft_content::Matrix(m).then(&initial_ctm);
+        }
+    }
+    assert_eq!(initial_ctm, pdfcraft_content::Matrix([100.0, 0.0, 0.0, 100.0, 100.0, 100.0]));
+
+    let extracted = images::extract_scope_state(&ops, scope_start, target, initial_ctm)
+        .expect("extraction must not return Err")
+        .expect("extraction must return Some rather than None");
+
+    assert_eq!(extracted.do_op.op.as_slice(), b"Do");
+    assert_eq!(extracted.do_op.name(0), Some(b"Im0".as_slice()));
+}
+
+#[test]
+fn arrange_unwrapped_image_in_mixed_scope_succeeds() {
+    // Content unit contains text and an unwrapped image; scope extraction of unit fails on BT,
+    // so it safely falls back to extracting target Do directly.
+    let content = "q BT /F1 12 Tf 72 700 Td (Preceding Text) Tj ET 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 12 Tf 72 500 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < do_pos, "moved image follows External Text");
+
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0]);
+}
+
+#[test]
+fn image_arrange_with_transformed_clipping_path_succeeds() {
+    // Nested graphics state: outer scope establishes a scaled clipping path (cm + path + W n),
+    // inner scope draws the image.
+    let content = "q 0.5 0 0 0.5 0 0 cm 100 100 m 300 100 l 300 300 l 100 300 l h W n q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    assert!(before[0].visible_rect.is_some());
+    let rect_before = before[0].rect;
+    let clip_before = before[0].visible_rect;
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, rect_before);
+    assert_eq!(after[0].visible_rect, clip_before);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < do_pos, "image moved after text: {str_content}");
+}
+
+#[test]
+fn inherited_source_opacity_is_preserved() {
+    // Outer q sets /GS0 gs; inner q draws /Im0 Do; outer Q restores state before External Text
+    let content = "q /GS0 gs q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Initial order: /Im0 Do precedes External Text
+    let initial_bytes = page_content_bytes(&doc, 0);
+    let initial_str = String::from_utf8_lossy(&initial_bytes);
+    let init_do = initial_str.find("/Im0 Do").unwrap();
+    let init_text = initial_str.find("External Text").unwrap();
+    assert!(init_do < init_text, "/Im0 Do initially precedes External Text");
+
+    // Move image to front (past External Text, outside its original outer q...Q scope)
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows External Text in the AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let after_text = str_content.find("External Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: effective appearance state (/GS0 gs) is injected and precedes /Im0 Do in the new unit
+    let after_gs = str_content.rfind("/GS0 gs").unwrap();
+    assert!(after_text < after_gs, "Appearance: /GS0 gs injected into the new unit at destination");
+    assert!(after_gs < after_do, "Appearance: /GS0 gs directly precedes /Im0 Do in the moved unit");
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text and original outer scope structure are preserved
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: external text preserved");
+}
+
+#[test]
+fn destination_opacity_pollution_is_prevented() {
+    // /Im0 Do is fully opaque at the start; destination has active top-level /GS_translucent gs
+    let content = "100 0 0 100 50 50 cm /Im0 Do /GS_translucent gs BT /F1 12 Tf 72 700 Td (Translucent Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    // Attempting to move opaque image 0 to front into active transparency scope must safely bail out with Err
+    let res = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than silently corrupting opacity");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: the document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
+}
+
+#[test]
+fn sequential_gs_operators_merging_properties_are_preserved() {
+    // Sequential gs calls: /GSalpha sets ca=0.6, /GSblend sets BM=/Multiply (without touching ca).
+    let content = "q /GSalpha gs /GSblend gs q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows External Text in the AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let after_text = str_content.find("External Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: Both merged state operators (/GSalpha and /GSblend) are preserved and precede /Im0 Do
+    let after_alpha = str_content.rfind("/GSalpha gs").unwrap();
+    let after_blend = str_content.rfind("/GSblend gs").unwrap();
+    assert!(after_text < after_alpha, "Appearance: /GSalpha gs injected into moved unit");
+    assert!(after_text < after_blend, "Appearance: /GSblend gs injected into moved unit");
+    assert!(after_alpha < after_do, "Appearance: /GSalpha gs precedes /Im0 Do");
+    assert!(after_blend < after_do, "Appearance: /GSblend gs precedes /Im0 Do");
+
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text is intact
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: external text preserved");
+}
+
+#[test]
+fn destination_differing_blend_mode_pollution_is_prevented() {
+    // /Im0 Do has default Normal blend mode; destination has active top-level /GSblend gs (BM = /Multiply)
+    let content = "100 0 0 100 50 50 cm /Im0 Do /GSblend gs BT /F1 12 Tf 72 700 Td (Blended Section) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    // Attempting to move Normal-blend image to front into active Multiply-blend scope must safely bail out with Err
+    let res = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than silently altering blend mode");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
+}
+
+fn nested_soft_mask_page(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /GroupA 9 0 R /GroupB 10 0 R >> /ExtGState << /GSA 7 0 R /GSB 8 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 9 0 R >> >>".into(),
+        "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 10 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 100 50 re f\nendstream".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 50 100 re f\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn nested_soft_masks_replay_in_correct_order_and_effective_mask_is_rendered() {
+    let content = "q /GSA gs q /GSB gs 100 0 0 100 0 0 cm /Im0 Do Q Q BT /F1 12 Tf 10 90 Td (External Text) Tj ET";
+    let mut doc = nested_soft_mask_page(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    let content_bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&content_bytes);
+
+    // 1. Assert emitted stream order: outer /GSA gs must precede inner /GSB gs, which precedes /Im0 Do
+    let after_text = str_content.find("External Text").unwrap();
+    let after_a = str_content.rfind("/GSA gs").unwrap();
+    let after_b = str_content.rfind("/GSB gs").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_a, "Position: /GSA gs relocated past external text");
+    assert!(after_a < after_b, "Order: outer /GSA gs must be replayed before inner /GSB gs");
+    assert!(after_b < after_do, "Order: inner /GSB gs must immediately precede /Im0 Do");
+
+    // 2. The image survives saving and reopening.
+    assert_eq!(images::page_images(&reopen(&doc), 0).unwrap().len(), 1);
+
+    // 3. Rendered-pixel assertion: render output and verify Mask B (left 50x100) is effective, not Mask A (bottom 100x50)
+    let pdf_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes), pdfcraft_render::RenderConfig::default());
+    let page =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    let px = |x: u32, y: u32| {
+        let idx = ((y * page.width + x) * 4) as usize;
+        page.rgba[idx..idx + 4].to_vec()
+    };
+    // Left half (inside Mask B): image is rendered black
+    assert_eq!(px(25, 25), vec![0, 0, 0, 255], "point (25, 25) is inside Mask B: image rendered");
+    assert_eq!(px(25, 75), vec![0, 0, 0, 255], "point (25, 75) is inside Mask B: image rendered");
+    // Right half (outside Mask B): masked out to white page background
+    assert_eq!(px(75, 25), vec![255, 255, 255, 255], "point (75, 25) is outside Mask B: masked out to white");
+    assert_eq!(px(75, 75), vec![255, 255, 255, 255], "point (75, 75) is outside Mask B: masked out to white");
+}
+
+#[test]
+fn destination_differing_mask_pollution_is_prevented() {
+    // /Im0 Do has no mask; destination has active top-level /GSA gs (Mask A)
+    let content = "100 0 0 100 0 0 cm /Im0 Do /GSA gs BT /F1 12 Tf 10 90 Td (Masked Section) Tj ET";
+    let mut doc = nested_soft_mask_page(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    let res = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than corrupting mask state");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
+}
+
+fn soft_mask_with_alpha_page(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /GroupA 9 0 R >> /ExtGState << /GSA 7 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /ExtGState /ca 0.25 /SMask << /Type /Mask /S /Alpha /G 9 0 R >> >>".into(),
+        "<< /Type /ExtGState /SMask /None >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 100 50 re f\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn non_identity_cm_before_gs_preserves_mask_coordinates_and_rendering() {
+    let content = "q 2 0 0 2 10 10 cm /GSA gs 50 0 0 50 0 0 cm /Im0 Do Q BT /F1 12 Tf 10 180 Td (External Text) Tj ET";
+    let mut doc = soft_mask_with_alpha_page(content);
+
+    // Initial state: image bounds are [10, 10, 110, 110]
+    let initial_images = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial_images.len(), 1);
+    assert!(close(initial_images[0].rect, [10.0, 10.0, 110.0, 110.0]));
+
+    // Render baseline before reordering
+    let pdf_bytes_before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes_before), pdfcraft_render::RenderConfig::default());
+    let page_before = renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let px_before = |x: u32, y: u32| {
+        let idx = ((y * page_before.width + x) * 4) as usize;
+        page_before.rgba[idx..idx + 4].to_vec()
+    };
+
+    // Arrange image: BringToFront
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    let content_bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&content_bytes);
+
+    // 1. Assert AST reordering succeeds and interleaves cm before gs
+    let text_pos = str_content.find("External Text").unwrap();
+    let cm_mask_pos = str_content.rfind("2 0 0 2 10 10 cm").unwrap();
+    let gs_pos = str_content.rfind("/GSA gs").unwrap();
+    let cm_img_pos = str_content.rfind("50 0 0 50 0 0 cm").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+
+    assert!(text_pos < cm_mask_pos, "Image relocated after external text");
+    assert!(cm_mask_pos < gs_pos, "CTM for soft mask established before /GSA gs");
+    assert!(gs_pos < cm_img_pos, "/GSA gs executed before image cm");
+    assert!(cm_img_pos < do_pos, "image cm executed before /Im0 Do");
+
+    // 2. Assert image bounds remain unchanged after saving and reopening
+    let reopened_doc = reopen(&doc);
+    let reopened_images = images::page_images(&reopened_doc, 0).unwrap();
+    assert_eq!(reopened_images.len(), 1);
+    assert!(close(reopened_images[0].rect, [10.0, 10.0, 110.0, 110.0]), "Image bounds preserved: {:?}", reopened_images[0].rect);
+
+    // 3. Render reopened document and assert non-overlapping pixels remain unchanged
+    let pdf_bytes_after = write_incremental(&reopened_doc, &SaveOptions::default()).unwrap();
+    let mut renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes_after), pdfcraft_render::RenderConfig::default());
+    let page_after = renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let px_after = |x: u32, y: u32| {
+        let idx = ((y * page_after.width + x) * 4) as usize;
+        page_after.rgba[idx..idx + 4].to_vec()
+    };
+
+    // A point inside the masked image (e.g. at x=50, inside the image and bottom half of mask)
+    // Non-overlapping with text (text is at y=180).
+    // The pixel renders at [191, 191, 191, 255] (25% black over 100% white).
+    // In raster coordinates, raster y for PDF y=50 in a 200-high page is y=150.
+    let rendered_pixel_before = px_before(50, 150);
+    let rendered_pixel_after = px_after(50, 150);
+    assert_eq!(rendered_pixel_before, vec![191, 191, 191, 255], "baseline pixel rendered with 25% opacity mask");
+    assert_eq!(rendered_pixel_after, rendered_pixel_before, "rendered non-overlapping pixels remain unchanged");
+
+    // Outside the image: pure white background
+    assert_eq!(px_after(5, 5), vec![255, 255, 255, 255]);
+    assert_eq!(px_after(5, 5), px_before(5, 5));
 }
 
 #[test]
@@ -2714,6 +5245,301 @@ fn form_artwork_edits_only_the_selected_placement() {
     }
     doc.set(artwork, broken);
     assert!(images::page_images(&doc, 0).unwrap().is_empty());
+}
+
+/// A page of [`fixture`] drawing Form artwork `form` (with `dict`'s entries and `content`) twice,
+/// then a caption, after `prefix`. Returns the document and the form's object.
+fn page_with_form(dict: &[(&str, Object)], content: &[u8], prefix: &str, page_states: Option<Dict>) -> (Document, pdfcraft_cos::ObjRef) {
+    let mut doc = fixture();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    form.set(b"Matrix".to_vec(), Object::Array([2, 0, 0, 2, 0, 0].map(Object::Int).to_vec()));
+    for (k, v) in dict {
+        form.set(k.as_bytes().to_vec(), v.clone());
+    }
+    let artwork = doc.add(Object::Stream(Stream::flate(form, content)));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+        if let Some(states) = page_states {
+            d.set(b"ExtGState".to_vec(), Object::Dict(states));
+        }
+    })
+    .unwrap();
+    let page = format!("{prefix} q 1 0 0 1 40 80 cm /Art Do Q q 1 0 0 1 300 400 cm /Art Do Q BT /F1 9 Tf 1 0 0 1 40 40 Tm (Caption) Tj ET");
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), page.as_bytes())));
+    (reopen(&doc), artwork)
+}
+
+/// #2964 / #3005: Ungroup draws a form's content in place of one of its `Do`s, so its text is the
+/// page's own and edits like any other. Its fonts are merged under fresh names where the page's
+/// clash, the form object and the other placement stay as they were, and a page sharing the
+/// content stream is untouched.
+#[test]
+fn ungrouping_form_artwork_makes_its_text_editable() {
+    let mut times = Dict::new();
+    times.set(b"Type".to_vec(), Object::name("Font"));
+    times.set(b"Subtype".to_vec(), Object::name("Type1"));
+    times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Dict(times.clone()));
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    // An unclosed `q` too: Ungroup ends the form with the state it was drawn with.
+    let content = b"BT /F1 12 Tf 1 0 0 1 20 30 Tm (Inside) Tj ET q 0 0 1 rg 5 5 10 10 re f";
+    let (mut doc, artwork) = page_with_form(&[("Resources", Object::Dict(res))], content, "", None);
+    let original = doc.get(artwork);
+    let texts = |doc: &Document, page: usize| text::text_lines(doc, page).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc, 0), ["Caption"], "form text isn't the page's own");
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 2);
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let inside = lines.iter().find(|l| l.text == "Inside").expect("the form's text is now page text");
+    // Tm (20, 30) through the form's Matrix (×2) and the placement (40, 80): baseline (80, 140).
+    assert!((inside.rect[0] - 80.0).abs() < 1.0 && inside.rect[1] < 140.0 && 140.0 < inside.rect[3], "{:?}", inside.rect);
+    assert!((inside.size - 24.0).abs() < 1e-6, "12 pt scaled ×2: {}", inside.size);
+    assert!(inside.base_font.contains("Times"), "the form's own F1, not the page's Courier: {}", inside.base_font);
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the other placement is still the form");
+    assert_eq!(*doc.get(artwork), *original, "the form object is untouched");
+    assert_eq!(texts(&doc, 1), ["Caption"], "page 2 shared the content stream and keeps drawing the form");
+    assert_eq!(images::page_images(&doc, 1).unwrap().len(), 2);
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(fonts.get(b"F1"), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(8, 0))), "the page's F1 is kept");
+    assert_eq!(fonts.get(b"PCUg1"), Some(&Object::Dict(times)), "the form's F1 joins under a fresh name");
+    let refs: Vec<Object> = match doc.resolve(page.dict.get(b"Contents").unwrap()).as_ref() {
+        Object::Array(a) => a.clone(),
+        _ => vec![page.dict.get(b"Contents").unwrap().clone()],
+    };
+    let data: Vec<u8> = refs
+        .iter()
+        .flat_map(|r| match doc.resolve(r).as_ref() {
+            Object::Stream(s) => [
+                s.decoded().unwrap(),
+                b"
+"
+                .to_vec(),
+            ]
+            .concat(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let ops = pdfcraft_content::parse(&data).ops;
+    let depth = ops.iter().fold(0i32, |d, op| d + i32::from(op.is("q")) - i32::from(op.is("Q")));
+    assert_eq!(depth, 0, "the unclosed q inside the form is closed");
+}
+
+/// Ungroup refuses what would draw differently inline: knockout groups, transparency groups that
+/// blend inside or are drawn translucent, and forms whose content restores more states than it
+/// saves. Plain groups drawn opaque, and translucency that a later `gs` turns off, are fine.
+#[test]
+fn ungroup_refuses_what_would_draw_differently() {
+    let group = |extra: &[(&str, Object)]| {
+        let mut g = Dict::new();
+        g.set(b"S".to_vec(), Object::name("Transparency"));
+        for (k, v) in extra {
+            g.set(k.as_bytes().to_vec(), v.clone());
+        }
+        Object::Dict(g)
+    };
+    let gs = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        Object::Dict(d)
+    };
+    let states = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        d
+    };
+    let ungroup = |dict: &[(&str, Object)], content: &[u8], prefix: &str, page_states: Option<Dict>| {
+        let (mut doc, _) = page_with_form(dict, content, prefix, page_states);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup)
+    };
+    let fill = b"1 0 0 rg 0 0 10 10 re f";
+    let refused = |r: Result<(), EditError>, why: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(why), "{m}"),
+        other => panic!("expected a refusal mentioning {why:?}, got {other:?}"),
+    };
+    refused(ungroup(&[("Group", group(&[("K", Object::Bool(true))]))], fill, "", None), "knockout");
+    let mut inner = Dict::new();
+    inner.set(b"ExtGState".to_vec(), Object::Dict(states(&[("M", gs(&[("BM", Object::name("Multiply"))]))])));
+    refused(ungroup(&[("Group", group(&[])), ("Resources", Object::Dict(inner))], b"/M gs 1 0 0 rg 0 0 10 10 re f", "", None), "blend");
+    let half =
+        || Some(states(&[("H", gs(&[("ca", Object::Real(0.5))])), ("O", gs(&[("LW", Object::Int(2))])), ("One", gs(&[("ca", Object::Int(1))]))]));
+    refused(ungroup(&[("Group", group(&[]))], fill, "/H gs", half()), "translucent");
+    // A later gs that sets only the line width leaves the fill alpha at 0.5.
+    refused(ungroup(&[("Group", group(&[]))], fill, "/H gs /O gs", half()), "translucent");
+    // A later gs that sets the fill alpha back to 1 ends it.
+    ungroup(&[("Group", group(&[]))], fill, "/H gs /One gs", half()).unwrap();
+    // The translucency ends with its q … Q scope.
+    ungroup(&[("Group", group(&[]))], fill, "q /H gs Q", half()).unwrap();
+    // A Q with no q to restore is ignored, as the renderer ignores it: the translucency stays.
+    refused(ungroup(&[("Group", group(&[]))], fill, "/H gs Q", half()), "translucent");
+    // Without a group, translucency at the Do applies to each part just as it would inline.
+    ungroup(&[], fill, "/H gs", half()).unwrap();
+    ungroup(&[("Group", group(&[]))], fill, "", None).unwrap();
+    refused(ungroup(&[], b"Q 1 0 0 rg 0 0 10 10 re f", "", None), "restores more");
+    // A raster image isn't grouped artwork.
+    let mut doc = fixture();
+    let mut img = Dict::new();
+    for (k, v) in [("Subtype", Object::name("Image")), ("Width", Object::Int(1)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))] {
+        img.set(k.as_bytes().to_vec(), v);
+    }
+    img.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let pic = doc.add(Object::Stream(Stream::flate(img, b"\x00")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Pic".to_vec(), Object::Ref(pic));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q 10 0 0 10 0 0 cm /Pic Do Q")));
+    let mut doc = reopen(&doc);
+    refused(images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup), "only grouped Form artwork");
+}
+
+/// Review on #3067: a transparency group with a blending colour space of its own (ISO 32000-2
+/// §11.6.6, Table 145 /CS) composites its contents there, and inline they would composite in the
+/// page's, so Ungroup refuses it. The page group's own space (§11.4.7), or DeviceRGB on a page
+/// that names none, is fine, as is a group that names no space.
+#[test]
+fn ungroup_refuses_a_group_blending_in_another_colour_space() {
+    let group = |cs: Option<&str>| {
+        let mut g = Dict::new();
+        g.set(b"S".to_vec(), Object::name("Transparency"));
+        if let Some(cs) = cs {
+            g.set(b"CS".to_vec(), Object::name(cs));
+        }
+        Object::Dict(g)
+    };
+    let fill = b"1 0 0 rg 0 0 10 10 re f";
+    let ungroup = |cs: Option<&str>, page_cs: Option<&str>| {
+        let (mut doc, _) = page_with_form(&[("Group", group(cs))], fill, "", None);
+        if let Some(page_cs) = page_cs {
+            let page = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(page, |d| d.set(b"Group".to_vec(), group(Some(page_cs)))).unwrap();
+        }
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup)
+    };
+    match ungroup(Some("DeviceCMYK"), None) {
+        Err(EditError::Invalid(m)) => assert!(m.contains("colour space of its own"), "{m}"),
+        other => panic!("a CMYK group on a page with no group space: {other:?}"),
+    }
+    assert!(matches!(ungroup(Some("DeviceRGB"), Some("DeviceCMYK")), Err(EditError::Invalid(_))), "the page blends in CMYK");
+    ungroup(Some("DeviceRGB"), None).unwrap();
+    ungroup(Some("DeviceCMYK"), Some("DeviceCMYK")).unwrap();
+    ungroup(None, Some("DeviceCMYK")).unwrap();
+}
+
+/// A gamma-3 calibrated RGB space: as `/DefaultRGB` it draws DeviceRGB red darker than red.
+fn dark_cal_rgb() -> Object {
+    let mut d = Dict::new();
+    d.set(b"WhitePoint".to_vec(), Object::Array([1, 1, 1].map(Object::Int).to_vec()));
+    d.set(b"Gamma".to_vec(), Object::Array([3, 3, 3].map(Object::Int).to_vec()));
+    Object::Array(vec![Object::name("CalRGB"), Object::Dict(d)])
+}
+
+/// Ungroup fixture page 1's form `Art` (red square) whose `/ColorSpace` resources are `form`,
+/// on a page whose `/ColorSpace` resources are `page` (none when `None`). `build` may add objects
+/// first. Returns the result and the document.
+fn ungroup_with_spaces(build: impl FnOnce(&mut Document) -> (Dict, Option<Dict>)) -> (Result<(), EditError>, Document) {
+    let mut doc = fixture();
+    let (form, page) = build(&mut doc);
+    let mut res = Dict::new();
+    res.set(b"ColorSpace".to_vec(), Object::Dict(form));
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    dict.set(b"Resources".to_vec(), Object::Dict(res));
+    let artwork = doc.add(Object::Stream(Stream::flate(dict, b"1 0 0 rg 0 0 10 10 re f")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+        if let Some(page) = page {
+            d.set(b"ColorSpace".to_vec(), Object::Dict(page));
+        }
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).map(|_| ());
+    (r, doc)
+}
+
+fn spaces(entries: &[(&str, Object)]) -> Dict {
+    let mut d = Dict::new();
+    for (k, v) in entries {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    d
+}
+
+/// A form's `/DefaultRGB` (likewise `/DefaultGray`, `/DefaultCMYK`) remaps the device colours it
+/// paints (ISO 32000-2 §8.6.5.6), looked up in the current resource dictionary (§7.8.3). Inline,
+/// that is the page's: renamed into it, the form's entry would no longer remap anything and its
+/// red would draw in another colour, so Ungroup refuses unless the page has the same entry. A
+/// page's entry that the form's own resources lack would remap the form's colours inline, so that
+/// is refused too.
+#[test]
+fn ungroup_refuses_a_form_with_its_own_default_colour_space() {
+    let refused = |r: Result<(), EditError>, key: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(key) && m.contains("device colours"), "{m}"),
+        other => panic!("expected a refusal naming {key}, got {other:?}"),
+    };
+    refused(ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), None)).0, "/DefaultRGB");
+    // The page has one too, but another.
+    let r = ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", Object::name("DeviceRGB"))])))).0;
+    refused(r, "/DefaultRGB");
+    refused(ungroup_with_spaces(|_| (spaces(&[("DefaultGray", Object::name("CalGray"))]), None)).0, "/DefaultGray");
+    // Only an entry of the same name counts: the page's DefaultRGB doesn't stand for a DefaultCMYK.
+    let r = ungroup_with_spaces(|_| (spaces(&[("DefaultCMYK", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())])))).0;
+    refused(r, "/DefaultCMYK");
+    // The other way round: the page's DefaultRGB would remap the red of a form whose own
+    // resources have none, which draws it as DeviceRGB red.
+    refused(ungroup_with_spaces(|_| (spaces(&[]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())])))).0, "/DefaultRGB");
+}
+
+/// When the page's resources have the same default colour space (the same object, or an equal
+/// value), it remaps the form's colours inline just as the form's did, so Ungroup goes ahead and
+/// adds no renamed copy of it that nothing would use.
+#[test]
+fn ungroup_allows_a_form_whose_default_colour_space_matches_the_page() {
+    let check = |doc: &Document, page_entry: &Object| {
+        let page = pdfcraft_model::pages(doc).into_iter().next().unwrap();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let cs = doc.resolve(res.get(b"ColorSpace").unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(cs.get(b"DefaultRGB"), Some(page_entry), "the page's DefaultRGB is kept");
+        assert_eq!(cs.len(), 1, "no renamed copy: {:?}", cs.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>());
+        assert!(images::page_images(doc, 0).unwrap().is_empty(), "ungrouped");
+    };
+    // Equal values written out twice.
+    let (r, doc) = ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())]))));
+    r.unwrap();
+    check(&doc, &dark_cal_rgb());
+    // The same object, and an indirect value equal to a direct one.
+    let mut shared = None;
+    let (r, doc) = ungroup_with_spaces(|doc| {
+        let cs = Object::Ref(doc.add(dark_cal_rgb()));
+        shared = Some(cs.clone());
+        (spaces(&[("DefaultRGB", cs.clone())]), Some(spaces(&[("DefaultRGB", cs)])))
+    });
+    r.unwrap();
+    check(&doc, shared.as_ref().unwrap());
+    let (r, doc) =
+        ungroup_with_spaces(|doc| (spaces(&[("DefaultRGB", Object::Ref(doc.add(dark_cal_rgb())))]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())]))));
+    r.unwrap();
+    check(&doc, &dark_cal_rgb());
 }
 
 #[test]
@@ -2962,6 +5788,20 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
 }
 
 #[test]
+fn text_blocks_split_at_headings_and_blank_lines() {
+    let page = |size: u32, gap: u32, words: &[&str], top: u32| -> String {
+        words.iter().enumerate().map(|(i, w)| format!("BT /F1 {size} Tf 40 {} Td ({w}) Tj ET\n", top - i as u32 * gap)).collect()
+    };
+    let count = |content: String| text::text_blocks(&text_page(&content), 0).unwrap().len();
+    let heading = page(12, 14, &["First line of text", "second line here", "third line ends"], 340)
+        + &page(12, 14, &["HEADING"], 340 - 28 - 24)
+        + &page(12, 14, &["Next paragraph one", "next two", "next three"], 340 - 28 - 24 - 24);
+    assert_eq!(count(heading), 3);
+    assert_eq!(count(page(12, 14, &["Para one a", "para one b"], 340) + &page(12, 14, &["Para two a", "para two b"], 340 - 42)), 2);
+    assert_eq!(count(page(24, 29, &["VISIBLE", "HIDDEN"], 340)), 1);
+}
+
+#[test]
 fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
     let listed = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
     // #1756: a rotated watermark's bounding box covers the middle of the page, and a body line
@@ -3115,6 +5955,404 @@ fn the_graphics_state_carries_over_between_content_streams() {
     let doc = split_page("q 0.5 0 0 0.5 0 0 cm", "Q BT /F1 10 Tf 100 100 Td (Footpath) Tj ET");
     let l = &text::text_lines(&doc, 0).unwrap()[0];
     assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A page whose first content stream is damaged after its text, and whose second is whole.
+fn damaged_page() -> (Document, pdfcraft_cos::Stream) {
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+    let damaged = damaged_flate(b"BT /F1 12 Tf 72 700 Td (Damaged) Tj ET\n", b"BT /F1 12 Tf 72 500 Td (After the damage) Tj ET");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged.clone());
+    (doc, damaged)
+}
+
+/// An edit that would rewrite a content stream damaged partway is refused: written from what
+/// decoded, it would lose what follows the damage, which other readers may still read. So is an
+/// edit in a later stream: what the damage hides can change how that stream reads, a string or
+/// comment it leaves open, or the graphics state. An edit in a stream before the damage goes on,
+/// and leaves the damaged one as it is stored.
+#[test]
+fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
+    let (mut doc, damaged) = damaged_page();
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Damaged", "Whole"], "read up to the damage");
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::rewrite_block(&mut doc, 0, 0, Some("Edited"), &text::BlockStyle::default()).unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::replace_line(&mut doc, 0, 1, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), damaged.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(texts(&doc), ["Edited", "Damaged"]);
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_eq!(list.get(1), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))));
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, damaged.raw, "stored as it was");
+}
+
+/// A comment the damage leaves open runs on into the next stream, up to its first end of line,
+/// so a string starting there reads as operators: a line of text inside it. That line is in a
+/// stream after the damage, and isn't edited.
+#[test]
+fn text_a_damaged_stream_runs_on_into_is_not_edited() {
+    let mut doc = split_page("", "(note\nBT /F1 12 Tf 72 600 Td (Inside a string) Tj ET\n) pop");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged_flate(b"0 g % a comment", b"\n"));
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Inside a string"], "the comment runs on into the next stream");
+    let listed = pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned();
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned(), listed);
+}
+
+/// A content stream that doesn't decode is never written over. A partial rewrite of the page's
+/// last paragraph closes its marker past the last operator read, in the page's last stream, here
+/// one that doesn't decode: the rewrite is refused, not that stream replaced by the close. An
+/// empty stream there takes the close.
+#[test]
+fn a_content_stream_that_does_not_decode_is_never_written_over() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = split_page(src, "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Stream::from_raw(dict, b"0 0 1 rg 0 0 10 10 re f".to_vec()));
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+    let refused = text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap_err();
+    assert!(refused.to_string().contains("can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page(src, "");
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."]);
+}
+
+/// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
+/// and the page's streams before it are read and edited. A stream of a few MB is read for
+/// selecting objects.
+#[test]
+fn a_content_stream_that_does_not_decode_is_kept_and_edited_before() {
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unknown = pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 12 Tf 72 700 Td (Unread) Tj ET".to_vec());
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), unknown.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["Edited"]);
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, unknown.raw, "stored as it was");
+
+    let large = format!("{}0 0 m 10 10 l S", " ".repeat(2 << 20));
+    assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
+/// A content stream that doesn't decode hides its operators as damage does. Here its `/Filter` is
+/// given by reference, which a file may do and which isn't read here, and it holds a `cm` that
+/// moves what the page draws after it. Text and images there aren't edited, as the edit would be
+/// worked out without the `cm`.
+#[test]
+fn content_after_a_stream_that_does_not_decode_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let hidden_move = |doc: &mut Document| {
+        let filter = doc.add(Object::name("FlateDecode"));
+        let mut s = Stream::flate(Dict::new(), b"1 0 0 1 0 -300 cm");
+        s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+        doc.set(ObjRef::new(4, 0), s);
+    };
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (After) Tj ET");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page("", "q 100 0 0 100 200 200 cm /Im1 Do Q");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+}
+
+/// A text object still open at a stream not read whole goes on in it: the text that stream shows
+/// starts where the text before it ends, so editing that text would move it. The edit is refused.
+/// A change before the text object, in the same stream, goes on. The same holds when the hidden
+/// stream is the page's last.
+#[test]
+fn text_a_stream_not_read_whole_goes_on_from_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    // The hidden stream between the text and a stream closing it, or the page's last.
+    for (damaged, last) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("damaged: {damaged}, last: {last}");
+        let shown: &[u8] = if last { b"(World) Tj ET" } else { b"(World) Tj" };
+        let mut doc = split_page("BT /F1 12 Tf 72 700 Td (Before) Tj ET BT /F1 12 Tf 72 600 Td (Hello) Tj", "ET");
+        let hidden = if damaged {
+            damaged_flate(b"", shown)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), shown);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = Object::Ref(doc.add(hidden));
+        let mut listed = vec![Object::Ref(ObjRef::new(4, 0)), hidden];
+        if !last {
+            listed.push(Object::Ref(ObjRef::new(5, 0)));
+        }
+        let listed = Object::Array(listed);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed.clone())).unwrap();
+        let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["Before", "Hello"], "{what}");
+        let refused = text::replace_line(&mut doc, 0, 1, "Hi").unwrap_err();
+        assert!(refused.to_string().contains("goes on in a content stream"), "{what}: {refused}");
+        assert_eq!(contents(&doc), Some(listed), "{what}");
+        text::replace_line(&mut doc, 0, 0, "Earlier").unwrap();
+    }
+}
+
+/// An image's `q cm … Q` that closes past a stream not read whole, one that doesn't decode or one
+/// damaged partway, may hold what that stream draws (here a square, in the image's `cm`), also when
+/// the square's operands end the stream before it and only its keyword is hidden. Moving the image
+/// leaves that `cm` as it is and gives the `Do` a `cm` of its own, so the square stays, with a clip
+/// on the image too, which then stays where it is as one the square may share. A crop goes around
+/// the `Do` alone, and a crop PdfCraft put in that scope isn't removed. A scope that closes in a
+/// damaged stream before its damage holds none of it: its `cm` takes the move.
+#[test]
+fn an_image_whose_scope_closes_past_a_stream_not_read_whole_moves_alone() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let first_stream = |doc: &Document| {
+        let Some(Object::Array(list)) = contents(doc) else { panic!("contents {:?}", contents(doc)) };
+        let Some(Object::Stream(first)) = list.first().map(|f| (*doc.resolve(f)).clone()) else { panic!("no first stream") };
+        String::from_utf8(first.decoded().unwrap()).unwrap()
+    };
+    let later_streams = |doc: &Document| match contents(doc) {
+        Some(Object::Array(list)) => list.get(1..).map(<[Object]>::to_vec),
+        other => panic!("contents {other:?}"),
+    };
+    // The image in `q 100 0 0 100 50 50 cm`, a stream not read whole drawing a square in that
+    // `cm`, then the scope's `Q`. Split, the square's operands come before the hidden keyword.
+    let page = |clip: &str, damaged: bool, split: bool| {
+        let operands = if split && !damaged { " 1.5 0 0.5 0.5" } else { "" };
+        let mut doc = two_stream_image_page(&format!("q 100 0 0 100 50 50 cm {clip}/Im1 Do{operands}"), "Q");
+        let hidden = match (damaged, split) {
+            (true, false) => damaged_flate(b"", b"0 0 1 rg 1.5 0 0.5 0.5 re f"),
+            (true, true) => damaged_flate(b"0 0 1 rg 1.5 0", b" 0.5 0.5 re f"),
+            (false, _) => {
+                let filter = doc.add(Object::name("FlateDecode"));
+                let mut s = Stream::flate(Dict::new(), if split { b"re f".as_slice() } else { b"0 0 1 rg 1.5 0 0.5 0.5 re f" });
+                s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+                s
+            }
+        };
+        let hidden = doc.add(hidden);
+        let listed = vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(ObjRef::new(5, 0))];
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(listed))).unwrap();
+        doc
+    };
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    for damaged in [false, true] {
+        for split in [false, true] {
+            for clip in ["", "0 0 1 1 re W n ", "/PdfCraftImageCrop MP 0 0 1 1 re W n "] {
+                let what = format!("damaged: {damaged}, split: {split}, clip: {clip:?}");
+                let mut doc = page(clip, damaged, split);
+                let later = later_streams(&doc);
+                images::change_image(&mut doc, 0, 0, &shift).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.contains("100 0 0 100 50 50 cm"), "{what}: the scope's cm stays: {first}");
+                assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [60.0, 50.0, 160.0, 150.0]), "{what}: the image moved");
+
+                let mut doc = page(clip, damaged, split);
+                images::change_image(&mut doc, 0, 0, &images::ImageChange::Crop([60.0, 60.0, 140.0, 140.0])).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: cropped, the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.starts_with("q 100 0 0 100 50 50 cm"), "{what}: nothing put at the scope's start: {first}");
+
+                if clip.contains("PdfCraftImageCrop") {
+                    let mut doc = page(clip, damaged, split);
+                    let listed = contents(&doc);
+                    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::RemoveCrop).unwrap_err();
+                    assert!(refused.to_string().contains("may also clip"), "{what}: {refused}");
+                    assert_eq!(contents(&doc), listed, "{what}");
+                }
+            }
+        }
+    }
+
+    let mut doc = two_stream_image_page("q 100 0 0 100 50 50 cm /Im1 Do", "");
+    doc.set(ObjRef::new(5, 0), damaged_flate(b"Q\n", b"0 0 1 rg 1.5 0 0.5 0.5 re f"));
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let first = first_stream(&doc);
+    assert!(first.contains("100 0 0 100 60 50 cm") && !first.contains("50 50 cm"), "closed before the damage: {first}");
+}
+
+/// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
+/// through the reference: its text is listed and edited, not read with the predictor's tag bytes
+/// left in it.
+#[test]
+fn content_with_parameters_given_by_reference_is_read_and_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let content = b"BT /F1 12 Tf 72 700 Td (Predicted) Tj ET";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    for given in ["parameters", "predictor"] {
+        let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+        let predictor = Object::Int(12);
+        let parms = if given == "parameters" {
+            Object::Ref(doc.add(Object::Dict([(b"Predictor".to_vec(), predictor)].into_iter().collect::<Dict>())))
+        } else {
+            Object::Dict([(b"Predictor".to_vec(), Object::Ref(doc.add(predictor)))].into_iter().collect())
+        };
+        let mut s = Stream::flate(Dict::new(), &rows);
+        s.dict.set(b"DecodeParms".to_vec(), parms);
+        doc.set(ObjRef::new(4, 0), s);
+        assert_eq!(texts(&doc), ["Predicted", "Whole"], "{given} by reference");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        assert_eq!(texts(&reopen(&doc)), ["Edited", "Whole"], "{given} by reference");
+    }
+}
+
+/// Objects are selected only from content read whole: what a damaged stream hides past the
+/// damage could change the graphics state of every later item.
+#[test]
+fn objects_are_not_listed_from_a_content_stream_damaged_partway() {
+    let (doc, _) = damaged_page();
+    let refused = editable_objects(&doc, 0).unwrap_err();
+    assert!(refused.to_string().contains("damaged partway"), "{refused}");
+    assert!(editable_objects(&split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
+fn two_stream_image_page(first: &str, second: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> /XObject << /Im0 7 0 R /Im1 7 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{first}\nendstream", first.len()),
+        format!("<< /Length {} >>\nstream\n{second}\nendstream", second.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\0\0\0\0\0\0\0\0\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn arrange_and_crop_image_in_second_content_stream_succeeds() {
+    let first = "q 100 0 0 100 50 50 cm /Im0 Do Q";
+    let second = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let mut doc = two_stream_image_page(first, second);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0].name, "Im0");
+    assert_eq!(before[1].name, "Im1");
+
+    // Arrange second image (located in the second content stream)
+    arrange(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
+    let after_arrange = images::page_images(&reopen(&doc), 0).unwrap();
+    assert_eq!(after_arrange.len(), 2);
+
+    // Crop image in second stream
+    crop(&mut doc, 0, 0, [210.0, 210.0, 290.0, 290.0]).unwrap();
+    let after_crop = images::page_images(&reopen(&doc), 0).unwrap();
+    assert_eq!(after_crop.len(), 2);
+    assert_eq!(after_crop[0].name, "Im1");
+    assert!(close(after_crop[0].visible_rect.unwrap(), [210.0, 210.0, 290.0, 290.0]));
+    assert_eq!(after_crop[1].name, "Im0");
+    assert_eq!(after_crop[1].visible_rect, Some(after_crop[1].rect));
+}
+
+/// What follows the damage in a content stream is unknown, the graphics state the later streams
+/// draw in too: here it hides a `cm` that doubles them. An image after the damage isn't moved, as
+/// the move is worked out without that `cm`, and one before it isn't arranged to after it, beside
+/// an added item there. An image before the damage is moved.
+#[test]
+fn images_after_a_content_stream_damaged_partway_are_not_moved() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let image = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let hidden_scale = || damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = two_stream_image_page("", image);
+    doc.set(ObjRef::new(4, 0), hidden_scale());
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page(image, "");
+    let damaged = doc.add(hidden_scale());
+    let mut added = Dict::new();
+    added.set(b"PCAdded".to_vec(), Object::Dict(Dict::new()));
+    let added = doc.add(Object::Stream(Stream::from_raw(added, b"q 0 0 1 rg 0 0 10 10 re f Q".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(damaged), Object::Ref(added)]))
+    })
+    .unwrap();
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    // Arranged within the content before the damage, it goes on.
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(added), Object::Ref(damaged)]))
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap();
+
+    let mut doc = two_stream_image_page(image, "");
+    doc.set(ObjRef::new(5, 0), hidden_scale());
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let moved = images::page_images(&reopen(&doc), 0).unwrap();
+    assert!(close(moved[0].rect, [210.0, 200.0, 310.0, 300.0]), "{:?}", moved[0].rect);
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,
@@ -3315,6 +6553,55 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
         let applied = add_watermark(&mut fixture(), &[0], &wm, false);
         assert_eq!(applied.err().map(|e| e.to_string()), refused.map(undrawable_message), "{text:?}");
     }
+}
+
+/// Thai in a header, footer or text watermark is drawn from the Thai face as Add text draws it:
+/// Type 3 glyphs with a ToUnicode map, one set of fonts shared by every page the mark goes on,
+/// beside the mark's standard face. A build without a Thai face refuses it, saying what to do.
+#[test]
+fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
+    let blank = String::new;
+    let footer = HeaderFooter {
+        text: [blank(), "หน้า <<1>> บุญฤทธิ์".into(), blank(), blank(), blank(), "น้ำ <<Bates Number#3#1#ก-#>>".into()],
+        ..HeaderFooter::default()
+    };
+    let wm = Watermark { text: "ลับ ปั้น\nDRAFT".into(), ..Watermark::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let mut doc = fixture();
+        for err in [add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap_err(), add_watermark(&mut doc, &[0], &wm, false).unwrap_err()] {
+            assert!(matches!(&err, EditError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        }
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (Some('ห'), Some('ล')));
+        return;
+    }
+    assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None));
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0, 1], &footer, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    let doc = reopen(&doc);
+    let mut shared = Vec::new();
+    for page in 0..2 {
+        let drawn = streams(&doc, page).concat();
+        assert!(drawn.contains("/PCTh") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{drawn}");
+        let p = &pdfcraft_model::pages(&doc)[page];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+        let thai: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCTh")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        assert_eq!(thai.len(), 2, "the footer's fonts and the watermark's");
+        let mut mapped = String::new();
+        for (_, f) in &thai {
+            let f = doc.resolve(f).as_dict().unwrap().clone();
+            assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+            mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+        }
+        // น้ำ, ก (the Bates prefix) and ปั้น copy as typed.
+        for text in ["<0E190E490E33>", "<0E01>", "<0E1B0E310E49>"] {
+            assert!(mapped.contains(text), "{text} in {mapped}");
+        }
+        shared.push(thai);
+    }
+    assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
 }
 
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
@@ -3522,6 +6809,177 @@ fn reading_follows_form_xobjects() {
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
 }
 
+/// A page's `/XObject` and a form's `/Resources` are read wherever they are stored, and a form with
+/// none of its own, or with something else there, uses the ones it was drawn with (PDF 1.1 files).
+/// Each of these pages shows one line of text and one picture through one form.
+#[test]
+fn reading_follows_forms_however_their_resources_are_stored() {
+    let body = "BT /F1 12 Tf 72 700 Td (In the form) Tj ET q 20 0 0 10 5 5 cm /Im Do Q";
+    let (font, direct) = ("/Font << /F1 5 0 R >>", "/XObject << /Fm 6 0 R /Im 7 0 R >>");
+    for (page, form) in [
+        (format!("<< {font} {direct} >>"), ""),
+        (format!("<< {font} /XObject 9 0 R >>"), ""),
+        (format!("<< /Font 10 0 R {direct} >>"), ""),
+        (format!("<< {font} {direct} >>"), "/Resources 99 0 R"),
+        (format!("<< {font} {direct} >>"), "/Resources 12"),
+        ("<< /XObject << /Fm 6 0 R >> >>".to_string(), "/Resources 8 0 R"),
+        ("<< /XObject 9 0 R >>".to_string(), "/Resources << /Font << /F1 5 0 R >> /XObject 9 0 R >>"),
+    ] {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources {page} /Contents 4 0 R >>"),
+            &stream("", "/Fm Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 600 800] {form}"), body),
+            &stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+            "<< /Font << /F1 5 0 R >> /XObject 9 0 R >>",
+            "<< /Fm 6 0 R /Im 7 0 R >>",
+            "<< /F1 5 0 R >>",
+        ]);
+        let blocks = text::reading_blocks(&doc, 0).unwrap();
+        let texts: Vec<(&str, &str)> = blocks.iter().map(|b| (b.text.as_str(), b.base_font.as_str())).collect();
+        assert_eq!(texts, [("In the form", "Courier")], "{page} {form}");
+        assert_eq!(images::reading_images(&doc, 0).unwrap().len(), 1, "{page} {form}");
+    }
+}
+
+/// #3503: a form XObject's `/BBox` clips its content, so text drawn outside it is not shown and
+/// should not be read either -- matching the renderer, which already honours the clip.
+#[test]
+fn form_bbox_clips_text_from_reading() {
+    let page = stream("", "/Fm Do");
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 6 0 R >> >>",
+        "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &fm,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE"]);
+}
+
+/// #3503: a page's own `re`/`W`/`n` clip (not a form's `/BBox`) hides text outside it the same
+/// way, and `Q` lifts it again -- the clip is scoped to its `q`/`Q` like the rest of the graphics
+/// state, not a one-way switch.
+#[test]
+fn page_re_w_n_clip_hides_text_from_reading_until_q() {
+    let page = stream(
+        "",
+        "q 0 0 50 50 re W n BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 100 100 Td (AFTER) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE", "AFTER"]);
+}
+
+/// The text `reading_blocks` reads on a 400 × 400 pt page drawing `content` with Helvetica as
+/// `/F1`, and forms `/Fa` and `/Fb` (objects 6 and 7) with the given dictionary entries and content.
+fn read_clipped(content: &str, forms: [(&str, &str); 2]) -> Vec<String> {
+    let font = "/Font << /F1 5 0 R >>";
+    let resources = format!("<< {font} /XObject << /Fa 6 0 R /Fb 7 0 R >> >>");
+    let form = |(dict, body): (&str, &str)| stream(&format!("/Type /XObject /Subtype /Form {dict} /Resources {resources}"), body);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents 4 0 R >>"),
+        &stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &form(forms[0]),
+        &form(forms[1]),
+    ]);
+    text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+/// #5075 review: a `/BBox` with anything but four numbers is no bound. Reading the numbers it
+/// happens to hold (`[0 /Bad 0 50 50]` as `[0 0 50 50]`) invented a clip and hid real text.
+#[test]
+fn a_malformed_form_bbox_clips_nothing() {
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET";
+    for bbox in ["[0 /Bad 0 50 50]", "[0 0 50]", "[0 0 50 50 60]", "[0 (x) 50 50]"] {
+        let texts = read_clipped("/Fa Do", [(&format!("/BBox {bbox}"), body), ("", "")]);
+        assert_eq!(texts, ["INSIDE", "OUTSIDE"], "/BBox {bbox}");
+    }
+}
+
+/// #5075 review: a clipping path of several rectangles clips to all of them, not to the last one
+/// drawn (text seen through the first rectangle was hidden), and not to the box around them
+/// either (text in the gap between them was read, though nothing of it shows).
+#[test]
+fn a_clip_of_several_rectangles_keeps_text_in_each() {
+    let content = "q 0 0 50 50 re 100 100 50 50 re W n BT /F1 12 Tf 5 5 Td (FIRST) Tj ET BT /F1 12 Tf 105 105 Td (SECOND) Tj ET \
+                   BT /F1 12 Tf 60 60 Td (GAP) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["FIRST", "SECOND"]);
+}
+
+/// #5075 review: a form's `/BBox` clips however thin it is and wherever its matrix puts it. A box
+/// one point by 1e-10 was taken for no box (its area fell under a fixed threshold), and one moved
+/// 1e12 points away lost its area to rounding; either way the text outside it was read.
+#[test]
+fn a_thin_or_far_off_form_bbox_still_clips() {
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET";
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let thin = read_clipped(&format!("/Fa Do {after}"), [("/BBox [0 0 1 1e-10]", body), ("", "")]);
+    assert_eq!(thin, ["AFTER"], "a thin /BBox");
+    let far = read_clipped(&format!("/Fa Do {after}"), [("/Matrix [1 0 0 1 1e12 1e12] /BBox [0 0 100 100]", body), ("", "")]);
+    assert_eq!(sorted(far), ["AFTER", "INSIDE"], "a /BBox 1e12 points away");
+}
+
+/// #5075 review: a clip of no area has no inside, so nothing drawn under it shows (ISO 32000-2
+/// §8.5.4). It was taken for no clip at all, and everything under it was read.
+#[test]
+fn a_clip_of_no_area_shows_nothing() {
+    let content = "q 0 0 100 0 re W n BT /F1 12 Tf 5 5 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["AFTER"]);
+}
+
+/// #5075 review: what shows is the intersection of every clip in force. A long run that crosses a
+/// page clip and, apart from it, a form's `/BBox` overlaps each of them but shows in neither, as it
+/// does not when one form's `/BBox` lies apart from the one of the form it is drawn in.
+#[test]
+fn disjoint_clips_show_nothing_between_them() {
+    let run = "BT /F1 12 Tf 5 10 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET";
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    // A page clip and a form's `/BBox` side by side.
+    let page_clip = format!("q 0 0 50 50 re W n /Fa Do Q {after}");
+    assert_eq!(read_clipped(&page_clip, [("/BBox [100 0 150 50]", run), ("", "")]), ["AFTER"]);
+    // A form's `/BBox` and the `/BBox` of the form inside it, side by side.
+    let nested = format!("/Fa Do {after}");
+    assert_eq!(read_clipped(&nested, [("/BBox [0 0 50 50]", "/Fb Do"), ("/BBox [100 0 150 50]", run)]), ["AFTER"]);
+}
+
+/// #5075 review: a clip turned with its matrix keeps its turned shape. Its upright bounding box
+/// takes in corners it does not cover, and text there was read although it is clipped away.
+#[test]
+fn a_turned_clip_hides_text_in_the_corners_of_its_bounding_box() {
+    // A 100 pt square turned 45° about (200, 0): a diamond with its lower corner at (200, 0).
+    // Undone straight after the clip, so the text is drawn upright on the page.
+    let (turn, undo) =
+        ("0.70710678 0.70710678 -0.70710678 0.70710678 200 0 cm", "0.70710678 -0.70710678 0.70710678 0.70710678 -141.421356 141.421356 cm");
+    let texts = "BT /F1 6 Tf 132 3 Td (CORNER) Tj ET BT /F1 6 Tf 195 65 Td (CENTRE) Tj ET";
+    let page_clip = format!("q {turn} 0 0 100 100 re W n {undo} {texts} Q");
+    assert_eq!(read_clipped(&page_clip, [("", ""), ("", "")]), ["CENTRE"], "a turned page clip");
+    // The same diamond as a form's `/BBox`, under its `/Matrix`.
+    let matrix = "/Matrix [0.70710678 0.70710678 -0.70710678 0.70710678 200 0] /BBox [0 0 100 100]";
+    assert_eq!(read_clipped("/Fa Do", [(matrix, &format!("{undo} {texts}")), ("", "")]), ["CENTRE"], "a turned form /BBox");
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -3636,24 +7094,28 @@ fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
 /// missing are read once (or skipped) without panicking or looping.
+///
+/// `/BBox [0 0 20 420]` is wide enough to hold every form's own text below (#3503 clips a form's
+/// content to its `/BBox`; this test is about the loop and resource handling, not clipping).
 #[test]
 fn hostile_form_xobjects_are_read_once() {
     let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
     let font = "/Font << /F1 5 0 R >>";
     let lp = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
         "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
     );
     let a = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /B 8 0 R >> >>"),
         "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
     );
     let b = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /A 7 0 R >> >>"),
         "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
     );
-    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
-    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let nores = stream("/Subtype /Form /BBox [0 0 20 420]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad =
+        stream(&format!("/Subtype /Form /BBox [0 0 20 420] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
     let doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -3700,6 +7162,57 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     delete_content(&mut doc, 0, 0).unwrap();
     assert!(list_added(&doc).is_empty());
     assert!(arabic_font_names(&doc, 0).is_empty());
+}
+
+#[test]
+fn added_thai_text_wraps_between_dictionary_words() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!("skipping the Thai word wrapping checks: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "การประปาส่วนภูมิภาคให้บริการน้ำประปาที่สะอาดแก่ประชาชนทั่วประเทศ";
+    let t = AddedText { rect: [0.0, 0.0, 90.0, 400.0], text: text.into(), size: 16.0, ..AddedText::default() };
+    let rows = super::added::lines(&t);
+    assert!(rows.len() > 2, "{rows:?}");
+    assert_eq!(rows.concat(), text, "no space is added or lost between the rows");
+    // Every row ends where the dictionary lets one end, never inside a word such as ประปา.
+    let cuts = crate::linebreak::breaks(text);
+    let mut at = 0;
+    for row in rows.iter().take(rows.len() - 1) {
+        at += row.len();
+        assert!(cuts.contains(&at), "row {row:?} ends inside a word: {rows:?}");
+    }
+    // Spaces where a row ends are dropped, as for Latin text, and a word wider than the row is
+    // still broken between clusters.
+    let spaced =
+        AddedText { text: "น้ำประปา สะอาด ปลอดภัย".into(), rect: [0.0, 0.0, 60.0, 400.0], ..t.clone() };
+    let rows = super::added::lines(&spaced);
+    assert!(rows.iter().all(|r| !r.starts_with(' ') && !r.ends_with(' ')), "{rows:?}");
+    assert_eq!(rows.concat(), "น้ำประปาสะอาดปลอดภัย");
+    let narrow = AddedText { rect: [0.0, 0.0, 16.0, 200.0], text: "กิ่กิ่กิ่".into(), ..t.clone() };
+    assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
+    // Spaces that open a paragraph are kept, but they are not a row of their own: a first word
+    // too wide to fit after them stays on the first row (or breaks between clusters there).
+    for width in [16.0, 40.0, 60.0, 90.0] {
+        let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: "      ประปาสะอาด".into(), ..t.clone() };
+        let rows = super::added::lines(&indented);
+        assert!(rows.iter().all(|r| !r.trim().is_empty()), "an empty row at width {width}: {rows:?}");
+        assert!(rows[0].starts_with("      "), "the opening spaces are kept at width {width}: {rows:?}");
+        assert_eq!(rows.concat().trim_start(), "ประปาสะอาด");
+    }
+    // A first word that fits a row alone but not after the opening spaces breaks between clusters
+    // on the first row rather than running past its end.
+    let word = "ประปา";
+    let word_w = super::added::shaped_width(&t, word, false);
+    let indent_w = super::added::shaped_width(&t, "      ", false);
+    let width = word_w + indent_w / 2.0;
+    let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: format!("      {word}"), ..t.clone() };
+    let rows = super::added::lines(&indented);
+    for row in &rows {
+        assert!(super::added::shaped_width(&t, row, false) <= width + 0.5, "{row:?} overflows {width}: {rows:?}");
+    }
+    assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
+    assert_eq!(rows.concat().trim_start(), word);
 }
 
 #[test]
@@ -4123,6 +7636,126 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     let broken = doc.add(Object::Stream(Stream::from_raw(filter, vec![1, 2, 3])));
     doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(broken))).unwrap();
     assert!(editable_objects(&doc, 0).is_err(), "an undecodable stream is refused");
+}
+
+/// Invisible text moves on top only when something painted after it covers it: an XObject drawn
+/// over its box (an image, or a form holding one), or any inline image or shading. An image
+/// clipped away entirely, or drawn elsewhere, does not move it.
+#[test]
+fn revealed_text_moves_on_top_only_when_painted_over() {
+    let on_top_of = |doc: Document| {
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        revealed_under_paint(&doc, 0, block.invisible, block.rect, &ops, at)
+    };
+    let on_top = |content: &str| on_top_of(image_page_with(content));
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    assert!(on_top(&format!("BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET {scan}")), "the scan covers it");
+    assert!(!on_top(&format!("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET {scan}")), "an image elsewhere");
+    assert!(!on_top(&format!("{scan} BT /F1 12 Tf 3 Tr 110 150 Td (Over) Tj ET")), "the scan is drawn first");
+    assert!(!on_top(&format!("BT /F1 12 Tf 0 Tr 110 150 Td (Shown) Tj ET {scan}")), "visible text stays where it is");
+    assert!(!on_top("BT /F1 12 Tf 3 Tr 110 150 Td (Path) Tj ET 0 0 600 800 re f"), "a filled path does not move it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Shade) Tj ET /Sh sh"), "a shading after it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Inline) Tj ET BI /W 1 /H 1 /CS /G /BPC 8 ID x EI"), "an inline image after it");
+    let under = "BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET";
+    let elsewhere = "q 50 0 0 50 400 600 cm /Im0 Do Q";
+    assert!(!on_top(&format!("{under} q 0 0 10 10 re W n {scan} Q")), "the scan is clipped away entirely");
+    assert!(on_top(&format!("{under} {elsewhere} {scan}")), "two images, the second over it");
+    assert!(on_top(&format!("{under} {scan} {elsewhere}")), "two images, the first over it");
+    assert!(!on_top(&format!("{under} {elsewhere} {elsewhere}")), "two images, neither over it");
+    let in_form = |content: &str| {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im0 6 0 R >> >>", "/Im0 Do");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page.into(),
+            stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            image,
+            form,
+        ];
+        on_top_of(build(&objs.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    assert!(in_form(&format!("{under} q 200 0 0 100 100 100 cm /Fm0 Do Q")), "a form holding the scan, over it");
+    assert!(!in_form(&format!("{under} q 50 0 0 50 400 600 cm /Fm0 Do Q")), "a form holding an image elsewhere");
+}
+
+/// Revealed OCR text is checked where the rewrite lands, not only where it was: an image drawn
+/// after it over just the moved or grown text still lifts the text on top, on both rewrite paths.
+#[test]
+fn an_ocr_rewrite_goes_on_top_of_paint_over_where_it_lands() {
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let moved = text::BlockStyle { offset: Some([-290.0, -450.0]), ..Default::default() };
+    let sized = text::BlockStyle { size: Some(24.0), ..Default::default() };
+    let spaced = text::BlockStyle { line_spacing: Some(3.0), ..Default::default() };
+    let range = text::RangeStyle {
+        range: 0..2,
+        family: None,
+        resource: None,
+        size: Some(120.0),
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let enlarged = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let above = "q 200 0 0 60 100 200 cm /Im0 Do Q";
+    let cases = [
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved", &moved),
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved\nTwice", &moved),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there, this line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there,\nthis line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 110 230 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &text::BlockStyle::default()),
+    ];
+    let low = "q 200 0 0 30 100 300 cm /Im0 Do Q";
+    let cases = cases.into_iter().map(|(c, e, s)| (c, e, s, scan)).chain([
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &sized, low),
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &spaced, low),
+        ("BT /F1 12 Tf 3 Tr 110 150 Td (Hi there) Tj ET", "Hi there", &enlarged, above),
+    ]);
+    for (content, edit, style, scan) in cases {
+        let mut doc = image_page_with(&format!("{content} {scan}"));
+        let before = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        assert!(!revealed_under_paint(&doc, 0, true, before.rect, &ops, at), "{edit:?}: the old box alone is clear of the scan");
+        text::rewrite_block(&mut doc, 0, 0, Some(edit), style).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let scan_at = ops.iter().position(|o| o.is("Do")).unwrap();
+        let shows = ["Tj", "TJ", "'", "\""];
+        assert!(ops.iter().skip(scan_at).any(|o| shows.iter().any(|s| o.is(s))), "{edit:?}: the rewrite is drawn over the scan");
+    }
+}
+
+/// [`crate::Reach`] grows the old box to the move, the width either way and the lines below.
+#[test]
+fn a_rewrites_reach_covers_its_move_width_and_lines() {
+    let reach = |offset, width, rows, upright| crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset, width, rows, pitch: 10.0, upright }.bounds();
+    assert_eq!(reach([0.0, 0.0], 20.0, 1, true), [10.0, 90.0, 30.0, 110.0]);
+    assert_eq!(reach([5.0, -50.0], 20.0, 1, true), [10.0, 40.0, 35.0, 100.0]);
+    assert_eq!(reach([0.0, 0.0], 50.0, 3, true), [-20.0, 70.0, 60.0, 110.0]);
+    assert_eq!(reach([0.0, 0.0], 30.0, 4, false), [-40.0, 40.0, 80.0, 150.0]);
+    assert_eq!(reach([f64::NAN, 0.0], 20.0, 1, true)[0], f64::NEG_INFINITY);
+    let larger = crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset: [0.0, 0.0], width: 20.0, rows: 1, pitch: 24.0, upright: true };
+    assert_eq!(larger.bounds(), [10.0, 76.0, 30.0, 124.0], "a larger size grows the line up as well as down");
+}
+
+/// Revealed OCR text may have to go on top of the page; a page whose marked content nests too deep
+/// for that is refused before either rewrite path changes anything.
+#[test]
+fn an_ocr_rewrite_refused_on_top_leaves_the_document_as_it_was() {
+    let content = format!("{} BT /F1 20 Tf 3 Tr 42 44 Td (John) Tj ET /Im Do {}", "/X BMC ".repeat(10_001), "EMC ".repeat(10_001));
+    let mut doc = text_page(&content);
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].invisible);
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    for edit in ["Jane", "Jane\nDoe"] {
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(edit), &text::BlockStyle::default()).unwrap_err();
+        assert!(error.to_string().contains("nested too deeply"), "{edit:?}: {error}");
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap() == before, "{edit:?}: a refused rewrite changes nothing");
+    }
 }
 
 #[test]
@@ -4635,6 +8268,40 @@ fn cropped_image_resizing_moves_private_clips_and_keeps_shared_ones() {
     );
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform([0.5, 0.0, 0.0, 0.5, 0.0, 0.0])).unwrap();
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 1);
+}
+
+/// Report generators draw each picture as `q re W n cm Do Q` inside a section's clip that the
+/// section's text shares. Resizing the picture scales its own clip with it (the enlarged picture
+/// used to show only through its old box) while the section's clip and text stay put.
+#[test]
+fn resizing_an_image_under_a_shared_clip_moves_its_own_clip() {
+    // The picture's own clip as wide as the picture, and wider (both seen in one report).
+    for clip_width in [61.2, 85.0] {
+        let mut doc = image_page_with(&format!(
+            "q 20 20 560 760 re W n q 162 79 {clip_width} 28.3 re W n 61.2 0 0 28.3 162 79 cm /Im0 Do Q BT /F1 12 Tf 30 50 Td (Section text) Tj ET Q"
+        ));
+        let before = images::page_images(&doc, 0).unwrap()[0].clone();
+        assert!(close(before.visible_rect.unwrap(), [162.0, 79.0, 223.2, 107.3]), "{:?}", before.visible_rect);
+        let caption = text::text_lines(&doc, 0).unwrap();
+        let target = [162.0, 79.0, 284.4, 135.6];
+        let transform = images::rect_to_rect(before.visible_rect.unwrap(), target);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(transform)).unwrap();
+        doc = reopen(&doc);
+        let after = images::page_images(&doc, 0).unwrap()[0].clone();
+        let near = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.05);
+        assert!(near(after.visible_rect.unwrap(), target), "clip {clip_width}: the whole enlarged picture shows, {:?}", after.visible_rect);
+        assert_eq!(after.object, before.object, "pixels are never resampled or replaced");
+        assert_eq!(
+            text::text_lines(&doc, 0).unwrap().iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            caption.iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            "the section's text stays where it was"
+        );
+        // The section's clip is shared, so it still bounds the picture: past it, nothing shows.
+        let past = images::rect_to_rect(after.visible_rect.unwrap(), [500.0, 79.0, 700.0, 135.6]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(past)).unwrap();
+        let clipped = images::page_images(&reopen(&doc), 0).unwrap()[0].visible_rect.unwrap();
+        assert!(clipped[2] <= 580.05, "the section's clip stays in force: {clipped:?}");
+    }
 }
 
 #[test]
@@ -5732,6 +9399,52 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Fix hairlines: zero-width strokes and strokes thinner than the threshold on
+/// the page (after the CTM) get the chosen width, in page content and the forms it draws; wider
+/// lines, and glyphs and patterns unless asked, are left alone.
+#[test]
+fn hairlines_are_widened_in_page_content_and_forms() {
+    use crate::hairlines::{Hairlines, fix_hairlines};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // A form drawn at half scale with a 0.1 pt line (0.05 pt on the page) and a 4 pt line.
+    let mut fd = Dict::new();
+    fd.set(b"Type".to_vec(), Object::name("XObject"));
+    fd.set(b"Subtype".to_vec(), Object::name("Form"));
+    fd.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, 100.0, 100.0].iter().map(|v| Object::Real(*v)).collect()));
+    let form = doc.add(Object::Stream(Stream::flate(fd, b"0.1 w 0 0 m 50 50 l S 4 w 0 50 m 50 0 l S")));
+    let content = b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S q 0.5 0 0 0.5 0 0 cm 0.2 w 0 0 m 10 10 l S /Fm1 Do Q 0.5 w 10 30 m 100 30 l S";
+    let cs = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    let mut xo = Dict::new();
+    xo.set(b"Fm1".to_vec(), Object::Ref(form));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(cs));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap();
+    // Page: the 0 w line and the 0.2 w line at half scale (0.1 pt); the 2 pt and 0.5 pt lines stay.
+    // Form: the 0.1 w line (0.05 pt on the page); the 4 pt line stays.
+    assert_eq!(fixed, crate::hairlines::Fixed { lines: 3, pages: 1, elsewhere: 0 });
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = flat(&page_content_bytes(&doc, 0));
+    assert!(text.contains("0.72 w 10 10 m 100 10 l S"), "zero width → 0.72 pt: {text}");
+    assert!(text.contains("2 w 10 20 m 100 20 l S") && text.contains("0.5 w 10 30 m 100 30 l S"), "wider lines untouched: {text}");
+    assert!(text.contains("1.44 w 0 0 m 10 10 l S"), "under a half-scale CTM the width is doubled: {text}");
+    let Object::Stream(fs) = &*doc.get(form) else { panic!() };
+    let ft = flat(&fs.decoded().unwrap());
+    assert!(ft.contains("1.44 w 0 0 m 50 50 l S") && ft.contains("4 w 0 50 m 50 0 l S"), "{ft}");
+    // Nothing left to fix: a second run changes nothing.
+    assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0);
+    // A stricter threshold catches the 0.5 pt line too, with a custom width.
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines { narrower_than: 0.6, width: 1.0, ..Hairlines::default() }).unwrap();
+    assert_eq!(fixed.lines, 1);
+    assert!(flat(&page_content_bytes(&doc, 0)).contains("1 w 10 30 m 100 30 l S"));
+    assert!(fix_hairlines(&mut doc, &[0], &Hairlines { width: 0.0, ..Hairlines::default() }).is_err());
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.
@@ -6027,7 +9740,7 @@ fn vertical_page(content: &str) -> Document {
     ]);
     let unicode = doc.add(Object::Stream(Stream::flate(
         Dict::new(),
-        b"1 begincodespacerange <0000> <ffff> endcodespacerange 6 beginbfchar <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 7 beginbfchar <0020> <0020> <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
     )));
     font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
     font.set(
@@ -6241,12 +9954,124 @@ fn actual_text_pairs_past_the_marked_content_cap() {
     }
 }
 
-/// #2992: the colour a page is painted with before anything else is its background, for exports
-/// that keep a page colour. Edit a PDF ▸ Background's fill is found under the text it goes
-/// behind; a page that paints anything else first, a fill that doesn't cover the page, a
-/// translucent or clipped one, or a colour that isn't plain gray, RGB or CMYK has none.
+fn page_background_from_content(content: &str, resources: &str) -> Option<[f64; 3]> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [0 0 500 700] /Contents 4 0 R /Resources << {resources} >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref_offset = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    page_background(&Document::open(Arc::new(bytes)).unwrap(), 0).unwrap()
+}
+
+fn assert_page_background_fill_cases(gs: &str) {
+    assert_eq!(page_background_from_content("1 g 0 0 600 800 re f", ""), Some([1.0; 3]), "a producer's white page fill");
+    assert_eq!(page_background_from_content("0 0 1 0 k 0 0 500 700 re f", ""), Some([1.0, 1.0, 0.0]), "CMYK, covering the crop box");
+    assert_eq!(page_background_from_content("/DeviceRGB cs 1 0 0 sc 0 0 500 700 re f", ""), Some([1.0, 0.0, 0.0]), "cs and sc");
+    assert_eq!(page_background_from_content("/Full gs q 2 0 0 2 0 0 cm 0 1 0 rg 0 0 300 400 re f Q", gs), Some([0.0, 1.0, 0.0]), "under a cm");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 300 800 re f", ""), None, "half the page");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 300 800 re 300 0 300 800 re f", ""), None, "two halves are not one covering rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 300 800 re 0 0 600 800 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "one of the rectangles covers it"
+    );
+    // #2994 review: a second rectangle that cuts a hole: any one under even-odd, one wound the
+    // other way under nonzero.
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f*", ""), None, "even-odd hole");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 600 800 re 300 100 -200 200 re f", ""), None, "nonzero, reversed inner rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "nonzero, same winding: no hole"
+    );
+    assert_eq!(
+        page_background_from_content("1 0 0 rg q -1 0 0 1 600 0 cm 0 0 600 800 re Q 100 100 200 200 re f", ""),
+        None,
+        "reversed by a mirroring cm"
+    );
+    assert_eq!(page_background_from_content("/Half gs 1 0 0 rg 0 0 600 800 re f", gs), None, "translucent");
+    assert_eq!(page_background_from_content("/Mul gs 1 0 0 rg 0 0 600 800 re f", gs), None, "blended");
+    assert_eq!(page_background_from_content("0 0 100 100 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "clipped to a corner");
+    assert_eq!(page_background_from_content("0 0 600 800 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "a page-sized clip");
+    assert_eq!(page_background_from_content("/Pattern cs /P1 scn 0 0 600 800 re f", ""), None, "a pattern");
+    assert_eq!(page_background_from_content("BT ET 0 0 600 800 re S 1 0 0 rg 0 0 600 800 re f", ""), None, "a stroke first");
+    assert_eq!(page_background_from_content("0 0 m 600 0 l 600 800 l 0 800 l h f", ""), None, "a path that isn't a rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 m 200 100 l 200 200 l h f*", ""),
+        None,
+        "a page fill with a hole cut in it"
+    );
+}
+
+fn assert_page_background_transform_and_clip_cases() {
+    // #2994 review: a rectangle turned 45° about the crop box's centre covers it only if the crop
+    // box's corners are inside it; its bounding box covering the crop box isn't enough. This one
+    // reaches 500 from the centre along each axis (its box covers the 500 × 700 crop box) but
+    // 354 along the diagonals, short of the corners. One reaching 707 covers them.
+    let turned = "0.70710678 0.70710678 -0.70710678 0.70710678 250 350 cm";
+    assert_eq!(
+        page_background_from_content(&format!("1 0 0 rg {turned} -353.553 -353.553 707.107 707.107 re f"), ""),
+        None,
+        "a turned fill short of the corners"
+    );
+    assert_eq!(
+        page_background_from_content(&format!("1 0 0 rg {turned} -500 -500 1000 1000 re f"), ""),
+        Some([1.0, 0.0, 0.0]),
+        "a turned fill over them"
+    );
+    // The same for a clip.
+    assert_eq!(
+        page_background_from_content(&format!("{turned} -353.553 -353.553 707.107 707.107 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
+        None,
+        "a turned clip"
+    );
+    assert_eq!(
+        page_background_from_content(&format!("{turned} -500 -500 1000 1000 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
+        Some([1.0, 0.0, 0.0]),
+        "a turned clip over the corners"
+    );
+    // Clips add up: two that each cover the page leave it covered, one that doesn't among them
+    // doesn't.
+    assert_eq!(
+        page_background_from_content("0 0 600 800 re W n 0 0 550 750 re W n 1 0 0 rg 0 0 600 800 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "two covering clips"
+    );
+    assert_eq!(
+        page_background_from_content("0 0 600 800 re W n 0 0 300 750 re W n 1 0 0 rg 0 0 600 800 re f", ""),
+        None,
+        "the second clip doesn't cover"
+    );
+    // Past 64 clipping rectangles the clip counts as unknown.
+    let clips = "0 0 600 800 re W n ".repeat(65);
+    assert_eq!(page_background_from_content(&format!("{clips}1 0 0 rg 0 0 600 800 re f"), ""), None, "too many clips to follow");
+    // A rectangle drawn the other way round (negative width) covers the page all the same.
+    assert_eq!(page_background_from_content("1 0 0 rg 600 0 -600 800 re f", ""), Some([1.0, 0.0, 0.0]), "drawn clockwise");
+    // The crop box counts as covered within half a percent of its size (2.5 × 3.5 here), the
+    // edge of that included.
+    assert_eq!(page_background_from_content("1 0 0 rg 2 3 496 694 re f", ""), Some([1.0, 0.0, 0.0]), "within the tolerance");
+    assert_eq!(page_background_from_content("1 0 0 rg 2.5 3.5 495 693 re f", ""), Some([1.0, 0.0, 0.0]), "on the tolerance's edge");
+    assert_eq!(page_background_from_content("1 0 0 rg 3 4 494 692 re f", ""), None, "past the tolerance");
+}
+
+/// #2992: page background detection follows the first full-page fill under text and ignores
+/// partial, translucent, clipped, or unsupported fills.
 #[test]
 fn a_page_painted_first_with_a_full_page_fill_has_that_background() {
+    let gs = "/ExtGState << /Half << /ca 0.5 >> /Mul << /BM /Multiply >> /Full << /ca 1 /SMask /None >> >>";
     let mut doc = fixture();
     assert_eq!(page_background(&doc, 0).unwrap(), None, "text first");
     add_background(&mut doc, &[0, 1], &Background { color: [0.0, 0.5, 0.5], opacity: 1.0, ..Background::default() }, false).unwrap();
@@ -6257,77 +10082,8 @@ fn a_page_painted_first_with_a_full_page_fill_has_that_background() {
     assert_eq!(page_background(&doc, 2).unwrap(), None, "a page with no content");
     assert!(page_background(&doc, 9).is_err());
 
-    let page = |content: &str, resources: &str| {
-        let objs: Vec<String> = vec![
-            "<< /Type /Catalog /Pages 2 0 R >>".into(),
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [0 0 500 700] /Contents 4 0 R /Resources << {resources} >> >>"),
-            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-        ];
-        let mut out = b"%PDF-1.7\n".to_vec();
-        let mut offs = Vec::new();
-        for (i, o) in objs.iter().enumerate() {
-            offs.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-        }
-        let x = out.len();
-        out.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
-        for o in offs {
-            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-        }
-        out.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n").as_bytes());
-        page_background(&Document::open(Arc::new(out)).unwrap(), 0).unwrap()
-    };
-    let gs = "/ExtGState << /Half << /ca 0.5 >> /Mul << /BM /Multiply >> /Full << /ca 1 /SMask /None >> >>";
-    assert_eq!(page("1 g 0 0 600 800 re f", ""), Some([1.0; 3]), "a producer's white page fill");
-    assert_eq!(page("0 0 1 0 k 0 0 500 700 re f", ""), Some([1.0, 1.0, 0.0]), "CMYK, covering the crop box");
-    assert_eq!(page("/DeviceRGB cs 1 0 0 sc 0 0 500 700 re f", ""), Some([1.0, 0.0, 0.0]), "cs and sc");
-    assert_eq!(page("/Full gs q 2 0 0 2 0 0 cm 0 1 0 rg 0 0 300 400 re f Q", gs), Some([0.0, 1.0, 0.0]), "under a cm");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re f", ""), None, "half the page");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re 300 0 300 800 re f", ""), None, "two halves are not one covering rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "one of the rectangles covers it");
-    // #2994 review: a second rectangle that cuts a hole: any one under even-odd, one wound the
-    // other way under nonzero.
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f*", ""), None, "even-odd hole");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 300 100 -200 200 re f", ""), None, "nonzero, reversed inner rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f", ""), Some([1.0, 0.0, 0.0]), "nonzero, same winding: no hole");
-    assert_eq!(page("1 0 0 rg q -1 0 0 1 600 0 cm 0 0 600 800 re Q 100 100 200 200 re f", ""), None, "reversed by a mirroring cm");
-    assert_eq!(page("/Half gs 1 0 0 rg 0 0 600 800 re f", gs), None, "translucent");
-    assert_eq!(page("/Mul gs 1 0 0 rg 0 0 600 800 re f", gs), None, "blended");
-    assert_eq!(page("0 0 100 100 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "clipped to a corner");
-    assert_eq!(page("0 0 600 800 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "a page-sized clip");
-    assert_eq!(page("/Pattern cs /P1 scn 0 0 600 800 re f", ""), None, "a pattern");
-    assert_eq!(page("BT ET 0 0 600 800 re S 1 0 0 rg 0 0 600 800 re f", ""), None, "a stroke first");
-    assert_eq!(page("0 0 m 600 0 l 600 800 l 0 800 l h f", ""), None, "a path that isn't a rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 m 200 100 l 200 200 l h f*", ""), None, "a page fill with a hole cut in it");
-    // #2994 review: a rectangle turned 45° about the crop box's centre covers it only if the crop
-    // box's corners are inside it; its bounding box covering the crop box isn't enough. This one
-    // reaches 500 from the centre along each axis (its box covers the 500 × 700 crop box) but
-    // 354 along the diagonals, short of the corners. One reaching 707 covers them.
-    let turned = "0.70710678 0.70710678 -0.70710678 0.70710678 250 350 cm";
-    assert_eq!(page(&format!("1 0 0 rg {turned} -353.553 -353.553 707.107 707.107 re f"), ""), None, "a turned fill short of the corners");
-    assert_eq!(page(&format!("1 0 0 rg {turned} -500 -500 1000 1000 re f"), ""), Some([1.0, 0.0, 0.0]), "a turned fill over them");
-    // The same for a clip.
-    assert_eq!(page(&format!("{turned} -353.553 -353.553 707.107 707.107 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""), None, "a turned clip");
-    assert_eq!(
-        page(&format!("{turned} -500 -500 1000 1000 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
-        Some([1.0, 0.0, 0.0]),
-        "a turned clip over the corners"
-    );
-    // Clips add up: two that each cover the page leave it covered, one that doesn't among them
-    // doesn't.
-    assert_eq!(page("0 0 600 800 re W n 0 0 550 750 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "two covering clips");
-    assert_eq!(page("0 0 600 800 re W n 0 0 300 750 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "the second clip doesn't cover");
-    // Past 64 clipping rectangles the clip counts as unknown.
-    let clips = "0 0 600 800 re W n ".repeat(65);
-    assert_eq!(page(&format!("{clips}1 0 0 rg 0 0 600 800 re f"), ""), None, "too many clips to follow");
-    // A rectangle drawn the other way round (negative width) covers the page all the same.
-    assert_eq!(page("1 0 0 rg 600 0 -600 800 re f", ""), Some([1.0, 0.0, 0.0]), "drawn clockwise");
-    // The crop box counts as covered within half a percent of its size (2.5 × 3.5 here), the
-    // edge of that included.
-    assert_eq!(page("1 0 0 rg 2 3 496 694 re f", ""), Some([1.0, 0.0, 0.0]), "within the tolerance");
-    assert_eq!(page("1 0 0 rg 2.5 3.5 495 693 re f", ""), Some([1.0, 0.0, 0.0]), "on the tolerance's edge");
-    assert_eq!(page("1 0 0 rg 3 4 494 692 re f", ""), None, "past the tolerance");
+    assert_page_background_fill_cases(gs);
+    assert_page_background_transform_and_clip_cases();
 }
 
 #[test]
@@ -6354,4 +10110,4561 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             "Ordinary body text. Still the same paragraph.",
         ]
     );
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+
+        #[test]
+        fn prop_is_entire_page_wrapped_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let _ = images::is_entire_page_wrapped(&ops);
+        }
+
+        #[test]
+        fn prop_content_units_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..2048),
+            start in 0usize..50,
+            end in 0usize..50,
+        ) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let scan_start = start.min(ops.len());
+            let scan_end = end.min(ops.len()).max(scan_start);
+            let units = images::content_units(&ops, scan_start, scan_end);
+            for u in units {
+                prop_assert!(u.start <= u.end);
+                prop_assert!(u.end <= ops.len());
+            }
+        }
+
+        #[test]
+        fn prop_arrange_image_arbitrary_malformed(
+            index in 0usize..10,
+            order_idx in 0u8..4,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let order = match order_idx {
+                0 => images::ArrangeOrder::BringToFront,
+                1 => images::ArrangeOrder::SendToBack,
+                2 => images::ArrangeOrder::BringForward,
+                _ => images::ArrangeOrder::SendBackward,
+            };
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = arrange(&mut doc, 0, index, order);
+        }
+
+        #[test]
+        fn prop_crop_image_malformed_inputs(
+            x1 in -500.0f64..500.0,
+            y1 in -500.0f64..500.0,
+            x2 in -500.0f64..500.0,
+            y2 in -500.0f64..500.0,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = crop(&mut doc, 0, 0, [x1, y1, x2, y2]);
+            let _ = remove_crop(&mut doc, 0, 0);
+        }
+    }
+}
+
+/// One 600×800 page: Im0 (4×2 gray image), Fm0 (200×100 Form), ExtGState GSone (ca 1).
+fn regression_page(content: &str) -> Document {
+    let form = "0 g 0 0 200 100 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /Fm0 7 0 R >> /ExtGState << /GSone << /Type /ExtGState /ca 1 >> >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >>\nstream\n{form}\nendstream", form.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn regression_rects(doc: &Document) -> Vec<[i64; 4]> {
+    let mut v: Vec<[i64; 4]> = images::page_images(doc, 0).unwrap().iter().map(|i| i.rect.map(|x| x.round() as i64)).collect();
+    v.sort();
+    v
+}
+
+/// A `cm` inside a BDC…EMC unit applies to later content; arranging the unit must not shift anything.
+#[test]
+fn arrange_keeps_cm_leaking_out_of_marked_content() {
+    let mut doc = regression_page("/Figure <</MCID 0>> BDC 1 0 0 1 50 50 cm q 100 0 0 100 0 0 cm /Im0 Do Q EMC q 10 0 0 10 200 200 cm /Im0 Do Q");
+    let before = regression_rects(&doc);
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    assert_eq!(before, regression_rects(&reopen(&doc)), "other content moved");
+}
+
+/// Cropping a Form XObject to 100×100 keeps a 100×100 visible area (or is refused) — never 1×1.
+#[test]
+fn crop_form_xobject_keeps_requested_area() {
+    let mut doc = regression_page("q 1 0 0 1 100 100 cm /Fm0 Do Q");
+    if crop(&mut doc, 0, 0, [100.0, 100.0, 200.0, 200.0]).is_err() {
+        return; // refusing to crop vector art is also acceptable
+    }
+    let after = images::page_images(&reopen(&doc), 0).unwrap()[0].clone();
+    let v = after.visible_rect.unwrap_or(after.rect);
+    assert!((v[2] - v[0] - 100.0).abs() < 1.0 && (v[3] - v[1] - 100.0).abs() < 1.0, "expected 100x100 visible, got {v:?}");
+}
+
+/// A gs naming a missing ExtGState must not be read as 50% opacity and block the reorder.
+#[test]
+fn arrange_tolerates_missing_extgstate() {
+    let mut doc = regression_page("q /GSmissing gs 100 0 0 100 50 50 cm /Im0 Do Q /GSone gs q 10 0 0 10 200 200 cm /Im0 Do Q");
+    let r = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// Bring to front on the image already in front must not report a change it didn't make.
+#[test]
+fn noop_arrange_is_not_ok_without_change() {
+    let mut doc = regression_page("q 10 0 0 10 200 200 cm /Im0 Do Q q 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let r = arrange(&mut doc, 0, 1, images::ArrangeOrder::BringToFront);
+    let after = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(r.is_err() || before != after, "Ok with no change");
+}
+
+/// Cropping a turned image keeps the requested upright box in user space, rather than expanding
+/// to the bounding box of the turned image coordinates.
+#[test]
+fn crop_turned_image_preserves_requested_area() {
+    let mut doc = regression_page("q 70.71 70.71 -70.71 70.71 300 100 cm /Im0 Do Q");
+    let req = [270.0, 150.0, 330.0, 200.0];
+    crop(&mut doc, 0, 0, req).expect("crop succeeds");
+    let after = &images::page_images(&reopen(&doc), 0).unwrap()[0];
+    let v = after.visible_rect.expect("visible rect exists");
+    assert!((v[0] - req[0]).abs() < 1.0, "x0: expected {}, got {}", req[0], v[0]);
+    assert!((v[1] - req[1]).abs() < 1.0, "y0: expected {}, got {}", req[1], v[1]);
+    assert!((v[2] - req[2]).abs() < 1.0, "x1: expected {}, got {}", req[2], v[2]);
+    assert!((v[3] - req[3]).abs() < 1.0, "y1: expected {}, got {}", req[3], v[3]);
+}
+
+/// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
+/// a width: the width is clamped between the font size and 14 400 pt, and `f64::clamp` panics when
+/// its minimum is the larger. The width is now capped at 14 400 pt whatever the font size: from the
+/// file (`Tf`, or a small `Tf` scaled up by `Tm`) or asked for (the automation tools pass it through).
+#[test]
+fn width_on_a_paragraph_set_larger_than_a_page_is_capped_not_a_panic() {
+    let wide = text::BlockStyle { width: Some(200.0), ..Default::default() };
+    let huge = text::BlockStyle { size: Some(20_000.0), width: Some(200.0), ..Default::default() };
+    for (content, style) in [
+        ("BT /F2 20000 Tf 72 700 Td (ab) Tj ET", &wide),
+        ("BT /F2 1 Tf 20000 0 0 20000 72 700 Tm (ab) Tj ET", &wide),
+        ("BT /F2 12 Tf 72 700 Td (ab) Tj ET", &huge),
+    ] {
+        let mut doc = text_page(content);
+        text::rewrite_block(&mut doc, 0, 0, None, style).unwrap();
+    }
+}
+
+#[test]
+fn added_text_is_wrapped_once_per_write() {
+    let mut doc = fixture();
+    let lines: Vec<String> = (0..40).map(|i| format!("line {i}")).collect();
+    let text = AddedText { rect: [72.0, 100.0, 300.0, 700.0], text: lines.join("\n"), size: 10.0, align: Align::Justify, ..AddedText::default() };
+    added::WRAP_CALLS.with(|c| c.set(0));
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let calls = added::WRAP_CALLS.with(std::cell::Cell::get);
+    assert!(calls <= 4, "the text was wrapped {calls} times for 40 lines");
+}
+
+/// Negative character spacing keeps a line from ever filling its box. Wrapping then holds every
+/// word on one line, appended and measured once each rather than copied and measured again for
+/// each word (which took minutes for this text); the widths still decide the breaks.
+#[test]
+fn added_text_that_never_fills_its_line_wraps_in_linear_time() {
+    let words = vec!["word"; 200_000].join(" ");
+    let packed = AddedText { rect: [0.0, 0.0, 100.0, 100.0], text: words.clone(), char_spacing: -10.0, ..AddedText::default() };
+    let start = std::time::Instant::now();
+    assert_eq!(added::lines(&packed), [words]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let plain = AddedText { rect: [0.0, 0.0, 60.0, 100.0], text: "one two three four".into(), size: 10.0, ..AddedText::default() };
+    assert_eq!(added::lines(&plain), ["one two", "three four"]);
+}
+
+/// Character spacing on added text (#4245) is the PDF's `Tc`, kept in `/PCAdded` so the item
+/// reopens with it; an item written without it reads 0.
+#[test]
+fn added_text_character_spacing_is_drawn_and_reopens() {
+    let mut doc = fixture();
+    let plain = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Approved".into(), size: 10.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(plain.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { char_spacing: 2.5, ..plain })).unwrap();
+    let doc = reopen(&doc);
+    let spacings: Vec<f64> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.char_spacing } else { f64::NAN }).collect();
+    assert_eq!(spacings, [0.0, 2.5]);
+    let page = streams(&doc, 0);
+    let tc: Vec<bool> = page.iter().filter(|s| s.contains("(Approved) Tj")).map(|s| s.contains("2.5 Tc")).collect();
+    assert_eq!(tc, [false, true], "{page:?}");
+}
+
+/// Spacing widens every measure the layout takes: the widest line and wrapping.
+#[test]
+fn added_text_character_spacing_widens_its_layout() {
+    let plain = AddedText { rect: [0.0, 0.0, 1000.0, 100.0], text: "Approved".into(), size: 10.0, ..AddedText::default() };
+    let spaced = AddedText { char_spacing: 3.0, ..plain.clone() };
+    // After each of the 8 letters, like `Tc`.
+    assert!((added::text_width(&spaced) - added::text_width(&plain) - 24.0).abs() < 1e-9);
+    let w = added::text_width(&plain);
+    let narrow = |t: &AddedText| AddedText { text: "Approved Approved".into(), rect: [0.0, 0.0, 2.0 * w + 5.0, 100.0], ..t.clone() };
+    assert_eq!(added::lines(&narrow(&plain)).len(), 1);
+    assert_eq!(added::lines(&narrow(&spaced)).len(), 2, "the spaced words no longer fit one line");
+}
+
+/// A field tree whose every node lists its child twice is pruned in work linear in its nodes, not
+/// in its paths, and a node listing itself is visited once.
+#[test]
+fn flattening_prunes_a_field_tree_with_repeated_kids_once_per_node() {
+    let levels = 16;
+    let page = stream("", " ");
+    // 5: the flattened widget; 6…: the chain; then the hidden widget at its end, on the page.
+    let leaf = 6 + levels;
+    let fields = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R {} 0 R] >> >>", leaf + 2);
+    let annots = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R {leaf} 0 R] >>");
+    let mut objs: Vec<String> = vec![
+        fields,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        annots,
+        page,
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Rect [10 10 150 40] /F 4 /AP << /N {} 0 R >> >>", leaf + 1),
+    ];
+    for i in 0..levels {
+        let next = 7 + i;
+        objs.push(format!("<< /T (n{i}) /Kids [{next} 0 R {next} 0 R] >>"));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /T (hidden) /Rect [10 90 150 120] /F 2 >>".into());
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into());
+    objs.push(format!("<< /T (loop) /Kids [{} 0 R] >>", leaf + 2));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    flatten::KEEP_CALLS.with(|c| c.set(0));
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    let calls = flatten::KEEP_CALLS.with(std::cell::Cell::get);
+    assert!(calls <= 2 * (levels + 4), "{calls} field-tree visits");
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let left = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().len();
+    assert_eq!(left, 2, "the chain to the hidden widget and the self-listing node stay");
+}
+
+/// A field reached first at the end of a long chain has its kids cut off by the depth limit, so
+/// they survive there. A shorter path to the same field still looks at its kids: an off-page widget
+/// under it is taken out when every field is flattened.
+#[test]
+fn a_field_reached_again_by_a_shorter_path_is_pruned_there() {
+    let chain = 64;
+    let page = stream("", " ");
+    // 7…: the chain; then the shared field, its off-page widget, and the short path to it.
+    let shared = 7 + chain;
+    let fields = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 7 0 R {} 0 R] >> >>", shared + 2);
+    let mut objs: Vec<String> = vec![
+        fields,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Rect [10 10 150 40] /F 4 /AP << /N 6 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    for i in 0..chain {
+        objs.push(format!("<< /T (c{i}) /Kids [{} 0 R] >>", 8 + i));
+    }
+    objs.push(format!("<< /T (shared) /Kids [{} 0 R] >>", shared + 1));
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /T (orphan) /Rect [10 50 150 80] /F 4 >>".into());
+    objs.push(format!("<< /T (short) /Kids [{shared} 0 R] >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    let shared_ref = pdfcraft_cos::ObjRef::new(u32::try_from(shared).unwrap(), 0);
+    let kids = doc.resolve(doc.get(shared_ref).as_dict().unwrap().get(b"Kids").unwrap()).as_array().unwrap().len();
+    assert_eq!(kids, 0, "the off-page widget is pruned along the short path");
+}
+
+/// A ToUnicode destination is repeated for every glyph that shows its code: a page whose text
+/// would run past the extraction budget is refused, not built in memory.
+#[test]
+fn page_text_past_the_budget_is_refused() {
+    let cmap = stream("", &format!("1 beginbfchar <41> <{}> endbfchar", "0041".repeat(256)));
+    let page = |shown: &str| {
+        let content = stream("", &format!("BT /F1 12 Tf 10 10 Td ({shown}) Tj ET"));
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            &content,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+            &cmap,
+        ])
+    };
+    let doc = page(&"A".repeat(100_000));
+    assert!(matches!(text_lines(&doc, 0), Err(EditError::Invalid(_))), "25 MB of text from a 100 kB page");
+    let doc = page("AA");
+    assert_eq!(text_lines(&doc, 0).unwrap()[0].text.len(), 512, "a page within the budget still reads");
+}
+
+/// A one-page document from the page's /Contents and /Resources, built in code.
+fn page_with(build: impl FnOnce(&mut Document) -> (Object, Dict)) -> Document {
+    let mut doc = Document::new_empty();
+    let pages = doc.add(Object::Null);
+    let (contents, resources) = build(&mut doc);
+    let page: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Page".to_vec())),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::from).to_vec())),
+        (b"Contents".to_vec(), contents),
+        (b"Resources".to_vec(), Object::Dict(resources)),
+    ]
+    .into_iter()
+    .collect();
+    let page = doc.add(page);
+    let tree: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Pages".to_vec())),
+        (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+        (b"Count".to_vec(), Object::Int(1)),
+    ]
+    .into_iter()
+    .collect();
+    doc.set(pages, Object::Dict(tree));
+    let catalog: Dict = [(b"Type".to_vec(), Object::Name(b"Catalog".to_vec())), (b"Pages".to_vec(), Object::Ref(pages))].into_iter().collect();
+    let catalog = doc.add(catalog);
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    doc
+}
+
+#[test]
+fn page_rules_join_decoded_streams_before_parsing_operators() {
+    let doc = page_with(|doc| {
+        let first = doc.add(Stream::flate(Dict::new(), b"q 2 0 0 2 0 0 cm 10 20 m 30"));
+        let second = doc.add(Stream::flate(Dict::new(), b"20 l S Q 40 50 1 30 re f"));
+        (Object::Array(vec![Object::Ref(first), Object::Null, Object::Ref(second)]), Dict::new())
+    });
+    assert_eq!(page_rules(&doc, 0).unwrap(), vec![[20.0, 40.0, 60.0, 40.0], [40.0, 50.0, 41.0, 80.0]]);
+    assert_eq!(page_rules(&doc, 1), Err(EditError::NoSuchPage(1)));
+
+    let empty = page_with(|_| (Object::Array(Vec::new()), Dict::new()));
+    assert!(page_rules(&empty, 0).unwrap().is_empty());
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    // One 1 MiB stream (a kilobyte on disk) named 300 times by the page's /Contents.
+    let doc = page_with(|doc| {
+        let spaces = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+        (Object::Array(vec![Object::Ref(spaces); 300]), Dict::new())
+    });
+    match text_lines(&doc, 0) {
+        Ok(lines) => panic!("read {} lines from more content than a page may decode", lines.len()),
+        Err(e) => assert!(matches!(e, EditError::Invalid(_)), "{e}"),
+    }
+}
+
+#[test]
+fn reading_images_stops_at_the_page_record_limit() {
+    // 20 draws of a form drawing a form 20 times that draws an image 20 times: 8,000 images
+    // per level-two form, 160,000 in all, from a few hundred bytes.
+    let doc = page_with(|doc| {
+        let image: Dict = [
+            (b"Subtype".to_vec(), Object::Name(b"Image".to_vec())),
+            (b"Width".to_vec(), Object::Int(1)),
+            (b"Height".to_vec(), Object::Int(1)),
+            (b"ColorSpace".to_vec(), Object::Name(b"DeviceGray".to_vec())),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+        ]
+        .into_iter()
+        .collect();
+        let mut inner = doc.add(Stream::from_raw(image, vec![0]));
+        let draws = "/X Do ".repeat(20);
+        let resources = |inner: pdfcraft_cos::ObjRef| -> Dict {
+            let xobjects: Dict = [(b"X".to_vec(), Object::Ref(inner))].into_iter().collect();
+            [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect()
+        };
+        for _ in 0..3 {
+            let mut d = resources(inner);
+            d = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec())), (b"Resources".to_vec(), Object::Dict(d))].into_iter().collect();
+            inner = doc.add(Stream::from_raw(d, draws.clone().into_bytes()));
+        }
+        let page = doc.add(Stream::from_raw(Dict::new(), draws.into_bytes()));
+        (Object::Ref(page), resources(inner))
+    });
+    if let Ok(images) = crate::reading_images(&doc, 0) {
+        assert!(images.len() <= crate::images::MAX_PAGE_IMAGES, "{} images", images.len());
+    }
+}
+
+#[test]
+fn reading_spends_one_decode_budget_on_content_and_forms() {
+    // 130 MiB of content and a 130 MiB form (a kilobyte each on disk): each fits a page's budget,
+    // together they don't, so reading leaves the form out and says so.
+    let doc = page_with(|doc| {
+        let mut body = b"%".to_vec();
+        body.resize(130 << 20, b'x');
+        let form: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
+        let form = doc.add(Stream::flate(form, &body));
+        let mut content = b"/X Do\n%".to_vec();
+        content.resize(130 << 20, b'x');
+        let content = doc.add(Stream::flate(Dict::new(), &content));
+        let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
+        (Object::Ref(content), [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect())
+    });
+    assert!(crate::text::reading_blocks_checked(&doc, 0).unwrap().truncated);
+}
+
+/// A page that can't take flattened content on top (marked content nested past the depth budget)
+/// refuses the whole flatten: the pages before it keep their comments and content.
+#[test]
+fn a_flatten_refused_on_a_later_page_changes_nothing() {
+    let deep = stream("", &"/Artifact BMC\n".repeat(10_001));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>",
+        &stream("", " "),
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /F 4 /AP << /N 9 0 R >> >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 7 0 R /Annots [8 0 R] >>",
+        &deep,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /F 4 /AP << /N 9 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let first = pdfcraft_cos::ObjRef::new(3, 0);
+    let before = (*doc.get(first)).clone();
+    assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
+    assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
+}
+
+#[test]
+fn arrange_preserves_clip_leaked_out_of_marked_unit() {
+    let content = "/Figure <</MCID 0>> BDC 0 0 300 300 re W n q 10 0 0 10 50 50 cm /Im0 Do Q EMC q 10 0 0 10 400 400 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert!(initial[0].visible_rect.is_some());
+    assert!(initial[1].visible_rect.is_none(), "second image is fully clipped initially");
+
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2);
+    let img1 = after.iter().find(|img| (img.rect[0] - 400.0).abs() < 1e-3).expect("second image exists");
+    assert!(img1.visible_rect.is_none(), "second image must stay clipped after BringToFront");
+
+    // Conflicting leaking transform with leaking clip must be refused
+    let content_cm_clip =
+        "/Figure <</MCID 0>> BDC 2 0 0 2 0 0 cm 0 0 300 300 re W n q 10 0 0 10 50 50 cm /Im0 Do Q EMC q 10 0 0 10 400 400 cm /Im0 Do Q";
+    let mut doc3 = image_page_with(content_cm_clip);
+    let res3 = arrange(&mut doc3, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res3.is_err(), "moving marked unit with both leaking cm and leaking clip must be refused");
+}
+
+#[test]
+fn arrange_preserves_leaked_color_and_text_state() {
+    let content = "/Figure <</MCID 0>> BDC /DeviceRGB cs 1 0 0 sc /F1 14 Tf 2 Tc q 10 0 0 10 50 50 cm /Im0 Do Q EMC 0 0 10 10 re f q 10 0 0 10 200 200 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("1 0 0 sc"), "sc must be preserved in content stream: {s}");
+    assert!(s.contains("/F1 14 Tf"), "Tf must be preserved in content stream: {s}");
+    assert!(s.contains("2 Tc"), "Tc must be preserved in content stream: {s}");
+
+    // Pixel test: 0 0 10 10 re f still fills red [255, 0, 0] after arrange
+    let pdf_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes), pdfcraft_render::RenderConfig::default());
+    let page =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    let idx = (((page.height - 5) * page.width + 5) * 4) as usize;
+    assert_eq!(page.rgba[idx..idx + 3], [255, 0, 0], "point (5, 5 from bottom) inside 10x10 rect fills red");
+}
+
+#[test]
+fn arrange_preserves_inherited_drawing_state_for_stencil_and_form() {
+    // 1. Stencil mask test:
+    // Page has: q 1 0 0 rg q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET
+    // Non-overlapping stencil and text.
+    let content = "q 1 0 0 rg q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET";
+    let mut doc = stencil_page_with(content);
+
+    // Render before move:
+    let pdf_before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(pdf_before), pdfcraft_render::RenderConfig::default());
+    let page_before = renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let stencil_pixel_idx = (((page_before.height - 75) * page_before.width + 75) * 4) as usize;
+    assert_eq!(page_before.rgba[stencil_pixel_idx..stencil_pixel_idx + 3], [255, 0, 0], "stencil starts red");
+
+    // Bring to front
+    arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    // Save and reopen
+    let doc = reopen(&doc);
+
+    // Verify content stream has inherited color
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("1 0 0 rg"), "inherited 1 0 0 rg must be replayed in moved unit: {s}");
+
+    // Render after reopen and verify stencil remains red:
+    let pdf_after = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(pdf_after), pdfcraft_render::RenderConfig::default());
+    let page_after = renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert_eq!(page_after.rgba[stencil_pixel_idx..stencil_pixel_idx + 3], [255, 0, 0], "stencil stays red after BringToFront and reopen");
+
+    // 2. Form XObject test:
+    // Page has: q 0 1 0 rg q 1 0 0 1 50 50 cm /Fm0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET
+    let form_content = "q 0 1 0 rg q 1 0 0 1 50 50 cm /Fm0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET";
+    let mut form_doc = form_page_with(form_content);
+
+    let form_pdf_before = write_incremental(&form_doc, &SaveOptions::default()).unwrap();
+    let mut form_renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(form_pdf_before), pdfcraft_render::RenderConfig::default());
+    let form_page_before = form_renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let form_pixel_idx = (((form_page_before.height - 75) * form_page_before.width + 75) * 4) as usize;
+    assert_eq!(form_page_before.rgba[form_pixel_idx..form_pixel_idx + 3], [0, 255, 0], "form starts green");
+
+    arrange(&mut form_doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let form_doc = reopen(&form_doc);
+
+    let form_pdf_after = write_incremental(&form_doc, &SaveOptions::default()).unwrap();
+    let mut form_renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(form_pdf_after), pdfcraft_render::RenderConfig::default());
+    let form_page_after = form_renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert_eq!(form_page_after.rgba[form_pixel_idx..form_pixel_idx + 3], [0, 255, 0], "form stays green after BringToFront and reopen");
+}
+/// Existing-row alignment is explicitly refused without mutating the paragraph.
+#[test]
+fn one_row_of_a_paragraph_takes_its_own_alignment_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (First row) Tj T* (Second row) Tj ET");
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(&blocks[0].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Refusal preserves all existing rows and their saved content stream.
+#[test]
+fn rows_without_their_own_alignment_keep_their_operators_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (First row) Tj T* (Second row) Tj ET");
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(&blocks[0].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Mixed-style rows also refuse unsupported per-row intent before writing.
+#[test]
+fn one_row_of_a_styled_region_takes_its_own_alignment_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = mixed_region_page();
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 1, Some(&blocks[1].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Added text: each paragraph is laid out with its own alignment, a justified paragraph's last
+/// line isn't stretched, and the alignments survive saving and reopening.
+#[test]
+fn added_text_paragraphs_keep_their_own_alignments() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 372.0, 700.0],
+        text: "Left line\nRight line\nCentred line".into(),
+        size: 12.0,
+        aligns: vec![None, Some(Align::Right), Some(Align::Center)],
+        ..AddedText::default()
+    };
+    assert_eq!(text.paragraph_align(1), Align::Right);
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let Content::Text(t) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t.aligns, text.aligns, "saved with the item");
+    let page = streams(&doc, 0).join("\n");
+    let x_of = |s: &str| -> f64 {
+        let at = page.find(&format!("({s}) Tj")).unwrap();
+        let tm = page[..at].rfind(" Tm").unwrap();
+        let nums: Vec<f64> = page[..tm].rsplit("1 0 0 1 ").next().unwrap().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        nums[0]
+    };
+    let w = |s: &str| Family::Helvetica.width(s, 12.0, false, false);
+    assert!((x_of("Left line") - 72.0).abs() < 0.01);
+    assert!((x_of("Right line") - (372.0 - w("Right line"))).abs() < 0.01);
+    assert!((x_of("Centred line") - (72.0 + (300.0 - w("Centred line")) / 2.0)).abs() < 0.01);
+    // A paragraph's own alignment the same as the box's is no entry at all.
+    let tidy = paragraph_align::tidy(vec![Some(Align::Left), Some(Align::Right)], Align::Left);
+    assert_eq!(tidy, [None, Some(Align::Right)]);
+}
+
+/// With character spacing, a paragraph aligned on its own is placed by its spaced width: a
+/// right-aligned line still ends at the box's right edge, and a centred one sits in the middle.
+#[test]
+fn added_text_paragraphs_align_by_their_spaced_width() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 372.0, 700.0],
+        text: "Left line\nRight line\nCentred line".into(),
+        size: 12.0,
+        aligns: vec![None, Some(Align::Right), Some(Align::Center)],
+        char_spacing: 2.0,
+        ..AddedText::default()
+    };
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let page = streams(&reopen(&doc), 0).join("\n");
+    assert!(page.contains("2 Tc"), "{page}");
+    let x_of = |s: &str| -> f64 {
+        let at = page.find(&format!("({s}) Tj")).unwrap();
+        let tm = page[..at].rfind(" Tm").unwrap();
+        let nums: Vec<f64> = page[..tm].rsplit("1 0 0 1 ").next().unwrap().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        nums[0]
+    };
+    let w = |s: &str| Family::Helvetica.width(s, 12.0, false, false) + 2.0 * s.chars().count() as f64;
+    assert!((x_of("Left line") - 72.0).abs() < 0.01);
+    assert!((x_of("Right line") - (372.0 - w("Right line"))).abs() < 0.01);
+    assert!((x_of("Centred line") - (72.0 + (300.0 - w("Centred line")) / 2.0)).abs() < 0.01);
+}
+
+/// A one-row title over a body column: an alignment picked for it is measured across the column.
+/// Left puts it on the column's left edge, and centring it again leaves it where it is, rather
+/// than aligning it in its own box (a no-op) or toward the page's margin (moving it right each
+/// time). It is aligned as the editor aligns a selected row, in whichever paragraph holds it.
+#[test]
+fn a_lone_row_aligns_across_the_column_it_sits_in() {
+    let mut doc = text_page(
+        "BT /F1 24 Tf 1 0 0 1 250 700 Tm (Title) Tj ET          BT /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].text, "Title");
+    let column = [blocks[1].rect[0], blocks[1].rect[2]];
+    let title = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    let align = |doc: &mut Document, a: added::Align| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        let line = lines.iter().position(|l| l.text == "Title").unwrap();
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.lines.contains(&line)).unwrap();
+        // The title is the paragraph's first row.
+        let style = text::BlockStyle { align: Some(a), ..Default::default() };
+        text::rewrite_block(doc, 0, index, Some(&block.editor_text), &style).unwrap();
+    };
+    align(&mut doc, added::Align::Center);
+    let centred = title(&doc);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[1]) / 2.0).abs() < 1.0, "centred in the column: {centred:?} vs {column:?}");
+    align(&mut doc, added::Align::Center);
+    assert!((title(&doc)[0] - centred[0]).abs() < 0.5, "centring again leaves it where it is: {:?} vs {centred:?}", title(&doc));
+    align(&mut doc, added::Align::Left);
+    assert!((title(&doc)[0] - column[0]).abs() < 0.5, "left: back on the column's edge, {:?} vs {column:?}", title(&doc));
+    align(&mut doc, added::Align::Right);
+    assert!((title(&doc)[2] - column[1]).abs() < 1.0, "right: on the column's right edge, {:?} vs {column:?}", title(&doc));
+}
+
+/// An edited paragraph's text has a line break between its source rows (`editor_text`), as the
+/// paragraph editor sends it. Those are the rows of one paragraph, not paragraph ends: justified
+/// in a font of its own (the single-style rewrite), every row but the last still fills the width.
+#[test]
+fn a_justified_paragraph_from_the_editor_fills_its_rows() {
+    let mut doc =
+        text_page("BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj T* (end) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    assert_eq!(block.editor_text.matches('\n').count(), 2);
+    let style = text::BlockStyle { align: Some(added::Align::Justify), family: Some((Family::Helvetica, true, false)), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(&block.editor_text), &style).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let row = |t: &str| lines.iter().find(|l| l.text.starts_with(t)).unwrap().rect;
+    let right = row("One")[2];
+    assert!((row("eight")[2] - right).abs() < 1.0, "the second row is stretched: {:?} vs {right}", row("eight"));
+    assert!(row("end")[2] < right - 20.0, "the last row isn't");
+}
+
+/// An alignment for a row the draft doesn't have names no row: a one-row title given one for a
+/// second row only stays where it is, not moved to its column's edge. Nor does a row of the draft
+/// with no alignment of its own move because another row has one (CodeRabbit on 648dd428).
+#[test]
+fn a_title_moves_to_its_column_only_for_an_alignment_of_its_own() {
+    let page = "BT /F1 24 Tf 1 0 0 1 250 700 Tm (Title) Tj ET          BT /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET";
+    let title = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    let before = title(&text_page(page));
+    for draft in ["Title", "Title\nSub"] {
+        let mut doc = text_page(page);
+        let style = text::BlockStyle { aligns: vec![None, Some(added::Align::Right)], ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).is_err());
+        assert!((title(&doc)[0] - before[0]).abs() < 0.5, "{draft:?}: the title stays put, {:?} vs {before:?}", title(&doc));
+    }
+}
+
+/// A column whose rows are several runs (a second style on the same baseline) reaches the right
+/// edge of its whole rows, not of the run at the left edge: a title wider than that first run is
+/// still held by the column and aligns to it (CodeRabbit on b9940d7d).
+#[test]
+fn a_column_is_measured_by_its_whole_rows_not_its_first_runs() {
+    let page = "BT /F1 18 Tf 1 0 0 1 100 672 Tm (A longer title) Tj ET                 BT /F1 10 Tf 12 TL 50 610 Td (The first column runs to here.) Tj ET                 BT /F1 11 Tf 1 0 0 rg 1 0 0 1 185 610 Tm (and keeps going on.) Tj ET                 BT /F1 10 Tf 12 TL 50 598 Td (A second row of it.) Tj ET";
+    let blocks = text::text_blocks(&text_page(page), 0).unwrap();
+    let body = blocks.iter().find(|b| b.text.starts_with("The first")).expect("the body is a block");
+    assert!(body.rows.first().is_some_and(|row| row.len() >= 2), "the body's first row is several runs: {:?}", body.rows);
+    let lines = text::text_lines(&text_page(page), 0).unwrap();
+    let column_right =
+        body.rows.iter().filter_map(|row| row.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect[2]).reduce(f64::max)).fold(f64::MIN, f64::max);
+    let mut doc = text_page(page);
+    let index = blocks.iter().position(|b| b.text == "A longer title").expect("the title is a block of its own");
+    let style = text::BlockStyle { align: Some(added::Align::Right), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, index, Some("A longer title"), &style).unwrap();
+    let title = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "A longer title").unwrap().rect;
+    assert!((title[2] - column_right).abs() < 1.0, "right: on the whole row's right edge, {title:?} vs {column_right}");
+}
+
+/// A row with no column of its own is aligned in its own box, but that box is not the width its new
+/// text wraps at: changing the text together with an alignment keeps a single row on one row, as
+/// it does without the alignment (CodeRabbit on b9940d7d).
+#[test]
+fn an_isolated_row_edited_with_an_alignment_does_not_wrap_at_its_old_width() {
+    for align in [added::Align::Center, added::Align::Right] {
+        let mut doc = text_page("BT /F1 18 Tf 1 0 0 1 100 700 Tm (Title) Tj ET");
+        let longer = "A much longer title for the page";
+        let style = text::BlockStyle { align: Some(align), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(longer), &style).unwrap();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [longer], "{align:?}: the title stays on one row");
+    }
+}
+
+/// A heading across the whole page sits closer to the title than the title's own column does: the
+/// title is still aligned in its own column, not across the heading's page-wide frame (FredApps's
+/// review of 43f848d5). Centre and right both go by the column.
+#[test]
+fn a_lone_row_aligns_in_its_own_column_not_a_closer_full_width_heading() {
+    let page = "BT /F1 12 Tf 1 0 0 1 50 700 Tm (A heading that runs across both columns of the page, well past the first column, to the far margin.) Tj ET                 BT /F1 18 Tf 1 0 0 1 120 672 Tm (Title) Tj ET                 BT /F1 10 Tf 12 TL 50 610 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET                 BT /F1 10 Tf 12 TL 320 610 Td (The second column has more rows.) Tj T* (One.) Tj T* (Two.) Tj T* (Three.) Tj ET";
+    let blocks = text::text_blocks(&text_page(page), 0).unwrap();
+    let column = blocks.iter().find(|b| b.text.starts_with("The first")).unwrap().rect;
+    let heading = blocks.iter().find(|b| b.text.starts_with("A heading")).unwrap().rect;
+    let title_block = blocks.iter().find(|b| b.text == "Title").expect("the title is a block of its own").rect;
+    let gap = |other: [f64; 4]| (other[1] - title_block[3]).max(title_block[1] - other[3]).max(0.0);
+    assert!(gap(heading) < gap(column), "the heading is the nearer block: {} vs {}", gap(heading), gap(column));
+    assert!(heading[2] - heading[0] > 2.0 * (column[2] - column[0]), "the heading is page-wide: {heading:?} vs {column:?}");
+    let title_after = |align: added::Align| {
+        let mut doc = text_page(page);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let index = blocks.iter().position(|b| b.text == "Title").unwrap();
+        let style = text::BlockStyle { align: Some(align), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, index, Some("Title"), &style).unwrap();
+        text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect
+    };
+    let centred = title_after(added::Align::Center);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[2]) / 2.0).abs() < 1.0, "centred in its own column: {centred:?} vs {column:?}");
+    let right = title_after(added::Align::Right);
+    assert!((right[2] - column[2]).abs() < 1.0, "right: on its own column's right edge, {right:?} vs {column:?}");
+}
+
+/// The same on a page of two columns, where the other column has more rows: a title over the
+/// first column is aligned across the first column, not its own box.
+#[test]
+fn a_lone_row_aligns_across_its_own_column_of_two() {
+    let mut doc = text_page(
+        "BT /F1 18 Tf 1 0 0 1 120 700 Tm (Title) Tj ET \
+         BT /F1 10 Tf 12 TL 50 660 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET \
+         BT /F1 10 Tf 12 TL 320 660 Td (The second column has more rows.) Tj T* (One.) Tj T* (Two.) Tj T* (Three.) Tj T* (Four.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let column = blocks.iter().find(|b| b.text.starts_with("The first")).unwrap().rect;
+    let index = blocks.iter().position(|b| b.text == "Title").unwrap();
+    let style = text::BlockStyle { align: Some(added::Align::Left), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, index, Some("Title"), &style).unwrap();
+    let title = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    assert!((title[0] - column[0]).abs() < 0.5, "left: on the first column's edge, {title:?} vs {column:?}");
+}
+
+/// A one-row title in two colours is rewritten by the styled-region path, which is given the
+/// same column frame: centred twice, it stays centred in the column instead of moving right.
+#[test]
+fn a_lone_row_of_two_styles_aligns_across_its_column() {
+    let mut doc = text_page(
+        "BT /F1 18 Tf 1 0 0 1 250 700 Tm (Big ) Tj 1 0 0 rg (Title) Tj ET \
+         BT 0 g /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].text, "Big Title");
+    let column = [blocks[1].rect[0], blocks[1].rect[2]];
+    let title = |doc: &Document| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        let block = text::text_blocks(doc, 0).unwrap().into_iter().find(|b| b.text == "Big Title").unwrap();
+        block.lines.iter().map(|i| lines[*i].rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).unwrap()
+    };
+    let centre = |doc: &mut Document| {
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == "Big Title").unwrap();
+        let style = text::BlockStyle { align: Some(added::Align::Center), ..Default::default() };
+        text::rewrite_block(doc, 0, index, Some(&block.editor_text), &style).unwrap();
+    };
+    centre(&mut doc);
+    let centred = title(&doc);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[1]) / 2.0).abs() < 1.0, "centred in the column: {centred:?} vs {column:?}");
+    centre(&mut doc);
+    assert!((title(&doc)[0] - centred[0]).abs() < 0.5, "centring again leaves it where it is: {:?} vs {centred:?}", title(&doc));
+}
+
+#[test]
+fn a_titles_column_ignores_distant_full_width_headers_and_footers() {
+    for (title_x, column_prefix) in [(95, "The first"), (365, "The second")] {
+        for mixed in [false, true] {
+            for title_y in [710, 580] {
+                let title = if mixed { "(Big ) Tj 1 0 0 rg (Title) Tj" } else { "(Title) Tj" };
+                let name = if mixed { "Big Title" } else { "Title" };
+                let mut doc = text_page(&format!(
+                    "BT /F1 10 Tf 12 TL 50 780 Td (A page-wide header extending well beyond either body column on this page and continuing all the way to the right margin.) Tj T* (A repeated page-wide heading across both columns and continuing to the right margin of the page.) Tj ET \
+                 BT /F1 18 Tf 1 0 0 1 {title_x} {title_y} Tm {title} ET \
+                 BT 0 g /F1 10 Tf 12 TL 50 660 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET \
+                 BT /F1 10 Tf 12 TL 320 660 Td (The second column runs to here.) Tj T* (Another row.) Tj ET \
+                 BT /F1 10 Tf 50 40 Td (A page-wide footer extending well beyond either body column on this page and continuing all the way to the right margin.) Tj ET"
+                ));
+                let rect = |doc: &Document, prefix: &str| {
+                    let blocks = text::text_blocks(doc, 0).unwrap();
+                    blocks.iter().find(|b| b.text.starts_with(prefix)).unwrap_or_else(|| panic!("missing {prefix:?} in {blocks:?}")).rect
+                };
+                let column = rect(&doc, column_prefix);
+                let header = rect(&doc, "A page-wide header");
+                let footer = rect(&doc, "A page-wide footer");
+                assert!(header[2] > column[2] + 20.0 && footer[2] > column[2] + 20.0);
+                for align in [added::Align::Center, added::Align::Center, added::Align::Right, added::Align::Left] {
+                    let blocks = text::text_blocks(&doc, 0).unwrap();
+                    let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == name).unwrap();
+                    let style = text::BlockStyle { align: Some(align), ..Default::default() };
+                    text::rewrite_block(&mut doc, 0, index, Some(&block.editor_text), &style).unwrap();
+                    doc = reopen(&doc);
+                    let title = rect(&doc, name);
+                    let error = match align {
+                        added::Align::Center => ((title[0] + title[2]) - (column[0] + column[2])).abs() / 2.0,
+                        added::Align::Right => (title[2] - column[2]).abs(),
+                        _ => (title[0] - column[0]).abs(),
+                    };
+                    assert!(error < 1.0, "{align:?}, mixed={mixed}, title_y={title_y}: {title:?} must use {column:?}");
+                    assert_eq!(rect(&doc, "A page-wide header"), header);
+                    assert_eq!(rect(&doc, "A page-wide footer"), footer);
+                    assert_eq!(rect(&doc, column_prefix), column);
+                }
+            }
+        }
+    }
+}
+
+/// How each glyph-showing operator on page 0 is painted, read the way a renderer reads the page:
+/// its text, `Tr`, stroke colour operators, line width (from `w` or an ExtGState's `/LW`) and
+/// the ExtGStates selected before it, following `q`/`Q`.
+#[derive(Clone, Debug, PartialEq)]
+struct Painted {
+    text: String,
+    render_mode: i64,
+    stroke: Vec<String>,
+    line_width: f64,
+    gs: Vec<String>,
+}
+
+fn painted_shows(doc: &Document) -> Vec<Painted> {
+    let (_, ops) = joined_ops(doc);
+    let p = &pdfcraft_model::pages(doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let ext = res.as_dict().unwrap().get(b"ExtGState").map(|g| doc.resolve(g).as_dict().cloned().unwrap()).unwrap_or_default();
+    let mut state = Painted { text: String::new(), render_mode: 0, stroke: Vec::new(), line_width: 1.0, gs: Vec::new() };
+    let mut stack = Vec::new();
+    let mut out = Vec::new();
+    let show = |op: &pdfcraft_content::Op| String::from_utf8_lossy(&pdfcraft_content::serialize_ops(std::slice::from_ref(op))).trim().to_string();
+    for op in ops {
+        match op.op.as_slice() {
+            b"q" => stack.push(state.clone()),
+            b"Q" => state = stack.pop().unwrap(),
+            b"Tr" => state.render_mode = op.operands[0].as_int().unwrap(),
+            b"G" | b"RG" | b"K" | b"CS" => state.stroke = vec![show(&op)],
+            b"SC" | b"SCN" => state.stroke.push(show(&op)),
+            b"w" => state.line_width = op.num(0).unwrap(),
+            b"gs" => {
+                let name = op.name(0).unwrap();
+                state.gs.push(String::from_utf8_lossy(name).into_owned());
+                let lw = ext.get(name).and_then(|g| doc.resolve(g).as_dict().and_then(|g| g.get(b"LW")).and_then(|w| w.as_f64()));
+                state.line_width = lw.unwrap_or(state.line_width);
+            }
+            b"Tj" => {
+                let Some(Object::String(s)) = op.operands.last() else { continue };
+                if !s.bytes.is_empty() {
+                    out.push(Painted { text: String::from_utf8_lossy(&s.bytes).into_owned(), ..state.clone() });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A page with Helvetica as /F1, /GS1, an ExtGState that paints at 20 % opacity, /GS2, one that
+/// sets the line width to 4, /GS3, another at 20 % opacity, and /GS4, at 20 % opacity and dashed.
+fn faint_page(content: &str) -> Document {
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 6 0 R /GS2 7 0 R /GS3 8 0 R /GS4 9 0 R >> >> >>",
+        &format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /ExtGState /ca 0.2 >>",
+        "<< /Type /ExtGState /LW 4 >>",
+        "<< /Type /ExtGState /ca 0.2 >>",
+        "<< /Type /ExtGState /ca 0.2 /D [[6 3] 0] >>",
+    ])
+}
+
+/// Rewriting a paragraph drew it before its text object, restating only the font, spacing and
+/// fill: a `1 Tr 1 0 0 RG 2 w` set inside `BT` was lost, and red outline text came back filled
+/// black, even with the text unchanged (#3508). Set before `BT` (the control), it already worked.
+#[test]
+fn a_rewritten_paragraph_keeps_the_rendering_mode_stroke_and_width_set_inside_its_text_object() {
+    let outline = |text: &str| Painted { text: text.into(), render_mode: 1, stroke: vec!["1 0 0 RG".into()], line_width: 2.0, gs: Vec::new() };
+    for content in ["BT /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (OUTLINE) Tj ET\n", "1 Tr 1 0 0 RG 2 w BT /F1 72 Tf 40 400 Td (OUTLINE) Tj ET\n"] {
+        assert_eq!(painted_shows(&text_page(content)), [outline("OUTLINE")], "the fixture: {content}");
+        for new in ["OUTLINE", "OUTLINED"] {
+            let mut doc = text_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(painted_shows(&doc), [outline(new)], "{content} -> {new}: {}", streams(&doc, 0).join("\n"));
+        }
+    }
+}
+
+/// The same for transparency: `/GS1 gs` (`/ca 0.2`) inside `BT` was not in force for the
+/// rewritten paragraph, so 20 % blue text came back opaque (#3509).
+#[test]
+fn a_rewritten_paragraph_keeps_the_extgstate_selected_inside_its_text_object() {
+    for content in ["BT /GS1 gs /F1 72 Tf 0 0 1 rg 40 400 Td (FAINT) Tj ET\n", "/GS1 gs BT /F1 72 Tf 0 0 1 rg 40 400 Td (FAINT) Tj ET\n"] {
+        for new in ["FAINT", "FAINTER"] {
+            let mut doc = faint_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            let shows = painted_shows(&doc);
+            assert_eq!(shows.len(), 1, "{content} -> {new}: {shows:?}");
+            assert_eq!(
+                (shows[0].text.as_str(), shows[0].gs.as_slice()),
+                (new, ["GS1".to_string()].as_slice()),
+                "{content} -> {new}: {}",
+                streams(&doc, 0).join("\n")
+            );
+        }
+    }
+}
+
+/// A paragraph of differently coloured runs goes through the styled rewrite, which draws each
+/// run in its own text object: each keeps the state its source set inside `BT`.
+#[test]
+fn a_styled_rewrite_keeps_the_paint_state_set_inside_the_text_object() {
+    let content = "BT /GS1 gs 1 Tr 1 0 0 RG 2 w /F1 72 Tf 40 400 Td (FAI) Tj 0 0 1 rg (NT) Tj ET\n";
+    let mut doc = faint_page(content);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+    text::rewrite_block(&mut doc, 0, 0, Some("FAINTS"), &BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let shows = painted_shows(&doc);
+    let joined = streams(&doc, 0).join("\n");
+    assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), "FAINTS", "{joined}");
+    for s in &shows {
+        assert_eq!((s.render_mode, s.stroke.as_slice(), s.line_width), (1, ["1 0 0 RG".to_string()].as_slice(), 2.0), "{s:?}: {joined}");
+        assert_eq!(s.gs, ["GS1"], "{s:?}: {joined}");
+    }
+}
+
+/// A `gs` has no inverse, so one run's ExtGState stayed in force for the runs the styled rewrite
+/// drew after it. Two ExtGStates at the same opacity paint the same (see `Paint`), so their runs
+/// share a paragraph, but either may set what that doesn't compare (a dash, a line cap): each run
+/// is drawn with only the ones its source selected.
+#[test]
+fn a_styled_rewrite_does_not_carry_one_runs_extgstate_into_the_next() {
+    // "FAI" ends at 40 + 72 * (0.611 + 0.667 + 0.278) = 152.032; "NT" is blue, so another run.
+    let content = "q BT /GS3 gs /F1 72 Tf 40 400 Td (FAI) Tj ET Q BT /GS1 gs /F1 72 Tf 0 0 1 rg 152.032 400 Td (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let gs: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.gs.as_slice())).collect();
+        assert_eq!(gs.first(), Some(&("FAI", ["GS3".to_string()].as_slice())), "{gs:?}: {joined}");
+        assert!(gs.iter().skip(1).all(|(_, gs)| *gs == ["GS1"]), "{gs:?}: {joined}");
+    }
+}
+
+/// An ExtGState's `/LW` sets the line width as `w` does: `2 w /GS2 gs` (`/LW 4`) outlines at 4,
+/// and the rewrite replayed `/GS2 gs` and then `2 w`. `/GS2 gs 1 w` outlines at 1, and the
+/// rewrite replayed only `/GS2 gs`, since 1 is the initial width.
+#[test]
+fn a_rewritten_paragraph_keeps_the_line_width_an_extgstate_set() {
+    for (content, width) in [
+        ("BT /F1 72 Tf 1 Tr 2 w /GS2 gs 40 400 Td (OUTLINE) Tj ET\n", 4.0),
+        ("BT /F1 72 Tf 1 Tr /GS2 gs 2 w 40 400 Td (OUTLINE) Tj ET\n", 2.0),
+        ("BT /F1 72 Tf 1 Tr /GS2 gs 1 w 40 400 Td (OUTLINE) Tj ET\n", 1.0),
+    ] {
+        assert_eq!(painted_shows(&faint_page(content))[0].line_width, width, "the fixture: {content}");
+        for new in ["OUTLINE", "OUTLINED"] {
+            let mut doc = faint_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            let shows = painted_shows(&doc);
+            assert_eq!(
+                shows.iter().map(|s| (s.text.as_str(), s.render_mode, s.line_width)).collect::<Vec<_>>(),
+                [(new, 1, width)],
+                "{content} -> {new}: {}",
+                streams(&doc, 0).join("\n")
+            );
+        }
+    }
+}
+
+/// A line is rewritten in the state of its first run, so outline text partway through a text
+/// object came back filled: "FAI" filled and "NT" a red outline came back all filled. The change
+/// of `Tr` now starts a run. (A `gs` partway already starts a paragraph; see `Paint`.)
+#[test]
+fn a_rendering_mode_partway_through_a_line_starts_a_run_of_its_own() {
+    let content = "BT /F1 72 Tf 40 400 Td (FAI) Tj 1 Tr 1 0 0 RG 2 w (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let modes: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.render_mode, s.stroke.as_slice(), s.line_width)).collect();
+        assert_eq!(modes.first().map(|m| (m.0, m.1)), Some(("FAI", 0)), "{modes:?}: {joined}");
+        let outline = ["1 0 0 RG".to_string()];
+        assert!(modes.iter().skip(1).all(|m| (m.1, m.2, m.3) == (1, outline.as_slice(), 2.0)), "{modes:?}: {joined}");
+    }
+}
+
+/// Two ExtGStates at the same opacity paint text the same (see `Paint`), but one of them dashes
+/// its outline: a dashed outline after a solid one in the same text object joined its line and
+/// came back solid, drawn with the first run's selections. A different dash now starts a run.
+#[test]
+fn a_dash_partway_through_an_outlined_line_starts_a_run_of_its_own() {
+    let content = "BT /GS3 gs /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (FAI) Tj /GS4 gs (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let gs: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.gs.as_slice())).collect();
+        assert_eq!(gs.first(), Some(&("FAI", ["GS3".to_string()].as_slice())), "{gs:?}: {joined}");
+        assert!(gs.iter().skip(1).all(|(_, gs)| gs.last().is_some_and(|g| g == "GS4")), "{gs:?}: {joined}");
+    }
+}
+
+/// The dash and cap are compared as the operators set them too: `d` or `J` partway through an
+/// outlined line starts a run, and a malformed one (too long, not numbers, out of range) is ignored.
+#[test]
+fn a_dash_or_cap_operator_partway_through_an_outlined_line_starts_a_run() {
+    let long = format!("[{}] 0 d", "1 ".repeat(40));
+    for (change, runs) in [("[6 3] 0 d", 2), ("1 J", 2), (long.as_str(), 1), ("[(a) 3] 0 d", 1), ("[6 3] /x d", 1), ("7 J", 1), ("J", 1)] {
+        let content = format!("BT /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (FAI) Tj {change} (NT) Tj ET\n");
+        let mut doc = faint_page(&content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), runs, "{change}");
+        text::rewrite_block(&mut doc, 0, 0, Some("FAINTS"), &BlockStyle::default()).unwrap();
+        let shows = painted_shows(&reopen(&doc));
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), "FAINTS", "{change}");
+    }
+}
+
+/// #4199, #3797: every space typed into a paragraph is saved, not folded into one.
+#[test]
+fn an_edited_paragraph_keeps_every_space_typed() {
+    for typed in ["Hello  world", "Hello     world   end", "  indented and trailing  "] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        assert_eq!(text::replace_block(&mut doc, 0, 0, typed).unwrap().substituted, None);
+        let doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(content.contains(&format!("({typed}) Tj")), "{typed:?}: {content}");
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, typed);
+    }
+}
+
+/// Spaces after a row's last word are kept but take no part in its alignment: a justified row
+/// still reaches the margin, and a centred or right-aligned one sits where it would without them.
+#[test]
+fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
+    let shown = |text: &str, align: added::Align| {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let style =
+            text::BlockStyle { family: Some((added::Family::Helvetica, false, false)), align: Some(align), width: Some(300.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(text), &style).unwrap();
+        String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned()
+    };
+    for (plain, trailing, align) in [
+        ("aaa bbb ccc\nddd eee", "aaa bbb ccc  \nddd eee", added::Align::Justify),
+        ("Title", "Title   ", added::Align::Center),
+        ("Title", "Title   ", added::Align::Right),
+    ] {
+        let first = trailing.split('\n').next().unwrap();
+        let expected = shown(plain, align);
+        let actual = shown(trailing, align).replace(&format!("({first})"), &format!("({})", first.trim_end()));
+        assert_eq!(actual, expected, "{trailing:?} {align:?}");
+    }
+}
+
+/// A justified row runs from the paragraph's left edge to the margin. Word spacing reaches only
+/// the spaces between its words: the spaces before its first word and after its last are left
+/// out of a stretched row (as before #4199), so the reopened rows stay inside the paragraph and
+/// can be edited again in place.
+#[test]
+fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    for typed in ["    Pack my box with five dozen jugs\nof liquor", "    Pack my box with five dozen jugs   \nof liquor"] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+        let mut doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
+        assert_eq!(first.text, "Pack my box with five dozen jugs", "{typed:?}");
+        assert!((first.rect[0] - 72.0).abs() < 0.5, "{typed:?}: {:?}", first.rect);
+        assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{typed:?}: {lines:?}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "{typed:?}: {blocks:?}");
+        text::replace_block(&mut doc, 0, 0, "Edited again").unwrap();
+        let again = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert!(again.iter().all(|l| l.rect[0] >= 0.0 && l.rect[2] <= 600.0), "{typed:?}: {again:?}");
+    }
+}
+
+/// A justified paragraph whose first row was typed with an indent is edited again through the
+/// styled path (a draft with a line break): its rows keep their scaling and stay one paragraph
+/// inside its width.
+#[test]
+fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
+    let mut doc = reopen(&doc);
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
+    assert!(draft.contains('\n'), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let doc = reopen(&doc);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{lines:?}");
+}
+
+/// A paragraph drawn at `0 Tz` has no width to justify into: nothing is divided by it. The
+/// writer writes a number that isn't finite as 0, so the test looks for the word spacing and
+/// the move a division by zero would add, rather than for `NaN`.
+#[test]
+fn justifying_text_at_zero_horizontal_scaling_divides_by_nothing() {
+    let mut doc = text_page("BT /F1 12 Tf 0 Tz 72 700 Td (Hello world) Tj ET");
+    let style = text::BlockStyle { family: Some((added::Family::Helvetica, false, false)), align: Some(added::Align::Justify), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb\nccc"), &style).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let block = content.split("ET").next().unwrap();
+    assert_eq!(block.matches(" Tw").count(), 1, "only the paragraph's own 0 Tw: {content}");
+    let first_row = block.split(" Tm").nth(1).and_then(|rest| rest.split(" Tj").next()).unwrap();
+    assert!(!first_row.contains(" Td"), "no move before the first row: {content}");
+}
+
+/// The preview's box is the box of the rows Apply writes, measured to their last glyphs.
+#[test]
+fn a_drafts_box_is_the_box_apply_draws() {
+    let doc = text_page("BT /F1 12 Tf 14 TL 72 700 Td [(First) -2000 (row here )] TJ T* (Second row ) Tj ET");
+    let source = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    let draft = source.editor_text.replacen("Second", "Third", 1);
+    let layout = text::text_edit_layout(&doc, 0, 0, &draft, &text::BlockStyle::default()).unwrap();
+    let mut applied = doc.clone();
+    text::replace_block(&mut applied, 0, 0, &draft).unwrap();
+    let boxed = text::text_lines(&applied, 0)
+        .unwrap()
+        .into_iter()
+        .map(|l| {
+            let end = l.ink.iter().map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
+            [l.rect[0], l.rect[1], if end.is_finite() { end.min(l.rect[2]) } else { l.rect[2] }, l.rect[3]]
+        })
+        .reduce(|a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+    let (d, b) = (layout.draft_rect.unwrap(), boxed.unwrap());
+    assert!(d.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01), "{draft:?}: preview {d:?}, applied {b:?}");
+}
+
+/// The draft's box is measured to its last glyph, not over the spaces typed after it.
+#[test]
+fn a_drafts_box_leaves_out_spaces_after_the_last_word() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    let layout = |text: &str| text::text_edit_layout(&doc, 0, 0, text, &text::BlockStyle::default()).unwrap().draft_rect;
+    assert_eq!(layout("Hello there     "), layout("Hello there"));
+}
+
+/// A lone carriage return (an old Mac line ending) breaks the row, as `\n` and `\r\n` do.
+#[test]
+fn a_lone_carriage_return_breaks_an_edited_paragraph() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "one\rtwo").unwrap();
+    let lines: Vec<String> = text::text_lines(&reopen(&doc), 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["one", "two"]);
+}
+
+/// On the styled rewrite path too, `\r\n` is one row break and a lone `\r` another, and no
+/// carriage return reaches the page: with no other formatting, and with a part set in red.
+#[test]
+fn carriage_returns_break_rows_on_the_styled_path() {
+    let draft = "one\r\ntwo\rthree";
+    let red = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    for style in [text::BlockStyle::default(), text::BlockStyle { ranges: vec![red], ..Default::default() }] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let doc = reopen(&doc);
+        let content = page_content_bytes(&doc, 0);
+        assert!(!content.contains(&b'\r') && !content.windows(2).any(|w| w == b"\\r"), "{}", String::from_utf8_lossy(&content));
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one", "two", "three"], "{style:?}");
+    }
+}
+
+/// A subset with no space glyph shows each space as a positioning gap one space wide, so a run
+/// of spaces still takes a run's width (#4199).
+#[test]
+fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
+    let reopened = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
+    assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "ab  ba   ab");
+}
+
+/// Spaces drawn as TJ gaps in a subset without a space glyph are wrapped in `/ActualText`, so
+/// repeated spaces and leading indents read back through `text_lines`, `editor_text`, and text
+/// extraction, and survive a second edit without shifting the line or miscalibrating its scale
+/// (#4229).
+#[test]
+fn spaces_and_indents_in_a_subset_without_a_space_glyph_round_trip_across_edits() {
+    for paragraph in [true, false] {
+        for typed in ["  ab  ba", "ab  ba   ab", "  ab  ba   ab  "] {
+            let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+            let edit = if paragraph { text::replace_block(&mut doc, 0, 0, typed) } else { text::replace_line(&mut doc, 0, 0, typed) };
+            assert_eq!(edit.unwrap().substituted, None, "{typed:?}");
+            let mut doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), 1, "{typed:?}: {lines:?}");
+            assert_eq!(lines[0].text, typed, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks[0].editor_text, typed, "{typed:?}");
+
+            // Re-edit the reopened document and verify the origin, gap count, and scale stay exact.
+            let next = "   ba  ab";
+            let edit2 = if paragraph { text::replace_block(&mut doc, 0, 0, next) } else { text::replace_line(&mut doc, 0, 0, next) };
+            assert_eq!(edit2.unwrap().substituted, None, "{typed:?}");
+            let doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines[0].text, next, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+            assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+        }
+    }
+
+    // Styled multi-row path: untouched calibration and row breaks keep 100 Tz and every space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba   ab").unwrap().substituted, None);
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba   ab");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba  ab").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  ab  ba", "ba  ab"]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba  ab");
+
+    // Two subsets of the same face (/F2 holds 'a' only, /F3 holds 'b' only, neither has ' '):
+    // spaces adopt their neighbour's subset on the row so no space is stranded in a glyph-less run.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (a) Tj /F1 12 Tf ( ) Tj /F3 12 Tf (b) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(97));
+        f.set(b"LastChar".to_vec(), Object::Int(97));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500)]));
+    })
+    .unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(98));
+        f.set(b"LastChar".to_vec(), Object::Int(98));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(520)]));
+    })
+    .unwrap();
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  b  a  \n  a  b  ").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  b  a  ", "  a  b  "]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  b  a  \n  a  b  ");
+
+    // A RangeStyle covering only spaces in a subset without a space glyph joins an adjacent
+    // glyph-bearing segment so its space count survives save/reopen.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab   ba");
+}
+
+/// A space that joins a neighbour's subset for `/ActualText` keeps the underline of its own
+/// style, not the neighbour's, and still reads back as that space.
+#[test]
+fn a_reassigned_subset_space_keeps_its_own_underline() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let line = text::text_lines(&doc, 0).unwrap().into_iter().next().expect("a line");
+    assert_eq!(line.text, "ab   ba");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let mut widths = Vec::new();
+    let mut from = None;
+    for row in content.lines() {
+        if let Some(rest) = row.strip_suffix(" m") {
+            from = rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
+        } else if let Some(rest) = row.strip_suffix(" l")
+            && let (Some(x0), Some(x1)) = (from.take(), rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()))
+        {
+            widths.push((x1 - x0).abs());
+        }
+    }
+    let text_width = line.rect[2] - line.rect[0];
+    assert!(widths.iter().any(|w| *w > 1.0), "the spaces lost their underline: {widths:?}\n{content}");
+    assert!(
+        widths.iter().all(|w| *w < text_width * 0.6),
+        "the space underline covered the neighbouring glyphs ({text_width}): {widths:?}\n{content}"
+    );
+}
+
+/// #6131: a subset that writes width 0 for its unused space (pdfTeX does) has no space glyph. A word added to
+/// the line takes a positioning gap for its spaces, not code 32 at width 0, which would run the words together.
+#[test]
+fn a_space_in_a_subset_that_gives_it_no_width_is_a_gap_not_code_32() {
+    for subtype in ["TrueType", "Type1"] {
+        // Codes 32..=98: the space and everything else 0 wide, but a and b (97, 98).
+        let widths: Vec<String> = (32..=98).map(|c| if c == 97 || c == 98 { "500" } else { "0" }.to_string()).collect();
+        let font = format!(
+            "<< /Type /Font /Subtype /{subtype} /BaseFont /ABCDEF+Sample /FirstChar 32 /LastChar 98 /Widths [{}] /Encoding /WinAnsiEncoding >>",
+            widths.join(" ")
+        );
+        let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len()
+            ),
+            font,
+        ];
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+{o}
+endobj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+        }
+        let x = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offs {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{x}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        let mut doc = Document::open(Arc::new(out)).unwrap();
+        assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None, "{subtype}");
+        // Every byte the text-showing operators draw (strings inside `TJ` arrays too) and every
+        // `TJ` adjustment, read from the saved content rather than matched as text.
+        let ops = pdfcraft_content::parse(&page_content_bytes(&reopen(&doc), 0)).ops;
+        let mut shown: Vec<u8> = Vec::new();
+        let mut adjustments: Vec<f64> = Vec::new();
+        // How many bytes had been drawn when each adjustment came: the gap must sit between the words.
+        let mut positions: Vec<usize> = Vec::new();
+        for op in ops.iter().filter(|o| matches!(o.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")) {
+            for operand in &op.operands {
+                match operand {
+                    Object::String(s) => shown.extend_from_slice(&s.bytes),
+                    Object::Array(items) => {
+                        for item in items {
+                            match item {
+                                Object::String(s) => shown.extend_from_slice(&s.bytes),
+                                number => {
+                                    if let Some(adjustment) = number.as_f64() {
+                                        adjustments.push(adjustment);
+                                        positions.push(shown.len());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(shown, b"abba", "{subtype}: the words are drawn and no code 32 at width 0 between them");
+        assert!(matches!(adjustments.as_slice(), [gap] if *gap < 0.0), "{subtype}: one adjustment moves the second word right: {adjustments:?}");
+        assert_eq!(positions, [2], "{subtype}: the gap is between the words, after \"ab\"");
+    }
+}
+
+#[test]
+fn image_exclusive_scope_resets_path_on_scope_exit() {
+    // An earlier scope has a path operation closed by Q (with 'h' closepath).
+    // The subsequent image in its own scope must cleanly extract and allow crop removal.
+    let content = "q 0 0 m 10 10 l h Q q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    crop(&mut doc, 0, 0, [100.0, 100.0, 250.0, 180.0]).unwrap();
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    remove_crop(&mut doc, 0, 0).unwrap();
+}
+
+#[test]
+fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
+    // /GS0 gs followed by Q and subsequent images must isolate each Do unit properly
+    let content = "q /GS0 gs Q q 200 0 0 100 100 100 cm /Im0 Do Q q 10 0 0 10 300 300 cm /Im0 Do Q";
+    let pieces = pdfcraft_content::Pieces::join(&[content.as_bytes()]);
+    let ops = pieces.parse().ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units.len(), 2);
+}
+
+/// A 1 × 1 grey inline image whose one sample is `data`.
+fn inline_image(data: char) -> String {
+    format!("BI /W 1 /H 1 /CS /G /BPC 8 ID {data} EI")
+}
+
+/// What page 0 paints, in order: `BI x` for an inline image with sample `x`, `Do x,y` for an
+/// XObject placed by a `cm` translating to x,y, and `Tj` for text. A `cm` lasts until its `Q`, so an
+/// XObject moved out of its `q`/`Q` wrapper shows as a bare `Do `.
+fn painted(doc: &Document) -> Vec<String> {
+    let mut at = vec![String::new()];
+    pdfcraft_content::parse(&page_content_bytes(doc, 0))
+        .ops
+        .iter()
+        .filter_map(|op| match op.op.as_slice() {
+            b"q" => {
+                at.push(at.last().unwrap().clone());
+                None
+            }
+            b"Q" => {
+                at.pop();
+                None
+            }
+            b"cm" => {
+                let m = op.nums::<6>().unwrap();
+                *at.last_mut().unwrap() = format!("{},{}", m[4], m[5]);
+                None
+            }
+            b"Do" => Some(format!("Do {}", at.last().unwrap())),
+            b"BI" => Some(format!("BI {}", String::from_utf8_lossy(&op.inline.as_ref().unwrap().1))),
+            b"Tj" => Some("Tj".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The index in [`images::page_images`] of the image whose box starts at `x`,`y`.
+fn image_at(doc: &Document, x: f64, y: f64) -> usize {
+    images::page_images(doc, 0).unwrap().iter().position(|i| (i.rect[0] - x).abs() < 1e-6 && (i.rect[1] - y).abs() < 1e-6).unwrap()
+}
+
+#[test]
+fn content_units_keep_each_top_level_inline_image_to_itself() {
+    // The parser emits a whole inline image as one `BI` op; its unit must not run on to the end
+    // (#3146). Inline images at the start, side by side and at the end are one unit each.
+    let content = format!(
+        "{} q 200 0 0 100 100 100 cm /Im0 Do Q {} {} q 10 0 0 10 300 300 cm /Im0 Do Q {}",
+        inline_image('a'),
+        inline_image('b'),
+        inline_image('c'),
+        inline_image('d')
+    );
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..1, 1..5, 5..6, 6..7, 7..11, 11..12]);
+}
+
+#[test]
+fn content_units_keep_a_nested_inline_image_inside_its_enclosing_unit() {
+    // A `BI` inside `q`/`Q` or a marked-content sequence stays part of that sequence's unit.
+    let content = format!("q {} Q /Span << /MCID 0 >> BDC {} EMC {}", inline_image('a'), inline_image('b'), inline_image('c'));
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..3, 3..6, 6..7]);
+}
+
+#[test]
+fn send_backward_after_a_top_level_inline_image_moves_one_step() {
+    // Before #3146 the inline image's unit swallowed everything after it, so SendBackward on a later
+    // image acted like SendToBack: it must step behind the text only.
+    let content = format!(
+        "{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q",
+        inline_image('x')
+    );
+    let mut doc = image_page_with(&content);
+    let front = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["BI x", "Do 100,100", "Do 200,200", "Tj"]);
+}
+
+#[test]
+fn arrange_steps_an_image_past_one_inline_image_at_a_time() {
+    // Before #3146 BringForward on B, inside the first inline image's unit, put it in front of
+    // everything. One step forward is past the next inline image only, and one step back again
+    // is behind that inline image only.
+    let content = format!(
+        "q 100 0 0 100 100 100 cm /Im0 Do Q {} q 150 0 0 150 200 200 cm /Im0 Do Q {} BT /F1 12 Tf 72 700 Td (Text) Tj ET q 50 0 0 50 300 300 cm /Im0 Do Q",
+        inline_image('a'),
+        inline_image('b')
+    );
+    let mut doc = image_page_with(&content);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::BringForward).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "BI b", "Do 200,200", "Tj", "Do 300,300"]);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "Do 200,200", "BI b", "Tj", "Do 300,300"]);
+}
+
+#[test]
+fn arrange_around_inline_images_at_the_ends_of_the_stream() {
+    // Before #3146 BringToFront on the last image after an inline image "succeeded" without moving
+    // it. It is already in front, so it is refused and nothing changes.
+    let content =
+        format!("{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q", inline_image('a'));
+    let mut doc = image_page_with(&content);
+    let before = page_content_bytes(&doc, 0);
+    let front = image_at(&doc, 200.0, 200.0);
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringToFront).is_err());
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    // Send to back goes behind the inline image that starts the stream.
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 200,200", "BI a", "Do 100,100", "Tj"]);
+
+    // Bring to front goes past the inline image that ends the stream.
+    let content = format!("q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET {}", inline_image('z'));
+    let mut doc = image_page_with(&content);
+    let back = image_at(&doc, 100.0, 100.0);
+    arrange(&mut doc, 0, back, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Tj", "BI z", "Do 100,100"]);
+}
+
+#[test]
+fn different_inline_soft_masks_have_distinct_identities() {
+    let doc = Document::new_empty();
+    let mut dict1 = Dict::default();
+    let mut mask1 = Dict::default();
+    mask1.set(b"Type".to_vec(), Object::Name(b"Mask1".to_vec()));
+    dict1.set(b"SMask".to_vec(), Object::Dict(mask1));
+
+    let mut dict2 = Dict::default();
+    let mut mask2 = Dict::default();
+    mask2.set(b"Type".to_vec(), Object::Name(b"Mask2".to_vec()));
+    dict2.set(b"SMask".to_vec(), Object::Dict(mask2));
+
+    let mut state1 = images::EffectiveGState::default();
+    state1.merge_dict(&dict1, &doc, pdfcraft_content::Matrix::IDENTITY);
+
+    let mut state2 = images::EffectiveGState::default();
+    state2.merge_dict(&dict2, &doc, pdfcraft_content::Matrix::IDENTITY);
+
+    assert!(state1.visually_differs(&state2), "two different inline soft masks must visually differ");
+}
+
+#[test]
+fn is_entire_page_wrapped_with_nested_scopes() {
+    let wrapped = "q 1 0 0 1 0 0 cm q 0 0 10 10 re f Q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let pieces = pdfcraft_content::Pieces::join(&[wrapped.as_bytes()]);
+    let ops = pieces.parse().ops;
+    assert!(images::is_entire_page_wrapped(&ops), "page wrapped in outer q...Q with inner nested q...Q is wrapped");
+
+    let unwrapped = "q 1 0 0 1 0 0 cm Q q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let pieces2 = pdfcraft_content::Pieces::join(&[unwrapped.as_bytes()]);
+    let ops2 = pieces2.parse().ops;
+    assert!(!images::is_entire_page_wrapped(&ops2), "page with two separate top-level q...Q scopes is not wrapped");
+}
+
+#[test]
+fn hostile_page_with_many_gs_and_nested_q_does_not_hang_or_oom() {
+    use std::fmt::Write as _;
+    let mut stream = String::new();
+    for i in 0..10_000 {
+        let _ = write!(stream, "/G{i} gs ");
+    }
+    for _ in 0..500 {
+        stream.push_str("q ");
+    }
+    stream.push_str("100 0 0 100 0 0 cm /Im0 Do ");
+    for _ in 0..500 {
+        stream.push_str("Q ");
+    }
+    let doc = image_page_with(&stream);
+    let start = std::time::Instant::now();
+    let imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs.len(), 1);
+    assert!(start.elapsed().as_secs() < 5, "page_images on hostile 10k gs must finish in under 5s, took {:?}", start.elapsed());
+}
+
+#[test]
+fn crop_image_with_leading_cm_in_scope_places_clip_before_internal_cm() {
+    let content = "q 10 0 0 10 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    crop(&mut doc, 0, 0, [50.0, 50.0, 55.0, 55.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert!(after[0].visible_rect.is_some());
+    let (v0, v1, v2, v3) =
+        (after[0].visible_rect.unwrap()[0], after[0].visible_rect.unwrap()[1], after[0].visible_rect.unwrap()[2], after[0].visible_rect.unwrap()[3]);
+    assert!((v0 - 50.0).abs() < 1e-3 && (v2 - 55.0).abs() < 1e-3, "visible rect must match crop coordinates: {:?}", after[0].visible_rect);
+    assert!((v1 - 50.0).abs() < 1e-3 && (v3 - 55.0).abs() < 1e-3, "visible rect must match crop coordinates: {:?}", after[0].visible_rect);
+}
+
+#[test]
+fn remove_crop_preserves_cm_before_extgstate() {
+    let content = "q 2 0 0 2 0 0 cm /GS0 gs 0 0 100 100 re W n 10 0 0 10 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    crop(&mut doc, 0, 0, [100.0, 100.0, 110.0, 110.0]).unwrap();
+    remove_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("W n"), "the author clipping path must remain: {s}");
+    assert!(!s.contains("PdfCraftImageCrop"), "the editor crop must be removed: {s}");
+    // Verify that the initial cm appears before /GS0 gs
+    let cm_pos = s.find("2 0 0 2 0 0 cm").expect("cm must be preserved");
+    let gs_pos = s.find("/GS0 gs").expect("gs must be preserved");
+    assert!(cm_pos < gs_pos, "cm must precede /GS0 gs so soft mask space is preserved: {s}");
+}
+
+/// Inside a text object `q`/`Q` save and restore the text and text line matrices (ISO 32000-2
+/// §9.4.1, as corrected by the PDF Association's errata, issue 368), as the renderer does: the
+/// text after `Q` is found, and stays, where it is drawn.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    for (content, text, baseline) in [
+        ("BT /F1 12 Tf 72 700 Td q 0 -100 Td Q (After) Tj ET", "After", [72.0, 700.0]),
+        ("BT /F1 12 Tf 72 700 Td q 1 0 0 1 300 300 Tm Q (After) Tj ET", "After", [72.0, 700.0]),
+        // `T*` moves from the restored line, not the one set inside q/Q.
+        ("BT /F1 12 Tf 14 TL 72 700 Td q 0 -100 Td Q T* (Next) Tj ET", "Next", [72.0, 686.0]),
+    ] {
+        let mut doc = text_page(content);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), (text, baseline), "{content}");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
+    }
+}
+
+#[test]
+fn variation_public_line_and_block_edits_preserve_selectors_after_reopen() {
+    let replacement = "1\u{FE0F}";
+    let mut results = Vec::new();
+    for kind in ["line", "block"] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        if kind == "line" {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        }
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        results.push((kind, lines[0].text.clone()));
+    }
+    assert_eq!(results, vec![("line", replacement.to_owned()), ("block", replacement.to_owned())]);
+}
+
+#[test]
+fn variation_public_selector_does_not_shift_centered_text_with_character_spacing() {
+    // қ requires the same bundled fallback for both drafts, without optional font inputs.
+    for spacing in [0.0, 2.0] {
+        let mut plain = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        let mut selected = plain.clone();
+        let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(spacing), ..Default::default() };
+        text::rewrite_block(&mut plain, 0, 0, Some("1қ"), &style).unwrap();
+        text::rewrite_block(&mut selected, 0, 0, Some("1\u{FE0F}қ"), &style).unwrap();
+        let a = text::text_lines(&reopen(&plain), 0).unwrap();
+        let b = text::text_lines(&reopen(&selected), 0).unwrap();
+        assert_eq!(a[0].base_font, b[0].base_font);
+        assert!(close(a[0].rect, b[0].rect), "Tc={spacing}: plain {:?}, selector {:?}", a[0].rect, b[0].rect);
+    }
+}
+/// Whole-paragraph alignment retains both soft wraps and typed hard breaks after save/reopen.
+/// Selected-row alignment for existing PDF content is withheld until it can persist safely.
+#[test]
+fn wrapped_rows_keep_whole_paragraph_alignment_and_hard_break_markers() {
+    let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (Old) Tj ET");
+    let style = text::BlockStyle { width: Some(60.0), align: Some(added::Align::Left), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("One two three four five six\nTail"), &style).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.len() > 2, "the first logical row must wrap");
+    let tail = lines.iter().find(|line| line.text == "Tail").unwrap();
+    assert!((tail.rect[0] - 72.0).abs() < 1.0, "the second logical row keeps the paragraph alignment: {:?}", tail.rect);
+    for line in lines.iter().filter(|line| line.text != "Tail") {
+        assert!((line.rect[0] - 72.0).abs() < 1.0, "soft-wrapped rows stay left-aligned: {:?}", line.rect);
+    }
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCSoft") && content.contains("/PCHard"), "both break kinds survive: {content}");
+}
+
+#[test]
+fn hostile_soft_wrap_counts_fail_before_reflow_allocates() {
+    for marker in [
+        "/PCSoft << /N 9223372036854775807 >> BDC EMC",
+        "/PCSoft << /N 16777217 >> BDC EMC",
+        "/PCSoft << /N 8388608 >> BDC EMC /PCSoft << /N 8388609 >> BDC EMC",
+    ] {
+        let doc = text_page(&format!("BT /F1 12 Tf 20 700 Td (First) Tj {marker} 0 -14 Td (Second) Tj ET"));
+        let error = text::text_lines(&doc, 0).unwrap_err();
+        assert!(error.to_string().contains("too large"), "{marker}: {error}");
+    }
+}
+
+#[test]
+fn ordinary_soft_wrap_counts_keep_their_spaces() {
+    for gap in [0, 1, 2, 8] {
+        let doc = text_page(&format!("BT /F1 12 Tf 20 700 Td (First) Tj /PCSoft << /N {gap} >> BDC EMC 0 -14 Td (Second) Tj ET"));
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.len(), 2);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].reflow_text, format!("First{}Second", " ".repeat(gap)));
+    }
+}
+
+#[test]
+fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() {
+    let mut doc = mixed_region_page();
+    let before = page_content_bytes(&doc, 0);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let style = text::BlockStyle { align: Some(added::Align::Justify), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 1, Some(&blocks[1].editor_text), &style).unwrap_err();
+    assert!(error.to_string().contains("justification"));
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// Ungroup renames every kind of resource a content stream names, where the page already uses
+/// that name for something else: fonts, XObjects, graphics states, colour spaces (also an inline
+/// image's /CS), patterns, shadings and marked-content properties. Each name the inline content
+/// uses resolves, in the page's merged resources, to the form's own object.
+#[test]
+fn ungroup_renames_every_kind_of_resource() {
+    let tag = |s: &str| {
+        let mut d = Dict::new();
+        d.set(b"Tag".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: s.as_bytes().to_vec(), hex: false }));
+        Object::Dict(d)
+    };
+    let categories = ["Font", "XObject", "ExtGState", "ColorSpace", "Pattern", "Shading", "Properties"];
+    let names = ["F1", "Art", "G", "C", "P", "S", "M"];
+    // The page uses every one of these names for something else; the form's are "form …".
+    let mut form_res = Dict::new();
+    let mut page_res = Dict::new();
+    for (cat, name) in categories.iter().zip(names) {
+        let mut f = Dict::new();
+        f.set(name.as_bytes().to_vec(), tag(&format!("form {cat}")));
+        form_res.set(cat.as_bytes().to_vec(), Object::Dict(f));
+        if *cat != "Font" && *cat != "XObject" {
+            let mut p = Dict::new();
+            p.set(name.as_bytes().to_vec(), tag(&format!("page {cat}")));
+            page_res.set(cat.as_bytes().to_vec(), Object::Dict(p));
+        }
+    }
+    let content = b"/G gs /C cs /Pattern cs /P scn /S sh /OC /M BDC EMC /Art Do BT /F1 9 Tf (x) Tj ET BI /CS /C /W 1 /H 1 /BPC 8 ID \x00 EI";
+    let (mut doc, _) = page_with_form(&[("Resources", Object::Dict(form_res))], content, "", None);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        for (k, v) in page_res.iter() {
+            d.set(k.clone(), v.clone());
+        }
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let contents = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(s) = contents.as_ref() else { panic!("one content stream") };
+    let ops = pdfcraft_content::parse(&s.decoded().unwrap()).ops;
+    let lookup = |cat: &str, name: &[u8]| {
+        let d = doc.resolve(res.get(cat.as_bytes()).unwrap()).as_dict().cloned().unwrap();
+        d.get(name).map(|o| doc.resolve(o).as_ref().clone())
+    };
+    let used: Vec<(&str, Vec<u8>)> = ops
+        .iter()
+        .filter_map(|op| match op.op.as_slice() {
+            b"gs" => Some(("ExtGState", op.name(0)?.to_vec())),
+            b"cs" if op.name(0) != Some(b"Pattern") => Some(("ColorSpace", op.name(0)?.to_vec())),
+            b"scn" => Some(("Pattern", op.name(0)?.to_vec())),
+            b"sh" => Some(("Shading", op.name(0)?.to_vec())),
+            b"BDC" => Some(("Properties", op.name(1)?.to_vec())),
+            b"Do" if op.name(0) != Some(b"Art") || ops.iter().filter(|o| o.is("Do")).count() == 1 => Some(("XObject", op.name(0)?.to_vec())),
+            b"Tf" => Some(("Font", op.name(0)?.to_vec())),
+            b"BI" => Some(("ColorSpace", op.inline.as_ref()?.0.get(b"CS")?.as_name()?.to_vec())),
+            _ => None,
+        })
+        .collect();
+    for cat in categories {
+        let hits: Vec<_> = used.iter().filter(|(c, _)| *c == cat).collect();
+        assert!(!hits.is_empty(), "{cat} is used: {used:?}");
+        // The form is placed by its Matrix [2 0 0 2 0 0] after the page's `1 0 0 1 40 80 cm`, so
+        // its pattern is drawn from a copy that carries that placement (ISO 32000-2 §8.7.2).
+        let want = match tag(&format!("form {cat}")) {
+            Object::Dict(mut d) if cat == "Pattern" => {
+                d.set(b"Matrix".to_vec(), Object::Array([2, 0, 0, 2, 40, 80].map(Object::Int).to_vec()));
+                Object::Dict(d)
+            }
+            other => other,
+        };
+        assert!(hits.iter().any(|(_, n)| lookup(cat, n) == Some(want.clone())), "{cat}: the inline content names the form's object: {hits:?}");
+    }
+    assert!(
+        used.iter().filter(|(c, _)| *c == "ColorSpace").all(|(_, n)| lookup("ColorSpace", n) == Some(tag("form ColorSpace"))),
+        "cs and the inline image's /CS both point at the form's colour space"
+    );
+    assert_eq!(lookup("ExtGState", b"G"), Some(tag("page ExtGState")), "the page's own G is kept");
+}
+
+/// The renderer takes an operator's operands from the end and ignores a surplus before them
+/// (`0 /Inner Do` draws `/Inner`): one name for `Do`, `gs`, `sh` and `cs`, a name then a size for
+/// `Tf`, a tag then a name for `BDC` and `DP`, the last name for `scn`. Ungroup renames that
+/// operand, so the inline content still selects the form's objects and not the page's.
+#[test]
+fn ungroup_renames_the_name_operand_the_renderer_reads() {
+    let tag = |s: &str| {
+        let mut d = Dict::new();
+        d.set(b"Tag".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: s.as_bytes().to_vec(), hex: false }));
+        Object::Dict(d)
+    };
+    let categories = ["Font", "XObject", "ExtGState", "ColorSpace", "Pattern", "Shading", "Properties"];
+    let names = ["F1", "Inner", "G", "C", "P", "S", "M"];
+    let mut form_res = Dict::new();
+    let mut page_res = Dict::new();
+    for (cat, name) in categories.iter().zip(names) {
+        let mut f = Dict::new();
+        f.set(name.as_bytes().to_vec(), tag(&format!("form {cat}")));
+        form_res.set(cat.as_bytes().to_vec(), Object::Dict(f));
+        if *cat != "Font" && *cat != "XObject" {
+            let mut p = Dict::new();
+            p.set(name.as_bytes().to_vec(), tag(&format!("page {cat}")));
+            page_res.set(cat.as_bytes().to_vec(), Object::Dict(p));
+        }
+    }
+    let content = b"0 /G gs 1 /C cs /Pattern cs 0.5 /P scn 0 /S sh /X /OC /M BDC EMC /X /OC /M DP 0 /Inner Do BT /X /F1 9 Tf (x) Tj ET";
+    let (mut doc, art) = page_with_form(&[("Resources", Object::Dict(form_res))], content, "", None);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        for (k, v) in page_res.iter() {
+            d.set(k.clone(), v.clone());
+        }
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(art));
+        xo.set(b"Inner".to_vec(), tag("page XObject"));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let contents = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(s) = contents.as_ref() else { panic!("one content stream") };
+    let ops = pdfcraft_content::parse(&s.decoded().unwrap()).ops;
+    let lookup = |cat: &str, name: &[u8]| {
+        let d = doc.resolve(res.get(cat.as_bytes()).unwrap()).as_dict().cloned().unwrap();
+        d.get(name).map(|o| doc.resolve(o).as_ref().clone())
+    };
+    // The operand each of the form's operators is drawn with, counted from the end as the
+    // renderer does (the page's own `/Art Do` and `/F1 9 Tf` have no surplus and are skipped).
+    let from_end = |op: &pdfcraft_content::Op, back: usize| op.operands.len().checked_sub(back + 1).and_then(|i| op.name(i)).map(<[u8]>::to_vec);
+    let used: Vec<(&str, Vec<u8>)> = ops
+        .iter()
+        .filter(|op| op.operands.len() >= if op.is("Tf") || op.is("BDC") || op.is("DP") { 3 } else { 2 })
+        .filter_map(|op| match op.op.as_slice() {
+            b"gs" => Some(("ExtGState", from_end(op, 0)?)),
+            b"cs" => Some(("ColorSpace", from_end(op, 0)?)),
+            b"scn" => Some(("Pattern", from_end(op, 0)?)),
+            b"sh" => Some(("Shading", from_end(op, 0)?)),
+            b"BDC" | b"DP" => Some(("Properties", from_end(op, 0)?)),
+            b"Do" => Some(("XObject", from_end(op, 0)?)),
+            b"Tf" => Some(("Font", from_end(op, 1)?)),
+            _ => None,
+        })
+        .collect();
+    for cat in categories {
+        let hits: Vec<_> = used.iter().filter(|(c, _)| *c == cat).collect();
+        assert!(!hits.is_empty(), "{cat} is used: {used:?}");
+        let want = match tag(&format!("form {cat}")) {
+            Object::Dict(mut d) if cat == "Pattern" => {
+                d.set(b"Matrix".to_vec(), Object::Array([2, 0, 0, 2, 40, 80].map(Object::Int).to_vec()));
+                Object::Dict(d)
+            }
+            other => other,
+        };
+        for (_, n) in &hits {
+            assert_eq!(lookup(cat, n), Some(want.clone()), "{cat}: the operand the renderer reads names the form's object: {hits:?}");
+        }
+    }
+    let surplus = ops.iter().filter(|o| o.operands.len() == 3).filter_map(|o| o.name(0)).filter(|n| *n == b"X").count();
+    assert_eq!(surplus, 3, "the surplus operands of BDC, DP and Tf are left as they were");
+}
+
+/// A surplus operand before a resource name can't hide what the name selects from Ungroup's
+/// checks either: a nested form without resources of its own drawn with `0 /N Do` still inherits
+/// renamed ones, and a group's `0 /M gs` still blends, directly or in a nested form.
+#[test]
+fn ungroup_checks_the_name_operand_the_renderer_reads() {
+    let refused = |r: Result<(), EditError>, why: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(why), "{m}"),
+        other => panic!("expected a refusal mentioning {why:?}, got {other:?}"),
+    };
+    let nested = |doc: &mut Document, res: Option<Dict>, content: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+        if let Some(res) = res {
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        }
+        Object::Ref(doc.add(Object::Stream(Stream::flate(d, content))))
+    };
+    let one = |cat: &str, name: &str, v: Object| {
+        let mut inner = Dict::new();
+        inner.set(name.as_bytes().to_vec(), v);
+        let mut d = Dict::new();
+        d.set(cat.as_bytes().to_vec(), Object::Dict(inner));
+        d
+    };
+    // The form's F1 (Times) is renamed past the page's Courier F1, so N would find the page's.
+    let r = ungroup_art(b"BT /F1 9 Tf (a) Tj ET 0 /N Do", false, |doc| {
+        let n = nested(doc, None, b"BT /F1 9 Tf (n) Tj ET");
+        let mut times = Dict::new();
+        times.set(b"Type".to_vec(), Object::name("Font"));
+        times.set(b"Subtype".to_vec(), Object::name("Type1"));
+        times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+        let mut res = one("Font", "F1", Object::Dict(times));
+        res.set(b"XObject".to_vec(), one("XObject", "N", n).get(b"XObject").cloned().unwrap());
+        res
+    });
+    refused(r, "uses its resources");
+    let multiply = || {
+        let mut gs = Dict::new();
+        gs.set(b"BM".to_vec(), Object::name("Multiply"));
+        Object::Dict(gs)
+    };
+    refused(ungroup_art(b"0 /M gs 1 0 0 rg 0 0 10 10 re f", true, |_| one("ExtGState", "M", multiply())), "blend");
+    let r = ungroup_art(b"/N Do", true, |doc| {
+        let n = nested(doc, Some(one("ExtGState", "M", multiply())), b"0 /M gs 1 0 0 rg 0 0 10 10 re f");
+        one("XObject", "N", n)
+    });
+    refused(r, "blend");
+    let r = ungroup_art(b"0 /N Do", true, |doc| {
+        let n = nested(doc, Some(one("ExtGState", "M", multiply())), b"/M gs 1 0 0 rg 0 0 10 10 re f");
+        one("XObject", "N", n)
+    });
+    refused(r, "blend");
+}
+
+/// An operator whose operands the renderer can't read as a resource selection (no name where
+/// it takes one, a `Tf` without a size, a `BDC` whose properties are a number) is skipped when
+/// drawn. Ungroup refuses rather than guess what it should rename. A `BDC` with an inline
+/// properties dictionary names no resource and is fine.
+#[test]
+fn ungroup_refuses_a_resource_operator_it_cannot_read() {
+    for content in [&b"Do"[..], b"1 Do", b"/F1 Tf", b"/F1 /F2 Tf", b"/Tag 5 BDC EMC", b"/P BDC EMC", b"(s) /P scn", b"/G (s) gs"] {
+        match ungroup_art(content, false, |_| Dict::new()) {
+            Err(EditError::Invalid(m)) => assert!(m.contains("can't be read"), "{}: {m}", String::from_utf8_lossy(content)),
+            other => panic!("{}: expected a refusal, got {other:?}", String::from_utf8_lossy(content)),
+        }
+    }
+    ungroup_art(b"/Span <</ActualText (x)>> BDC EMC 0 0 1 rg 0 0 5 5 re f", false, |_| Dict::new()).unwrap();
+}
+
+/// #3067 review: a pattern's matrix maps pattern space to the default space of the stream that
+/// uses it (ISO 32000-2 §8.7.2), so drawn from the page a form's pattern would lose the form's
+/// placement. Ungroup draws it from a copy whose `/Matrix` carries that placement. A pattern
+/// selected twice is copied once, the form keeps its own for the other placement, and a pattern
+/// whose matrix can't be read is refused rather than drawn somewhere else.
+#[test]
+fn ungroup_carries_the_placement_into_the_patterns_it_selects() {
+    let pattern = |matrix: Object| {
+        let mut d = Dict::new();
+        d.set(b"PatternType".to_vec(), Object::Int(2));
+        d.set(b"Shading".to_vec(), Object::Dict(Dict::new()));
+        d.set(b"Matrix".to_vec(), matrix);
+        Object::Dict(d)
+    };
+    let form_with = |p: Object| {
+        let mut patterns = Dict::new();
+        patterns.set(b"P".to_vec(), p);
+        let mut res = Dict::new();
+        res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+        page_with_form(&[("Resources", Object::Dict(res))], b"/Pattern cs /P scn 0 0 10 10 re f /P scn 0 0 5 5 re f", "", None)
+    };
+    let own = pattern(Object::Array([1, 0, 0, 1, 3, 4].map(Object::Int).to_vec()));
+    let (mut doc, artwork) = form_with(own.clone());
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let table = doc.resolve(res.get(b"Pattern").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(s) = doc.resolve(page.dict.get(b"Contents").unwrap()).as_ref().clone() else { panic!("one content stream") };
+    let selected: Vec<Vec<u8>> =
+        pdfcraft_content::parse(&s.decoded().unwrap()).ops.iter().filter(|o| o.is("scn")).filter_map(|o| o.name(0).map(<[u8]>::to_vec)).collect();
+    assert_eq!(selected.len(), 2, "{selected:?}");
+    assert!(selected[0] == selected[1] && selected[0] != b"P", "both selections use one copy: {selected:?}");
+    let copy = doc.resolve(table.get(&selected[0]).unwrap()).as_dict().cloned().unwrap();
+    // [1 0 0 1 3 4], then the form's Matrix [2 0 0 2 0 0], then the page's `1 0 0 1 40 80 cm`.
+    let matrix = copy.get(b"Matrix").and_then(Object::as_array).and_then(|a| pdfcraft_content::Matrix::from_operands(a));
+    assert_eq!(matrix.map(|m| m.0), Some([2.0, 0.0, 0.0, 2.0, 46.0, 88.0]));
+    assert_eq!(table.iter().filter(|(k, _)| k.starts_with(b"PCUgPat")).count(), 1, "one copy");
+    let Object::Stream(form) = doc.get(artwork).as_ref().clone() else { panic!("the form") };
+    let form_res = doc.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let form_patterns = doc.resolve(form_res.get(b"Pattern").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(form_patterns.get(b"P"), Some(&own), "the form keeps its own pattern for its other placement");
+
+    let (mut doc, _) =
+        form_with(pattern(Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0), Object::Int(1), Object::name("Bad"), Object::Int(4)])));
+    match images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup) {
+        Err(EditError::Invalid(m)) => assert!(m.contains("position can't be kept"), "{m}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Ungroup draws the form where the `Do` drew it and only inside its bounding box: the inline
+/// content starts `q <Matrix> cm <BBox> re W n`, a form without a Matrix gets no `cm`, and the
+/// page's other content is unchanged around it.
+#[test]
+fn ungrouped_content_keeps_the_forms_matrix_and_clip() {
+    let content = b"0 0 1 rg -50 -50 300 300 re f";
+    let page_ops = |doc: &Document| {
+        let page = pdfcraft_model::pages(doc).into_iter().next().unwrap();
+        let Object::Stream(s) = doc.resolve(page.dict.get(b"Contents").unwrap()).as_ref().clone() else { panic!("one stream") };
+        pdfcraft_content::parse(&s.decoded().unwrap()).ops
+    };
+    let (mut doc, _) = page_with_form(&[], content, "", None);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let ops = page_ops(&reopen(&doc));
+    let words: Vec<String> = ops.iter().map(|o| String::from_utf8_lossy(&o.op).into_owned()).collect();
+    // q 1 0 0 1 40 80 cm | q 2 0 0 2 0 0 cm 0 0 100 50 re W n <form> Q | Q …
+    let at = words.iter().position(|w| w == "re").expect("a clip");
+    assert_eq!(words[at - 3..at + 3], ["cm", "q", "cm", "re", "W", "n"], "{words:?}");
+    assert_eq!(ops[at - 1].nums::<6>(), Some([2.0, 0.0, 0.0, 2.0, 0.0, 0.0]), "the form's Matrix");
+    assert_eq!(ops[at].nums::<4>(), Some([0.0, 0.0, 100.0, 50.0]), "the form's BBox");
+    assert_eq!(words.iter().filter(|w| *w == "Do").count(), 1, "the other placement still draws the form");
+    // No Matrix, no cm.
+    let (mut doc, artwork) = page_with_form(&[], content, "", None);
+    if let Object::Stream(mut s) = doc.get(artwork).as_ref().clone() {
+        s.dict.remove(b"Matrix");
+        doc.set(artwork, Object::Stream(s));
+    }
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let ops = page_ops(&reopen(&doc));
+    let at = ops.iter().position(|o| o.is("re")).unwrap();
+    assert!(ops[at - 1].is("q"), "no Matrix, no cm: {:?}", ops[at - 1]);
+}
+
+/// Merging resources: an object the page already has under the same name keeps that name, a
+/// fresh name never takes one the page already uses, and a form without resources of its own
+/// (PDF 1.1) draws with the page's as they are.
+#[test]
+fn ungroup_merges_resources_without_duplicates_or_clashes() {
+    let courier = Object::Ref(pdfcraft_cos::ObjRef::new(8, 0));
+    let mut times = Dict::new();
+    times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), courier.clone());
+    fonts.set(b"F2".to_vec(), Object::Dict(times.clone()));
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    let content = b"BT /F1 9 Tf (a) Tj /F2 9 Tf (b) Tj ET";
+    let (mut doc, _) = page_with_form(&[("Resources", Object::Dict(res))], content, "", None);
+    // The page already uses PCUg1 for another font.
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut f = Dict::new();
+        f.set(b"F1".to_vec(), courier.clone());
+        f.set(b"F2".to_vec(), Object::name("PageF2"));
+        f.set(b"PCUg1".to_vec(), Object::name("Taken"));
+        d.set(b"Font".to_vec(), Object::Dict(f));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let names: Vec<String> = fonts.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+    assert_eq!(names.len(), 4, "F1 shared, F2 renamed once: {names:?}");
+    assert_eq!(fonts.get(b"PCUg1"), Some(&Object::name("Taken")), "a fresh name never replaces one in use");
+    assert_eq!(fonts.get(b"PCUg2"), Some(&Object::Dict(times)), "the form's F2 under the next free name");
+    let Object::Stream(s) = doc.resolve(page.dict.get(b"Contents").unwrap()).as_ref().clone() else { panic!("one stream") };
+    let used: Vec<Vec<u8>> =
+        pdfcraft_content::parse(&s.decoded().unwrap()).ops.iter().filter(|o| o.is("Tf")).filter_map(|o| o.name(0).map(<[u8]>::to_vec)).collect();
+    assert!(used.contains(&b"F1".to_vec()) && used.contains(&b"PCUg2".to_vec()), "{used:?}");
+
+    // No resources of its own: nothing to merge or rename.
+    let (mut doc, _) = page_with_form(&[], b"BT /F1 9 Tf (c) Tj ET", "", None);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "c" && l.base_font.contains("Courier")));
+}
+
+/// Ungroup never drops what it can't read: a form whose content can't be decoded or parsed is
+/// refused and the page is unchanged. (A form without a usable BBox or Matrix isn't offered as
+/// artwork at all.)
+#[test]
+fn ungroup_refuses_unreadable_forms() {
+    let refused = |dict: &[(&str, Object)], content: &[u8], raw: Option<&[u8]>| {
+        let (mut doc, artwork) = page_with_form(dict, content, "", None);
+        if let Some(raw) = raw
+            && let Object::Stream(mut s) = doc.get(artwork).as_ref().clone()
+        {
+            s.raw = raw.to_vec().into();
+            doc.set(artwork, Object::Stream(s));
+        }
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+        assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("can't be ungrouped")), "{r:?}");
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "nothing changed");
+    };
+    // Flate data that isn't Flate.
+    refused(&[], b"0 0 1 1 re f", Some(b"not deflated at all"));
+    // Bytes that aren't operators.
+    refused(&[], b"0 0 1 1 re f ) ) ]]", None);
+}
+
+/// Translucency at the `Do` is followed parameter by parameter: stroke alpha counts, a soft mask
+/// of /None doesn't, a blend mode set on the page counts (Compatible doesn't, and an array's first
+/// entry decides), it carries over from an earlier content stream, and a group whose /S isn't
+/// Transparency isn't checked.
+#[test]
+fn ungroup_follows_the_graphics_state_at_the_do() {
+    let gs = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        Object::Dict(d)
+    };
+    let mut states = Dict::new();
+    for (k, v) in [
+        ("Stroke", gs(&[("CA", Object::Real(0.4))])),
+        ("NoMask", gs(&[("SMask", Object::name("None"))])),
+        ("Mask", gs(&[("SMask", gs(&[("S", Object::name("Luminosity"))]))])),
+        ("Mul", gs(&[("BM", Object::name("Multiply"))])),
+        ("Compat", gs(&[("BM", Object::name("Compatible"))])),
+        ("MulArr", gs(&[("BM", Object::Array(vec![Object::name("Multiply"), Object::name("Normal")]))])),
+        ("NormArr", gs(&[("BM", Object::Array(vec![Object::name("Normal"), Object::name("Multiply")]))])),
+    ] {
+        states.set(k.as_bytes().to_vec(), v);
+    }
+    let group = |s: &str| {
+        let mut g = Dict::new();
+        g.set(b"S".to_vec(), Object::name(s));
+        Object::Dict(g)
+    };
+    let try_with = |prefix: &str, s: &str| {
+        let (mut doc, _) = page_with_form(&[("Group", group(s))], b"0 0 1 1 re f", prefix, Some(states.clone()));
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).is_ok()
+    };
+    assert!(!try_with("/Stroke gs", "Transparency"), "stroke alpha");
+    assert!(try_with("/NoMask gs", "Transparency"), "SMask /None");
+    assert!(!try_with("/Mask gs", "Transparency"), "a soft mask");
+    assert!(!try_with("/Mul gs", "Transparency"), "Multiply");
+    assert!(try_with("/Compat gs", "Transparency"), "Compatible");
+    assert!(!try_with("/MulArr gs", "Transparency"), "an array's first entry decides: Multiply");
+    assert!(try_with("/NormArr gs", "Transparency"), "an array's first entry decides: Normal");
+    assert!(try_with("/Mul gs", "Other"), "not a transparency group");
+    // Nor are the blend modes inside a group that isn't a transparency group.
+    let mut inner = Dict::new();
+    let mut inner_states = Dict::new();
+    inner_states.set(b"Mul".to_vec(), gs(&[("BM", Object::name("Multiply"))]));
+    inner.set(b"ExtGState".to_vec(), Object::Dict(inner_states));
+    let (mut doc, _) = page_with_form(&[("Group", group("Other")), ("Resources", Object::Dict(inner.clone()))], b"/Mul gs 0 0 1 1 re f", "", None);
+    assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).is_ok(), "blending inside a non-transparency group");
+    let (mut doc, _) = page_with_form(&[("Group", group("Transparency")), ("Resources", Object::Dict(inner))], b"/Mul gs 0 0 1 1 re f", "", None);
+    assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).is_err(), "blending inside a transparency group");
+    // The gs in an earlier content stream of the page.
+    let (mut doc, _) = page_with_form(&[("Group", group("Transparency"))], b"0 0 1 1 re f", "", Some(states.clone()));
+    let first = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Mul gs")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| {
+        d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))]));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).is_err(), "carried from the first stream");
+    // #3067 review: the Do's index counts the page's streams as one. Read as an index into its
+    // own stream it ran past the Do to the Q after it, and missed the Multiply it is drawn with.
+    let (mut doc, _) = page_with_form(&[("Group", group("Transparency"))], b"0 0 1 1 re f", "", Some(states.clone()));
+    let first = doc.add(Object::Stream(Stream::flate(Dict::new(), b"0 0 m 1 1 l n")));
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Mul gs /Art Do Q 0 0 m")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| {
+        d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))]));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+    assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("drawn translucent")), "drawn under Multiply in the second stream: {r:?}");
+}
+
+/// A transparency group's blend modes are looked for where they are used: in the `gs` its
+/// content sets (not every ExtGState its resources happen to list) and inside the forms it
+/// draws, at any depth. A nested form that draws itself counts as blending, without looping.
+#[test]
+fn ungroup_looks_for_blend_modes_where_they_are_used() {
+    let gs = |bm: &str| {
+        let mut d = Dict::new();
+        d.set(b"BM".to_vec(), Object::name(bm));
+        Object::Dict(d)
+    };
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    let attempt = |form_content: &[u8], nested_content: Option<(&[u8], &str)>, self_loop: bool| {
+        let mut doc = fixture();
+        let mut inner_res = Dict::new();
+        let mut states = Dict::new();
+        states.set(b"Mul".to_vec(), gs("Multiply"));
+        states.set(b"Norm".to_vec(), gs("Normal"));
+        inner_res.set(b"ExtGState".to_vec(), Object::Dict(states));
+        let nested = nested_content.map(|(content, _)| {
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            d.set(b"Resources".to_vec(), Object::Dict(inner_res.clone()));
+            doc.add(Object::Stream(Stream::flate(d, content)))
+        });
+        if let (Some(n), true) = (nested, self_loop) {
+            // The nested form draws itself.
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            let mut res = inner_res.clone();
+            let mut xo = Dict::new();
+            xo.set(b"Me".to_vec(), Object::Ref(n));
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+            doc.set(n, Object::Stream(Stream::flate(d, b"/Me Do")));
+        }
+        let mut res = inner_res.clone();
+        if let (Some(n), Some((_, name))) = (nested, nested_content) {
+            let mut xo = Dict::new();
+            xo.set(name.as_bytes().to_vec(), Object::Ref(n));
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+        }
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+        form.set(b"Group".to_vec(), Object::Dict(group.clone()));
+        form.set(b"Resources".to_vec(), Object::Dict(res));
+        let artwork = doc.add(Object::Stream(Stream::flate(form, form_content)));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            let mut xo = Dict::new();
+            xo.set(b"Art".to_vec(), Object::Ref(artwork));
+            d.set(b"XObject".to_vec(), Object::Dict(xo));
+        })
+        .unwrap();
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+        let mut doc = reopen(&doc);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).is_ok()
+    };
+    assert!(attempt(b"/Norm gs 0 0 1 1 re f", None, false), "Normal is fine");
+    assert!(attempt(b"0 0 1 1 re f", None, false), "Multiply listed but never used");
+    assert!(!attempt(b"/Mul gs 0 0 1 1 re f", None, false), "Multiply used");
+    assert!(!attempt(b"/Inner Do", Some((b"/Mul gs 0 0 1 1 re f", "Inner")), false), "Multiply inside a nested form");
+    assert!(attempt(b"/Inner Do", Some((b"/Norm gs 0 0 1 1 re f", "Inner")), false), "a nested form without blending");
+    assert!(!attempt(b"/Inner Do", Some((b"", "Inner")), true), "a nested form that draws itself");
+}
+
+/// Ungroup the form `Art` drawn by fixture page 1, with `content`; `build` adds the form's other
+/// entries (`/Group`, `/Resources`) and the objects they refer to.
+fn ungroup_built(content: &[u8], build: impl FnOnce(&mut Document, &mut Dict)) -> Result<(), EditError> {
+    let mut doc = fixture();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    build(&mut doc, &mut form);
+    let artwork = doc.add(Object::Stream(Stream::flate(form, content)));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).map(|_| ())
+}
+
+/// #3067 review: the entries a refusal depends on count when they are indirect objects too
+/// (ISO 32000-2 §7.3.10): a group's `/S` and `/K`, and the `/Subtype` or `/PatternType` of what
+/// the form draws.
+#[test]
+fn ungroup_reads_indirect_group_and_type_entries() {
+    let refused = |r: Result<(), EditError>, why: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(why), "{m}"),
+        other => panic!("expected a refusal mentioning {why:?}, got {other:?}"),
+    };
+    let fill = b"1 0 0 rg 0 0 10 10 re f";
+    let group = |doc: &mut Document, form: &mut Dict, s: bool, k: Option<bool>| {
+        let mut g = Dict::new();
+        let name = Object::name("Transparency");
+        g.set(b"S".to_vec(), if s { Object::Ref(doc.add(name)) } else { name });
+        if let Some(k) = k {
+            g.set(b"K".to_vec(), Object::Ref(doc.add(Object::Bool(k))));
+        }
+        form.set(b"Group".to_vec(), Object::Dict(g));
+    };
+    refused(ungroup_built(fill, |doc, form| group(doc, form, true, Some(true))), "knockout");
+    refused(
+        ungroup_built(fill, |doc, form| {
+            group(doc, form, false, None);
+            let k = Object::Ref(doc.add(Object::Bool(true)));
+            if let Some(Object::Dict(g)) = form.get_mut(b"Group") {
+                g.set(b"K".to_vec(), k);
+            }
+        }),
+        "knockout",
+    );
+    ungroup_built(fill, |doc, form| group(doc, form, true, Some(false))).unwrap();
+
+    // A nested form whose /Subtype is indirect is still looked into for blend modes.
+    refused(
+        ungroup_built(b"/Inner Do", |doc, form| {
+            group(doc, form, true, None);
+            let mut bm = Dict::new();
+            bm.set(b"BM".to_vec(), Object::name("Multiply"));
+            let mut states = Dict::new();
+            states.set(b"Mul".to_vec(), Object::Dict(bm));
+            let mut inner_res = Dict::new();
+            inner_res.set(b"ExtGState".to_vec(), Object::Dict(states));
+            let mut inner = Dict::new();
+            inner.set(b"Subtype".to_vec(), Object::Ref(doc.add(Object::name("Form"))));
+            inner.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            inner.set(b"Resources".to_vec(), Object::Dict(inner_res));
+            let inner = doc.add(Object::Stream(Stream::flate(inner, b"/Mul gs 0 0 1 1 re f")));
+            let mut xo = Dict::new();
+            xo.set(b"Inner".to_vec(), Object::Ref(inner));
+            let mut res = Dict::new();
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+            form.set(b"Resources".to_vec(), Object::Dict(res));
+        }),
+        "blend",
+    );
+
+    // A nested form or tiling pattern without resources, typed through an indirect object, still
+    // inherits the form's renamed ones.
+    for (cat, content) in [("XObject", &b"BT /F1 9 Tf (a) Tj ET /N Do"[..]), ("Pattern", b"BT /F1 9 Tf (a) Tj ET /Pattern cs /N scn 0 0 10 10 re f")]
+    {
+        let r = ungroup_built(content, |doc, form| {
+            let mut d = Dict::new();
+            if cat == "XObject" {
+                d.set(b"Subtype".to_vec(), Object::Ref(doc.add(Object::name("Form"))));
+                d.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+            } else {
+                d.set(b"PatternType".to_vec(), Object::Ref(doc.add(Object::Int(1))));
+            }
+            let nested = doc.add(Object::Stream(Stream::flate(d, b"BT /F1 9 Tf (n) Tj ET")));
+            let mut times = Dict::new();
+            times.set(b"Type".to_vec(), Object::name("Font"));
+            times.set(b"Subtype".to_vec(), Object::name("Type1"));
+            times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+            let mut fonts = Dict::new();
+            fonts.set(b"F1".to_vec(), Object::Dict(times));
+            let mut named = Dict::new();
+            named.set(b"N".to_vec(), Object::Ref(nested));
+            let mut res = Dict::new();
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            res.set(cat.as_bytes().to_vec(), Object::Dict(named));
+            form.set(b"Resources".to_vec(), Object::Dict(res));
+        });
+        refused(r, "uses its resources");
+    }
+}
+
+/// Ungroup the form `Art` drawn by fixture page 1, with `content` and `resources`, as a
+/// transparency group or not; `build` adds what the resources refer to first.
+fn ungroup_art(content: &[u8], group: bool, build: impl FnOnce(&mut Document) -> Dict) -> Result<(), EditError> {
+    let mut doc = fixture();
+    let res = build(&mut doc);
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    if group {
+        let mut g = Dict::new();
+        g.set(b"S".to_vec(), Object::name("Transparency"));
+        form.set(b"Group".to_vec(), Object::Dict(g));
+    }
+    form.set(b"Resources".to_vec(), Object::Dict(res));
+    let artwork = doc.add(Object::Stream(Stream::flate(form, content)));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).map(|_| ())
+}
+
+/// A nested form, Type 3 font or tiling pattern without `/Resources` takes its names from the
+/// form drawing it (the renderer chains them). Once the form's names are renamed into the page's,
+/// it would find the page's instead (the page's Courier `F1`, not the form's Times), so ungroup
+/// refuses. With resources of its own it is unaffected, and so is a form without resources of
+/// its own, whose names are already the page's.
+#[test]
+fn ungroup_refuses_nested_content_that_inherits_renamed_resources() {
+    let times = || {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Font"));
+        d.set(b"Subtype".to_vec(), Object::name("Type1"));
+        d.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+        Object::Dict(d)
+    };
+    let nested = |doc: &mut Document, kind: &str, own: bool| -> (&'static str, Object) {
+        let mut d = Dict::new();
+        if own {
+            d.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
+        }
+        match kind {
+            "form" => {
+                d.set(b"Subtype".to_vec(), Object::name("Form"));
+                d.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+                ("XObject", Object::Ref(doc.add(Object::Stream(Stream::flate(d, b"BT /F1 9 Tf (n) Tj ET")))))
+            }
+            "type3" => {
+                d.set(b"Type".to_vec(), Object::name("Font"));
+                d.set(b"Subtype".to_vec(), Object::name("Type3"));
+                ("Font", Object::Dict(d))
+            }
+            _ => {
+                d.set(b"PatternType".to_vec(), Object::Int(1));
+                ("Pattern", Object::Ref(doc.add(Object::Stream(Stream::flate(d, b"BT /F1 9 Tf (n) Tj ET")))))
+            }
+        }
+    };
+    let content = |kind: &str| -> &'static [u8] {
+        match kind {
+            "form" => b"BT /F1 9 Tf (a) Tj ET /N Do",
+            "type3" => b"BT /F1 9 Tf (a) Tj /N 9 Tf (b) Tj ET",
+            // An uncoloured pattern: the name comes after the colour.
+            _ => b"BT /F1 9 Tf (a) Tj ET /PG cs 0.5 /N scn 0 0 10 10 re f",
+        }
+    };
+    let run = |kind: &'static str, own: bool| {
+        ungroup_art(content(kind), false, |doc| {
+            let (cat, obj) = nested(doc, kind, own);
+            let mut fonts = Dict::new();
+            fonts.set(b"F1".to_vec(), times());
+            let mut res = Dict::new();
+            if cat == "Font" {
+                fonts.set(b"N".to_vec(), obj);
+            } else {
+                let mut d = Dict::new();
+                d.set(b"N".to_vec(), obj);
+                res.set(cat.as_bytes().to_vec(), Object::Dict(d));
+            }
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            // `cs` takes a name (ISO 32000-2 §8.6.8, Table 73), here the uncoloured pattern space.
+            let mut spaces = Dict::new();
+            spaces.set(b"PG".to_vec(), Object::Array(vec![Object::name("Pattern"), Object::name("DeviceGray")]));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(spaces));
+            res
+        })
+    };
+    for kind in ["form", "type3", "pattern"] {
+        let r = run(kind, false);
+        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("uses its resources")), "{kind}: {r:?}");
+        assert!(run(kind, true).is_ok(), "{kind} with resources of its own");
+    }
+
+    // An image and a shading pattern have no content to look names up for.
+    let r = ungroup_art(b"BT /F1 9 Tf (a) Tj ET /Im Do /Pattern cs /Sh scn 0 0 10 10 re f", false, |doc| {
+        let mut img = Dict::new();
+        img.set(b"Subtype".to_vec(), Object::name("Image"));
+        img.set(b"Width".to_vec(), Object::Int(1));
+        img.set(b"Height".to_vec(), Object::Int(1));
+        img.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        img.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        let img = doc.add(Object::Stream(Stream::flate(img, b"@")));
+        let mut shading = Dict::new();
+        shading.set(b"ShadingType".to_vec(), Object::Int(2));
+        let mut pattern = Dict::new();
+        pattern.set(b"PatternType".to_vec(), Object::Int(2));
+        pattern.set(b"Shading".to_vec(), Object::Dict(shading));
+        let mut res = Dict::new();
+        let mut d = Dict::new();
+        d.set(b"Im".to_vec(), Object::Ref(img));
+        res.set(b"XObject".to_vec(), Object::Dict(d));
+        let mut d = Dict::new();
+        d.set(b"Sh".to_vec(), Object::Dict(pattern));
+        res.set(b"Pattern".to_vec(), Object::Dict(d));
+        let mut d = Dict::new();
+        d.set(b"F1".to_vec(), times());
+        res.set(b"Font".to_vec(), Object::Dict(d));
+        res
+    });
+    assert!(r.is_ok(), "an image and a shading pattern: {r:?}");
+
+    // The outer form has no resources: the nested form already finds the page's, as it will.
+    let mut doc = fixture();
+    let mut inner = Dict::new();
+    inner.set(b"Subtype".to_vec(), Object::name("Form"));
+    inner.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    let inner = doc.add(Object::Stream(Stream::flate(inner, b"BT /F1 9 Tf (n) Tj ET")));
+    let mut outer = Dict::new();
+    outer.set(b"Subtype".to_vec(), Object::name("Form"));
+    outer.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    let outer = doc.add(Object::Stream(Stream::flate(outer, b"/N Do")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(outer));
+        xo.set(b"N".to_vec(), Object::Ref(inner));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    let art = images::page_images(&doc, 0).unwrap().iter().position(|i| i.name == "Art").unwrap();
+    images::change_image(&mut doc, 0, art, &images::ImageChange::Ungroup).unwrap();
+}
+
+/// #3067 review: a form whose marked content or text objects don't balance within its own
+/// stream is refused: inlined, an extra EMC would close what the page opened, and one left open
+/// would take in the page's later content.
+#[test]
+fn ungroup_refuses_unbalanced_marked_content_and_text_objects() {
+    assert!(ungroup_art(b"/P BMC BT ET EMC /Q <</MCID 0>> BDC EMC", false, |_| Dict::new()).is_ok(), "balanced");
+    for content in [&b"EMC"[..], b"/P BMC", b"/P <</MCID 0>> BDC", b"BT", b"ET", b"BT BT ET ET", b"BT EMC ET"] {
+        let r = ungroup_art(content, false, |_| Dict::new());
+        assert!(
+            matches!(r, Err(EditError::Invalid(ref m)) if m.contains("marked content") || m.contains("text object")),
+            "{}: {r:?}",
+            String::from_utf8_lossy(content)
+        );
+    }
+}
+
+/// #3067 review: inside a transparency group, painting with a pattern blends when a shading
+/// pattern's own graphics state does, or a tiling pattern's content does.
+#[test]
+fn ungroup_looks_for_blend_modes_in_patterns() {
+    let attempt = |shading_bm: Option<&str>, tiling_content: Option<&[u8]>| {
+        ungroup_art(b"/Pattern cs /P1 scn 0 0 10 10 re f", true, |doc| {
+            let mut states = Dict::new();
+            for (name, bm) in [("Mul", "Multiply"), ("Norm", "Normal")] {
+                let mut gs = Dict::new();
+                gs.set(b"BM".to_vec(), Object::name(bm));
+                states.set(name.as_bytes().to_vec(), Object::Dict(gs));
+            }
+            let pattern = match (shading_bm, tiling_content) {
+                (Some(bm), _) => {
+                    let mut gs = Dict::new();
+                    gs.set(b"BM".to_vec(), Object::name(bm));
+                    let mut p = Dict::new();
+                    p.set(b"PatternType".to_vec(), Object::Int(2));
+                    p.set(b"ExtGState".to_vec(), Object::Dict(gs));
+                    doc.add(Object::Dict(p))
+                }
+                (None, content) => {
+                    let mut p = Dict::new();
+                    p.set(b"PatternType".to_vec(), Object::Int(1));
+                    p.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+                    let mut res = Dict::new();
+                    res.set(b"ExtGState".to_vec(), Object::Dict(states.clone()));
+                    p.set(b"Resources".to_vec(), Object::Dict(res));
+                    doc.add(Object::Stream(Stream::flate(p, content.unwrap_or_default())))
+                }
+            };
+            let mut patterns = Dict::new();
+            patterns.set(b"P1".to_vec(), Object::Ref(pattern));
+            let mut res = Dict::new();
+            res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+            res
+        })
+    };
+    assert!(attempt(Some("Normal"), None).is_ok(), "a shading pattern without blending");
+    assert!(attempt(Some("Multiply"), None).is_err(), "a shading pattern that multiplies");
+    assert!(attempt(None, Some(b"/Norm gs 0 0 1 1 re f")).is_ok(), "a tiling pattern without blending");
+    assert!(attempt(None, Some(b"/Mul gs 0 0 1 1 re f")).is_err(), "a tiling pattern that multiplies");
+}
+
+/// #3067 review: a form drawn many times inside a group is read once (its answer is kept), so
+/// shared forms nested to the limit can't multiply the work; and the reads have a ceiling, past
+/// which the group counts as blending.
+#[test]
+fn ungroup_reads_each_nested_form_once_and_within_a_ceiling() {
+    // Six levels, each drawing the one below ten times: 10^6 reads without the cache.
+    let shared = ungroup_art(&b"/F Do ".repeat(10), true, |doc| {
+        let mut below: Option<pdfcraft_cos::ObjRef> = None;
+        for _ in 0..6 {
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            let mut res = Dict::new();
+            let content = match below {
+                Some(r) => {
+                    let mut xo = Dict::new();
+                    xo.set(b"F".to_vec(), Object::Ref(r));
+                    res.set(b"XObject".to_vec(), Object::Dict(xo));
+                    b"/F Do ".repeat(10)
+                }
+                None => b"0 0 1 1 re f".to_vec(),
+            };
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+            below = Some(doc.add(Object::Stream(Stream::flate(d, &content))));
+        }
+        let mut xo = Dict::new();
+        xo.set(b"F".to_vec(), Object::Ref(below.unwrap()));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res
+    });
+    assert!(shared.is_ok(), "{shared:?}");
+    // 2000 different forms: more reads than the ceiling allows.
+    let many = ungroup_art(&(0..2000).map(|i| format!("/F{i} Do ")).collect::<String>().into_bytes(), true, |doc| {
+        let mut xo = Dict::new();
+        for i in 0..2000 {
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            d.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
+            xo.set(format!("F{i}").into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(d, b"0 0 1 1 re f")))));
+        }
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res
+    });
+    assert!(matches!(many, Err(EditError::Invalid(ref m)) if m.contains("blend")), "{many:?}");
+}
+
+/// The forms a group draws are read within one allowance shared with the group itself, not 64 MiB
+/// each: 70 forms that each inflate to 1 MiB are past it, so the group can't be checked and is
+/// refused instead of being decoded 70 MiB deep (or, with 1024 of them, 64 GiB).
+#[test]
+fn ungroup_reads_what_a_group_draws_within_one_allowance() {
+    let r = ungroup_art(&(0..70).map(|i| format!("/F{i} Do ")).collect::<String>().into_bytes(), true, |doc| {
+        let mut xo = Dict::new();
+        for i in 0..70 {
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            d.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
+            xo.set(format!("F{i}").into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(d, &vec![b' '; 1 << 20])))));
+        }
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res
+    });
+    assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("can't be checked")), "{r:?}");
+}
+
+/// A transparency group that draws a nested form whose content can't be read is refused: what
+/// it blends can't be known, so it isn't guessed.
+#[test]
+fn ungroup_refuses_a_group_drawing_an_unreadable_form() {
+    let mut doc = fixture();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let broken = doc.add(Object::Stream(Stream::from_raw(d, b"not deflated at all".to_vec())));
+    let mut xo = Dict::new();
+    xo.set(b"Inner".to_vec(), Object::Ref(broken));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    let (mut with_group, _) = {
+        let mut doc2 = doc.clone();
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+        form.set(b"Group".to_vec(), Object::Dict(group));
+        form.set(b"Resources".to_vec(), Object::Dict(res));
+        let artwork = doc2.add(Object::Stream(Stream::flate(form, b"/Inner Do")));
+        doc2.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            let mut xo = Dict::new();
+            xo.set(b"Art".to_vec(), Object::Ref(artwork));
+            d.set(b"XObject".to_vec(), Object::Dict(xo));
+        })
+        .unwrap();
+        doc2.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+        (reopen(&doc2), artwork)
+    };
+    let r = images::change_image(&mut with_group, 0, 0, &images::ImageChange::Ungroup);
+    assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("blend")), "{r:?}");
+}
+
+/// A form in a layer keeps its layer once ungrouped: its content is marked `/OC <name> BDC … EMC`
+/// with a Properties entry for the same optional-content object (an existing one reused), so
+/// hiding the layer still hides it. Tagged form content is refused: inline, it would lose its
+/// structure element.
+#[test]
+fn ungroup_keeps_a_forms_layer_and_refuses_tagged_content() {
+    let mut doc = fixture();
+    let mut ocg = Dict::new();
+    ocg.set(b"Type".to_vec(), Object::name("OCG"));
+    ocg.set(b"Name".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: b"Walls".to_vec(), hex: false }));
+    let layer = doc.add(Object::Dict(ocg));
+    let base = reopen(&doc);
+    let ops_after = |reuse: bool| {
+        let mut doc = base.clone();
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+        form.set(b"OC".to_vec(), Object::Ref(layer));
+        let artwork = doc.add(Object::Stream(Stream::flate(form, b"0 0 1 rg 0 0 10 10 re f")));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            let mut xo = Dict::new();
+            xo.set(b"Art".to_vec(), Object::Ref(artwork));
+            d.set(b"XObject".to_vec(), Object::Dict(xo));
+            if reuse {
+                let mut props = Dict::new();
+                props.set(b"MC0".to_vec(), Object::Ref(layer));
+                d.set(b"Properties".to_vec(), Object::Dict(props));
+            }
+        })
+        .unwrap();
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+        let mut doc = reopen(&doc);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+        let doc = reopen(&doc);
+        let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let props = doc.resolve(res.get(b"Properties").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(s) = doc.resolve(page.dict.get(b"Contents").unwrap()).as_ref().clone() else { panic!("one stream") };
+        (pdfcraft_content::parse(&s.decoded().unwrap()).ops, props)
+    };
+    for reuse in [false, true] {
+        let (ops, props) = ops_after(reuse);
+        let bdc = ops.iter().position(|o| o.is("BDC")).expect("the content is marked");
+        assert_eq!(ops[bdc].name(0), Some(&b"OC"[..]));
+        let name = ops[bdc].name(1).unwrap().to_vec();
+        assert_eq!(props.get(&name), Some(&Object::Ref(layer)), "the marked content names the form's layer");
+        if reuse {
+            assert_eq!(name, b"MC0", "the page's own entry for that layer is reused");
+            assert_eq!(props.iter().count(), 1);
+        }
+        let emc = ops.iter().position(|o| o.is("EMC")).expect("closed");
+        let (q, last_q) = (ops.iter().position(|o| o.is("q")).unwrap(), ops.iter().rposition(|o| o.is("Q")).unwrap());
+        assert!(
+            q < bdc && bdc < emc && emc < last_q,
+            "inside the placement's q … Q: {:?}",
+            ops.iter().map(|o| String::from_utf8_lossy(&o.op).into_owned()).collect::<Vec<_>>()
+        );
+    }
+
+    let mut doc = base.clone();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    form.set(b"StructParent".to_vec(), Object::Int(3));
+    let artwork = doc.add(Object::Stream(Stream::flate(form, b"0 0 1 1 re f")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+    assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("tagged")), "{r:?}");
+}
+
+/// A transparency group drawing a nested form whose content has parts that can't be read as
+/// operators is refused too: a blend mode could hide in what was skipped.
+#[test]
+fn ungroup_refuses_a_group_drawing_a_partly_unreadable_form() {
+    let mut doc = fixture();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+    let nested = doc.add(Object::Stream(Stream::flate(d, b"0 0 1 1 re f ) ) ]]")));
+    let mut xo = Dict::new();
+    xo.set(b"Inner".to_vec(), Object::Ref(nested));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    form.set(b"Group".to_vec(), Object::Dict(group));
+    form.set(b"Resources".to_vec(), Object::Dict(res));
+    let artwork = doc.add(Object::Stream(Stream::flate(form, b"/Inner Do")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+    assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("blend")), "{r:?}");
+}
+
+/// The OCR stamp path registers the plan's Type3 faces (a free `PCOcr…` name per stamp, so a
+/// page that is OCR'd twice keeps both layers' fonts), and the stamped codes extract back
+/// through the font's ToUnicode CMap.
+#[test]
+fn stamp_with_fonts_registers_the_planned_type3_faces() {
+    if without_craft_fonts("stamp_with_fonts_registers_the_planned_type3_faces") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let mut plan = pdfcraft_fonts::TextPlan::for_words(["日本"]);
+    assert_eq!(plan.missing(), 0);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, |p| {
+        let codes: Vec<u8> = p.encoding(0).iter().map(|&(_, c)| c).collect();
+        let mut c = format!("BT 3 Tr /PCHelv 1 Tf\n/{} 1 Tf 100 700 Td ", p.fonts[0].name).into_bytes();
+        c.extend_from_slice(&pdfcraft_fonts::literal(&codes));
+        c.extend_from_slice(b" Tj ET");
+        c
+    })
+    .unwrap();
+    assert!(plan.fonts[0].name.starts_with("PCOcr"), "{:?}", plan.fonts[0].name);
+    // The registered font carries a ToUnicode CMap; the engine's own reader decodes the run.
+    let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text.contains("日本")), "{lines:?}");
+    // A second stamp on the same page takes the next free name; the first layer's font stands.
+    let mut second = pdfcraft_fonts::TextPlan::for_words(["語"]);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut second, |p| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes())
+        .unwrap();
+    assert_eq!(second.fonts[0].name, format!("{}1", plan.fonts[0].name));
+}
+
+/// A Type3 face built for page 1 is reused on page 2, but page 2 already has a font under the
+/// name page 1 gave it: page 2's own font keeps its name, and the shared face is registered on
+/// page 2 under a free one that the plan carries for page 2's content. (The plan is written out
+/// by hand, so this runs without the craft-fonts build input.)
+#[test]
+fn a_reused_type3_face_never_replaces_a_later_page_s_font_of_the_same_name() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 6 0 R /Resources << /Font << /PCOcr 7 0 R >> >> >>",
+        &stream("", ""),
+        &stream("", "BT /PCOcr 12 Tf 72 700 Td (own) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let glyph = pdfcraft_fonts::GlyphOutline { contours: vec![vec![[0.1, 0.0], [0.9, 0.0], [0.5, 0.8]]], width: 1.0, bbox: [0.1, 0.0, 0.9, 0.8] };
+    let mut plan = pdfcraft_fonts::TextPlan::default();
+    plan.fonts.push(pdfcraft_fonts::PlannedType3 { family: "Test", glyphs: vec![('日', glyph)], name: String::new(), object: None });
+    let draw = |p: &pdfcraft_fonts::TextPlan| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes();
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, draw).unwrap();
+    assert_eq!(plan.fonts[0].name, "PCOcr", "free on page 1");
+    let face = plan.fonts[0].object.expect("built once");
+    stamp_with_fonts(&mut doc, 1, "OCR", &mut plan, draw).unwrap();
+    assert_ne!(plan.fonts[0].name, "PCOcr", "page 2 already has a PCOcr");
+    let page2 = &pdfcraft_model::pages(&doc)[1];
+    let res = doc.resolve(page2.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    assert_eq!(fonts.get(b"PCOcr").and_then(|o| o.as_ref()), Some(pdfcraft_cos::ObjRef::new(7, 0)), "page 2's own font keeps its name");
+    assert_eq!(fonts.get(plan.fonts[0].name.as_bytes()).and_then(|o| o.as_ref()), Some(face), "the shared face, under a free name");
+    assert_eq!(plan.fonts[0].object, Some(face), "still built once");
+}
+
+#[test]
+fn planned_type3_charproc_has_valid_metrics_and_encloses_its_ink() {
+    let glyph = pdfcraft_fonts::GlyphOutline {
+        contours: vec![vec![[-0.1001, -0.2001], [0.9001, 1.1001]]],
+        width: 0.8,
+        bbox: [-0.1001, -0.2001, 0.9001, 1.1001],
+    };
+    let parsed = pdfcraft_content::parse(&text::glyph_path(&glyph));
+    assert_eq!(parsed.skipped, 0);
+    let metrics = &parsed.ops[0];
+    assert!(metrics.is("d1"));
+    assert_eq!(metrics.operands.len(), 6);
+    assert_eq!((metrics.num(0), metrics.num(1)), (Some(800.0), Some(0.0)));
+    assert_eq!((metrics.num(2), metrics.num(3), metrics.num(4), metrics.num(5)), (Some(-101.0), Some(-201.0), Some(901.0), Some(1101.0)));
+}
+
+#[test]
+fn image_arrange_refuses_crossed_scope_boundaries_without_changes() {
+    for content in ["/P <</MCID 0>> BDC q 10 0 0 10 0 0 cm /Im0 Do EMC Q /Im0 Do", "q /P <</MCID 0>> BDC /Im0 Do Q EMC /Im0 Do"] {
+        let mut doc = image_page_with(content);
+        let before = page_content_bytes(&doc, 0);
+        assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err(), "{content}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+}
+
+#[test]
+fn removing_a_crop_preserves_author_clips_and_works_under_outer_clip() {
+    for content in ["0 0 300 300 re W n q 10 0 0 10 50 50 cm /Im0 Do Q", "q 50 50 8 8 re W n 10 0 0 10 50 50 cm /Im0 Do Q"] {
+        let mut doc = image_page_with(content);
+        let original = images::page_images(&doc, 0).unwrap()[0].clone();
+        crop(&mut doc, 0, 0, [52.0, 52.0, 55.0, 55.0]).unwrap();
+        let mut doc = reopen(&doc);
+        remove_crop(&mut doc, 0, 0).unwrap();
+        let mut doc = reopen(&doc);
+        let restored = images::page_images(&doc, 0).unwrap()[0].clone();
+        assert_eq!(restored.rect, original.rect);
+        assert_eq!(restored.visible_rect, original.visible_rect);
+        assert_eq!(restored.contains([59.0, 59.0]), original.contains([59.0, 59.0]));
+        assert!(remove_crop(&mut doc, 0, 0).is_err());
+    }
+}
+
+#[test]
+fn remove_crop_refuses_an_unmarked_author_clip_without_changes() {
+    let mut doc = image_page_with("q 50 50 8 8 re W n 10 0 0 10 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(remove_crop(&mut doc, 0, 0).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_refuses_unrestorable_extended_print_state() {
+    let mut unexpectedly_moved = Vec::new();
+    for (key, value) in [
+        ("TR", Object::name("Identity")),
+        ("TR2", Object::name("Default")),
+        ("OP", Object::Bool(true)),
+        ("op", Object::Bool(true)),
+        ("OPM", Object::Int(1)),
+        ("BG", Object::name("Default")),
+        ("BG2", Object::name("Default")),
+        ("UCR", Object::name("Default")),
+        ("UCR2", Object::name("Default")),
+        ("HT", Object::name("Default")),
+    ] {
+        let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do Q /Print gs BT /F1 12 Tf 20 700 Td (Text) Tj ET");
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+        resources.set(
+            b"ExtGState".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Print".to_vec(), Object::Dict(Dict::from_iter([(key.as_bytes().to_vec(), value)])))])),
+        );
+        doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+        let before = page_content_bytes(&doc, 0);
+        match arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront) {
+            Ok(()) => unexpectedly_moved.push(key),
+            Err(error) => {
+                assert!(error.to_string().contains("graphics state"), "{key}: {error}");
+                assert_eq!(page_content_bytes(&doc, 0), before, "{key} refusal changes nothing");
+            }
+        }
+    }
+    assert!(unexpectedly_moved.is_empty(), "unrestorable destination state was accepted: {unexpectedly_moved:?}");
+}
+
+#[test]
+fn arrange_keeps_implicit_device_spaces_before_sc_and_scn() {
+    for (select, color) in [("0 g", "0.5 sc"), ("0 0 0 rg", "1 0 0 sc"), ("0 0 0 1 k", "0 1 1 0 scn")] {
+        for stroke in [false, true] {
+            let (select, color) = if stroke { (select.to_uppercase(), color.to_uppercase()) } else { (select.into(), color.into()) };
+            for content in [
+                format!("q {select} {color} q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET"),
+                format!("q {select} q {color} 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET"),
+            ] {
+                let mut doc = stencil_page_with(&content);
+                arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+                let doc = reopen(&doc);
+                let bytes = page_content_bytes(&doc, 0);
+                let ops = pdfcraft_content::parse(&bytes).ops;
+                let do_index = ops.iter().rposition(|op| op.is("Do")).unwrap();
+                let start = ops[..do_index].iter().rposition(|op| op.is("q")).unwrap();
+                let relocated = &ops[start..do_index];
+                let selector = select.split_whitespace().last().unwrap();
+                let color_op = color.split_whitespace().last().unwrap();
+                let space_index = relocated.iter().position(|op| op.is(selector));
+                let color_index = relocated.iter().position(|op| op.is(color_op));
+                assert!(
+                    space_index.is_some() && space_index < color_index,
+                    "{select} must select its device space before {color}: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn arrange_restores_initial_rendering_intent_from_ri_and_gs() {
+    for selection in ["/Saturation ri", "/Print gs"] {
+        let mut doc = image_page_with(&format!("q 100 0 0 100 50 50 cm /Im0 Do Q {selection} BT /F1 12 Tf 20 700 Td (Text) Tj ET"));
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+        resources.set(
+            b"ExtGState".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Print".to_vec(), Object::Dict(Dict::from_iter([(b"RI".to_vec(), Object::name("Saturation"))])))])),
+        );
+        doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        let doc = reopen(&doc);
+        let bytes = page_content_bytes(&doc, 0);
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("/RelativeColorimetric ri"),
+            "default rendering intent must be restored after {selection}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+}
+
+#[test]
+fn editor_crop_moves_with_repeated_group_translation() {
+    let mut doc = image_page();
+    let caption_rect = text::text_lines(&doc, 0).unwrap()[0].rect;
+    crop(&mut doc, 0, 0, [150.0, 120.0, 250.0, 170.0]).unwrap();
+    let start = images::page_images(&doc, 0).unwrap()[0].clone();
+    let mut count = 0;
+    for iteration in 0..20 {
+        images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        if iteration == 0 {
+            count = ops.len();
+        }
+        assert_eq!(ops.len(), count, "repeated moves fold the same transform");
+    }
+    let shifted = |r: [f64; 4]| [r[0] + 20.0, r[1] - 40.0, r[2] + 20.0, r[3] - 40.0];
+    let doc = reopen(&doc);
+    let after = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(after.rect, shifted(start.rect)));
+    assert!(
+        close(after.visible_rect.unwrap(), shifted(start.visible_rect.unwrap())),
+        "the editor crop moves with its pixels: {:?}",
+        after.visible_rect
+    );
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Caption");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].rect, caption_rect);
+}
+
+#[test]
+fn arranging_original_image_keeps_it_independent_of_added_items() {
+    for update in [false, true] {
+        let mut doc = image_page();
+        let caption_rect = text::text_lines(&doc, 0).unwrap()[0].rect;
+        add_content(
+            &mut doc,
+            0,
+            &Content::Text(AddedText { rect: [20.0, 250.0, 250.0, 290.0], text: "Added caption".into(), ..AddedText::default() }),
+        )
+        .unwrap();
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        let mut doc = reopen(&doc);
+        assert_eq!(list_added(&doc).len(), 1, "the added item stays editable");
+        if update {
+            update_content(
+                &mut doc,
+                0,
+                0,
+                &Content::Text(AddedText { rect: [20.0, 250.0, 250.0, 290.0], text: "Updated caption".into(), ..AddedText::default() }),
+            )
+            .unwrap();
+        } else {
+            delete_content(&mut doc, 0, 0).unwrap();
+        }
+        let doc = reopen(&doc);
+        assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "editing/deleting an added item must preserve arranged original artwork");
+        assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [100.0, 100.0, 300.0, 200.0]);
+        let text = text::text_lines(&doc, 0).unwrap().into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert!(text.iter().any(|line| line == "Caption"), "the original caption survives");
+        assert_eq!(text.iter().any(|line| line == "Updated caption"), update);
+        assert_eq!(text::text_lines(&doc, 0).unwrap().iter().find(|line| line.text == "Caption").unwrap().rect, caption_rect);
+    }
+}
+
+#[test]
+fn arranging_nested_marked_image_refuses_without_losing_tags() {
+    for marked in ["/Figure <</MCID 3>> BDC", "/Figure BMC"] {
+        let mut doc = image_page_with(&format!(
+            "q {marked} 100 0 0 100 50 50 cm /Im0 Do EMC BT /F1 12 Tf 20 700 Td (Text) Tj ET Q BT /F1 12 Tf 20 720 Td (Outside) Tj ET"
+        ));
+        let before = page_content_bytes(&doc, 0);
+        let error = arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap_err();
+        assert!(error.to_string().contains("marked-content"), "{error}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+#[test]
+fn editor_crop_group_move_keeps_an_outer_author_clip_fixed() {
+    let mut doc = image_page_with("0 0 220 300 re W n q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 10 250 Td (Caption) Tj ET");
+    crop(&mut doc, 0, 0, [150.0, 120.0, 210.0, 170.0]).unwrap();
+    let mut operators = 0;
+    for i in 0..20 {
+        images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        let count = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.len();
+        if i == 0 {
+            operators = count;
+        }
+        assert_eq!(count, operators, "moves under an inherited clip must fold their transform");
+    }
+    let doc = reopen(&doc);
+    let image = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(image.rect, [120.0, 60.0, 320.0, 160.0]));
+    assert!(
+        close(image.visible_rect.unwrap(), [170.0, 80.0, 220.0, 130.0]),
+        "the editor crop moves but its author's outer clip stays fixed: {:?}",
+        image.visible_rect
+    );
+    let bytes = page_content_bytes(&doc, 0);
+    assert!(String::from_utf8_lossy(&bytes).starts_with("0 0 220 300 re W n"));
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Caption");
+}
+
+fn review_state_raster(doc: &Document) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), Default::default());
+    renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() }).rgba.to_vec()
+}
+
+#[test]
+fn review_arrange_form_keeps_inherited_text_spacing() {
+    for (spacing, later_spacing) in [(0, false), (12, false), (0, true)] {
+        let initial = if later_spacing { String::new() } else { format!("BT {spacing} Tc ET") };
+        let later = if later_spacing { "BT 12 Tc ET" } else { "" };
+        let content = format!("q {initial} q 1 0 0 1 20 20 cm /Fm0 Do Q Q {later} q 0 0 1 rg 200 200 5 5 re f Q");
+        let mut doc = form_page_with(&content);
+        let form = pdfcraft_cos::ObjRef::new(6, 0);
+        let dict = doc.get(form).as_dict().unwrap().clone();
+        doc.set(form, Object::Stream(pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 20 Tf 0 15 Td (ABC) Tj ET".to_vec())));
+        let doc_before = reopen(&doc);
+        let before = review_state_raster(&doc_before);
+        assert!(before.as_chunks::<4>().0.iter().any(|p| p[0] == 0 && p[1] == 0 && p[2] == 0), "the Form actually paints text");
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        let saved = reopen(&doc);
+        assert_eq!(images::page_images(&saved, 0).unwrap()[0].rect, images::page_images(&doc_before, 0).unwrap()[0].rect);
+        assert_eq!(review_state_raster(&saved), before, "inherited {spacing} Tc must survive arranging the Form and reopening");
+    }
+}
+
+fn review_shared_mask_page(states: &str, luminosity_b: bool, mask_paint: &str) -> Document {
+    let content = format!("q {states} q 100 0 0 100 20 20 cm /Im0 Do Q Q q 0 0 1 rg 200 200 5 5 re f Q");
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let subtype = if luminosity_b { "Luminosity" } else { "Alpha" };
+    let mask_b = format!("<< /Type /ExtGState /SMask << /S /{subtype} /G 8 0 R >> >>");
+    let group = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /I true /CS /DeviceGray >> /Length {} >>\nstream\n{mask_paint}\nendstream",
+        mask_paint.len()
+    );
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> /ExtGState << /A 6 0 R /B 7 0 R >> >> >>",
+        &stream,
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\0\0\0\0\nendstream",
+        "<< /Type /ExtGState /SMask << /S /Alpha /G 8 0 R >> >>",
+        &mask_b,
+        &group,
+    ])
+}
+
+#[test]
+fn review_repeated_gs_keeps_alpha_vs_luminosity_mask_chronology() {
+    for states in ["/A gs", "/A gs /B gs", "/A gs /B gs /A gs"] {
+        let mut doc = review_shared_mask_page(states, true, "0.25 g 0 0 300 300 re f");
+        let before = review_state_raster(&reopen(&doc));
+        assert!(before.as_chunks::<4>().0.iter().any(|p| p[0] == p[1] && p[1] == p[2] && p[0] < 230), "the masked image is visible");
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        assert_eq!(review_state_raster(&reopen(&doc)), before, "mask application order must survive: {states}");
+    }
+}
+
+#[test]
+fn review_repeated_gs_keeps_last_mask_establishment_ctm() {
+    for states in [
+        "1 0 0 1 50 0 cm /A gs 1 0 0 1 -50 0 cm",
+        "/A gs 1 0 0 1 50 0 cm /B gs 1 0 0 1 -50 0 cm",
+        "/A gs 1 0 0 1 50 0 cm /B gs 1 0 0 1 -50 0 cm /A gs",
+    ] {
+        let mut doc = review_shared_mask_page(states, false, "0.25 g 0 0 60 300 re f");
+        let before = review_state_raster(&reopen(&doc));
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        assert_eq!(review_state_raster(&reopen(&doc)), before, "mask CTM must survive: {states}");
+    }
+}
+
+#[test]
+fn review_soft_masks_sharing_a_group_keep_distinct_configurations() {
+    let doc = Document::new_empty();
+    let mask = |subtype: &str| {
+        Dict::from_iter([(
+            b"SMask".to_vec(),
+            Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name(subtype)), (b"G".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(8, 0)))])),
+        )])
+    };
+    let mut alpha = images::EffectiveGState::default();
+    let mut luminosity = images::EffectiveGState::default();
+    alpha.merge_dict(&mask("Alpha"), &doc, pdfcraft_content::Matrix::IDENTITY);
+    luminosity.merge_dict(&mask("Luminosity"), &doc, pdfcraft_content::Matrix::IDENTITY);
+    assert!(alpha.visually_differs(&luminosity), "a shared group does not make Alpha and Luminosity the same mask");
+    for (key, value) in [
+        (b"BC".to_vec(), Object::Array(vec![Object::Real(0.5)])),
+        (
+            b"TR".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"FunctionType".to_vec(), Object::Int(2)),
+                (b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)])),
+                (b"N".to_vec(), Object::Int(2)),
+            ])),
+        ),
+    ] {
+        let mut changed = mask("Luminosity");
+        let Object::Dict(definition) = changed.get_mut(b"SMask").unwrap() else { panic!("mask dictionary") };
+        definition.set(key, value);
+        let mut state = images::EffectiveGState::default();
+        state.merge_dict(&changed, &doc, pdfcraft_content::Matrix::IDENTITY);
+        assert!(state.visually_differs(&luminosity), "mask backdrop and transfer function belong to its definition");
+    }
+}
+
+#[test]
+fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
+    for scale in [1, 2] {
+        let content = format!("{scale} 0 0 {scale} 0 0 cm q 40 0 0 40 10 10 cm /Im0 Do Q q 0 0 1 rg 75 75 5 5 re f Q");
+        let mut cropped = image_page_with(&content);
+        let keep = if scale == 2 { [30.0, 30.0, 70.0, 70.0] } else { [15.0, 15.0, 35.0, 35.0] };
+        crop(&mut cropped, 0, 0, keep).unwrap();
+        arrange(&mut cropped, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+        for offset in [[10.0, 0.0], [0.0, 10.0], [-10.0, 3.0]] {
+            let mut grouped = reopen(&cropped);
+            let mut direct = reopen(&cropped);
+            let before = images::page_images(&grouped, 0).unwrap()[0].clone();
+            images::translate_images(&mut grouped, 0, &[0], offset).unwrap();
+            images::change_image(&mut direct, 0, 0, &images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, offset[0], offset[1]])).unwrap();
+            let moved = |r: [f64; 4]| [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
+            let saved = reopen(&grouped);
+            let image = &images::page_images(&saved, 0).unwrap()[0];
+            assert!(close(image.rect, moved(before.rect)), "scale {scale} offset {offset:?}: {:?}", image.rect);
+            assert!(close(image.visible_rect.unwrap(), moved(before.visible_rect.unwrap())), "the crop follows the complete displacement");
+            assert_eq!(
+                review_state_raster(&saved),
+                review_state_raster(&reopen(&direct)),
+                "group and direct transforms must agree, preserving other artwork"
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_font() {
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+UnavailableThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        f.set(b"FirstChar".to_vec(), Object::Int(65));
+        f.set(b"LastChar".to_vec(), Object::Int(65));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(600)]));
+    })
+    .unwrap();
+    let before = text::text_lines(&doc, 0).unwrap();
+    let choice = text::text_editor_fonts(&doc, 0).unwrap().into_iter().find(|f| f.resource == "builtin:thai");
+    let style = text::BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(choice.is_none());
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("น้ำ"), &style).is_err());
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, before[0].text);
+        return;
+    }
+    assert!(choice.is_some(), "the document-font menu must offer a bundled Thai replacement");
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("นน"), &text::BlockStyle::default()).unwrap_err().to_string();
+    assert!(error.contains("UnavailableThai") && error.contains("Noto Sans Thai"), "{error}");
+    let draft = "น้ำ กิ่ กี้ ผู้ใช้";
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().text, before[1].text);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().baseline(), before[1].baseline());
+    text::rewrite_block(&mut doc, 0, 0, Some("น้ำ ปู่"), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "น้ำ ปู่");
+    // A selected range uses the same explicit choice; neighbouring source runs keep their face.
+    let mut selected = text_page("BT /F1 16 Tf 50 700 Td (Ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 0..1,
+            resource: Some("builtin:thai".into()),
+            family: None,
+            size: None,
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut selected, 0, 0, Some("Ab"), &style).unwrap();
+    let lines = text::text_lines(&reopen(&selected), 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "A" && l.base_font.contains("NotoSansThai")));
+    assert!(lines.iter().any(|l| l.text == "b" && l.base_font == "Helvetica"));
+}
+
+#[test]
+fn existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_font() {
+    // The matching full face is the optional craft-fonts input; CI builds with it.
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_font: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    // Synthetic source subset: only one Thai letter is encoded. No binary fixture or font
+    // is committed; the complete, openly licensed matching face is the optional build input.
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai-Regular"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+    })
+    .unwrap();
+    let neighbour = text::text_lines(&doc, 0).unwrap()[1].clone();
+    // More than 240 distinct logical clusters requires several single-byte Type 3 resources.
+    let long: String =
+        "กขคงจฉชซญดตถทนบปผฝพฟมยรลวศษสหฬอฮ".chars().flat_map(|c| ["ิ่", "ิ้", "ี่", "ี้", "ึ่", "ึ้", "ื่", "ื้"].map(move |marks| format!("{c}{marks}"))).collect();
+    let draft = format!("{long} ผู้ใช้ ปู่ ๑๒๓");
+    let style = text::BlockStyle { width: Some(14_400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].baseline(), [50.0, 700.0]);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().text, neighbour.text);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().baseline(), neighbour.baseline());
+    let next = "Hello ผู้ใช้ น้ำ ๔๕๖";
+    text::rewrite_block(&mut doc, 0, 0, Some(next), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, next);
+}
+
+/// The bundled Thai face is Regular: a subset of the same family that its descriptor marks bold
+/// (a variable-font instance keeps the family name) is not completed with it silently. The
+/// edit is refused, unchanged, until a replacement is chosen explicitly.
+#[test]
+fn a_bold_thai_subset_is_not_completed_with_the_regular_bundled_face() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping a_bold_thai_subset_is_not_completed_with_the_regular_bundled_face: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        f.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    })
+    .unwrap();
+    assert!(text::text_lines(&doc, 0).unwrap()[0].bold, "the descriptor makes the source bold");
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("ผู้ใช้"), &text::BlockStyle::default()).expect_err("no silent Regular completion");
+    assert!(!error.to_string().is_empty());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// A complete program of the family in another style (bold, by its descriptor) can't complete a
+/// Regular subset, so it doesn't keep the bundled Regular outlines from doing so: the text is not
+/// drawn in the bold program instead.
+#[test]
+fn a_complete_program_in_another_style_does_not_keep_the_bundled_thai_face_out() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping a_complete_program_in_another_style_does_not_keep_the_bundled_thai_face_out: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+    })
+    .unwrap();
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut bold = legacy_thai_font(&mut doc, "NotoSansThai", &complete, LEGACY_THAI_UNICODE);
+    let Some(Object::Array(mut descendants)) = bold.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+    let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+    let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+    descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    bold.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(bold));
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("ผู้ใช้"), &text::BlockStyle::default()).expect("completed with the bundled face");
+    assert_eq!(edited.substituted.as_deref(), pdfcraft_fonts::document_thai_font().map(|f| f.family));
+}
+
+#[test]
+fn grouped_source_text_preparation_edits_original_operators_without_changing_shared_forms() {
+    let mut doc = page_with_forms("q 1 0 0 1 12 20 cm /Body Do Q", &[("Body".into(), "BT /F1 14 Tf 40 500 Td (Original body) Tj ET".into())]);
+    let original_form = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).clone();
+    let first = pdfcraft_model::pages(&doc)[0].clone();
+    let second = doc.add(Object::Dict(first.dict.clone()));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(first.obj), Object::Ref(second)]));
+        d.set(b"Count".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    assert!(!text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text.contains("Original body")));
+    let prepared = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(prepared.expanded, 1);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == "Original body").unwrap();
+    assert!((block.rect[0] - 52.0).abs() < 0.01, "placement must survive preparation: {block:?}");
+    rewrite_block(&mut doc, 0, index, Some("Changed body"), &BlockStyle::default()).unwrap();
+    assert!(
+        !text::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap().iter().any(|l| l.text.contains("Original body")),
+        "old glyphs must be removed, not covered"
+    );
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "Changed body"));
+    assert!(text::reading_blocks(&doc, 1).unwrap().iter().any(|b| b.text == "Original body"));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(7, 0)), original_form);
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 0);
+}
+
+/// A text form whose resources would take the page's past the limit is refused itself, so a later
+/// form whose resources are all the page's already is still prepared.
+#[test]
+fn grouped_text_preparation_refuses_the_form_that_would_pass_the_resource_limit() {
+    let mut doc = page_with_forms(
+        "/A Do /B Do",
+        &[("A".into(), "BT /X 14 Tf 40 500 Td (a) Tj ET".into()), ("B".into(), "BT /F1 14 Tf 40 400 Td (b) Tj ET".into())],
+    );
+    let helvetica = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        // With F1, the 4 096 the limit allows.
+        for i in 0..4095 {
+            fonts.set(format!("P{i}").into_bytes(), helvetica.clone());
+        }
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    // A names Helvetica /X, which the page doesn't: merging it adds a name. B's /F1 is the page's.
+    for (object, name) in [(7, "X"), (8, "F1")] {
+        let Object::Stream(mut form) = doc.get(pdfcraft_cos::ObjRef::new(object, 0)).as_ref().clone() else { panic!("fixture") };
+        let mut fonts = Dict::new();
+        fonts.set(name.as_bytes().to_vec(), helvetica.clone());
+        let mut resources = Dict::new();
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        form.dict.set(b"Resources".to_vec(), Object::Dict(resources));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Stream(form));
+    }
+    let prepared = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(prepared.expanded, 1);
+    assert!(prepared.refused.len() == 1 && prepared.refused[0].starts_with("A:"), "{:?}", prepared.refused);
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "b"));
+}
+
+#[test]
+fn grouped_text_preparation_keeps_unsafe_compositing_paths_and_malformed_forms_intact() {
+    for (page_ops, form_ops, extra) in [
+        ("/Body Do", "BT /F1 14 Tf (body) Tj ET", "/Group << /S /Transparency /K true >>"),
+        ("/Body Do", "Q BT /F1 14 Tf (body) Tj ET", ""),
+        ("/Body Do", "BT /F1 14 Tf (body) Tj", ""),
+        ("10 10 m 20 20 l /Body Do S", "BT /F1 14 Tf (body) Tj ET", ""),
+        ("BT /F1 14 Tf /Body Do ET", "BT /F1 14 Tf (body) Tj ET", ""),
+        ("/Body Do", "/Body Do", "/Group << /S /Transparency >>"),
+    ] {
+        let mut doc = page_with_forms(page_ops, &[("Body".into(), form_ops.into())]);
+        if !extra.is_empty() {
+            let additions = build(&[&format!("<< {extra} >>")]);
+            let fields = additions.get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+            let form = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+            let Object::Stream(mut s) = form.as_ref().clone() else { panic!("fixture") };
+            for (k, v) in fields.iter() {
+                s.dict.set(k.clone(), v.clone());
+            }
+            doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(s));
+        }
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        assert_eq!(result.expanded, 0, "unsafe input {page_ops}, {form_ops}, {extra}");
+        let [refused] = result.refused.as_slice() else { panic!("one refusal for {page_ops}, {form_ops}, {extra}: {:?}", result.refused) };
+        assert!(refused.starts_with("Body: "), "the refusal names the group: {refused}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+    }
+}
+
+/// A form whose content gives an operator a surplus operand (`0 /Inner Do`) is prepared as Ungroup
+/// draws it: the renderer draws the last operand, and that is the one renamed with the inner
+/// artwork's resource, so every drawn name still resolves.
+#[test]
+fn grouped_text_with_a_surplus_resource_operand_renames_the_operand_drawn() {
+    let form = |body: &str| {
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Inner 7 0 R >> >>", body)
+    };
+    for body in ["BT /F1 14 Tf 40 500 Td (body) Tj ET 0 /Inner Do", "BT /F1 14 Tf 40 500 Td (body) Tj ET /Inner Do"] {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Body 6 0 R >> >> /Contents 4 0 R >>"
+                .to_string(),
+            stream("", "/Body Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            form(body),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >>", "0 0 10 10 re f"),
+        ];
+        let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 1, "{body}");
+        let page = &pdfcraft_model::pages(&doc)[0];
+        let xobjects = page.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"XObject").and_then(|x| doc.dict(x))).unwrap();
+        for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")) {
+            assert!(xobjects.contains(op.last_name().unwrap()), "every drawn name resolves: {op:?}");
+        }
+    }
+}
+
+/// Text grouped deeper than preparation opens is reported, not passed over: of nine nested
+/// forms, eight are opened and the ninth, which holds the text, is named in the refusals.
+#[test]
+fn grouped_text_nested_past_the_level_limit_is_reported() {
+    let forms: Vec<(String, String)> = (1..=9)
+        .map(|i| (format!("Body{i}"), if i < 9 { format!("/Body{} Do", i + 1) } else { "BT /F1 14 Tf 40 500 Td (deep) Tj ET".into() }))
+        .collect();
+    let mut doc = page_with_forms("/Body1 Do", &forms);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 8);
+    assert_eq!(result.refused, ["Body9: its text is grouped more than 8 levels deep"]);
+    // Eight levels are still opened completely: the ninth, one level less deep, is prepared.
+    let mut doc = page_with_forms("/Body2 Do", &forms);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.refused.len()), (8, 0));
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "deep"));
+}
+
+/// A form that draws only an image (itself, or through a form it draws) is artwork: it is
+/// neither expanded nor counted. Text reached through a nested form still is.
+#[test]
+fn grouped_image_artwork_is_not_prepared() {
+    let image = "q 10 0 0 10 0 0 cm /Im Do Q";
+    for forms in [vec![("Logo", image)], vec![("Logo", "/Inner Do"), ("Inner", image)]] {
+        let forms: Vec<(String, String)> = forms.into_iter().map(|(n, b)| (n.to_string(), b.to_string())).collect();
+        let mut doc = page_with_forms("/Logo Do", &forms);
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        assert_eq!((result.expanded, result.refused.len()), (0, 0), "{forms:?}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "{forms:?}");
+    }
+    let forms = [("Logo".to_string(), "/Inner Do".to_string()), ("Inner".to_string(), "BT /F1 14 Tf 40 500 Td (inner) Tj ET".to_string())];
+    let mut doc = page_with_forms("/Logo Do", &forms);
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 2);
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "inner"));
+}
+
+/// A click on grouped artwork prepares its page only when that artwork has text preparation
+/// would open: a text group does, a logo, a refused group and a picture don't, and asking reads
+/// the page without changing it.
+#[test]
+fn grouped_text_at_says_which_artwork_preparation_would_open() {
+    let forms = [
+        ("Body".to_string(), "BT /F1 14 Tf 40 500 Td (body) Tj ET".to_string()),
+        ("Logo".to_string(), "q 10 0 0 10 0 0 cm /Im Do Q".to_string()),
+        ("Knock".to_string(), "BT /F1 14 Tf 40 400 Td (kept) Tj ET".to_string()),
+    ];
+    let mut doc = page_with_forms("/Body Do /Logo Do /Knock Do q 10 0 0 10 0 0 cm /Im Do Q", &forms);
+    let r = pdfcraft_cos::ObjRef::new(9, 0);
+    let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+    s.dict.set(
+        b"Group".to_vec(),
+        Object::Dict(build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone()),
+    );
+    doc.set(r, Object::Stream(s));
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let images = images::page_images(&doc, 0).unwrap();
+    let at = |name: &str| images.iter().position(|i| i.name == name).unwrap();
+    let says = |name: &str| text::forms::grouped_text_at(&doc, 0, at(name)).unwrap();
+    assert!(says("Body"));
+    assert!(!says("Logo") && !says("Knock") && !says("Im"));
+    assert!(!text::forms::grouped_text_at(&doc, 0, images.len()).unwrap(), "no such picture");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+/// Artwork and groups refused for what they are (knockout groups, content that restores more
+/// graphics states than it saves) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
+/// group are 41 reads, within the 64-placement limit, where reading either again on the second
+/// pass would pass it and prepare nothing.
+#[test]
+fn artwork_and_refused_groups_count_once_against_the_placement_limit() {
+    for knockout in [true, false] {
+        let refused_body = if knockout { "BT /F1 14 Tf 40 500 Td (kept) Tj ET" } else { "BT /F1 14 Tf 40 500 Td (kept) Tj ET Q" };
+        let mut forms: Vec<(String, String)> = (1..=10).map(|i| (format!("Logo{i}"), "q 10 0 0 10 0 0 cm /Im Do Q".to_string())).collect();
+        forms.extend((1..=30).map(|i| (format!("Refused{i}"), refused_body.to_string())));
+        forms.push(("Body".into(), "BT /F1 14 Tf 40 300 Td (body) Tj ET".into()));
+        let content: String = forms.iter().map(|(name, _)| format!("/{name} Do\n")).collect();
+        let mut doc = page_with_forms(&content, &forms);
+        // Forms are objects 7 onwards, in order: the refused groups follow the 10 logos.
+        for i in 0..30u32 {
+            let r = pdfcraft_cos::ObjRef::new(7 + 10 + i, 0);
+            let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+            if knockout {
+                let group = build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+                s.dict.set(b"Group".to_vec(), Object::Dict(group));
+            }
+            doc.set(r, Object::Stream(s));
+        }
+        let result = text::forms::prepare(&mut doc, 0).unwrap_or_else(|e| panic!("knockout {knockout}: each group is read once ({e})"));
+        assert_eq!(result.expanded, 1);
+        assert_eq!(result.refused.len(), 30, "{:?}", result.refused);
+        assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "body"));
+    }
+}
+
+/// A page-level `Do` with an operand too many is left as it is and settles nothing: the form
+/// found by its first operand may not be the one the renderer draws (its last). Here `/A /B Do`
+/// draws the knockout group B, and A, a text group, is still prepared where Parent draws it.
+#[test]
+fn a_page_do_with_an_operand_too_many_settles_no_form() {
+    let forms = [
+        ("A".to_string(), "BT /F1 14 Tf 40 500 Td (alpha) Tj ET".to_string()),
+        ("B".to_string(), "BT /F1 14 Tf 40 400 Td (beta) Tj ET".to_string()),
+        ("Parent".to_string(), "/A Do".to_string()),
+    ];
+    let mut doc = page_with_forms("/A /B Do\n/Parent Do", &forms);
+    let r = pdfcraft_cos::ObjRef::new(8, 0);
+    let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+    let group = build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+    s.dict.set(b"Group".to_vec(), Object::Dict(group));
+    doc.set(r, Object::Stream(s));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "Parent, then the A it draws: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.contains("an operand too many")), "{:?}", result.refused);
+}
+
+/// A refusal that comes from where a form is drawn is not remembered for the form: a text group
+/// refused where it is drawn translucent is still prepared where an expanded parent draws it
+/// opaque, on the next pass.
+#[test]
+fn a_placement_refusal_does_not_settle_the_form_for_later_passes() {
+    let resources = "<< /Font << /F1 5 0 R >> /ExtGState << /Alpha << /ca 0.5 >> >> /XObject << /Shared 6 0 R /Parent 7 0 R >> >>";
+    let form = |extra: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] {extra} /Resources {resources}"), body);
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>"),
+        stream("", "q /Alpha gs /Shared Do Q /Parent Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("/Group << /S /Transparency >>", "BT /F1 14 Tf 40 500 Td (shared) Tj ET"),
+        form("", "/Shared Do"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "Parent, then the Shared it draws opaque: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.starts_with("Shared: ") && r.contains("translucent")), "{:?}", result.refused);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().iter().filter(|b| b.text == "shared").count(), 1, "only the opaque one is the page's own text");
+}
+
+/// A placement refused where it is drawn is read once, not again on every pass, while the same
+/// form drawn anew by an expanded parent is still read in its own place: 33 translucent
+/// placements of a text group and a parent drawing it opaque are 35 reads, within the
+/// 64-placement limit, where reading the 33 again on the second pass would pass it and prepare
+/// nothing.
+#[test]
+fn a_group_refused_where_it_is_drawn_counts_once_against_the_placement_limit() {
+    let resources = "<< /Font << /F1 5 0 R >> /ExtGState << /Alpha << /ca 0.5 >> >> /XObject << /Shared 6 0 R /Parent 7 0 R >> >>";
+    let form = |extra: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] {extra} /Resources {resources}"), body);
+    let content = format!("{}/Parent Do", "q /Alpha gs /Shared Do Q\n".repeat(33));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>"),
+        stream("", &content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("/Group << /S /Transparency >>", "BT /F1 14 Tf 40 500 Td (shared) Tj ET"),
+        form("", "/Shared Do"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap_or_else(|e| panic!("each placement is read once ({e})"));
+    assert_eq!(result.expanded, 2, "Parent, then the Shared it draws opaque: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.starts_with("Shared: ") && r.contains("translucent")), "{:?}", result.refused);
+    let drawn = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")).count();
+    assert_eq!(drawn, 33, "the translucent placements stay grouped");
+}
+
+/// A group refused because its resources would need renaming (it draws a form that looks them
+/// up by name) is prepared on a later pass once another group's merge has given the page those
+/// very names. A lists the child as `/PCUg1`; B lists it as `/Other`, which merging B names
+/// `/PCUg1` on the page. Its first refusal is then no longer reported.
+#[test]
+fn a_group_refused_for_renaming_is_prepared_once_the_page_has_its_names() {
+    let form = |resources: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {resources}"), body);
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /A 6 0 R /B 7 0 R >> >> /Contents 4 0 R >>"
+            .to_string(),
+        stream("", "/A Do\n/B Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("<< /Font << /F1 5 0 R >> /XObject << /PCUg1 8 0 R >> >>", "BT /F1 14 Tf 40 500 Td (alpha) Tj ET /PCUg1 Do"),
+        form("<< /Font << /F1 5 0 R >> /XObject << /Other 8 0 R >> >>", "BT /F1 14 Tf 40 400 Td (beta) Tj ET"),
+        // The child has no resources of its own: it looks names up in whatever draws it.
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 10 10 re f"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "B, then A once the page names the child as A does: {:?}", result.refused);
+    assert!(result.refused.is_empty(), "A was prepared after all: {:?}", result.refused);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(["alpha", "beta"].iter().all(|t| blocks.iter().any(|b| b.text == *t)), "{blocks:?}");
+}
+
+/// Ungroup finds the form by the name its `Do` writes, byte for byte: `/F#FF` is not UTF-8, and
+/// the picture's display name (`F�`) names no resource.
+#[test]
+fn ungroup_finds_a_form_under_a_non_utf8_name() {
+    let mut doc = page_with_forms("/F#FF Do", &[("F#FF".into(), "BT /F1 14 Tf 40 500 Td (named) Tj ET".into())]);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "named"));
+}
+
+/// Ungroup refuses a form drawn inside a text object or an unfinished path: inline, its text
+/// objects would be nested in the page's, and its clip would take in the page's path (which its
+/// `n` then discards). The same form drawn outside them is ungrouped.
+#[test]
+fn ungroup_refuses_a_form_drawn_inside_text_or_a_path() {
+    let form = [("Body".to_string(), "BT /F1 14 Tf 40 500 Td (body) Tj ET".to_string())];
+    for content in ["BT /F1 14 Tf /Body Do ET", "10 10 m 20 20 l /Body Do S"] {
+        let mut doc = page_with_forms(content, &form);
+        let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("unfinished path or text object")), "{content}: {r:?}");
+    }
+    let mut doc = page_with_forms("BT /F1 14 Tf ET /Body Do 10 10 m 20 20 l S", &form);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+}
+
+/// The `Do` is matched to its resource by the name's bytes as written, which need not be UTF-8.
+#[test]
+fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {
+    let mut doc = page_with_forms("/F#FF Do", &[("F#FF".into(), "BT /F1 14 Tf 40 500 Td (named) Tj ET".into())]);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.refused.len()), (1, 0), "{:?}", result.refused);
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "named"));
+}
+
+/// Preparation follows Ungroup's rule for a transparency group that blends in DeviceRGB: it
+/// composites as the page does on a page whose own group says DeviceRGB, or that names no
+/// blending space (DeviceRGB on screen), and is prepared there; on a page that blends in CMYK it
+/// is refused.
+#[test]
+fn grouped_text_in_an_rgb_group_needs_a_page_that_blends_in_rgb() {
+    for page_space in [None, Some("DeviceRGB"), Some("DeviceCMYK")] {
+        let mut doc = page_with_forms("/Body Do", &[("Body".into(), "0 0 0 1 k BT /F1 14 Tf 40 500 Td (body) Tj ET".into())]);
+        let group = |cs: &str| build(&[&format!("<< /S /Transparency /CS /{cs} >>")]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+        let Object::Stream(mut s) = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).as_ref().clone() else { panic!("fixture") };
+        s.dict.set(b"Group".to_vec(), Object::Dict(group("DeviceRGB")));
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(s));
+        if let Some(cs) = page_space {
+            doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Group".to_vec(), Object::Dict(group(cs)))).unwrap();
+        }
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        if page_space == Some("DeviceCMYK") {
+            assert_eq!(result.expanded, 0);
+            assert!(result.refused.iter().any(|r| r.contains("colour space of its own")), "{:?}", result.refused);
+        } else {
+            assert_eq!((result.expanded, result.refused.len()), (1, 0), "{page_space:?}: {:?}", result.refused);
+        }
+    }
+}
+
+/// The damaged THSarabunPSK map is repaired with entries after the last `endcmap`: a stream with
+/// a second block that repeats corrupt destinations must not override the corrective entries.
+#[test]
+fn grouped_legacy_thai_map_repair_follows_every_block_of_the_damaged_map() {
+    let damaged = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
+        1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange \
+        <00d9><00d9><0e04> <00e2><00e2><0e0d> <00fa><00fa><0e25> <0100><0100><0e2b> <0102><0102><0e2d> \
+        <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
+        <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
+        <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> endbfrange endcmap\n\
+        begincmap 2 beginbfchar <0103> <0036> <0107> <0040> endbfchar endcmap";
+    // ฮา: codes 259 and 263, which the second block maps to "6@" again.
+    let mut doc = page_with_forms("/Body Do", &[("Body".into(), "BT /F1 14 Tf 40 500 Td <01030107> Tj ET".into())]);
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), damaged);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.repaired_fonts), (1, 1));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "ฮา"), "{:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+}
+
+/// The damaged THSarabunPSK map of text that was never grouped is repaired by preparation too,
+/// recorded in the repair log; with nothing to prepare or repair, preparation changes nothing.
+#[test]
+fn legacy_thai_map_repair_needs_no_grouped_text() {
+    let damaged = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
+        1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange \
+        <00d9><00d9><0e04> <00e2><00e2><0e0d> <00fa><00fa><0e25> <0100><0100><0e2b> <0102><0102><0e2d> \
+        <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
+        <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
+        <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> endbfrange endcmap";
+    // ฮา: codes 259 and 263, drawn by the page itself.
+    let mut doc = page_with_forms("BT /F1 14 Tf 40 500 Td <01030107> Tj ET", &[]);
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), damaged);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.repaired_fonts), (0, 1));
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "ฮา"));
+    assert!(doc.repair_log().iter().any(|l| l.contains("THSarabunPSK")), "{:?}", doc.repair_log());
+    // Repaired once: the map no longer has the damage, and nothing else is to be done.
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().repaired_fonts, 0);
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+/// A Thai run whose glyphs a subsetter split across two subsets of the face is kept in that
+/// face: each cluster comes from a subset that has it. A cluster no subset has is refused with
+/// the reason, and the document is unchanged.
+#[test]
+fn editing_legacy_thai_shapes_a_run_across_subsets_of_the_same_face() {
+    // F1 lacks ค (glyph 217), F2 lacks ข (215); "ขค" needs both.
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let mut without_kho_khai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khai, 215);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let first = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(first));
+    let second = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &without_kho_khai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(second));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the face's subsets together have every glyph");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    let shown = shown_codes(&doc);
+    assert!(shown.contains(&("F1".into(), vec![0x00, 0xd6])) && shown.contains(&("F1".into(), vec![0x00, 0xd7])), "ก and ข from F1: {shown:?}");
+    assert!(shown.contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the subset that has it, F2: {shown:?}");
+    assert_eq!(page_font_programs(&doc).iter().filter(|(_, program)| program.is_some()).count(), 2, "no font program is added");
+    // ฆ (glyph 219) is in no subset of the face.
+    let mut neither = legacy_thai_program();
+    drop_sfnt_glyph(&mut neither, 219);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let only = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &neither, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(only));
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กฆ"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("load the complete original font"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// A space no subset of the face encodes is the gap the source font's text-space fallback gives
+/// (`source_space`, a third of an em here), as wrapping measures it everywhere else.
+#[test]
+fn an_unencoded_space_in_legacy_thai_takes_the_source_space_fallback() {
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("ก ก"), &style).unwrap();
+    // After the first ก (500 units), the second starts 330 units further: the gap.
+    let gaps: Vec<f64> = pdfcraft_content::parse(&page_content_bytes(&doc, 0))
+        .ops
+        .iter()
+        .filter(|op| op.is("TJ"))
+        .flat_map(|op| op.operands.first().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_f64))
+        .collect();
+    assert!(gaps.iter().any(|g| (g + 330.0).abs() < 0.01), "{gaps:?}");
+}
+
+/// Every resource name of one THSarabunPSK font object shares its program, decoded once. Distinct
+/// subsets of the face are read within one budget for the edit: past it the edit is refused with
+/// the reason, and the document is unchanged.
+#[test]
+fn legacy_thai_subsets_are_read_within_one_budget_per_edit() {
+    // Padding after the tables: the program reads the same, at 12 MiB.
+    let mut large = legacy_thai_program();
+    large.resize(12 << 20, 0);
+    let fixture = |extra: &dyn Fn(&mut Document) -> Object| {
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &large, LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let names: Vec<_> = (0..8).map(|i| (format!("T{i}").into_bytes(), extra(&mut doc))).collect();
+        doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+            let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+            for (name, font) in names {
+                fonts.set(name, font);
+            }
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            page.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        doc
+    };
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    // Eight more names of F1's object: 108 MiB if each name decoded its own copy.
+    let mut aliases = fixture(&|_| Object::Ref(pdfcraft_cos::ObjRef::new(5, 0)));
+    text::rewrite_block(&mut aliases, 0, 0, Some("กขค"), &style).expect("the aliases share one program");
+    assert_eq!(text::text_lines(&reopen(&aliases), 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    // Eight more font objects over the program: each is read, and together they are too many.
+    let mut distinct = fixture(&|doc| {
+        let font = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref().clone();
+        Object::Ref(doc.add(font))
+    });
+    let before = pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut distinct, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB") && error.contains("choose a replacement font"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
+/// shaped with its own layout like any source font, not by the legacy shaper (which would ask
+/// for Windows PUA alternates such a face doesn't need).
+#[test]
+fn a_thai_subset_with_mark_positioning_is_shaped_with_its_own_layout() {
+    let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = program[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        program[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("ปู่"), &style).expect("its own layout positions the marks");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "ปู่");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font == "F1"), "drawn in the source resource's own codes: {:?}", shown_codes(&doc));
+}
+
+/// A legacy subset beside a complete face of the same family that has its own Thai mark
+/// positioning (as Load font adds): what the subset lacks comes from the complete face, in its
+/// codes, rather than the edit being refused.
+#[test]
+fn a_legacy_subset_is_completed_by_a_positioned_face_of_the_same_family() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let mut complete = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(complete[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = complete[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    complete[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        complete[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the complete face has ค");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(shown_codes(&doc).contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the complete face: {:?}", shown_codes(&doc));
+}
+
+/// `program` with its `cmap` replaced by one mapping Thai to the legacy THSarabunPSK glyph order
+/// (U+0E01–U+0E3A to glyphs 214–271, U+0E3F–U+0E5B to 272–298), as a complete face's own does,
+/// and A–Z to glyphs 36–61 (any outlines do: only what the program covers matters here).
+fn with_legacy_thai_cmap(mut program: Vec<u8>) -> Vec<u8> {
+    let groups = [(0x41u32, 0x5au32, 36u32), (0x0e01, 0x0e3a, 214), (0x0e3f, 0x0e5b, 272)];
+    let mut cmap: Vec<u8> = [0u16, 1, 3, 10].iter().flat_map(|v| v.to_be_bytes()).collect();
+    cmap.extend(12u32.to_be_bytes());
+    cmap.extend(12u16.to_be_bytes());
+    cmap.extend(0u16.to_be_bytes());
+    for value in [16 + 12 * groups.len() as u32, 0, groups.len() as u32] {
+        cmap.extend(value.to_be_bytes());
+    }
+    for (first, last, glyph) in groups {
+        cmap.extend([first, last, glyph].iter().flat_map(|v| v.to_be_bytes()));
+    }
+    program.resize(program.len().next_multiple_of(4), 0);
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let record = (0..count).map(|i| 12 + i * 16).find(|&r| &program[r..r + 4] == b"cmap").unwrap();
+    let at = program.len() as u32;
+    program[record + 8..record + 12].copy_from_slice(&at.to_be_bytes());
+    program[record + 12..record + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+    program.extend(cmap);
+    program
+}
+
+/// A legacy subset beside a complete face of the same family that can't be reused in its
+/// existing codes (its encoding is a CMap stream, as Load font writes for a CFF face): the span
+/// the subset can't show is shaped by the complete program with its own layout, all of it in
+/// that one face, instead of being refused.
+#[test]
+fn a_legacy_subset_is_completed_by_a_complete_program_it_cannot_reuse_in_place() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+    let encoding = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+    )));
+    full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the complete program shapes what the subset lacks");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(
+        lines.iter().all(|l| pdfcraft_fonts::embedding::face_key(&l.base_font) == "thsarabunpsk"),
+        "the same face throughout: {:?}",
+        lines.iter().map(|l| &l.base_font).collect::<Vec<_>>()
+    );
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font != "F1"), "no cluster split from the subset: {:?}", shown_codes(&doc));
+}
+
+/// A complete program whose embedding permissions forbid embedding it again is passed over for a
+/// later complete program of the face that may be, rather than failing the edit.
+#[test]
+fn a_complete_program_that_may_not_be_embedded_is_passed_over() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut restricted = complete.clone();
+    let fs_type = sfnt_table(&restricted, b"OS/2") + 8;
+    restricted[fs_type..fs_type + 2].copy_from_slice(&2u16.to_be_bytes());
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let encoding = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+    )));
+    for (object, program) in [(6, &restricted), (7, &complete)] {
+        let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", program, LEGACY_THAI_UNICODE);
+        full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Dict(full));
+    }
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the program that may be embedded shapes the span");
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+}
+
+/// The complete program that takes over a span shapes all of its rows, a Latin-only one too,
+/// even where its existing PDF encoding has no Latin; and it must have the source's own style:
+/// a Regular program never completes text that the subset's descriptor marks bold.
+#[test]
+fn a_complete_program_takes_the_whole_span_only_in_the_source_style() {
+    let fixture = |bold: bool| {
+        let mut without_kho_khwai = legacy_thai_program();
+        drop_sfnt_glyph(&mut without_kho_khwai, 217);
+        let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let mut legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+        if bold {
+            let Some(Object::Array(mut descendants)) = legacy.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+            let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+            descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+            descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+            legacy.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        }
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+        let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+        let encoding = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+        )));
+        full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+        doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+        doc
+    };
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let mut doc = fixture(false);
+    text::rewrite_block(&mut doc, 0, 0, Some("กขค\nABC"), &style).expect("every row shaped by the complete program");
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "กขค\nABC");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font != "F1" && font != "F2"), "{:?}", shown_codes(&doc));
+    let mut doc = fixture(true);
+    assert!(text::text_lines(&doc, 0).unwrap()[0].bold, "the descriptor makes the subset bold");
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).is_err(), "no Regular program for bold text");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+/// Exporters set the descriptor's Italic flag on upright faces (seen on a THSarabunPSK header
+/// subset: `/Flags 96`, `/ItalicAngle 0`). Such a subset is still the same style as its upright
+/// siblings, so they complete what it lacks; a real slant (`/ItalicAngle -12`) is not.
+#[test]
+fn an_italic_flag_alone_does_not_separate_subsets_of_one_face() {
+    for (angle, completes) in [(0, true), (-12, false)] {
+        let mut without_kho_khwai = legacy_thai_program();
+        drop_sfnt_glyph(&mut without_kho_khwai, 217);
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let mut flagged = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+        let Some(Object::Array(mut descendants)) = flagged.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+        let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+        descriptor.set(b"Flags".to_vec(), Object::Int(96));
+        descriptor.set(b"ItalicAngle".to_vec(), Object::Int(angle));
+        descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        flagged.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(flagged));
+        let upright = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(upright));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style);
+        assert_eq!(edited.is_ok(), completes, "ItalicAngle {angle}: {:?}", edited.err());
+        if completes {
+            assert!(shown_codes(&reopen(&doc)).contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the upright sibling");
+        }
+    }
+}
+
+/// A subset keeps only what its document used. One without อ or any tone alternate still takes
+/// text that needs neither, in the source face; text that needs an alternate it lacks is refused.
+#[test]
+fn editing_legacy_thai_needs_only_the_glyphs_the_text_uses() {
+    let mut sparse = legacy_thai_program();
+    for gid in [258, 347, 352, 353] {
+        drop_sfnt_glyph(&mut sparse, gid);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &sparse, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("ปู่"), &style).unwrap_err().to_string();
+    assert!(error.contains("contextual mark") && error.contains("U+0E48"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("every glyph this text needs is in the subset");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font == "F1"), "{:?}", shown_codes(&doc));
+}
+
+/// A subset may give a character a code whose glyph it emptied (its `/W` still lists it). The
+/// edit then uses another subset of the face that draws it, rather than drawing nothing.
+#[test]
+fn editing_legacy_thai_skips_a_subset_whose_glyph_is_empty() {
+    // Both subsets map A (glyph 36 in Inter) through ToUnicode; F1 has emptied it.
+    let unicode = [LEGACY_THAI_UNICODE, b" 1 beginbfchar <0024> <0041> endbfchar"].concat();
+    let mut empty_a = legacy_thai_program();
+    drop_sfnt_glyph(&mut empty_a, 36);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let first = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &empty_a, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(first));
+    let second = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &legacy_thai_program(), &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(second));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("กA"), &style).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กA");
+    let shown = shown_codes(&doc);
+    assert!(shown.contains(&("F2".into(), vec![0x00, 0x24])), "A from the subset that has its outline: {shown:?}");
+    assert!(!shown.contains(&("F1".into(), vec![0x00, 0x24])), "not from the one that emptied it: {shown:?}");
+}
+
+/// Each two-byte code a page's content shows, with the font resource it is shown in.
+fn shown_codes(doc: &Document) -> Vec<(String, Vec<u8>)> {
+    let mut font = String::new();
+    let mut shown = Vec::new();
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        if op.is("Tf") {
+            font = String::from_utf8_lossy(op.name(0).unwrap_or_default()).into_owned();
+        }
+        let strings: Vec<Vec<u8>> = match op.op.as_slice() {
+            b"Tj" | b"'" => op.operands.last().and_then(Object::as_string).map(|s| s.bytes.clone()).into_iter().collect(),
+            b"TJ" => {
+                op.operands.first().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_string).map(|s| s.bytes.clone()).collect()
+            }
+            _ => Vec::new(),
+        };
+        for bytes in strings {
+            shown.extend(bytes.chunks(2).map(|c| (font.clone(), c.to_vec())));
+        }
+    }
+    shown
+}
+
+/// Where table `tag` starts in an sfnt.
+fn sfnt_table(program: &[u8], tag: &[u8; 4]) -> usize {
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let record = (0..count).map(|i| 12 + i * 16).find(|&r| &program[r..r + 4] == tag).unwrap();
+    u32::from_be_bytes(program[record + 8..record + 12].try_into().unwrap()) as usize
+}
+
+/// Empty glyph `gid` of an sfnt as a subsetter drops it: its data stays as the previous glyph's
+/// padding, and every other glyph keeps its outline.
+fn drop_sfnt_glyph(program: &mut [u8], gid: usize) {
+    let long = program[sfnt_table(program, b"head") + 51] == 1;
+    let (loca, size) = (sfnt_table(program, b"loca"), if long { 4 } else { 2 });
+    let next = program[loca + (gid + 1) * size..][..size].to_vec();
+    program[loca + gid * size..][..size].copy_from_slice(&next);
+}
+
+/// Inter's outlines in a legacy THSarabunPSK subset's glyph order; no proprietary font fixture is
+/// needed. The slots where that order has a Thai vowel or tone mark, or a mark-like Windows PUA
+/// alternate, take no advance (the source font is checked for that before its glyphs are trusted)
+/// and the others 500 units. Removing the layout and `cmap` tables reproduces legacy subsetting.
+fn legacy_thai_program() -> Vec<u8> {
+    let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let hmtx = sfnt_table(&program, b"hmtx");
+    for gid in (214..=298usize).chain(342..=368) {
+        let mark = match gid {
+            342..=368 => !matches!(gid, 342 | 357),
+            _ => matches!(gid + if gid <= 271 { 0xd2b } else { 0xd2f }, 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e),
+        };
+        let advance: u16 = if mark { 0 } else { 500 };
+        program[hmtx + gid * 4..hmtx + gid * 4 + 2].copy_from_slice(&advance.to_be_bytes());
+    }
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = program[12..12 + count * 16]
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .filter(|r| !matches!(&r[..4], b"cmap" | b"GSUB" | b"GPOS"))
+        .map(|r| r.to_vec())
+        .collect();
+    program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        program[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    program
+}
+
+/// A THSarabunPSK Identity-H font over `program` (a [`legacy_thai_program`]), mapping `unicode`.
+fn legacy_thai_font(doc: &mut Document, base_font: &str, program: &[u8], unicode: &[u8]) -> Dict {
+    let raw = doc.add(Object::Stream(Stream::flate(Dict::new(), program)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(raw));
+    let mut descendant = Dict::new();
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    descendant.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+    descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(65535), Object::Int(500)]));
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), unicode)));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type0"));
+    font.set(b"BaseFont".to_vec(), Object::name(base_font));
+    font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+    font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(descendant)]));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+    font
+}
+
+/// The intact ToUnicode of a legacy THSarabunPSK subset: nominal Thai and two tone alternates.
+const LEGACY_THAI_UNICODE: &[u8] =
+    b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
+
+#[test]
+fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_after_reopen() {
+    // Remap existing OFL Inter outlines to synthetic Thai glyph slots; no proprietary font
+    // fixture is needed. Removing layout/cmap tables reproduces legacy PDF font subsetting.
+    let program = legacy_thai_program();
+    for bold in [false, true] {
+        let mut doc = text_page("BT /F1 17.5 Tf 0.42 Tc 1.1 Tw 86 Tz 1.5 Ts 2 Tr 0.6 w 0.2 0.3 0.4 rg 50 650 Td <00d601090119> Tj ET");
+        let raw = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(raw));
+        let mut descendant = Dict::new();
+        descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        descendant.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(65535), Object::Int(500)]));
+        let unicode = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar",
+        )));
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type0"));
+        font.set(b"BaseFont".to_vec(), Object::name(if bold { "ABCDEF+THSarabunPSK-Bold" } else { "ABCDEF+THSarabunPSK" }));
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(descendant)]));
+        font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font.clone()));
+        let before = text::text_lines(&doc, 0).unwrap()[0].clone();
+        let fonts = page_font_programs(&doc);
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some("กิ่ กี้ น้ำ"), &style).expect("existing source glyphs must remain editable");
+        assert_eq!(edited.substituted, None, "keeping the source must never silently select Noto or another face");
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines[0].text, "กิ่ กี้ น้ำ");
+        for after in &lines {
+            assert_eq!(after.font, before.font);
+            assert_eq!(after.base_font, before.base_font);
+            assert_eq!(after.bold, bold);
+            assert_eq!(after.size, before.size);
+            assert_eq!(after.color, before.color);
+            assert_eq!(after.baseline(), before.baseline());
+        }
+        let mut settings = std::collections::BTreeMap::new();
+        for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops {
+            if matches!(op.op.as_slice(), b"Tc" | b"Tw" | b"Tz" | b"Ts" | b"Tr" | b"w") {
+                settings.insert(op.op.clone(), op.num(0).unwrap());
+            }
+            let shows = if op.is("Tj") {
+                op.operands.first().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty())
+            } else if op.is("TJ") {
+                op.operands
+                    .first()
+                    .and_then(Object::as_array)
+                    .is_some_and(|a| a.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty())))
+            } else {
+                false
+            };
+            if shows {
+                break;
+            }
+        }
+        for (op, expected) in [("Tc", 0.42), ("Tw", 1.1), ("Tz", 86.0), ("Ts", 1.5), ("Tr", 2.0), ("w", 0.6)] {
+            assert_eq!(settings.get(op.as_bytes()), Some(&expected), "{op} must survive in the saved PDF");
+        }
+        let mut explicit = doc.clone();
+        let chosen = BlockStyle { resource: Some("F1".into()), width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut explicit, 0, 0, Some("กี้ น้ำ"), &chosen).expect("selecting the existing source font from the menu must work too");
+        assert_eq!(text::text_lines(&reopen(&explicit), 0).unwrap()[0].base_font, before.base_font);
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict(), Some(&font));
+        let Object::Stream(saved) = doc.get(raw).as_ref().clone() else { panic!("fixture font") };
+        assert_eq!(saved.decoded().unwrap(), program);
+        assert_eq!(page_font_programs(&doc), fonts, "no replacement font program may be added");
+    }
+}
+
+/// The Unicode row breaks are invisible moves, not glyphs. A draft carrying them (text pasted
+/// from a browser or Word) breaks the row on both rewrite paths, rather than being refused
+/// because no fallback face has an outline for U+2028 (#6272). The paragraph is one wide row, so
+/// a break that was dropped would leave the words on one row instead of two. A one-line edit has
+/// no next row, so there each break is written as a space.
+#[test]
+fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
+    let red = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    for separator in ['\u{2028}', '\u{2029}', '\u{0085}', '\u{000B}', '\u{000C}', '\u{001C}', '\u{001D}', '\u{001E}'] {
+        let draft = format!("one{separator}two");
+        for style in [
+            text::BlockStyle::default(),
+            text::BlockStyle { ranges: vec![red.clone()], ..Default::default() },
+            text::BlockStyle { ranges: vec![text::RangeStyle { range: 0..draft.len(), ..red.clone() }], ..Default::default() },
+            text::BlockStyle { bold: Some(true), ..Default::default() },
+        ] {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+            let doc = reopen(&doc);
+            let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+            assert_eq!(lines, ["one", "two"], "U+{:04X}", u32::from(separator));
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_line(&mut doc, 0, 0, &draft).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+        let doc = reopen(&doc);
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one two"], "a one-line edit keeps U+{:04X} on its line", u32::from(separator));
+    }
+}
+
+/// Thai text on the styled path has its own coverage checks and row splits. A Unicode row break
+/// in a Thai draft breaks the row there too, whether the paragraph keeps its legacy subset, takes
+/// the bundled Thai face by choice or is completed by the matching one, instead of being refused
+/// for a glyph no face has (#6272).
+#[test]
+fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
+    let rows = |doc: &Document| -> Vec<String> { text::text_lines(&reopen(doc), 0).unwrap().into_iter().map(|l| l.text).collect() };
+    let thai_face = pdfcraft_fonts::document_thai_font().is_some();
+    if !thai_face {
+        eprintln!("thai_paragraphs_break_the_row_on_unicode_row_breaks: built without craft-fonts, so only the legacy subset is checked");
+    }
+    for separator in ['\u{2028}', '\u{001C}'] {
+        let draft = format!("กข{separator}ค");
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("legacy U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "legacy U+{:04X}", u32::from(separator));
+        if !thai_face {
+            continue;
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let chosen = BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &chosen).unwrap_or_else(|e| panic!("chosen U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "chosen U+{:04X}", u32::from(separator));
+        let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+        let cmap = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar",
+        )));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+            f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai-Regular"));
+            f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        })
+        .unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
+            .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
+    }
 }

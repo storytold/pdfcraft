@@ -32,14 +32,26 @@ that warning and keeps the existing layout and accepted widget values.
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  table in an area) alike; fields that compute the page number or count on layout show the numbers,
+  and so do those that compute the sheet number (`sheet(this)+1`) or count, a sheet being a page on
+  screen; an embedded (floating) field shows its value from the data, which is where a script's
+  value goes (a repeating row's own instance, a page area's field under the area, a multi-select
+  list's picks, a date in its display picture), and an event, reset (a hidden one without a
+  widget included), typed value or pick that changes one lays the form out again;
+  a field inside an exclusion group is not shown yet;
+  a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
+  of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
+  field, a subform or a draw in a flow doesn't turn.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
   format and keystroke actions from the picture clause), check boxes and radio groups (from
   `exclGroup`), push buttons with Reset / Print / Save As / URI actions recognised from their
-  scripts. Appearance streams are left empty for the forms layer to generate. Each field keeps
-  its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
+  scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
+  fields under one for each step above it) because other viewers lay a dynamic form out again
+  and find a signature by that name. A box whose path, or a part of it, the file already gives
+  another field keeps its own name, and a new layout keeps a signature a generated box holds. Appearance streams are left empty for the forms layer to
+  generate. Each field keeps its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
@@ -70,6 +82,10 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   field changes, and click for buttons. Every generated copy of a page-master button resolves
   its own PDF field to the shared XFA click script, so clicking an early copy works as well
   as the last, including through `js_run` and after save/reopen.
+  While this XFA layout is active, the engine does not
+  initialize Acrobat JavaScript with the PDF container's document-level scripts (including
+  non-XFA-viewer warnings). They stay available for inspection and saving; explicit console
+  scripts and XFA messages still run. Static XFA keeps its document scripts.
 
   Private keys PdfCraft writes (other viewers ignore them):
 
@@ -78,6 +94,8 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
   | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
+  | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
 
 ## API sketch
@@ -100,7 +118,8 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   not locale-aware pictures beyond simple number and date ones, or `Get`/`Post`/`Put` (refused).
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
-  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
+  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page and sheet numbers,
+  `xfa.event`);
   not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
   (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.

@@ -6,13 +6,21 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
 
 - **Builders** for the comment types Acrobat's commenting tools create: sticky note (`Text` +
   `Popup`), highlight, underline, strikethrough, squiggly, rectangle (`Square`), oval (`Circle`),
-  line and arrow (`Line` with `/LE`), freehand drawing (`Ink`) and text box (`FreeText`).
+  line and arrow (`Line` with `/LE`), freehand drawing (`Ink`), text box and callout
+  (`FreeText`), polygon (including cloudy borders), polyline, caret, rubber and custom stamp,
+  and file attachment.
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
+  A line's leader lines (`/LL`, `/LLE`, `/LLO`) and caption (`/Cap`, `/CP`, `/CO`) are drawn as
+  ISO 32000-2 Table 178 places them, the caption in black Helvetica 10.
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by approximate Helvetica proportions (no font program is bundled). Text it can't
-  draw (in a text box, callout, Fill & Sign text, measurement label or dynamic stamp's by-line;
-  `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
+  line breaking by Helvetica's standard-14 metrics. Thai in a text box, callout or Fill & Sign
+  text is shaped and drawn from the craft-fonts Thai face with Add text's writer
+  (`pdfcraft_fonts::shaped_text`: Type 3 glyphs with a ToUnicode map), the box sized to the ink
+  of its stacked marks and descenders; a build without a Thai face refuses it
+  (`AnnotError::Undrawable`) instead of drawing `?`. Other text it can't
+  draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
+  stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
   the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and
   flattening refuses to make it permanent. Two refusals (`AnnotError::Undrawable`): a redaction
   mark's overlay text, which becomes page content when applied; and a restyle or resize of a
@@ -28,7 +36,7 @@ let index = add_annotation(&mut doc, &NewAnnotation { page, shape, style, conten
 add_reply(&mut doc, page, index, "Agreed", "Ada", &meta)?;
 set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
-set_style(&mut doc, page, index, Some(rgb), Some(0.5), Some(2.0), &meta)?;
+set_style(&mut doc, page, index, StyleChange::new(Some(rgb), Some(0.5), Some(2.0), None), &meta)?;
 delete_annotation(&mut doc, page, index)?;
 signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```
@@ -41,8 +49,8 @@ deterministic; the engine supplies them.
 
 - Unknown keys are kept. Inline annotation dictionaries are promoted to indirect objects only
   when an edit needs a reference to them.
-- `set_style` refuses (and changes nothing) when it cannot redraw the comment, e.g. stamps,
-  cloudy borders or callouts, instead of leaving a stale appearance.
+- `set_style` refuses when it cannot redraw the comment, e.g. a stamp
+  whose appearance cannot be regenerated, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
@@ -51,8 +59,15 @@ deterministic; the engine supplies them.
   signature) and PdfCraft's rubber stamps counterrotate their appearance on rotated pages, so
   the picture or label reads upright as the page is displayed. Restyling a picture stamp keeps
   that appearance matrix. The rotation is the page's `/Rotate` at placement.
+- Sticky notes and file attachments are not counterrotated: they carry the NoRotate flag and
+  their icon is drawn in an unturned 20 × 20 box. A viewer keeps them upright on a turned page,
+  about the upper-left corner of `/Rect` (ISO 32000-2 §12.5.3). PdfCraft's renderer does so
+  (vendored hayro-interpret patch 37), and `Summary::no_rotate` tells the UI where the icon is
+  drawn.
 
-## Not yet
+## Rich text and remaining limits
 
-Callouts, polygons and polylines, clouds, carets (insert/replace text), stamps, file
-attachments, rich text (`/RC`, `/DS`), and the shared named-appearance cache Acrobat writes.
+Text-box text and colour edits regenerate `/RC` (XHTML) and `/DS` from the plain
+`/Contents`, `/DA` and `/Q`, so rich-text editors show the same text and style. These edits
+replace imported rich-text formatting. The shared named-appearance cache Acrobat writes
+is not implemented.
