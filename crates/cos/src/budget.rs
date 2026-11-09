@@ -1103,4 +1103,60 @@ mod tests {
         assert!(budget.decode_stages_within(&fits, max).is_err());
         assert_eq!(budget.remaining(), 0);
     }
+
+    /// What `decode_stages_within` charges, and which limit it reports, on each way a read stops:
+    /// a stage at the stream's limit with more of the room left charges what came before and the
+    /// limit; at the stages' total, with more of the allowance left, it charges that total; at
+    /// what is left of the allowance it spends all of it and reports the allowance's limit, as
+    /// `decode_within` does. Each boundary between them is read on both sides.
+    #[test]
+    fn a_stage_past_its_limit_charges_what_came_before_and_the_limit() {
+        let max = 1 << 12;
+        let hex = |data: &[u8]| data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect::<Vec<u8>>();
+        let two = |raw: &[u8]| {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+            Stream::from_raw(dict, hex(raw))
+        };
+        let says = |read: Result<Vec<u8>, CosError>, limit: usize| {
+            read.err().map(|e| e.to_string()) == Some(CosError::Filter(FilterError::LimitExceeded(limit).to_string()).to_string())
+        };
+        // Flate data making eight times the limit: the hex stage makes `inner` bytes of it, and
+        // the Flate stage stops at the limit.
+        let bomb = Stream::flate(Dict::new(), &vec![0u8; 8 * max]).raw.to_vec();
+        let inner = bomb.len();
+        // A byte more of the room than the hex stage and the limit: the Flate stage stops at the
+        // limit, so that is what it charges.
+        let mut budget = DecodeBudget::new(inner + max + 1, 0);
+        assert!(says(budget.decode_stages_within(&two(&bomb), max), max));
+        assert_eq!(budget.remaining(), 1);
+        // Exactly the hex stage and the limit: what was left stopped it as much as the limit did,
+        // so it is past the allowance, spends it and reports the allowance's limit.
+        let mut budget = DecodeBudget::new(inner + max, 0);
+        assert!(says(budget.decode_stages_within(&two(&bomb), max), inner + max));
+        assert_eq!(budget.remaining(), 0);
+        // The same data padded to exactly the limit: the hex stage makes all of it, and the Flate
+        // stage, at the limit, reaches the stages' total. With more of the allowance left, that
+        // total is what it charges and reports.
+        let mut padded = bomb.clone();
+        padded.resize(max, 0);
+        let mut budget = DecodeBudget::new(10 * max, 0);
+        assert!(says(budget.decode_stages_within(&two(&padded), max), 2 * max));
+        assert_eq!(budget.remaining(), 8 * max);
+        // With exactly the total left (of an allowance of three times the limit), it is past the
+        // allowance: all of it is spent, and the allowance's limit reported.
+        let mut budget = DecodeBudget::new(3 * max, 0);
+        budget.decode(&Stream::from_raw(Dict::new(), vec![0; max])).unwrap();
+        assert!(says(budget.decode_stages_within(&two(&padded), max), 3 * max));
+        assert_eq!(budget.remaining(), 0);
+        // With less than the total left, the same.
+        let mut budget = DecodeBudget::new(max, 0);
+        assert!(says(budget.decode_stages_within(&two(&padded), max), max));
+        assert_eq!(budget.remaining(), 0);
+        // With nothing left, a stream with data is refused before it is decoded, even one that
+        // decodes to nothing; an empty one reads.
+        let mut budget = DecodeBudget::new(0, 0);
+        assert!(says(budget.decode_stages_within(&Stream::flate(Dict::new(), b""), max), 0));
+        assert_eq!(budget.decode_stages_within(&Stream::from_raw(Dict::new(), Vec::new()), max).ok(), Some(Vec::new()));
+    }
 }
