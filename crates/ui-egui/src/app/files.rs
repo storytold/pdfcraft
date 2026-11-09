@@ -142,12 +142,19 @@ impl PdfCraftApp {
         Ok(token)
     }
 
+    /// How many opens may wait for the worker: its bound, less one place while a password prompt
+    /// is open, so the prompt's retry fits even before the worker has taken any of the others.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_slots(&self) -> usize {
+        open_worker::MAX_QUEUED_OPENS - usize::from(self.password_prompt.is_some())
+    }
+
     /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
-    /// job has a `pending_opens` entry, so fewer entries than the bound means room.
+    /// job has a `pending_opens` entry, so fewer entries than [`Self::open_slots`] means room.
     #[cfg(not(target_arch = "wasm32"))]
     fn submit_deferred_opens(&mut self) {
         let mut queue = std::mem::take(&mut self.deferred_opens);
-        while self.deferred_opens.is_empty() && self.pending_opens.len() < open_worker::MAX_QUEUED_OPENS {
+        while self.deferred_opens.is_empty() && self.pending_opens.len() < self.open_slots() {
             let Some(next) = queue.pop_front() else { break };
             self.open_path_request(&next.path, next.then, next.display_override);
         }
@@ -866,7 +873,7 @@ impl PdfCraftApp {
             self.startup_superseded = true;
             // The worker queue is bounded. A long file list (a launch behind a password prompt,
             // or many files at once) waits here, in order, and is submitted as opens finish.
-            if self.pending_opens.len() >= open_worker::MAX_QUEUED_OPENS || !self.deferred_opens.is_empty() {
+            if self.pending_opens.len() >= self.open_slots() || !self.deferred_opens.is_empty() {
                 self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
                 return OpenOutcome::Pending;
             }
