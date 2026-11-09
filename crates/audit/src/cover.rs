@@ -172,7 +172,11 @@ pub(crate) fn painted(rects: Vec<([f64; 4], i8)>, even_odd: bool, work: &mut usi
         let mut runs: Vec<(f64, f64)> = Vec::new();
         for col in xs.windows(2) {
             // Halve each edge before adding: both can sit near 1e308, where the sum is infinite.
-            if !filled(col[0] / 2.0 + col[1] / 2.0, y0 / 2.0 + y1 / 2.0) {
+            let (cx, cy) = (col[0] / 2.0 + col[1] / 2.0, y0 / 2.0 + y1 / 2.0);
+            // A cell too narrow for a representable interior point holds nothing a stroke can be
+            // attributed to. Testing one of its edges instead would flip the parity of every rect
+            // whose boundary it is, dropping the whole strip the cell belongs to.
+            if !(col[0] < cx && cx < col[1] && y0 < cy && cy < y1) || !filled(cx, cy) {
                 continue;
             }
             match runs.last_mut() {
