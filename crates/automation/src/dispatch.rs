@@ -467,6 +467,7 @@ impl Automation {
                         "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
                         "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
                         "remove_crop" => ImageEdit::RemoveCrop,
+                        "ungroup" => ImageEdit::Ungroup,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;
@@ -479,6 +480,10 @@ impl Automation {
                     };
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
+            }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                self.prepare_text(&a, page)?
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
@@ -733,6 +738,8 @@ impl Automation {
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
             "object_move" => self.object_move(&a)?,
+            "object_copy" => self.object_copy(&a)?,
+            "object_paste" => self.object_paste(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,

@@ -34,7 +34,8 @@ pub struct Document {
     pub from_book: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
-    /// The generation last handed out by `autosave_snapshots`.
+    /// The generation last handed out by `autosave_snapshots`, or another one when storing that
+    /// snapshot failed (`autosave_failed`), so it is due again.
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
@@ -260,6 +261,15 @@ impl Document {
             return Err("grouped Form artwork is not a bitmap; Save Image As is only available for raster images".into());
         }
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
+    }
+
+    /// Edit text: whether grouped artwork `index` on `page` (0-based, as [`Self::page_images`]
+    /// lists them) shows text that [`Edit::PrepareText`](crate::Edit::PrepareText) would make
+    /// editable. Reads the page without changing it; `false` for a logo, a group that can't be
+    /// opened or a page that can't be read.
+    pub fn grouped_text_at(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = self.editor.as_ref() else { return false };
+        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at(&editor.cos, page, index)).is_ok_and(|r| r.is_ok_and(|yes| yes))
     }
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
@@ -720,6 +730,14 @@ pub(crate) fn write_display_copy(
     }
 }
 
+/// `doc` as the reader shows it: comments without an appearance stream drawn
+/// (`pdfcraft_annot::with_missing_appearances`) and form fields drawn from their values where the
+/// file leaves that to the viewer. `None` when `doc` needs neither. The vector print draws from
+/// this copy too, so what prints is what the page shows (#371, #3475 draw them for display only).
+pub(crate) fn as_displayed(doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
+    with_field_appearances(pdfcraft_annot::with_missing_appearances(doc), doc)
+}
+
 /// Carry the marks across a revalidation that leaves the display copy alone, when it may: only
 /// when every verdict is the one the copy was drawn with. Returns whether it did; otherwise the
 /// copy has to be drawn again.
@@ -747,8 +765,9 @@ pub(crate) fn same_pages(a: &[pdfcraft_render::PageInfo], b: &[pdfcraft_render::
 }
 
 /// Each document-information field of `info` with its value in `cos` (`/Info`, else XMP), read
-/// the way the full inspection reads them: NULs and spaces trimmed, empty is none.
-pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 6] {
+/// the way the full inspection reads them: NULs and spaces trimmed, empty is none, dates shown as
+/// [`pdfcraft_render::pretty_date`] shows them.
+pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 8] {
     let read = |key| pdfcraft_organize::info(cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
     [
         (&mut info.title, read("Title")),
@@ -757,6 +776,8 @@ pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Documen
         (&mut info.keywords, read("Keywords")),
         (&mut info.creator, read("Creator")),
         (&mut info.producer, read("Producer")),
+        (&mut info.created, read("CreationDate").map(|d| pdfcraft_render::pretty_date(&d))),
+        (&mut info.modified, read("ModDate").map(|d| pdfcraft_render::pretty_date(&d))),
     ]
 }
 
@@ -771,7 +792,7 @@ pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec
         let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok()?;
         let mut signatures = signatures_of(&cos, &bytes, &TrustStore::default(), &pdfcraft_sign::DigestCache::default());
         let layered = pdfcraft_sign::has_status_layers(&cos, &signatures);
-        let (mut display, added) = match with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos) {
+        let (mut display, added) = match as_displayed(&cos) {
             Some(display) => (display, true),
             None if layered => (cos, false),
             None => return None,

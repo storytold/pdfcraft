@@ -1,8 +1,16 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
+
+> **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
+
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
+
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
@@ -190,27 +198,28 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages (historical % snapshot vs 2,143 keys, except Vietnamese, Brazilian
-Portuguese and Spanish vs the current union). Detail and script notes: [localization-parity.md](docs/localization-parity.md).
+Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
+`cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
 |---|---|---|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 97.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
-| Spanish | `es` | 100% of current union | partial (dialogs / tooltips; no help) |
-| Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 100% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
-| French | `fr` | 99.3% | partial |
-| Portuguese (Brazil) | `pt-br` | 100% of current union | partial |
-| Indonesian | `id` | 0% | none |
-| Japanese | `ja` | 99.1% | partial |
-| German | `de` | 99.3% | partial |
-| Korean | `ko` | 0% | none |
-| Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
+| Simplified Chinese | `zh-hans` | 88.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
+| Spanish | `es` | 98.4% | partial (dialogs / tooltips; no help) |
+| Hindi | `hi` | 97.5% | partial (Devanagari rendering unqualified) |
+| Arabic | `ar` | 97.9% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
+| French | `fr` | 98.4% | partial |
+| Portuguese (Brazil) | `pt-br` | 98.4% | partial |
+| Indonesian | `id` | 97.5% | partial |
+| Japanese | `ja` | 89.6% | partial |
+| German | `de` | 89.7% | partial |
+| Korean | `ko` | 97.5% | partial (no Hangul UI face) |
+| Vietnamese | `vi` | 98.4% | partial (dialogs / tooltips; no help) |
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
-Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Romanian and Czech: **15 more catalogs**
-(24 interface languages including English).
+Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
+Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
+(35 interface languages including English).
 
 ## Upcoming
 
@@ -229,20 +238,26 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
+- **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
+- **2026-11-07 (M10, `ocr.ocr-web`, port onto #977):** Web OCR rebuilt on main's engines and preprocessing (#977). `OcrJob::run` is now `OcrJob::steps` a page at a time: the page renders, crops to the region and cleans each page, a Web Worker runs ocrs on the result, and `OcrShot::place` maps the words back through the region and preprocessing. Every strategy reads like this when only one engine is present, and the web build has only ocrs. The downloaded models are installed into the engine cache (`ocr::install`), so the Verify screen and the engine-status checks see them too. The batch keeps main's skipped-files bucket, low-confidence notes and cancel. The translations moved to craft-i18n (storytold/craft-i18n#141). The Verify screen starts the model download itself and runs once the models land; before, on a fresh page it failed with the desktop's "set PDFCRAFT_MODELS" message. Known limits: the cleaning steps, and the Verify screen's Run OCR and re-reads, run on the page. Estimates unchanged.
+
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
 
+- **2026-11-03 (community, M7, Thai word breaking):** Thai rows end between words, found with ICU4X's dictionary line segmenter (`icu_segmenter` 2.3, compiled dictionary data, no LSTM model; Unicode-3.0), instead of only at spaces when rewrapping and at any cluster in Add text. A row never starts with a following vowel, tone or other mark, Mai Yamok or Paiyannoi, nor ends with a leading vowel; a word wider than the row still breaks between clusters, and the spaces where an Add text row ends are dropped as in Latin text. Rewrapping existing text works out the breaks once per run of non-space characters. Rewriting a paragraph into Thai still needs a source font with the Thai glyphs (there is no Thai fallback face for it yet). The compiled dictionaries (Thai, Lao, Khmer, Burmese) add about 1.8 MB to a stripped release binary. Estimates unchanged.
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
-- **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
+- **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings in its denominator, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
+- **2026-11-02 (M3, #5708):** Pages shorter than the window sit in its middle, one page or row at a time and when scrolling continuously with every page in view.
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
@@ -256,6 +271,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
+- **2026-10-31 (M3/M4, #5330):** The document quick toolbar offers Crop pages directly through the existing page.crop command, with the command’s assembly-permission check and an active-tool highlight. The existing crop, undo and headless page_set_box paths are unchanged. No toolbar customization or new shortcut. Estimates unchanged.
 
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
@@ -266,6 +282,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
 
+- **2026-10-27 (M10, `ocr.ocr-web`, rebase fix):** The web build loads OCR models only when their SHA-256 matches `ATTRIBUTION.toml`. With ONNX loading now on, rten's parser spins forever on some bytes that aren't a model (a corrupt or wrong download), so a bad file now fails at once instead of hanging a worker.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
@@ -277,6 +294,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-25 (web, same-document host mode):** A page that loads the PdfCraft web module into its own document (no iframe) can opt into the host bridge with `data-host="page"` on the app's canvas — the exact value `page`; any other value keeps the normal app with downloads, unless a same-origin framed `?host=parent` selects the parent bridge (unframed or cross-origin, `?host=parent` also keeps the normal app). It is the `?host=parent` bridge with the transport swapped: the same five messages travel as non-bubbling `CustomEvent`s on the canvas (`detail` holds the parent messages' fields without `type`; the host answers with a `pdfcraft:open` event), so saves reach the host instead of downloading and dirty and start-up-failure reporting are unchanged. Unit tests cover the opt-in rule; no parity or estimate changes.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
+- **2026-10-26 (M10, `ocr.ocr-web`, review fix):** On the web, Edit on a scanned page starts the OCR model download, and the page is read once the models load; it was taken for no scan and left unread until the document changed.
+- **2026-10-24 (M10, `ocr.ocr-web`, review fix):** On the web, single-file and multiple-file OCR running at once no longer lose a page: the workers' answers go to the run that sent each page, instead of to whichever run collected first, and a cancelled run's late answers are let go. Regression tests cover both start orders and cancellation. Files chosen for Recognize Text in Multiple Files before the models have downloaded now wait for them instead of having to be chosen again, and idle workers close on time even when nothing is happening on the page, a full minute after their last page comes back rather than after it was handed out (checked by hand in Firefox); estimates unchanged.
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
 - **2026-10-22 (M7, #2517):** A partial rewrite of the last paragraph closes its marker after that paragraph's last `ET`, so a row left in the source stays in the paragraph. When the next paragraph shares the text object, the marker closes before that neighbour instead of after the shared `ET`. The extra marker is not added across two marked-content regions. Estimates unchanged.
 - **2026-10-15 (M7, #2517):** A blank line between paragraphs stays a paragraph break. An explicit `TL` is the measured baseline gap. Without one, three or more rows at a repeated step stay one paragraph, and a single wider gap stays a break. Adding a row, even when an earlier row is left in the source, does not absorb the next paragraph on a later edit. Estimates unchanged.
@@ -426,6 +445,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-14 (M12, reading colours, #2059):** Pending page backgrounds use the document's reading colour immediately, preventing white flashes while scrolling to uncached pages. A headless canvas regression covers three pending pages in every preset and a custom background. Estimates unchanged.
 - **2026-10-15 (community, M6, #2608):** In Prepare a form the selected field moves with the arrow keys: a point per press, ten with Shift, as the object nudge and dragging it do. Each press is one undo step ("Change field properties"), and the keys no longer turn the page while a field is selected. Estimates unchanged.
 - **2026-10-15 (M3, closable community card):** The ArtCraft community card on Home has a close button that hides it for the rest of the run; it returns on the next launch, and its links stay in the top bar's Discord button and the Help menu. A UI regression covers closing and the fresh-launch default. Estimates unchanged.
+- **2026-10-15 (M14, MSI install folder, #1139):** The Windows installer's welcome dialog has an "Install to" row with a native folder browser, starting on the folder chosen for the per-user or per-machine scope (the recorded one on an update). `test-msi.ps1` checks the dialog wiring: both Install buttons set the folder before the dialog closes, and Browse's OK and Cancel. Estimates unchanged.
 - **2026-10-13 (community, M3, #1569 review):** Pixel-only Wayland wheel, wheel-tilt and continuous input use standalone moved events, so Ctrl zoom does not remain latched after the modifier is released (#991); vendored winit patch (13), with a policy test. Estimates unchanged.
 - **2026-10-18 (M1, PR #1143 repair policy):** A live in-file reference resolves when its generation matches the xref row or a same-number header at that indexed offset. Neither-match and free slots remain null, including when old object bytes remain. Opening records bounded xref/header disagreements without parsing object bodies or expanding compact xref rows. Synthetic controls cover read order, clones, overlays, dictionary edits, full classic/packed saves and an independent reader of incremental output. **Correction to the 2026-10-15 note below:** its async-opening-test sentence was not evidenced by this COS change; no fresh async-opening or GUI validation is claimed. The full-reference stream-length recursion key is defensive hardening, not an independently isolated regression fix. Estimates unchanged.
 - **2026-10-15 (M1, PR #1143 refresh):** COS reference lookups and full saves distinguish complete object references, so stale generations cannot expose replacement content. Snapshot restoration also keeps edits to objects with nonzero generations before incremental saves. Synthetic regressions cover caches, overlays, snapshots, stream lengths and classic/packed saves. Current upstream async-opening test corrections are included. Estimates unchanged.
@@ -556,6 +576,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 Newest first: the date, what moved, and the new overall estimate.
 
 - **2026-10-28 (M10, #1595):** Export to Markdown: `doc_export_office` with a `.md` or `.markdown` path writes CommonMark with GitHub pipe tables (headings, paragraphs with bold and italic, tables with their first row as the header, a rule between pages); text that Markdown would read as markup is escaped. Images, lists and links are not in the export's layout model and are left out. No menu item yet. Estimates unchanged.
+- **2026-10-12 (M10, `ocr.ocr-web`):** OCR in the browser, partly. The web zip carries the text recognition models in `models/` beside `index.html`; the first time Recognize Text is needed the web build downloads them (about 12 MB, with a spinner, an error and a retry). Pages are rendered on the page and read in Web Workers (up to two at once, so the page keeps responding), built with WebAssembly SIMD: 8.5 s a page instead of 20.5 s in wasmtime, still about 17× native. Where workers can't start, the page reads the pages itself. No automated browser test yet. Estimates unchanged.
+- **2026-10-12 (M10, `ocr.ocr-web`):** Web OCR shipped: reading scanned pages in Web Workers was checked by hand in a browser (4-page synthetic scan). Still no automated browser test, and a page reads about 17× slower than native.
 - **2026-10-12 (M3, GNOME title bar, #553):** On GNOME's Wayland session, whose compositor draws no window frames (it offers no `zxdg_decoration_manager_v1`), PdfCraft no longer shows winit's fallback title bar: it turns the frame off and the tab strip becomes the header bar, as in GNOME's own apps. Minimize, maximize/restore and close are drawn in Adwaita's style, in the order and on the side GNOME's `button-layout` names (Fedora's default shows only close); the window's edges and corners resize it, and a hairline outlines it while it isn't maximized. Preferences ▸ Use system title bar (shown only there) gives the window back winit's frame at once, without a restart (part of #1001), and `PDFCRAFT_TITLEBAR=app|system` overrides the choice. KDE, Sway, Hyprland, COSMIC and X11 keep the frame their desktop draws. Not done: right-clicking the header bar doesn't open GNOME's window menu (egui can't ask for it), the window has no shadow or rounded corners, the resize edges lie just inside the window rather than outside it, and Windows still uses its system frame (the rest of #1001). Estimates unchanged.
 - **2026-10-12 (M0, build label):** A local or patched build can carry a label, set at compile time with `PDFCRAFT_BUILD_LABEL`: `pdfcraft --version`, `pdfcraft-cli --version`, About and the log show `0.7.1 (titlebar)`, and `packaging/linux/package.sh` names the files `pdfcraft-0.7.1-titlebar-…` and makes the .rpm/.deb release `1.titlebar`, which upgrades over the release of the same version (and the next release over it). The version itself is unchanged, so the update check still compares it with published releases. Unlabelled builds are as before. Estimates unchanged.
 - **2026-10-11 (M6, #1208):** Dropdown and list-box Field Properties expose the existing Left/Center/Right alignment picker. Existing alignment stays intact until changed; cancel, undo/redo and save/reopen are covered through the real UI without changing options, values or flags. Estimates unchanged.
@@ -791,6 +813,9 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
+| 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
+| 2026-11-07 | patch | M10 #6514: load Windows PDF print jobs on demand through a read-only file stream, avoiding StorageFile access denial, whole-file buffering and per-chunk async waits; approved dependencies retain the #5006 crash fix. Regression tests pass; physical output remains unqualified; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |

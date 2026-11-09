@@ -11,7 +11,7 @@ fn notch(dy: f32, modifiers: Modifiers) -> Event {
 }
 
 fn read(events: &[Event]) -> WheelMotion {
-    WheelReader::default().read(events, 600.0, &egui::InputOptions::default())
+    WheelReader::default().read(events, 0.0, 600.0, &egui::InputOptions::default())
 }
 
 #[test]
@@ -46,14 +46,33 @@ fn a_touch_gesture_keeps_its_modifiers_and_ends_clean() {
     let options = egui::InputOptions::default();
     let point = |dy: f32, phase, modifiers| wheel(MouseWheelUnit::Point, vec2(0.0, dy), phase, modifiers);
     // ⌘ held as the fingers land, let go before the momentum: still zooming.
-    let began = reader.read(&[point(0.0, TouchPhase::Start, Modifiers::COMMAND), point(20.0, TouchPhase::Move, Modifiers::COMMAND)], 600.0, &options);
+    let began =
+        reader.read(&[point(0.0, TouchPhase::Start, Modifiers::COMMAND), point(20.0, TouchPhase::Move, Modifiers::COMMAND)], 0.0, 600.0, &options);
     assert!(began.zoom > 1.0 && began.scroll == Vec2::ZERO, "{began:?}");
-    let momentum = reader.read(&[point(20.0, TouchPhase::Move, Modifiers::NONE)], 600.0, &options);
+    let momentum = reader.read(&[point(20.0, TouchPhase::Move, Modifiers::NONE)], 0.0, 600.0, &options);
     assert!(momentum.zoom > 1.0 && momentum.scroll == Vec2::ZERO, "{momentum:?}");
+    assert_eq!(reader.modifiers, vec![Modifiers::COMMAND], "the momentum acts with the gesture's modifiers");
     // The pass it ends in moves nothing, and the next gesture starts without the modifier.
-    let ended = reader.read(&[point(20.0, TouchPhase::Move, Modifiers::NONE), point(0.0, TouchPhase::End, Modifiers::NONE)], 600.0, &options);
+    let ended = reader.read(&[point(20.0, TouchPhase::Move, Modifiers::NONE), point(0.0, TouchPhase::End, Modifiers::NONE)], 0.0, 600.0, &options);
     assert_eq!(ended, WheelMotion { scroll: Vec2::ZERO, zoom: 1.0 });
-    assert_eq!(reader.read(&[point(-20.0, TouchPhase::Move, Modifiers::NONE)], 600.0, &options).scroll, vec2(0.0, -20.0));
+    assert_eq!(reader.read(&[point(-20.0, TouchPhase::Move, Modifiers::NONE)], 0.0, 600.0, &options).scroll, vec2(0.0, -20.0));
+}
+
+/// A touch whose `End` never arrives (some mouse wheels on Wayland) ends after egui's timeout,
+/// so its modifiers don't latch onto later scrolling.
+#[test]
+fn a_touch_without_an_end_lets_its_modifiers_go_after_a_pause() {
+    let options = egui::InputOptions::default();
+    for (source, pause) in [(egui::MouseWheelSource::Unknown, 0.2), (egui::MouseWheelSource::Trackpad, 1.1)] {
+        let mut reader = WheelReader::default();
+        let point = |dy: f32, phase, modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, dy), phase, modifiers, source };
+        reader.read(&[point(0.0, TouchPhase::Start, Modifiers::COMMAND), point(20.0, TouchPhase::Move, Modifiers::COMMAND)], 1.0, 600.0, &options);
+        let soon = reader.read(&[point(20.0, TouchPhase::Move, Modifiers::NONE)], 1.1, 600.0, &options);
+        assert!(soon.zoom > 1.0 && soon.scroll == Vec2::ZERO, "{source:?}: still the same touch: {soon:?}");
+        let later = reader.read(&[point(-20.0, TouchPhase::Move, Modifiers::NONE)], 1.1 + pause, 600.0, &options);
+        assert_eq!(later, WheelMotion { scroll: vec2(0.0, -20.0), zoom: 1.0 }, "{source:?}");
+        assert_eq!(reader.modifiers, vec![Modifiers::NONE], "{source:?}");
+    }
 }
 
 #[test]
@@ -103,7 +122,7 @@ fn reading_at_once_goes_as_far_as_egui_eases() {
             });
         }
         let page_height = ctx.input(|i| i.viewport_rect().height());
-        let at_once = WheelReader::default().read(&[event], page_height, &options);
+        let at_once = WheelReader::default().read(&[event], 0.0, page_height, &options);
         assert!((scrolled - at_once.scroll).length() < 0.01, "{modifiers:?} {unit:?}: egui scrolled {scrolled:?}, read {:?}", at_once.scroll);
         assert!((zoomed / at_once.zoom - 1.0).abs() < 1e-3, "{modifiers:?} {unit:?}: egui zoomed {zoomed}, read {}", at_once.zoom);
         // What makes the reader necessary: egui's first pass holds part of the step back.
