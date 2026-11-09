@@ -103,6 +103,8 @@ impl PdfCraftApp {
         self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
     }
 
+    /// Hand `request` to the background open worker (started on first use); the result arrives
+    /// later as a pending open, under the returned token.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
         if self.open_worker.is_none() {
@@ -119,8 +121,10 @@ impl PdfCraftApp {
         if let Some(ctx) = &self.ctx {
             worker.set_context(ctx);
         }
-        let receiver =
-            worker.submit(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?;
+        // A new document opens with the remembered Highlight fields, which its scripts read; the
+        // session keeps the document in front's.
+        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
+        let receiver = worker.submit(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?;
         self.next_open_token = token;
         self.pending_opens.push(PendingOpen {
             token,
@@ -138,12 +142,19 @@ impl PdfCraftApp {
         Ok(token)
     }
 
+    /// How many opens may wait for the worker: its bound, less one place while a password prompt
+    /// is open, so the prompt's retry fits even before the worker has taken any of the others.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_slots(&self) -> usize {
+        open_worker::MAX_QUEUED_OPENS - usize::from(self.password_prompt.is_some())
+    }
+
     /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
-    /// job has a `pending_opens` entry, so fewer entries than the bound means room.
+    /// job has a `pending_opens` entry, so fewer entries than [`Self::open_slots`] means room.
     #[cfg(not(target_arch = "wasm32"))]
     fn submit_deferred_opens(&mut self) {
         let mut queue = std::mem::take(&mut self.deferred_opens);
-        while self.deferred_opens.is_empty() && self.pending_opens.len() < open_worker::MAX_QUEUED_OPENS {
+        while self.deferred_opens.is_empty() && self.pending_opens.len() < self.open_slots() {
             let Some(next) = queue.pop_front() else { break };
             self.open_path_request(&next.path, next.then, next.display_override);
         }
@@ -278,6 +289,8 @@ impl PdfCraftApp {
         }
     }
 
+    /// Open `bytes` on this thread: ask for a password if the document needs one, else add it
+    /// as a tab (in front when `activate`).
     fn try_open(
         &mut self,
         name: &str,
@@ -287,7 +300,10 @@ impl PdfCraftApp {
         activate: bool,
     ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
-        let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
+        // A new document opens with the remembered Highlight fields, which its scripts read; the
+        // session keeps the document in front's.
+        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
+        let prepared = match context.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
@@ -314,6 +330,9 @@ impl PdfCraftApp {
         self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
     }
 
+    /// Add a prepared document as a tab: its view, the panels it opens with, a portfolio's file list
+    /// and initial document, the recent-files entry, and what its scripts said while it opened (at
+    /// once in front, or when a background tab is first selected).
     fn finish_open(
         &mut self,
         name: &str,
@@ -324,6 +343,12 @@ impl PdfCraftApp {
     ) -> Result<DocId, String> {
         let id = self.session.commit_open(prepared);
         self.password_prompt = None;
+        // A tab opening in front leaves a portfolio's tab, whose file list gives the panel back:
+        // the document a portfolio presents opens with the panels any other would.
+        if activate {
+            self.leave_portfolio();
+        }
+        let right_before = self.right;
         // The reading-colours preference is app-wide: a newly opened document starts with it.
         // Idempotent: the engine returns `false` when the document has the setting already.
         self.session.set_reading_colors(id, self.reading_colors);
@@ -335,6 +360,13 @@ impl PdfCraftApp {
         // the user closed stays closed (#1590).
         let opening_mode = self.mode_override.unwrap_or(self.default_mode);
         let initial = doc.initial_view();
+        // A portfolio presents the document its `/D` names (ISO 32000-2 Table 153), kept by its
+        // name-tree key, which an edit meanwhile can't shift as it can an index.
+        let portfolio_initial =
+            doc.info.portfolio.as_ref().and_then(|p| p.initial).and_then(|i| doc.info.attachments.get(i)).and_then(|a| match &a.source {
+                pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
+                pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+            });
         if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
             self.right = if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
@@ -352,9 +384,11 @@ impl PdfCraftApp {
             self.active = Some(self.views.len() - 1);
         }
         self.apply_initial_view(self.views.len() - 1, &initial);
-        // Where the reader left off wins over the file's own initial view (#1767).
+        self.apply_viewer_preferences(self.views.len() - 1, &initial, activate);
+        // Where the reader left off wins over the file's own initial view and the zoom its
+        // viewer preferences open at (#1767).
         self.apply_last_view(self.views.len() - 1);
-        // After both, so full screen shows one fitted page and leaving it comes back to them.
+        // After all of them, so full screen shows one fitted page and leaving it comes back to them.
         if self.full_screen
             && let Some(view) = self.views.last_mut()
         {
@@ -364,6 +398,16 @@ impl PdfCraftApp {
         // its own (the prompt is `dialogs::full_screen_prompt`).
         if activate && initial.full_screen {
             self.pending_full_screen = Some(id);
+        }
+        if activate {
+            // A portfolio's tab shows its files from the start, in place of the panel there was
+            // before it opened, whichever panel its page mode asked for.
+            if opening_mode != Mode::Read && self.lists_files(id) {
+                self.show_portfolio_files(id, right_before);
+            }
+            // A document opening in front of a portfolio that hasn't presented its initial
+            // document yet (files opened together) keeps the front.
+            self.portfolio_initial = portfolio_initial.map(|key| (id, key));
         }
         if activate
             && self.left_open
@@ -401,6 +445,9 @@ impl PdfCraftApp {
         if activate {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
+        } else if let Some(on) = self.session.take_js_highlight(id) {
+            // The field highlight a form asks for isn't about the current document: now.
+            self.script_highlight(id, on);
         }
         Ok(id)
     }
@@ -471,6 +518,102 @@ impl PdfCraftApp {
                 #[cfg(target_arch = "wasm32")]
                 self.notify_fmt("Downloading attachments on the web arrives with M3.10 ({n} bytes ready)", &[("n", &bytes.len().to_string())]);
             }
+        }
+    }
+
+    /// A PDF portfolio (ISO 32000-2 §7.11.6) shows its documents, not the cover sheet that its
+    /// pages are. The document a portfolio that just opened presents first (`/D`) opens in a
+    /// tab of its own, and a portfolio's tab shows its file list, the Attachments panel, even
+    /// with the right panel closed, unless the portfolio keeps the list hidden (`/View /H`).
+    /// Leaving the tab gives back the panel the list replaced, unless the reader changed panels
+    /// meanwhile. Called every frame.
+    pub(crate) fn present_portfolios(&mut self) {
+        // A prompt or picker over the window belongs to the document it was raised for (the
+        // password of a file opened together with the portfolio, say): the initial document
+        // waits for its answer, and opening it then would close the prompt. A file still
+        // opening in the background (in the open worker, or a browser read of a drop or a
+        // picked file) comes to the front when it arrives, so it is waited for too.
+        #[cfg(not(target_arch = "wasm32"))]
+        let busy = self.modal_open() || self.pickers.pending() || self.pending_opens.iter().any(|p| p.activate);
+        #[cfg(target_arch = "wasm32")]
+        let busy = self.modal_open() || self.web_reads.load(std::sync::atomic::Ordering::Relaxed) > 0;
+        if !busy
+            && let Some((doc, key)) = self.portfolio_initial.take()
+            && self.active_ids().is_some_and(|(_, id)| id == doc)
+            && let Some(index) = self.portfolio_attachment(doc, &key)
+        {
+            self.open_portfolio_initial(doc, index);
+            // A portfolio inside the portfolio waits until the reader opens it, so a nested
+            // file can't open tab after tab on its own.
+            self.portfolio_initial = None;
+        }
+        let active = self.active_ids().map(|(_, id)| id);
+        if active == self.portfolio_seen {
+            return;
+        }
+        self.leave_portfolio();
+        if let Some(id) = active
+            && self.mode != Mode::Read
+            && self.right != Some(RightPanel::Attachments)
+            && self.lists_files(id)
+        {
+            self.show_portfolio_files(id, self.right);
+        }
+        self.portfolio_seen = active;
+    }
+
+    /// The document is a portfolio whose tab shows its file list: one that doesn't keep the
+    /// list hidden (`/View /H`).
+    fn lists_files(&self, id: DocId) -> bool {
+        self.session.get(id).and_then(|d| d.info.portfolio.as_ref()).is_some_and(|p| p.view != pdfcraft_render::PortfolioView::Hidden)
+    }
+
+    /// Show portfolio `id`'s file list in place of `before`, the panel given back when its tab
+    /// is left.
+    fn show_portfolio_files(&mut self, id: DocId, before: Option<RightPanel>) {
+        self.portfolio_seen = Some(id);
+        self.portfolio_panel = Some(before);
+        self.right = Some(RightPanel::Attachments);
+    }
+
+    /// Where in `doc`'s attachments now the file its name tree keys `key` is: an attachment
+    /// deleted since the portfolio opened moves it, or it is gone.
+    fn portfolio_attachment(&self, doc: DocId, key: &str) -> Option<usize> {
+        self.session
+            .get(doc)?
+            .info
+            .attachments
+            .iter()
+            .position(|a| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key: k } if k == key))
+    }
+
+    /// Open portfolio `doc`'s attachment `index` in a tab of its own when its bytes are a PDF,
+    /// whatever its name. A file of another kind, or one that can't be read, stays in the list.
+    fn open_portfolio_initial(&mut self, doc: DocId, index: usize) {
+        let Some(d) = self.session.get(doc) else { return };
+        let Some(att) = d.info.attachments.get(index).cloned() else { return };
+        let Ok(bytes) = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att) else { return };
+        if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
+            return;
+        }
+        if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+        }
+    }
+
+    /// Leave a portfolio's tab: the panel its file list replaced comes back, unless the reader
+    /// changed panels meanwhile. In Read mode, which put the list away and gives it back on
+    /// leaving, it is the panel Read mode gives back that changes, and a panel the reader picked
+    /// in Read mode stays.
+    fn leave_portfolio(&mut self) {
+        self.portfolio_seen = None;
+        let Some(before) = self.portfolio_panel.take() else { return };
+        if self.mode == Mode::Read {
+            if self.right_before_read == Some(RightPanel::Attachments) {
+                self.right_before_read = before;
+            }
+        } else if self.right == Some(RightPanel::Attachments) {
+            self.right = before;
         }
     }
 
@@ -731,7 +874,7 @@ impl PdfCraftApp {
             self.startup_superseded = true;
             // The worker queue is bounded. A long file list (a launch behind a password prompt,
             // or many files at once) waits here, in order, and is submitted as opens finish.
-            if self.pending_opens.len() >= open_worker::MAX_QUEUED_OPENS || !self.deferred_opens.is_empty() {
+            if self.pending_opens.len() >= self.open_slots() || !self.deferred_opens.is_empty() {
                 self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
                 return OpenOutcome::Pending;
             }
@@ -816,7 +959,9 @@ impl PdfCraftApp {
         {
             let inbox = self.inbox.clone();
             let ctx = self.ctx.clone();
+            let read = super::input::WebRead::start(&self.web_reads);
             wasm_bindgen_futures::spawn_local(async move {
+                let _read = read;
                 if let Some(h) = rfd::AsyncFileDialog::new()
                     .add_filter_any_case("PDF", &["pdf"])
                     .add_filter_any_case(tl!("Images and text"), &create_ui::CONVERTIBLE)
@@ -852,6 +997,7 @@ impl PdfCraftApp {
                 }
                 self.closed_tabs.push(path);
             }
+            self.placed_signatures.remove(&id);
             self.forget_recovery(id);
             self.session.close(id);
         }

@@ -1,5 +1,5 @@
 use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
-use super::model::{AttachmentSource, PageInfo, Xfa};
+use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
     Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
@@ -177,8 +177,8 @@ impl<'a> Inspector<'a> {
     }
 
     /// Reads what `info` holds beyond the page list: encryption, document information, tagging,
-    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments,
-    /// JavaScript and the opening destination.
+    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments
+    /// (and, for a PDF portfolio, how it presents them), JavaScript and the opening destination.
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -284,6 +284,7 @@ impl<'a> Inspector<'a> {
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();
         }
+        info.portfolio = catalog.get(b"Collection").ok().and_then(|o| self.dict(o)).map(|c| self.portfolio(c, &info.attachments));
         if let Ok(action) = catalog.get(b"OpenAction")
             && let Some(dict) = self.dict(action)
             && dict.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) == Some(&b"JavaScript"[..])
@@ -293,6 +294,26 @@ impl<'a> Inspector<'a> {
         info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
     }
 
+    /// A portfolio's collection dictionary (Table 153). `/D` names the initial document's key in
+    /// the `/EmbeddedFiles` name tree, decoded as the keys are.
+    fn portfolio(&self, collection: &Dictionary, attachments: &[Attachment]) -> Portfolio {
+        let view = match self.name(collection, b"View").as_deref() {
+            Some("T") => PortfolioView::Tile,
+            Some("H") => PortfolioView::Hidden,
+            Some("C") => PortfolioView::Custom,
+            _ => PortfolioView::Details,
+        };
+        let initial = match collection.get(b"D").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) => {
+                let name = text_string(bytes);
+                attachments.iter().position(|a| matches!(&a.source, AttachmentSource::Document { key } if *key == name))
+            }
+            _ => None,
+        };
+        Portfolio { initial, view }
+    }
+
+    /// The object a reference points at, or `o` itself for a direct object or a broken reference.
     pub(super) fn resolve(&self, o: &'a Object) -> &'a Object {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
     }
