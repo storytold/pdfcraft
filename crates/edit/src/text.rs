@@ -155,6 +155,66 @@ impl TextLine {
 mod tests {
     use super::*;
 
+    /// The clip regions reading uses (#3503): intersected regions keep only what both cover,
+    /// regions apart leave nothing, turned ones keep their shape, and touching is not showing.
+    #[test]
+    fn clip_regions_intersect_and_show_what_they_cover() {
+        use interp::{intersect, region, shows};
+        let square = |x: f64, y: f64| region(&Matrix::IDENTITY, [x, y, x + 10.0, y + 10.0]).unwrap();
+        let area = |p: &[[f64; 2]]| p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0;
+        // Squares overlapping by half each way share a quarter.
+        let both = intersect(&square(0.0, 0.0), &square(5.0, 5.0));
+        assert!((area(&both) - 25.0).abs() < 1e-9, "{both:?}");
+        assert!(shows([6.0, 6.0, 7.0, 7.0], &both) && !shows([1.0, 1.0, 2.0, 2.0], &both));
+        // Squares apart share nothing, so nothing shows, not even a box across both.
+        let none = intersect(&square(0.0, 0.0), &square(20.0, 0.0));
+        assert!(!shows([-100.0, -100.0, 100.0, 100.0], &none), "{none:?}");
+        // Squares that meet only along an edge share no area either: a box across that edge
+        // does not show (#5075 review).
+        let edge = intersect(&square(0.0, 0.0), &square(10.0, 0.0));
+        assert!(!shows([8.0, 2.0, 12.0, 4.0], &edge), "{edge:?}");
+        // Nothing intersected with anything is nothing, whichever side it is on.
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&square(0.0, 0.0), &Vec::new())));
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&Vec::new(), &square(0.0, 0.0))));
+        // A box touching an edge shares no area; one a hair inside does.
+        assert!(!shows([10.0, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
+        assert!(shows([9.99, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
+        // A square turned 45° keeps its diamond shape: a box in the corner of its bounding box is
+        // outside it, the centre is inside.
+        let c = std::f64::consts::FRAC_1_SQRT_2;
+        let diamond = region(&Matrix([c, c, -c, c, 0.0, 0.0]), [0.0, 0.0, 10.0, 10.0]).unwrap();
+        assert!(!shows([-7.0, 0.0, -6.5, 0.5], &diamond) && shows([-0.5, 6.5, 0.5, 7.5], &diamond));
+        // A corner repeated (an edge of no length) does not hide what the region covers.
+        let doubled = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        assert!(shows([4.0, 4.0, 6.0, 6.0], &doubled));
+        // A rectangle of no area is a region that covers nothing; a corner that isn't finite
+        // gives no region to clip with at all.
+        let flat = region(&Matrix::IDENTITY, [0.0, 0.0, 10.0, 0.0]).unwrap();
+        assert!(!shows([-100.0, -100.0, 100.0, 100.0], &flat), "{flat:?}");
+        assert!(region(&Matrix::IDENTITY, [0.0, 0.0, f64::INFINITY, 10.0]).is_none());
+        // However thin, a rectangle with area keeps it, and so does one far from the origin.
+        let thin = region(&Matrix::IDENTITY, [0.0, 0.0, 1.0, 1e-10]).unwrap();
+        assert!(shows([0.25, 0.0, 0.75, 1.0], &thin) && !shows([0.25, 1.0, 0.75, 2.0], &thin));
+        let far = region(&Matrix([1.0, 0.0, 0.0, 1.0, 1e12, 1e12]), [0.0, 0.0, 100.0, 100.0]).unwrap();
+        assert!(shows([1e12 + 10.0, 1e12 + 10.0, 1e12 + 20.0, 1e12 + 20.0], &far) && !shows([1e12 + 200.0, 1e12, 1e12 + 300.0, 1e12 + 10.0], &far));
+    }
+
+    /// A stream that sets clip after clip, each turned a little more, keeps its region bounded:
+    /// past the corner cap a region becomes its bounding box, which still holds all it held.
+    #[test]
+    fn clip_after_clip_keeps_the_region_bounded() {
+        use interp::{intersect, region, shows};
+        let mut clip = region(&Matrix::IDENTITY, [-100.0, -100.0, 100.0, 100.0]).unwrap();
+        for i in 1..=10_000 {
+            let (s, c) = (f64::from(i) * 0.001).sin_cos();
+            let turned = region(&Matrix([c, s, -s, c, 0.0, 0.0]), [-60.0, -60.0, 60.0, 60.0]).unwrap();
+            clip = intersect(&clip, &turned);
+            assert!(clip.len() <= 32 && clip.iter().flatten().all(|v| v.is_finite()), "clip {i}: {} corners", clip.len());
+        }
+        // Every square is centred on the origin, so the middle still shows.
+        assert!(shows([-1.0, -1.0, 1.0, 1.0], &clip));
+    }
+
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {
             text: text.into(),

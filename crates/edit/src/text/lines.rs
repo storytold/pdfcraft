@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::fallback::{same_font, same_paint};
-use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
+use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
@@ -565,8 +565,9 @@ impl FormBudget {
     }
 }
 
-/// A form XObject a page draws: its object, content, resources and its matrix composed with the
-/// CTM at the `Do`.
+/// A form XObject a page draws: its object, content, resources, its matrix composed with the
+/// CTM at the `Do`, and the clip its `/BBox` makes (page space, under that same matrix, so a
+/// turned form keeps its turned box; a box of no area hides everything) if it has a valid one.
 pub(crate) struct FormCall {
     pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
     pub(crate) data: Vec<u8>,
@@ -575,6 +576,7 @@ pub(crate) struct FormCall {
     form: Arc<Object>,
     own: Option<Arc<Object>>,
     pub(crate) ctm: Matrix,
+    bbox: Option<Clip>,
 }
 
 impl FormCall {
@@ -644,6 +646,12 @@ pub(crate) fn form_call(
         <[f64; 6]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
     });
     let own = s.dict.get(b"Resources").filter(|r| matches!(r, Object::Ref(_))).map(|r| doc.resolve(r));
+    // Four finite numbers, or no bound at all: a member that isn't one makes the box unknown, and
+    // reading the numbers around it would invent a clip.
+    let bbox = s.dict.get(b"BBox").map(|b| doc.resolve(b)).and_then(|b| {
+        let values: Vec<f64> = b.as_array()?.iter().map(|x| doc.resolve(x).as_f64().filter(|v| v.is_finite())).collect::<Option<_>>()?;
+        <[f64; 4]>::try_from(values).ok()
+    });
     let data = match budget.decode.decode(s) {
         Ok(data) => data,
         Err(_) if budget.decode.remaining() == 0 => {
@@ -653,7 +661,8 @@ pub(crate) fn form_call(
         Err(_) => Vec::new(),
     };
     budget.visits = budget.visits.saturating_add(1);
-    Some(FormCall { obj, data, form, own, ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
+    let ctm = m.map_or(ctm, |m| Matrix(m).then(&ctm));
+    Some(FormCall { obj, data, form, own, ctm, bbox: bbox.and_then(|b| region(&ctm, b)).map(|r| if r.is_empty() { Vec::new() } else { vec![r] }) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -684,6 +693,12 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
                 // Text after a form starts a new line.
                 last = None;
             }
+            // A run that the clips in force (forms' `/BBox`es and content-stream `re`/`W`/`n`
+            // clips, intersected) hide is not drawn, so it is not read either (#3503).
+            if s.state.clip.as_ref().is_some_and(|clip| !clip_shows(s.rect, clip)) {
+                last = None;
+                continue;
+            }
             let si = stream(s.op);
             // Text from another stream starts a new line, as when each stream was read alone.
             if last_stream.replace(si).is_some_and(|prev| prev != si) {
@@ -701,8 +716,14 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
+        // Its content is clipped to its `/BBox` within whatever clips the page had in force at the
+        // `Do`. It starts with a stack of its own, so no `Q` of its own can lift that clip.
+        let clip = match (&ts.clip, &form.bbox) {
+            (Some(outer), Some(own)) => Some(clip_within(outer, own)),
+            (outer, own) => outer.clone().or_else(|| own.clone()),
+        };
         let mut carry = Carry {
-            ts: Ts { ctm: form.ctm, ..ts },
+            ts: Ts { ctm: form.ctm, clip, ..ts },
             stack: Vec::new(),
             marked: Vec::new(),
             layers: Vec::new(),
