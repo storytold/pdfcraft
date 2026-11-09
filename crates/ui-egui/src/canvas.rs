@@ -628,8 +628,8 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -1064,7 +1064,7 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             screen_ppp: 1.0,
@@ -1154,7 +1154,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);

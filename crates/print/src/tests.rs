@@ -1285,3 +1285,15 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }
+
+#[test]
+fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
+    let mut doc = fixture(2);
+    let pages = pdfcraft_model::pages(&doc);
+    let res = doc.add(Object::Dict([(b"Font".to_vec(), Object::Dict(Dict::new()))].into_iter().collect()));
+    doc.update_dict(pages[1].obj, |d| d.set(b"Resources".to_vec(), Object::Ref(res))).unwrap();
+    let pages = pdfcraft_model::pages(&doc);
+    let form = imposition::page_form(&mut doc, &pages, 1, Content::default(), &mut Default::default()).unwrap();
+    let Object::Stream(s) = &*doc.get(form) else { panic!("form stream") };
+    assert_eq!(s.dict.get(b"Resources"), Some(&Object::Ref(res)));
+}
