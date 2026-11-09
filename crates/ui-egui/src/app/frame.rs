@@ -85,6 +85,8 @@ impl PdfCraftApp {
         }
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
+        // Before Paste or a right-click reads the clipboard this pass.
+        self.forget_own_clipboard_on_focus_loss(raw);
         // The native menu's key equivalents.
         if let Some(native) = self.native_menu.as_mut() {
             native.raw_input(raw);

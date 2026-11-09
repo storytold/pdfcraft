@@ -217,8 +217,8 @@ impl PdfCraftApp {
     }
 
     /// Keeps [`Self::own_clipboard_text`] up to date at the end of a frame: the text this frame
-    /// copied through egui (the last copy wins), or nothing once the window has lost focus, when
-    /// another app may have replaced it.
+    /// copied through egui (the last copy wins). [`Self::forget_own_clipboard_on_focus_loss`]
+    /// forgets it.
     pub(crate) fn note_own_clipboard(&mut self, ctx: &egui::Context) {
         let copied = ctx.output(|o| {
             o.commands.iter().rev().find_map(|c| match c {
@@ -228,7 +228,15 @@ impl PdfCraftApp {
         });
         if let Some(text) = copied {
             self.own_clipboard_text = Some(text).filter(|t| !t.is_empty());
-        } else if !ctx.input(|i| i.focused) {
+        }
+    }
+
+    /// Forgets [`Self::own_clipboard_text`] once the window has lost focus, when another app may
+    /// have replaced it; before anything reads the pass's input. The focus-loss event counts, not
+    /// only `focused`: a minimized or covered window runs no UI pass, so the loss and the focus
+    /// regained can reach the same one.
+    pub(crate) fn forget_own_clipboard_on_focus_loss(&mut self, raw: &egui::RawInput) {
+        if !raw.focused || raw.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false))) {
             self.own_clipboard_text = None;
         }
     }
@@ -482,7 +490,13 @@ mod own_clipboard_tests {
     /// A frame that copies `copy` through egui (if any), with the window focused or not, ended
     /// as production ends it.
     fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool, copy: Option<&str>) {
-        ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| {
+        frame_with(app, ctx, egui::RawInput { focused, ..Default::default() }, copy);
+    }
+
+    /// A frame on `raw`, through the raw input hook first, as production runs it.
+    fn frame_with(app: &mut PdfCraftApp, ctx: &egui::Context, mut raw: egui::RawInput, copy: Option<&str>) {
+        app.prepare_raw_input(ctx, &mut raw);
+        ctx.run_ui(raw, |ui| {
             if let Some(text) = copy {
                 ui.ctx().copy_text(text.to_owned());
             }
@@ -528,5 +542,19 @@ mod own_clipboard_tests {
         frame(&mut app, &ctx, true, Some("third"));
         frame(&mut app, &ctx, true, Some(""));
         assert_eq!(app.own_clipboard_text, None, "an empty copy");
+    }
+
+    /// A minimized or covered window runs no UI pass, so a focus loss there reaches the next
+    /// pass together with the focus regained: the copied text is forgotten before anything in
+    /// that pass reads it.
+    #[test]
+    fn focus_lost_and_regained_between_passes_forgets_the_copied_text() {
+        let mut app = PdfCraftApp::new();
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, true, Some("copied words"));
+        let mut raw =
+            egui::RawInput { focused: true, events: vec![egui::Event::WindowFocused(false), egui::Event::WindowFocused(true)], ..Default::default() };
+        app.prepare_raw_input(&ctx, &mut raw);
+        assert_eq!(app.own_clipboard_text, None, "forgotten before the pass reads its input");
     }
 }
