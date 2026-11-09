@@ -335,7 +335,8 @@ fn drawn_style(s: &pdfcraft_render::GlyphStyle) -> ClipStyle {
         size: f64::from(s.size),
         bold: s.bold || named_bold,
         italic: s.italic || named_italic,
-        small_caps: s.small_caps,
+        // Added per glyph by the copy, whichever style the glyph takes.
+        small_caps: false,
         color: s.color.map(|c| f64::from(c) / 255.0),
     }
 }
