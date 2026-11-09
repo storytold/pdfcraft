@@ -7,7 +7,8 @@
 //! catches up from a snapshot tail.
 
 use pdfcraft_collab_client_pdf::{
-    add_annotation_payload, add_note_payload, apply, merge_op, reply_payload, rotate_payload, set_contents_payload, structural_op,
+    add_annotation_payload, add_note_payload, apply, duplicate_page_payload, insert_page_payload, merge_op, reply_payload, rotate_payload,
+    set_contents_payload, structural_op,
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
@@ -187,6 +188,39 @@ impl Peer {
     fn rotation(&self) -> u16 {
         self.session.get(self.id).expect("the peer document is open").info.pages[0].rotation
     }
+
+    fn page_count(&self) -> usize {
+        self.session.get(self.id).expect("the peer document is open").info.pages.len()
+    }
+
+    fn saved(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        Ok(self.session.save_bytes(self.id)?.as_ref().clone())
+    }
+}
+
+/// The text of one page of a saved PDF, as a reader sees it.
+fn page_text(bytes: Vec<u8>, page: usize) -> Result<String, Box<dyn std::error::Error>> {
+    let mut session = Session::new();
+    let id = session.open("check.pdf", None, Arc::new(bytes), None)?;
+    let document = session.get(id).ok_or("the check document is open")?;
+    let mut exporter = pdfcraft_engine::export::Exporter::new(document);
+    Ok(exporter.text(page)?.trim().to_owned())
+}
+
+/// One page of `bytes` as a PDF of its own: what an insert or a duplicate
+/// carries on the wire.
+fn one_page_copy(bytes: &[u8], index: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut scratch = Session::new();
+    let id = scratch.open("copy.pdf", None, Arc::new(bytes.to_vec()), None)?;
+    let count = scratch.get(id).ok_or("the copy document is open")?.info.pages.len();
+    if index >= count {
+        return Err("the page is not in the source".into());
+    }
+    if count > 1 {
+        let others: Vec<usize> = (0..count).filter(|i| *i != index).collect();
+        scratch.apply(id, pdfcraft_engine::Edit::DeletePages { pages: others })?;
+    }
+    Ok(scratch.save_bytes(id)?.as_ref().clone())
 }
 
 fn page(index: u32, epoch: u64) -> Target {
@@ -697,6 +731,91 @@ fn two_clients_undo_a_deleted_comment_and_a_deleted_page() -> Result<(), Box<dyn
     }
     for peer in [&ada, &bo] {
         assert_eq!(peer.rotation(), 0, "the page is upright on every replica");
+    }
+    Ok(())
+}
+
+/// Insert and duplicate travel as one-page copies: the replica that never saw
+/// the client's file ends with the same pages, a duplicate keeps its address
+/// after someone else's edit, the undo returns the page count, and an operation
+/// addressed to a passed epoch is retryable rather than applied.
+#[test]
+fn two_clients_insert_and_duplicate_a_page_and_converge() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    // Ada joins first, so the writer lease is hers: structural operations are
+    // serialised by the room and only the lease holder may send them. Bo is the
+    // second replica, and the proof that the pages travel on the wire.
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let original = fixture(2);
+
+    // Bo edits page 0 first (a merge edit: it does not move the epoch). The
+    // duplicate below must still find its page after that.
+    let comment = merge_op(doc.clone(), OpId::new("op-comment")?, 0, 0, page(0, 0), add_note_payload("bo-1", [40.0, 250.0], "note", "bo"));
+    bo.send(comment)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+
+    // Ada inserts a copy of page 1 at the top.
+    let copy = one_page_copy(&original, 1)?;
+    let insert = structural_op(doc.clone(), OpId::new("op-insert")?, ada.version, ada.epoch, page(0, ada.epoch), insert_page_payload(&copy, 0));
+    ada.send(insert)?;
+    let mut inserted = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied) => inserted = Some(applied),
+            other => return Err(format!("expected an applied insert, got {other:?}").into()),
+        }
+    }
+    let inserted = inserted.ok_or("no applied insert")?;
+    assert_eq!(inserted.epoch, 1, "an insert is structural");
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 3, "the page is on every replica");
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the copy is the page Ada sent");
+        assert_eq!(page_text(peer.saved()?, 1)?, "Page 1", "the original first page moved down");
+    }
+
+    // The undo of the insert is a delete of the page it put there.
+    let at = inserted.op.payload["at"].as_u64().ok_or("the accepted insert names its position")?;
+    let undo = structural_op(
+        doc.clone(),
+        OpId::new("op-insert-undo")?,
+        ada.version,
+        ada.epoch,
+        page(u32::try_from(at)?, ada.epoch),
+        json!({"action": "page.delete"}),
+    );
+    ada.send(undo)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "the undo returns the page count");
+    }
+
+    // Duplicate page 0 right after itself.
+    let copy = one_page_copy(&original, 0)?;
+    let duplicate =
+        structural_op(doc.clone(), OpId::new("op-duplicate")?, ada.version, ada.epoch, page(0, ada.epoch), duplicate_page_payload(&copy, 1));
+    ada.send(duplicate)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 3);
+        assert_eq!(page_text(peer.saved()?, 1)?, "Page 1", "the duplicate follows its source");
+    }
+
+    // An insert addressed to the epoch before the last structural operation is
+    // stale and retryable: the client resyncs and re-addresses the page.
+    let stale = structural_op(doc.clone(), OpId::new("op-stale-insert")?, ada.version, 0, page(0, 0), insert_page_payload(&copy, 0));
+    ada.send(stale)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 3, "the stale insert changed nothing");
     }
     Ok(())
 }

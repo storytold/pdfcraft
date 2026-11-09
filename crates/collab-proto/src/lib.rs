@@ -53,6 +53,11 @@ pub const MAX_ANNOTATION_NAME: usize = 128;
 /// Largest bookmark path accepted.
 pub const MAX_BOOKMARK_DEPTH: usize = 64;
 
+/// Largest one-page copy an operation may carry (RFC §6.1). Base64 of it still
+/// fits one frame, and a page over this is refused before any mutation: an
+/// insert, a duplicate or a restore either travels whole or does not happen.
+pub const MAX_PAGE_COPY_BYTES: usize = 160 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
     #[error("unsupported protocol version {0}")]

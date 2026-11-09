@@ -19,12 +19,19 @@
 //! | `page.move` | structural | page |
 //! | `page.delete` | structural | page |
 //! | `page.restore` | structural | page |
+//! | `page.insert` | structural | page |
+//! | `page.duplicate` | structural | page |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
 //! that copy back as an ordinary operation, so every replica and the journal see
 //! the same thing. The copies live in memory and are rebuilt by `replay`, not
 //! written next to the journal: replaying the delete rebuilds the copy.
+//!
+//! An insert and a duplicate carry their own one-page copy in the operation
+//! (`bytes`, base64): the page travels whole, so every replica and the journal
+//! insert exactly the same content, and a page over
+//! [`MAX_RESTORE_PAGE_BYTES`] is refused before the document changes.
 //!
 //! Structural operations bump the epoch; merge operations keep it. Annotations
 //! are addressed by `/NM` (ADR-0002), never by a client-side index. Commit
@@ -88,11 +95,13 @@ enum DeletedKind {
     Page { index: u32, bytes: Arc<Vec<u8>> },
 }
 
-/// The largest one-page copy a restore can carry. The `applied` frame is
-/// 256 KiB and base64 is 4/3 of the copy, so the page itself is bounded well
-/// below the frame; a page over this is deleted without a copy and its undo is
-/// refused, which is the bound ADR-0010 asks for.
-pub const MAX_RESTORE_PAGE_BYTES: usize = 160 * 1024;
+/// The largest one-page copy an operation can carry (RFC §6.1, ADR-0010). The
+/// `applied` frame is 256 KiB and base64 is 4/3 of the copy, so the page itself
+/// is bounded below the frame; a page over this is refused before the document
+/// changes (a delete keeps no copy and its undo is refused), which is the bound
+/// ADR-0010 asks for. The number lives in `collab-proto` so the client refuses
+/// the same page for the same reason.
+pub const MAX_RESTORE_PAGE_BYTES: usize = pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES;
 
 /// How many deletions keep a copy, and how many bytes they may hold together.
 const MAX_COPIES: usize = 64;
@@ -445,6 +454,73 @@ impl PdfAdapter {
         Ok(json!({ "page": at }))
     }
 
+    /// Where an inserted page goes: a page address in the current epoch, allowed
+    /// to equal the page count (an append). A foreign epoch is retryable, not a
+    /// refusal: the pages changed, so the client resyncs and re-addresses.
+    fn insert_position(&self, page: PageRef) -> Result<usize, AdapterError> {
+        if page.epoch != self.epoch {
+            return Err(AdapterError::new(ErrorCode::Stale, "the page belongs to another epoch", true));
+        }
+        let index = usize::try_from(page.index).map_err(|_| AdapterError::new(ErrorCode::Invalid, "the page index is too large", false))?;
+        if index > self.document_or_error()?.info.pages.len() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "the position is past the last page", false));
+        }
+        Ok(index)
+    }
+
+    /// The one-page copy an insert or a duplicate carries, checked against the
+    /// operation budget before anything changes: a page over the limit is a
+    /// refusal with its size, never a partial insert.
+    fn carried_page(payload: &Value) -> Result<Vec<u8>, AdapterError> {
+        let encoded = payload
+            .get("bytes")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the operation carries no page", false))?;
+        let bytes = decode_base64(encoded)?;
+        if bytes.len() > MAX_RESTORE_PAGE_BYTES {
+            return Err(AdapterError::new(
+                ErrorCode::Limit,
+                format!("the page is {} bytes; one operation can carry at most {MAX_RESTORE_PAGE_BYTES}", bytes.len()),
+                false,
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// Insert the page the operation carries at `at`. The copy stays in the
+    /// accepted operation, so every replica and the journal insert the same
+    /// bytes without a second channel (the rule `page.restore` follows).
+    fn insert_page(&mut self, payload: &mut Value, at: usize) -> Result<Value, AdapterError> {
+        let bytes = Self::carried_page(payload)?;
+        payload["bytes"] = json!(base64_encode(&bytes));
+        payload["at"] = json!(at);
+        self.apply_edit(Edit::InsertPagesFrom {
+            name: "inserted-page.pdf".into(),
+            bytes: Arc::new(bytes),
+            pages: Some(vec![0]),
+            at,
+            field_conflicts: FieldConflicts::Rename,
+        })?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(json!({ "page": at }))
+    }
+
+    /// Duplicate `page` from the copy the operation carries. The address is the
+    /// source page in the current epoch: an edit someone else made to it (or a
+    /// later structural operation, which the room answers as stale) does not
+    /// lose it, because it is a page reference, not an offset. The copy goes at
+    /// the position the operation names, or right after the source when it names
+    /// none.
+    fn duplicate_page(&mut self, page: usize, payload: &mut Value) -> Result<Value, AdapterError> {
+        let count = self.document_or_error()?.info.pages.len();
+        let at = match payload.get("at").and_then(Value::as_u64).and_then(|at| usize::try_from(at).ok()) {
+            Some(at) if at <= count => at,
+            Some(_) => return Err(AdapterError::new(ErrorCode::Invalid, "the position is past the last page", false)),
+            None => page.saturating_add(1),
+        };
+        self.insert_page(payload, at)
+    }
+
     /// Keep a copy and answer its token. The oldest copies go first, so a long
     /// session cannot grow without bound (ADR-0010: no copy, no undo).
     fn push_copy(&mut self, kind: DeletedKind, bytes: usize) -> String {
@@ -580,6 +656,15 @@ impl Adapter for PdfAdapter {
                 self.delete_page(page)?
             }
             ("page.restore", ConflictClass::Structural) => self.restore_page(&mut effective.payload)?,
+            ("page.insert", ConflictClass::Structural) => {
+                let page = target_page(&effective)?;
+                let at = self.insert_position(page)?;
+                self.insert_page(&mut effective.payload, at)?
+            }
+            ("page.duplicate", ConflictClass::Structural) => {
+                let page = self.page_index(target_page(&effective)?)?;
+                self.duplicate_page(page, &mut effective.payload)?
+            }
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -727,7 +812,7 @@ pub(crate) fn fixture(n: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTHOR, PdfAdapter, fixture};
+    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, base64_encode, fixture};
     use pdfcraft_collab_proto::{
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
@@ -1185,6 +1270,176 @@ mod tests {
         let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
         assert!(bytes.windows(6).any(|w| w == b"Page 2"), "the page's content came back");
         assert!(committed.bytes > 0);
+        Ok(())
+    }
+
+    /// The text of one page of `bytes`, as a reader sees it: the proof that the
+    /// copy that travelled is the page the client cut.
+    fn page_text(bytes: &std::sync::Arc<Vec<u8>>, page: usize) -> Result<String, Box<dyn std::error::Error>> {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open("check.pdf", None, bytes.clone(), None)?;
+        let document = session.get(id).ok_or("the check document is open")?;
+        let mut exporter = pdfcraft_engine::export::Exporter::new(document);
+        Ok(exporter.text(page)?.trim().to_owned())
+    }
+
+    /// An insert carries the page itself: every replica inserts the same bytes at
+    /// the address the operation names, and the epoch moves.
+    #[test]
+    fn an_inserted_page_lands_at_its_address() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(2).ok_or("the fixture page copies")?;
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert", "at": 0, "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &insert, 0)?;
+        assert_eq!(applied.epoch, 1, "an insert is structural");
+        assert!(applied.op.payload["bytes"].is_string(), "the accepted operation carries the page");
+        assert_eq!(applied.op.payload["at"], 0);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 4);
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 3", "the copied page is at the address");
+        assert_eq!(page_text(&bytes, 1)?, "Page 1", "the original first page moved down");
+        Ok(())
+    }
+
+    #[test]
+    fn a_duplicate_lands_at_the_position_it_names() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(1).ok_or("the fixture page copies")?;
+        let duplicate = op(
+            "dup-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.duplicate", "at": 2, "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &duplicate, 0)?;
+        assert_eq!(applied.epoch, 1);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 4);
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 2)?, "Page 2", "the copy follows its source");
+        Ok(())
+    }
+
+    /// A page over the operation budget is refused before the document changes:
+    /// no partial insert, no epoch bump, no journal entry.
+    #[test]
+    fn a_page_over_the_limit_is_refused_before_the_document_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let huge = vec![0u8; MAX_RESTORE_PAGE_BYTES + 1];
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert", "at": 0, "bytes": base64_encode(&huge)}),
+        )?;
+        let rejected = room.apply(&editor, &insert, 0).err().ok_or("an oversized page was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Limit);
+        assert!(!rejected.retryable);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "nothing was inserted");
+        assert_eq!(room.epoch(), 0, "the epoch did not move");
+        assert_eq!(room.version(), 0, "nothing was accepted");
+        Ok(())
+    }
+
+    #[test]
+    fn an_insert_addressed_to_another_epoch_is_retryable() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let turn = op(
+            "rot-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.rotate", "degrees": 90}),
+        )?;
+        let turned = room.apply(&editor, &turn, 0)?;
+        let (_, copy) = room.adapter().page_copy(0).ok_or("the fixture page copies")?;
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            turned.version,
+            turned.epoch,
+            json!({"action": "page.insert", "at": 0, "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let rejected = room.apply(&editor, &insert, 0).err().ok_or("a foreign epoch was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Stale);
+        assert!(rejected.retryable, "the client resyncs and re-addresses the page");
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3);
+        Ok(())
+    }
+
+    /// The undo of an insert is a delete of the page it put there, so the
+    /// document is back to the page count it had.
+    #[test]
+    fn the_undo_of_an_insert_returns_the_original_page_count() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(2).ok_or("the fixture page copies")?;
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert", "at": 1, "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &insert, 0)?;
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 4);
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.delete"}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "the page count is back");
+        Ok(())
+    }
+
+    /// The accepted operation carries the copy, so a restart replays the insert
+    /// without any client file.
+    #[test]
+    fn an_insert_replays_from_its_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(2).ok_or("the fixture page copies")?;
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert", "at": 0, "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &insert, 0)?.op;
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        fresh.replay(editor.clone(), applied, 1)?;
+        let document = fresh.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.pages.len(), 4, "the journal's copy inserted the page");
+        assert_eq!(fresh.epoch(), 1);
         Ok(())
     }
 

@@ -35,6 +35,8 @@ pub enum ProjectionError {
     Edit(String),
     #[error("the operation could not be named: {0}")]
     Invalid(String),
+    #[error("the page is {0} bytes; one operation can carry at most {max}", max = pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES)]
+    TooLarge(usize),
 }
 
 impl From<WireError> for ProjectionError {
@@ -129,6 +131,19 @@ pub fn delete_page_payload() -> Value {
     json!({"action": "page.delete"})
 }
 
+/// One page inserted at `at` (an index in the page order as it is now, which
+/// may be the page count: an append). The copy is a one-page PDF: the page
+/// travels whole, so every replica inserts the same content (RFC §6.1).
+pub fn insert_page_payload(copy: &[u8], at: usize) -> Value {
+    json!({"action": "page.insert", "at": at, "bytes": encode_base64(copy)})
+}
+
+/// A copy of `page` inserted at `at` (right after it when the caller says so).
+/// The address is the source page; the position is where the copy goes.
+pub fn duplicate_page_payload(copy: &[u8], at: usize) -> Value {
+    json!({"action": "page.duplicate", "at": at, "bytes": encode_base64(copy)})
+}
+
 /// The engine edit for an accepted operation. Names are resolved against
 /// `document`; a comment that vanished is an error, never a silent skip.
 pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
@@ -205,6 +220,20 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
                 field_conflicts: FieldConflicts::Rename,
             })
         }
+        ("page.insert", ConflictClass::Structural) => {
+            // The inserted page travels in the operation, so every replica
+            // inserts the same bytes. The address is the target; the accepted
+            // operation also carries the normalised position.
+            let at = page_position(op).or_else(|| page_target(op).ok().map(|page| page.index as usize)).ok_or(ProjectionError::Missing("at"))?;
+            insert_edit(op, at, "inserted-page.pdf")
+        }
+        ("page.duplicate", ConflictClass::Structural) => {
+            // The address is the source page; the copy goes at `at` (right after
+            // the source when the operation names no position).
+            let page = page_target(op)?;
+            let at = page_position(op).unwrap_or_else(|| (page.index as usize).saturating_add(1));
+            insert_edit(op, at, "duplicate-page.pdf")
+        }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
 }
@@ -260,6 +289,58 @@ fn field_value(kind: FormFieldKind, text: &str) -> FieldValue {
 fn decode_base64(encoded: &str) -> Result<Vec<u8>, ProjectionError> {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| ProjectionError::Invalid(format!("the page copy is not base64: {e}")))
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Where an insert or duplicate puts its page, as the accepted operation
+/// carries it.
+fn page_position(op: &Op) -> Option<usize> {
+    op.payload.get("at").and_then(Value::as_u64).and_then(|at| usize::try_from(at).ok())
+}
+
+/// The edit that inserts the one-page copy an operation carries. The copy is
+/// checked against the same budget the server uses: a page it would refuse is
+/// never applied locally either.
+fn insert_edit(op: &Op, at: usize, name: &str) -> Result<Edit, ProjectionError> {
+    let encoded = op.payload.get("bytes").and_then(Value::as_str).ok_or(ProjectionError::Missing("bytes"))?;
+    let bytes = decode_base64(encoded)?;
+    if bytes.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+        return Err(ProjectionError::TooLarge(bytes.len()));
+    }
+    Ok(Edit::InsertPagesFrom { name: name.into(), bytes: Arc::new(bytes), pages: Some(vec![0]), at, field_conflicts: FieldConflicts::Rename })
+}
+
+/// One page of `bytes` as a PDF of its own: what an insert or a duplicate
+/// carries. The scratch session is the engine's own copier, so the copy is the
+/// page as every replica draws it.
+fn one_page_copy(bytes: &[u8], index: usize) -> Result<Vec<u8>, ProjectionError> {
+    let mut scratch = Session::new();
+    let id = scratch.open("page-copy.pdf", None, Arc::new(bytes.to_vec()), None).map_err(|e| ProjectionError::Edit(e.to_string()))?;
+    let count = scratch.get(id).ok_or(ProjectionError::NoDocument)?.info.pages.len();
+    if index >= count {
+        return Err(ProjectionError::Missing("page"));
+    }
+    if count > 1 {
+        let others: Vec<usize> = (0..count).filter(|i| *i != index).collect();
+        scratch.apply(id, Edit::DeletePages { pages: others }).map_err(|e| ProjectionError::Edit(e.to_string()))?;
+    }
+    let copy = scratch.save_bytes(id).map_err(|e| ProjectionError::Edit(e.to_string()))?;
+    if copy.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+        return Err(ProjectionError::TooLarge(copy.len()));
+    }
+    Ok(copy.as_ref().clone())
+}
+
+/// How many pages a source PDF has: the pages `Edit::InsertPagesFrom` names
+/// when it names none.
+fn source_page_count(bytes: &[u8]) -> Result<usize, ProjectionError> {
+    let mut scratch = Session::new();
+    let id = scratch.open("insert-source.pdf", None, Arc::new(bytes.to_vec()), None).map_err(|e| ProjectionError::Edit(e.to_string()))?;
+    Ok(scratch.get(id).ok_or(ProjectionError::NoDocument)?.info.pages.len())
 }
 
 // ── Edit → operation (the interface's side of the wire) ─────────────────────────────────────
@@ -362,6 +443,56 @@ pub fn ops_for_edit(
                 })
                 .collect::<Result<Vec<_>, ProjectionError>>()
         }
+        Edit::InsertPagesFrom { bytes, pages, at, .. } => {
+            // One page per operation: the page travels whole, and the position
+            // of each is the insert position plus what went before it.
+            let wanted = match pages {
+                Some(list) => list.clone(),
+                None => (0..source_page_count(bytes)?).collect(),
+            };
+            wanted
+                .into_iter()
+                .enumerate()
+                .map(|(i, page)| {
+                    let copy = one_page_copy(&bytes[..], page)?;
+                    let at = at.saturating_add(i);
+                    Ok(structural_op(
+                        doc.clone(),
+                        next_id(client_id, counter)?,
+                        base_version,
+                        epoch,
+                        Target::Page(PageRef { index: at as u32, epoch }),
+                        insert_page_payload(&copy, at),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProjectionError>>()
+        }
+        Edit::DuplicatePages { pages, at } => {
+            // Each copy is cut from the document as it is now; the address is
+            // the source page, so a later edit to the page set is what the
+            // room's version check catches, not a stale offset.
+            let mut sorted = pages.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            let first_at = at.unwrap_or_else(|| sorted.iter().copied().max().map_or(0, |page| page.saturating_add(1)));
+            let source = document.bytes.clone();
+            sorted
+                .into_iter()
+                .enumerate()
+                .map(|(i, page)| {
+                    let copy = one_page_copy(&source[..], page)?;
+                    let at = first_at.saturating_add(i);
+                    Ok(structural_op(
+                        doc.clone(),
+                        next_id(client_id, counter)?,
+                        base_version,
+                        epoch,
+                        Target::Page(PageRef { index: page as u32, epoch }),
+                        duplicate_page_payload(&copy, at),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProjectionError>>()
+        }
         other => Err(ProjectionError::Unsupported(other.label().to_string())),
     }
 }
@@ -429,6 +560,12 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
         }
         "page.delete" => return Ok(None),
+        "page.insert" | "page.duplicate" => {
+            // The undo of an insert is a delete of the page it put there; the
+            // page is addressed where the operation placed it.
+            let at = page_position(op).ok_or(ProjectionError::Missing("at"))?;
+            structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: at as u32, epoch }), delete_page_payload())
+        }
         other => return Err(ProjectionError::Unsupported(other.to_owned())),
     };
     Ok(Some(inverse))
@@ -807,6 +944,63 @@ mod tests {
         let edit = apply(&mut session, id, &op)?;
         assert!(matches!(edit, pdfcraft_engine::Edit::InsertPagesFrom { .. }));
         assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 3, "the page landed at the position the delete left");
+        Ok(())
+    }
+
+    #[test]
+    fn an_insert_and_a_duplicate_become_addressable_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let mut counter = 0;
+
+        // Insert one page of another file at the end.
+        let mut source = Session::new();
+        let src = source.open("insert.pdf", None, fixture(1).into(), None)?;
+        let bytes = source.save_bytes(src)?;
+        let insert = pdfcraft_engine::Edit::InsertPagesFrom {
+            name: "insert.pdf".into(),
+            bytes,
+            pages: None,
+            at: 2,
+            field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
+        };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &insert, doc()?, "client", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "page.insert");
+        assert_eq!(ops[0].payload["at"], 2);
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 2, epoch: 0 }));
+        assert!(ops[0].payload["bytes"].is_string(), "the page travels with the operation");
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-1")?)?.ok_or("an insert can be undone")?;
+        assert_eq!(inverse.payload["action"], "page.delete");
+        assert_eq!(inverse.target, Target::Page(PageRef { index: 2, epoch: 0 }), "the undo deletes the page it put there");
+        apply(&mut session, id, &ops[0])?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 3, "the replica inserted the page");
+
+        // Duplicate page 1: the copy goes right after it.
+        let duplicate = pdfcraft_engine::Edit::DuplicatePages { pages: vec![1], at: None };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &duplicate, doc()?, "client", 1, 1, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "page.duplicate");
+        assert_eq!(ops[0].payload["at"], 2);
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 1, epoch: 1 }), "the address is the source page");
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-2")?)?.ok_or("a duplicate can be undone")?;
+        assert_eq!(inverse.payload["action"], "page.delete");
+        apply(&mut session, id, &ops[0])?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 4);
+        Ok(())
+    }
+
+    /// A page the server would refuse is refused here too, before an operation
+    /// is built: the replica never shows a page the room cannot carry.
+    #[test]
+    fn a_page_over_the_limit_is_refused_on_this_side_too() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
+        let op =
+            super::structural_op(doc()?, OpId::new("i1")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::insert_page_payload(&huge, 0));
+        assert!(matches!(super::edit_for(document, &op), Err(ProjectionError::TooLarge(_))));
         Ok(())
     }
 
