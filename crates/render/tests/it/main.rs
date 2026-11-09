@@ -16,6 +16,7 @@ mod search;
 mod separation_all;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
+mod stroke_geometry;
 mod stroke_zero_end_tangent;
 mod substitute_widths;
 mod symbol_mt_builtin_encoding;
