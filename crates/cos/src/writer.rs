@@ -166,6 +166,24 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
     out.extend_from_slice(b"\nendstream");
 }
 
+/// A document opened without the password its embedded files need holds their data as stored and
+/// can't encrypt: a save keeps its `/Encrypt` as it is, and writes no edited or added stream that
+/// would have to be encrypted (an attached file put in, say), which would be written in the clear.
+fn keyless_check(doc: &Document) -> Result<(), CosError> {
+    if !doc.embedded_files_locked() {
+        return Ok(());
+    }
+    let refuse =
+        |what: &str| Err(CosError::Security(format!("{what} without the password of the document's embedded files: open it with the password")));
+    if doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none() {
+        return refuse("the document's security can't change");
+    }
+    if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+        return refuse("an edited or added embedded file can't be encrypted");
+    }
+    Ok(())
+}
+
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 /// `o` has the document's numbers in its references ([`crate::security::transform`]).
@@ -242,6 +260,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
+    keyless_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
@@ -383,6 +402,14 @@ pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
+    }
+    keyless_check(doc)?;
+    // Renumbering breaks a key that mixes in the object number.
+    if doc.security().is_some_and(|h| !h.has_key() && !h.survives_renumbering()) {
+        return Err(CosError::Security(
+            "the embedded files are encrypted and the document was opened without their password: open it with the password to save it in full"
+                .into(),
+        ));
     }
     // A full traversal must not fill the editor's shared caches (which undo snapshots also
     // own). Parsed objects and decoded object streams are temporary working data here.

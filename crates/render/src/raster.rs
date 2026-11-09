@@ -419,6 +419,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    ..Default::default()
                 }
             }
             None => {
