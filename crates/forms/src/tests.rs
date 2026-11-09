@@ -967,6 +967,61 @@ fn text_a_field_font_cannot_hold_is_kept_marked_and_redrawn_elsewhere() {
     assert!(need_appearances(&doc));
 }
 
+/// Thai typed into a field whose `/DA` font (Helvetica, WinAnsi) can't hold it is drawn from the
+/// Thai face as Add text draws it: Type 3 glyphs (stream objects of their own, with a ToUnicode
+/// map) beside the field's font, which draws the rest, so every viewer shows the same glyphs. The
+/// `/DA` is kept, nothing is marked and other viewers aren't asked to redraw. The ink of stacked
+/// marks and descenders stays inside the border, an automatic size shrinking to keep it there.
+/// A build without a Thai face refuses the text, saying why, and keeps the old value.
+#[test]
+fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /DA (/Helv 0 Tf 0 g) /V (Ada) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /DA (/Helv 16 Tf 0 g) /Rect [50 600 350 640] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let thai = "ชื่อ: บุญฤทธิ์ น้ำฎู";
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let err = set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap_err();
+        assert!(matches!(&err, FormError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err}");
+        assert_eq!(field(&fields(&doc), "name").value, ["Ada"]);
+        assert!(!need_appearances(&doc) && undrawn_fields(&doc).is_empty());
+        return;
+    }
+    set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "big", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "note", &FieldValue::Text(format!("น้ำฎู {thai}\nปั้น ฎู"))).unwrap();
+    let doc = reopen(&doc);
+    assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
+    let (lo, hi) = (pdfcraft_fonts::shaped_text::thai_reach("ฎู").unwrap()[0], pdfcraft_fonts::shaped_text::thai_reach("น้ำ").unwrap()[1]);
+    for (name, height) in [("name", 20.0), ("big", 40.0), ("note", 100.0)] {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        assert!(!ap.contains('?') && ap.contains("/PCTh1 ") && ap.contains("(: ) Tj"), "{ap}");
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap();
+        let font = fonts.get(b"PCTh1").and_then(|f| f.as_dict()).unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        assert!(String::from_utf8_lossy(&cmap.decoded().unwrap()).contains("<0E190E490E33>"), "น้ำ copies as typed");
+        // The size each line is drawn at, and where: every line's ink is inside the box.
+        let size: f64 = ap.split(" Tf").next().and_then(|s| s.rsplit(' ').next()).and_then(|s| s.parse().ok()).unwrap();
+        let ys: Vec<f64> = ap.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect();
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= height + 1e-3 && bottom + lo * size >= -1e-3, "{name}: {ys:?} at {size} in {height}");
+    }
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
@@ -2939,6 +2994,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        rect: None,
                     }],
                     message: None,
                 }
@@ -5650,4 +5706,36 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+/// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
+/// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
+#[test]
+fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
+    let widget = |name: &str, mk: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({name}) /Rect [50 700 70 720] /P 3 0 R /MK << {mk} >> /BS << /W 1 /S /S >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] >>".into(),
+        widget("cmyk", "/BG [0 0 1 null] /BC [1 0 0 null]"),
+        widget("rgb", "/BG [0 0 1] /BC [1 0 0]"),
+    ];
+    let mut doc = document(&objs);
+    let off = |doc: &mut Document, name: &str| {
+        redraw_field(doc, name).unwrap();
+        let all = fields(doc);
+        let w = field(&all, name).widgets[0].obj;
+        let wd = doc.get(w).as_dict().cloned().unwrap();
+        let n = doc.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(b"Off").expect("an Off appearance");
+        let Object::Stream(s) = &*doc.get(r) else { panic!("Off is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let cmyk = off(&mut doc, "cmyk");
+    assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
+    let rgb = off(&mut doc, "rgb");
+    assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
 }

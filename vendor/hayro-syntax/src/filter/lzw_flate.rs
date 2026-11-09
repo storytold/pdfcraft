@@ -1017,6 +1017,17 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                 return Some(unfilter_png(&data, row_len, bpp));
             }
 
+            if i == 2 && matches!(params.bits_per_component, 8 | 16) && !bit_level_only() {
+                // PdfCraft patch: whole-byte samples are undone a row at a time on byte slices
+                // instead of through the bit-level readers, which packed samples need.
+                let sample_len = usize::from(params.bits_per_component / 8);
+                let pixel_len = usize::from(params.colors).saturating_mul(sample_len);
+                return Some(undo_tiff_bytes(data, row_len, pixel_len, sample_len));
+            }
+
+            #[cfg(all(test, feature = "std"))]
+            BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
+
             let (bit_size, chunk_len) = (params.bits_per_component, params.colors as usize);
             let zero_row = vec![0; row_len];
             let mut prev_row = BitChunks::new(&zero_row, bit_size, chunk_len)?;
@@ -1052,6 +1063,69 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             Some(out)
         }
     }
+}
+
+/// PdfCraft patch: undoes TIFF predictor 2 (ISO 32000-2 §7.4.4.4, Table 10; TIFF 6.0 §14)
+/// for 8- and 16-bit samples, in rows of `row_len` bytes holding pixels of `pixel_len` bytes,
+/// each sample `sample_len` bytes (1 or 2, big-endian): every sample is added to the same
+/// component of the pixel to its left, wrapping at the sample's width. Bytes after the last
+/// complete row are dropped, as the bit-level path drops them.
+fn undo_tiff_bytes(
+    mut data: Vec<u8>,
+    row_len: usize,
+    pixel_len: usize,
+    sample_len: usize,
+) -> Vec<u8> {
+    let num_rows = data.len() / row_len.max(1);
+    data.truncate(num_rows.saturating_mul(row_len));
+    if pixel_len == 0 {
+        return data;
+    }
+
+    for row in data.chunks_exact_mut(row_len) {
+        let mut pixels = row.chunks_exact_mut(pixel_len);
+        let Some(mut left) = pixels.next() else {
+            continue;
+        };
+        for px in pixels {
+            if sample_len == 2 {
+                for (c, l) in px.chunks_exact_mut(2).zip(left.chunks_exact(2)) {
+                    if let ([c0, c1], [l0, l1]) = (c, l) {
+                        let sum = u16::from_be_bytes([*c0, *c1])
+                            .wrapping_add(u16::from_be_bytes([*l0, *l1]));
+                        [*c0, *c1] = sum.to_be_bytes();
+                    }
+                }
+            } else {
+                for (c, l) in px.iter_mut().zip(left.iter()) {
+                    *c = c.wrapping_add(*l);
+                }
+            }
+            left = px;
+        }
+    }
+
+    data
+}
+
+#[cfg(all(test, feature = "std"))]
+std::thread_local! {
+    /// PdfCraft patch tests: rows the bit-level TIFF predictor path has undone on this thread.
+    static BIT_LEVEL_TIFF_ROWS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    /// PdfCraft patch tests: send whole-byte TIFF samples through the bit-level path too.
+    static BIT_LEVEL_ONLY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch: whether whole-byte TIFF samples must take the bit-level path (only when a
+/// test compares the two paths).
+#[cfg(all(test, feature = "std"))]
+fn bit_level_only() -> bool {
+    BIT_LEVEL_ONLY.with(core::cell::Cell::get)
+}
+
+#[cfg(not(all(test, feature = "std")))]
+fn bit_level_only() -> bool {
+    false
 }
 
 /// PdfCraft patch: undoes PNG row filters (ISO 32000-2 §7.4.4.4, PNG specification §9) in
@@ -1489,5 +1563,118 @@ mod pdfcraft_png_predictor_tests {
             apply_predictor(data.clone(), &params).unwrap(),
             reference(&data, row_len, 6)
         );
+    }
+}
+
+/// PdfCraft patch tests: TIFF predictor 2 on 8- and 16-bit samples is undone on byte rows
+/// (`undo_tiff_bytes`), with the same output as the bit-level path.
+#[cfg(all(test, feature = "std"))]
+mod pdfcraft_tiff_predictor_tests {
+    use super::{BIT_LEVEL_ONLY, BIT_LEVEL_TIFF_ROWS};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+
+    fn tiff(colors: u8, bits_per_component: u8, columns: usize) -> PredictorParams {
+        PredictorParams {
+            predictor: 2,
+            colors,
+            bits_per_component,
+            columns,
+            early_change: false,
+        }
+    }
+
+    /// Both paths' output, the byte path's first; `None` from either is kept.
+    fn both(data: &[u8], params: &PredictorParams) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let fast = apply_predictor(data.to_vec(), params);
+        BIT_LEVEL_ONLY.with(|only| only.set(true));
+        let bits = apply_predictor(data.to_vec(), params);
+        BIT_LEVEL_ONLY.with(|only| only.set(false));
+        (fast, bits)
+    }
+
+    #[test]
+    fn whole_byte_samples_match_the_bit_level_path_on_random_rows() {
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for case in 0..600 {
+            let colors = [1u8, 2, 3, 4, 5, 7][(next() % 6) as usize];
+            let bits_per_component = [8u8, 16][(next() % 2) as usize];
+            let columns = 1 + (next() % 50) as usize;
+            let row_len = columns * usize::from(colors) * usize::from(bits_per_component) / 8;
+            let rows = (next() % 7) as usize;
+            // A partial row at the end, or none.
+            let tail = (next() % 4) as usize % row_len;
+            let data: Vec<u8> = (0..rows * row_len + tail).map(|_| next() as u8).collect();
+            let params = tiff(colors, bits_per_component, columns);
+            let (fast, bits) = both(&data, &params);
+            assert_eq!(
+                fast, bits,
+                "case {case}: {colors} colours at {bits_per_component} bits, {columns} columns,                  {rows} rows and {tail} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn whole_byte_samples_add_to_the_same_component_of_the_pixel_to_their_left() {
+        // Two 8-bit colours, three columns, two rows; sums wrap at 256.
+        let data = [10, 20, 1, 2, 3, 4, /* row 2 */ 5, 5, 250, 10, 1, 1];
+        assert_eq!(
+            apply_predictor(data.to_vec(), &tiff(2, 8, 3)).unwrap(),
+            [10, 20, 11, 22, 14, 26, 5, 5, 255, 15, 0, 16]
+        );
+        // One 16-bit colour: a carry crosses the byte boundary and the sum wraps at 65,536.
+        let data = [
+            0x01, 0x00, 0xff, 0xff, 0x00, 0x02, /* row 2 */ 0x00, 0xff, 0x00, 0x01, 0, 0,
+        ];
+        assert_eq!(
+            apply_predictor(data.to_vec(), &tiff(1, 16, 3)).unwrap(),
+            [
+                0x01, 0x00, 0x00, 0xff, 0x01, 0x01, 0x00, 0xff, 0x01, 0x00, 0x01, 0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn whole_byte_samples_do_not_take_the_bit_level_path() {
+        let start = BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get);
+        for bits_per_component in [8, 16] {
+            let data = vec![7; 3 * 4 * usize::from(bits_per_component) / 8 * 5];
+            apply_predictor(data, &tiff(3, bits_per_component, 4)).unwrap();
+        }
+        assert_eq!(BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get), start);
+
+        // Packed samples still do.
+        apply_predictor(vec![0x5f; 4], &tiff(1, 4, 2)).unwrap();
+        assert_eq!(BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get), start + 4);
+    }
+
+    #[test]
+    fn rows_without_a_complete_row_of_data_are_dropped_on_both_paths() {
+        for (data, params, want) in [
+            // Shorter than one row: nothing.
+            (vec![1, 2, 3], tiff(1, 8, 4), Some(vec![])),
+            (vec![1, 2, 3], tiff(1, 16, 2), Some(vec![])),
+            // A zero-width row is refused.
+            (vec![1, 2, 3], tiff(1, 8, 0), None),
+            (vec![], tiff(1, 16, 0), None),
+            // No data at all.
+            (vec![], tiff(3, 8, 2), Some(vec![])),
+            // The trailing partial row is dropped.
+            (
+                vec![1, 1, 1, 1, 2, 2],
+                tiff(1, 8, 4),
+                Some(vec![1, 2, 3, 4]),
+            ),
+            (vec![0, 1, 0, 1, 9], tiff(1, 16, 2), Some(vec![0, 1, 0, 2])),
+        ] {
+            let (fast, bits) = both(&data, &params);
+            assert_eq!(fast, want, "{data:?}");
+            assert_eq!(bits, want, "{data:?}");
+        }
     }
 }
