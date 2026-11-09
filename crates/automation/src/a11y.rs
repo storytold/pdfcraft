@@ -491,14 +491,17 @@ impl Automation {
             .opt_int("max_depth")?
             .map(|d| usize::try_from(d).map_err(|_| ToolError::InvalidArgs("max_depth must be 0 or more".into())))
             .transpose()?;
-        let matching: Vec<_> = self
-            .doc(a)?
-            .tags()
-            .into_iter()
-            .filter(|t| types.as_ref().is_none_or(|ty| ty.contains(&t.kind.as_str())))
-            .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
-            .filter(|t| max_depth.is_none_or(|d| t.depth <= d))
-            .collect();
+        let doc = self.doc(a)?;
+        let matching: Vec<_> = match &types {
+            // Chosen before any text is read, so tags the request excludes don't spend the
+            // allowance the returned ones need.
+            Some(ty) => doc.tags_of(ty),
+            None => doc.tags(),
+        }
+        .into_iter()
+        .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
+        .filter(|t| max_depth.is_none_or(|d| t.depth <= d))
+        .collect();
         let count = matching.len();
         let next = offset.checked_add(limit).filter(|n| *n < count);
         let tags: Vec<Value> = matching

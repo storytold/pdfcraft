@@ -155,11 +155,23 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
 
 /// List reachable, indirect tags in structure-tree order.
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
+    tags_where(doc, |_| true)
+}
+
+/// The tags of the given `/S` kinds, chosen before any text is read: a request for some types
+/// spends its text allowance only on the tags it can return, so an excluded tag can't starve a
+/// later one of the text the caller asked for.
+pub fn tags_of(doc: &Document, kinds: &[&str]) -> Vec<TagInfo> {
+    tags_where(doc, |d| d.name(b"S").is_some_and(|s| kinds.iter().any(|k| k.as_bytes() == s)))
+}
+
+fn tags_where(doc: &Document, keep: impl Fn(&Dict) -> bool) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let mut budget = alt::TextBudget::new();
     alt::elements(doc)
         .into_iter()
+        .filter(|e| keep(&e.dict))
         .filter_map(|e| {
             // Each read's own answer, taken before the next read resets it: a property the
             // allowance dropped reads as left out, not as absent, whichever property it was.
@@ -171,7 +183,9 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
             let alt_dropped = budget.refused();
             let language = budget.text(doc, &e.dict, b"Lang");
             let language_dropped = budget.refused();
-            let summary = table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().and_then(|s| budget.string(s)));
+            // A `/Summary` may be an indirect string: it is resolved before the allowance sees it,
+            // or the listing drops the summary and reports nothing as left out.
+            let summary = table_attribute(doc, &e.dict, b"Summary").and_then(|o| doc.resolve(&o).as_string().and_then(|s| budget.string(s)));
             // A missing attribute leaves `refused` from the read before it; that one is counted
             // already, so a stale answer here can only keep `truncated` true.
             let summary_dropped = budget.refused();

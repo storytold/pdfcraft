@@ -330,6 +330,12 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::tags(&e.cos)).unwrap_or_default()
     }
 
+    /// Reachable indirect structure tags of the given `/S` kinds, in document order. A filtered
+    /// listing spends its text allowance only on the tags it can return.
+    pub fn tags_of(&self, kinds: &[&str]) -> Vec<a11y::TagInfo> {
+        self.editor.as_ref().map(|e| a11y::tags_of(&e.cos, kinds)).unwrap_or_default()
+    }
+
     /// Marked-content items directly owned by one reachable indirect structure tag.
     pub fn tag_content(&self, object: pdfcraft_cos::ObjRef) -> Result<Vec<a11y::TagContentItem>, a11y::TagError> {
         self.editor.as_ref().map(|e| a11y::tag_content(&e.cos, object)).unwrap_or_else(|| Ok(Vec::new()))
