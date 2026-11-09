@@ -39,11 +39,11 @@ pub struct Zip<'a> {
 }
 
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(b.get(at..at.checked_add(2)?)?.try_into().ok()?))
 }
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    Some(u32::from_le_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
 
 fn damaged(what: &str) -> EpubError {
@@ -86,7 +86,7 @@ impl<'a> Zip<'a> {
         let mut entries = Vec::with_capacity(usize::from(count));
         let mut at = start as usize;
         for _ in 0..count {
-            if bytes.get(at..at + 4) != Some(b"PK\x01\x02") {
+            if bytes.get(at..at.saturating_add(4)) != Some(b"PK\x01\x02") {
                 return Err(damaged("the ZIP directory is damaged"));
             }
             let field = |o: usize| u16_at(bytes, at + o).ok_or_else(|| damaged("the ZIP directory is cut short"));
@@ -95,7 +95,10 @@ impl<'a> Zip<'a> {
             let (compressed, size) = (long(20)?, long(24)?);
             let (name_len, extra_len, comment_len) = (usize::from(field(28)?), usize::from(field(30)?), usize::from(field(32)?));
             let offset = long(42)?;
-            let raw = bytes.get(at + 46..at + 46 + name_len).ok_or_else(|| damaged("the ZIP directory is cut short"))?;
+            let raw = at
+                .checked_add(46)
+                .and_then(|from| bytes.get(from..from.checked_add(name_len)?))
+                .ok_or_else(|| damaged("the ZIP directory is cut short"))?;
             // Bit 11: the name is UTF-8; EPUB requires UTF-8 names, so read them that way regardless.
             let name = String::from_utf8_lossy(raw).into_owned();
             if compressed == 0xFFFF_FFFF || size == 0xFFFF_FFFF || offset == 0xFFFF_FFFF {
@@ -105,7 +108,7 @@ impl<'a> Zip<'a> {
                 return Err(EpubError::Damaged(format!("the file name \"{name}\" points outside the book")));
             }
             entries.push(Entry { name, method, flags, compressed: u64::from(compressed), size: u64::from(size), offset: u64::from(offset) });
-            at += 46 + name_len + extra_len + comment_len;
+            at = at.saturating_add(46 + name_len + extra_len + comment_len);
         }
         Ok(Self { bytes, entries, read: std::cell::Cell::new(0) })
     }
@@ -137,13 +140,15 @@ impl<'a> Zip<'a> {
             return Err(EpubError::TooLarge(format!("more than {} MiB uncompressed", MAX_TOTAL >> 20)));
         }
         let at = e.offset as usize;
-        if self.bytes.get(at..at + 4) != Some(b"PK\x03\x04") {
+        if self.bytes.get(at..at.saturating_add(4)) != Some(b"PK\x03\x04") {
             return Err(EpubError::Damaged(format!("{name} is missing from the container")));
         }
         let name_len = usize::from(u16_at(self.bytes, at + 26).ok_or_else(|| damaged("a file header is cut short"))?);
         let extra_len = usize::from(u16_at(self.bytes, at + 28).ok_or_else(|| damaged("a file header is cut short"))?);
-        let data = at + 30 + name_len + extra_len;
-        let raw = self.bytes.get(data..data + e.compressed as usize).ok_or_else(|| EpubError::Damaged(format!("{name} is cut short")))?;
+        let raw = at
+            .checked_add(30 + name_len + extra_len)
+            .and_then(|data| self.bytes.get(data..data.checked_add(usize::try_from(e.compressed).ok()?)?))
+            .ok_or_else(|| EpubError::Damaged(format!("{name} is cut short")))?;
         let out = match e.method {
             // Stored: its bytes are its size, so a directory that understates them can't slip
             // an entry past the caps above.

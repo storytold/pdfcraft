@@ -145,6 +145,8 @@ impl PdfCraftApp {
         match pdfcraft_engine::source_kind(name, bytes) {
             Some(SourceKind::Image | SourceKind::Text) => {}
             Some(SourceKind::Epub) => {
+                // Converts here, on the calling thread: only the fallback. Opening a file goes through
+                // the open worker, which converts off the UI thread and hands the result to `open_book`.
                 let book = self.session.create_from_epub(name, bytes).map_err(|e| book_error(name, &e));
                 return Some(self.open_book(name, book));
             }

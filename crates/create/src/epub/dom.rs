@@ -572,11 +572,14 @@ impl<'a> Builder<'a> {
             decls.insert(0, ("direction".into(), "ltr".into(), false));
         }
         if let Some(inline) = node.attribute("style") {
+            // Normal inline declarations go before the sheets' !important ones, inline !important
+            // ones after them (the later declaration wins).
             let important_at = decls.iter().position(|d| d.2).unwrap_or(decls.len());
-            let inline = css::declarations(inline);
-            for (i, d) in inline.into_iter().enumerate() {
+            let (important, normal): (Vec<_>, Vec<_>) = css::declarations(inline).into_iter().partition(|d| d.2);
+            for (i, d) in normal.into_iter().enumerate() {
                 decls.insert(important_at + i, d);
             }
+            decls.extend(important);
         }
         // font-size first: em lengths in the rest are against the element's own size.
         for (p, v, _) in decls.iter().filter(|d| d.0 == "font-size" || d.0 == "font") {

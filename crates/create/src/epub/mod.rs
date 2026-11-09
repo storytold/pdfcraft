@@ -803,6 +803,8 @@ mod tests_font_sources_first_wins;
 #[cfg(test)]
 mod tests_image_percent_size;
 #[cfg(test)]
+mod tests_inline_important;
+#[cfg(test)]
 mod tests_limits;
 #[cfg(test)]
 mod tests_line_height_percent;
