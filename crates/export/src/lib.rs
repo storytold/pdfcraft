@@ -42,7 +42,7 @@ use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
-pub(crate) use layout::{Run, flowing_paragraphs, tables};
+pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
 
 #[cfg(test)]
 mod tests;

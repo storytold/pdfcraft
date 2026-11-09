@@ -1016,6 +1016,51 @@ fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
     }
 }
 
+/// A touch gesture begun with ⌘/Ctrl zooms to its end after the keys are let go, as egui reads
+/// it: its later motion neither scrolls the page as well nor turns the rest of it into scrolling.
+#[test]
+fn a_zoom_gesture_zooms_to_its_end_after_its_keys_are_let_go() {
+    /// The view's zoom and page 1 on screen, settled, after a gesture of six 5-point motions,
+    /// the keys let go after the second one or held throughout.
+    fn zoom_gesture(effects: &'static str, let_go: bool) -> (f32, f32, egui::Rect) {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+        h.state_mut().set_option("animation_effects", effects).unwrap();
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        let before = h.state().views[0].zoom;
+        let touch = |phase, dy, modifiers| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        h.event(touch(TouchPhase::Start, 0.0, Modifiers::COMMAND));
+        h.step();
+        for k in 0..6 {
+            let modifiers = if let_go && k >= 2 { Modifiers::NONE } else { Modifiers::COMMAND };
+            h.event(touch(TouchPhase::Move, 5.0, modifiers));
+            h.step();
+        }
+        h.event(touch(TouchPhase::End, 0.0, Modifiers::NONE));
+        h.run_steps(40);
+        (before, h.state().views[0].zoom, rect(&h, 0).expect("page 1 on screen"))
+    }
+    for effects in ["off", "on"] {
+        let (before, held, held_page) = zoom_gesture(effects, false);
+        assert!(held > before, "{effects}: the gesture zoomed in: {before} to {held}");
+        let (_, let_go, let_go_page) = zoom_gesture(effects, true);
+        assert!((let_go / held - 1.0).abs() < 1e-4, "{effects}: the whole gesture zooms: {let_go}, held throughout {held}");
+        assert!(
+            (let_go_page.min - held_page.min).length() < 0.5,
+            "{effects}: and nothing scrolls: page 1 at {:?}, held throughout {:?}",
+            let_go_page.min,
+            held_page.min
+        );
+    }
+}
+
 #[test]
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);
@@ -2584,4 +2629,62 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     assert_ne!(h.ctx.memory(|m| m.focused()), focused, "pressing the document relinquishes Pages focus without Escape");
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
     assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
+}
+
+/// A one-page PDF whose content inflates past the renderer's per-stream limit (#623): a window
+/// of whitespace the interpreter can never complete, so the page is cut and says so.
+fn cut_content_pdf() -> Vec<u8> {
+    use std::io::Write as _;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let chunk = vec![0u8; 1 << 20];
+    for _ in 0..288 {
+        z.write_all(&chunk).unwrap();
+    }
+    let stream = z.finish().unwrap();
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Filter /FlateDecode /Length {} >> stream\n", stream.len()).as_bytes());
+    pdf.extend_from_slice(&stream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    pdf
+}
+
+/// A page whose content was cut at the renderer's limits is named in a notice, and listed for
+/// automation (`ui.state`, by page number), instead of looking complete (#623).
+#[test]
+fn a_page_whose_content_was_cut_is_named_in_a_notice() {
+    let _gpu = gpu();
+    let pdf = cut_content_pdf();
+    let slot: std::sync::Arc<std::sync::Mutex<Option<pdfcraft_ui_egui::control::ControlClient>>> = Default::default();
+    let s = slot.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app.open_bytes("cut.pdf", None, pdf).expect("opens");
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.state().views[0].cut_pages().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the cut page was never reported; errors={:?}", h.state().views[0].page_errors());
+        h.run_steps(2);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].cut_pages(), [0]);
+    assert!(h.state().views[0].page_errors().is_empty(), "a cut page still draws");
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    // Automation counts pages from 1, as the notice does (review on #2113).
+    let client = slot.lock().unwrap().take().expect("the control channel");
+    let rx = client.send("ui.state", serde_json::json!({}));
+    // Bounded by wall-clock time rather than frames, so a busy runner doesn't fail it, and a
+    // dropped channel fails at once instead of stalling the run.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let state = loop {
+        h.run_steps(1);
+        match rx.try_recv() {
+            Ok(reply) => break reply.expect("ui.state"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("ui.state: the control channel closed without a reply"),
+            Err(std::sync::mpsc::TryRecvError::Empty) => assert!(std::time::Instant::now() < deadline, "ui.state: no reply within 30 s"),
+        }
+    };
+    assert_eq!(state["active"]["cut_pages"], serde_json::json!([1]), "{state}");
 }
