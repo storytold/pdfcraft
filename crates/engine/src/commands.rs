@@ -228,6 +228,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
+    // a tab's right-click menu also splits right or down with any tab.
+    c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.
@@ -404,6 +407,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
+    c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
     c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),

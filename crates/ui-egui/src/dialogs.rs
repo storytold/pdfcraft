@@ -12,6 +12,7 @@ pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
 pub(super) mod credits;
+pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
@@ -45,6 +46,7 @@ struct Pending {
     protect_now: bool,
     boxes_now: bool,
     colours_now: bool,
+    fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -454,6 +456,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = go || cancel;
             return false;
         }
+        Dialog::FixHairlines => {
+            let (go, cancel) = crate::hairlines_ui::body(ui, app, &t);
+            req.fix_hairlines_now = go;
+            req.close = go || cancel;
+            return false;
+        }
         Dialog::BookmarksFromTextStyles => {
             req.close = crate::bookmark_styles_ui::body(ui, app, &t);
             return false;
@@ -569,8 +577,6 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 }
                 row(ui, "Application", i.creator.clone().unwrap_or_default());
                 row(ui, "PDF producer", i.producer.clone().unwrap_or_default());
-                row(ui, "Created", i.created.clone().unwrap_or_default());
-                row(ui, "Modified", i.modified.clone().unwrap_or_default());
             }
             PropsTab::InitialView => {
                 use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
@@ -1989,6 +1995,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     }
     if req.colours_now {
         app.convert_colours();
+    }
+    if req.fix_hairlines_now {
+        app.fix_hairlines();
     }
     if req.apply_number
         && let Some(edit) = req.number_now.take()
