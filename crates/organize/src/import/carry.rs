@@ -98,9 +98,13 @@ pub(super) fn source_outline(src: &Document, pages: HashMap<ObjRef, ObjRef>) -> 
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"Outlines").map(|o| src.resolve(o)))
         .and_then(|o| o.as_dict().and_then(|d| d.reference(b"First")));
+    let whole = crate::page_count(src).is_ok_and(|n| pages.len() >= n);
     let mapper = Copier::new(src, HashMap::new(), pages);
     let mut budget = 10_000usize;
-    outline_level(&mapper, first, 0, &mut budget)
+    let outline = outline_level(&mapper, first, 0, &mut budget);
+    // Of some of the pages, only the bookmarks that lead to a copied page and those above them:
+    // the others would carry their titles along into a file without their pages.
+    if whole { outline } else { kept_bookmarks(outline) }
 }
 
 /// `nodes` without the bookmarks whose page was not copied (no destination left), unless a bookmark
