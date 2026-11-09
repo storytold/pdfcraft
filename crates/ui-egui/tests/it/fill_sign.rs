@@ -2177,9 +2177,9 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     // The switch is in the panel's Sign yourself section, once; the Sign menu over the page,
     // where it was easy to miss, no longer has it.
     h.state_mut().flatten_fill_sign_on_save = false;
-    h.get_by_label("Fill & Sign").click();
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    // The quick bar's Fill & Sign button is named after the tool it shows; a right-click opens
+    // its menu.
+    h.get_by_label_contains("Fill & Sign: ").click_secondary();
     h.run_steps(2);
     h.get_by_label("Use signature");
     assert!(h.query_by_label("Lock into the page when saving").is_none(), "not in the Sign menu");
