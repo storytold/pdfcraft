@@ -10,6 +10,8 @@
 //! a bounding box: a path wholly outside the clip is left out, one partly inside is kept whole.
 //! Shadings (`sh`), images and text are not paths and are read elsewhere.
 
+use crate::optional_content as visibility;
+
 use pdfcraft_content::{Matrix, Op, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -144,8 +146,15 @@ fn space_named(doc: &Document, resources: &Dict, name: &[u8]) -> Space {
                 _ => Space::Other,
             }
         }
+        Some(b"Separation") if a.get(1).is_some_and(|n| doc.resolve(n).as_name() == Some(b"None")) => Space::Other,
         Some(b"Separation") => Space::Tint,
-        Some(b"DeviceN") if a.get(1).map(|n| doc.resolve(n)).and_then(|n| n.as_array().map(Vec::len)) == Some(1) => Space::Tint,
+        Some(b"DeviceN") => {
+            let names = a.get(1).map(|n| doc.resolve(n));
+            match names.as_deref().and_then(Object::as_array).map(Vec::as_slice) {
+                Some([name]) if doc.resolve(name).as_name() != Some(b"None") => Space::Tint,
+                _ => Space::Other,
+            }
+        }
         _ => Space::Other,
     }
 }
@@ -252,6 +261,7 @@ impl Path {
 }
 
 struct Walk<'a> {
+    visibility: visibility::Visibility<'a>,
     doc: &'a Document,
     out: ReadingShapes,
     order: Vec<usize>,
@@ -292,6 +302,8 @@ impl Walk<'_> {
         let mut lost_saves = 0usize;
         let mut path = Path::default();
         let mut clip_pending = false;
+        let mut marked = visibility::Marked::default();
+        let properties = resources.get(b"Properties").and_then(|p| doc.dict(p)).unwrap_or_default();
         self.order.push(0);
         for (index, op) in ops.iter().enumerate() {
             if let Some(current) = self.order.last_mut() {
@@ -311,6 +323,7 @@ impl Walk<'_> {
                 break;
             }
             match op.op.as_slice() {
+                _ if marked.update(op, &properties, &mut self.visibility) => {}
                 b"q" => {
                     if saved.len() < MAX_SAVES {
                         saved.push(st.clone());
@@ -419,6 +432,7 @@ impl Walk<'_> {
                     let subpaths = std::mem::take(&mut path).subpaths;
                     let found = bounds(&subpaths);
                     if paint != b"n"
+                        && marked.visible()
                         && let Some(b) = found
                     {
                         self.paint(paint, subpaths, b, st);
@@ -432,37 +446,9 @@ impl Walk<'_> {
                         st.clip = [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])];
                     }
                 }
-                b"Do" => {
-                    let Some(name) = op.last_name() else { continue };
-                    let Some(form) = crate::text::form_call(doc, resources, name, st.ctm, &self.forms, &mut self.budget) else { continue };
-                    if self.budget.truncated {
-                        self.out.truncated = true;
-                    }
-                    let bbox = resources
-                        .get(b"XObject")
-                        .and_then(|x| doc.dict(x))
-                        .and_then(|x| x.get(name).map(|o| doc.resolve(o)))
-                        .and_then(|o| match &*o {
-                            Object::Stream(s) => s.dict.get(b"BBox").map(|b| doc.resolve(b)),
-                            _ => None,
-                        })
-                        .and_then(|b| {
-                            let a = b.as_array()?;
-                            let [x0, y0, x1, y1] = a.as_slice() else { return None };
-                            Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
-                        });
-                    let mut inner = st.clone();
-                    inner.ctm = form.ctm;
-                    if let Some(b) = bbox.filter(|b| b.iter().all(|v| v.is_finite())) {
-                        let c = inner.clip;
-                        inner.clip = [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])];
-                    }
-                    if let Some(r) = form.obj {
-                        self.forms.push(r);
-                    }
-                    self.ops(&parse(&form.data).ops, form.resources(resources), &mut inner);
-                    if form.obj.is_some() {
-                        self.forms.pop();
+                b"Do" if marked.visible() => {
+                    if let Some(name) = op.last_name() {
+                        self.form(name, resources, st);
                     }
                 }
                 _ => {}
@@ -474,8 +460,46 @@ impl Walk<'_> {
             }
         }
         self.order.pop();
+        if self.budget.truncated || self.visibility.truncated || marked.truncated {
+            self.out.truncated = true;
+        }
+    }
+
+    fn form(&mut self, name: &[u8], resources: &Dict, st: &State) {
+        let doc = self.doc;
+        let xobject = resources.get(b"XObject").and_then(|o| doc.dict(o)).and_then(|d| d.get(name).map(|o| doc.resolve(o)));
+        if xobject.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"OC")).is_some_and(|oc| !self.visibility.visible(oc)) {
+            return;
+        }
+        let Some(form) = crate::text::form_call(doc, resources, name, st.ctm, &self.forms, &mut self.budget) else { return };
         if self.budget.truncated {
             self.out.truncated = true;
+        }
+        let bbox = resources
+            .get(b"XObject")
+            .and_then(|x| doc.dict(x))
+            .and_then(|x| x.get(name).map(|o| doc.resolve(o)))
+            .and_then(|o| match &*o {
+                Object::Stream(s) => s.dict.get(b"BBox").map(|b| doc.resolve(b)),
+                _ => None,
+            })
+            .and_then(|b| {
+                let a = b.as_array()?;
+                let [x0, y0, x1, y1] = a.as_slice() else { return None };
+                Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+            });
+        let mut inner = st.clone();
+        inner.ctm = form.ctm;
+        if let Some(b) = bbox.filter(|b| b.iter().all(|v| v.is_finite())) {
+            let c = inner.clip;
+            inner.clip = [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])];
+        }
+        if let Some(r) = form.obj {
+            self.forms.push(r);
+        }
+        self.ops(&parse(&form.data).ops, form.resources(resources), &mut inner);
+        if form.obj.is_some() {
+            self.forms.pop();
         }
     }
 
@@ -525,6 +549,7 @@ pub fn reading_shapes(doc: &Document, page: usize) -> Result<ReadingShapes, Edit
     let pieces = crate::text::joined(&streams);
     let truncated = streams.iter().any(|s| s.read != crate::text::Read::Whole);
     let mut walk = Walk {
+        visibility: visibility::Visibility::new(doc),
         doc,
         out: ReadingShapes { truncated, ..Default::default() },
         points: 0,
@@ -542,6 +567,7 @@ pub fn reading_shapes(doc: &Document, page: usize) -> Result<ReadingShapes, Edit
 /// one marks the result truncated, so callers can avoid classifying an incomplete appearance.
 pub fn reading_shape_ops(doc: &Document, ops: &[Op], resources: &Dict) -> ReadingShapes {
     let mut walk = Walk {
+        visibility: visibility::Visibility::new(doc),
         doc,
         out: ReadingShapes::default(),
         points: 0,

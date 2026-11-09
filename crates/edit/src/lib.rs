@@ -42,6 +42,7 @@ pub mod backdrop;
 pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 pub use text::strip_subset_tag;
 mod background;
+mod optional_content;
 pub use background::page_background;
 mod rules;
 pub use rules::page_rules;

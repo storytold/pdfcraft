@@ -467,3 +467,159 @@ fn review_simple_html_bounds_expanded_rgba_before_decoding() {
     assert!(pages[0].images.is_empty());
     assert_eq!(dropped, [0]);
 }
+
+fn review_followup_field_doc(props: &str, appearance: &str) -> pdfcraft_cos::Document {
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+        "null".into(),
+        format!("<< /Type /Annot /Subtype /Widget /T (Field) /Rect [10 10 110 30] /P 3 0 R /AP << /N 6 0 R >> {props} >>"),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 20] /Length {} >>\nstream\n{appearance}\nendstream", appearance.len()),
+    ])
+}
+
+#[test]
+fn review_followup_formatted_values_and_selected_option_survive() {
+    for (props, expected) in [
+        ("/FT /Tx /V (1234.5) /AA << /F << /S /JavaScript /JS (AFNumber_Format\\(2, 0, 0, 0, \\\"$\\\", true\\);) >> >>", "$1,234.50"),
+        ("/FT /Tx /V (unformatted)", "unformatted"),
+        ("/FT /Ch /V (same) /I [1] /Opt [[(same) (First)] [(same) (Second)]]", "Second"),
+    ] {
+        let doc = review_followup_field_doc(props, "");
+        let mut session = Session::new();
+        let id = session.open("field.pdf", None, doc.bytes().clone(), None).unwrap();
+        let pages = session.get(id).unwrap().export_pages();
+        let field = &pages[0].fields[0];
+        match &field.kind {
+            pdfcraft_export::FieldKind::Text { value, .. } | pdfcraft_export::FieldKind::Choice { value, .. } => assert_eq!(value, expected),
+            _ => panic!("wrong field kind"),
+        }
+        let zip = pdfcraft_export::docx(&pages, "Formatted");
+        assert!(office_part(&zip, "customXml/item1.xml").contains(expected));
+    }
+}
+
+#[test]
+fn review_followup_appearance_backgrounds_and_legacy_width() {
+    for (props, appearance, background, border) in [
+        ("/FT /Tx", "1 0 0 rg 0 0 100 20 re f", Some([1.0, 0.0, 0.0]), None),
+        ("/FT /Tx /MK << /BG [0 1 0] >>", "1 0 0 rg 0 0 100 20 re f", Some([0.0, 1.0, 0.0]), None),
+        ("/FT /Tx", "1 0 0 rg 45 5 10 10 re f", None, None),
+        ("/FT /Tx /MK << /BC [0] >> /Border [0 0 0]", "", None, None),
+        ("/FT /Tx /MK << /BC [0] >> /Border [0 0 0] /BS << /W 2 >>", "", None, Some(2.0)),
+    ] {
+        let doc = review_followup_field_doc(props, appearance);
+        let fields = pdfcraft_forms::fields(&doc);
+        let f = &fields[0];
+        let exported = export_field(&doc, f, &f.widgets[0], &|r| r, 1.0, &mut Looks::new(), &field_preparation(f)).unwrap();
+        assert_eq!(exported.background, background, "{props}: {appearance}");
+        assert_eq!(exported.border.map(|s| s.width), border, "{props}");
+    }
+}
+
+#[test]
+fn review_followup_oversized_direct_and_indirect_widget_colors_are_rejected() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut doc = review_followup_field_doc("/FT /Tx", "");
+    let fields = pdfcraft_forms::fields(&doc);
+    let w = &fields[0].widgets[0];
+    for indirect in [false, true] {
+        let color = Object::Array(vec![Object::Int(0); 100_000]);
+        let color = if indirect { Object::Ref(doc.add(color)) } else { color };
+        doc.update_dict(w.obj, |d| {
+            d.set(b"MK".to_vec(), Object::Dict(Dict::from_iter([(b"BC".to_vec(), color)])));
+        })
+        .unwrap();
+        assert_eq!(widget_look(&doc, w), (None, None));
+    }
+    assert_eq!(mk_colour(&doc, Some(&Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(0)]))), Some([0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn review_followup_upright_text_on_rotated_page_has_zero_angle() {
+    let data = "BT /F1 12 Tf 0 -1 1 0 100 160 Tm (Upright) Tj ET";
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate 270 /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ]);
+    let mut session = Session::new();
+    let id = session.open("upright.pdf", None, doc.bytes().clone(), None).unwrap();
+    let pages = session.get(id).unwrap().export_pages();
+    assert!(!pages[0].lines.is_empty());
+    assert!(pages[0].lines.iter().all(|b| b.rotation.abs() < 0.01));
+    assert!(!office_part(&pdfcraft_export::docx(&pages, "Upright"), "word/document.xml").contains("<v:textbox"));
+}
+
+#[test]
+fn review_followup_only_page_eligible_fields_spend_preparation_bytes() {
+    let mut doc = review_followup_field_doc("/FT /Tx /V (fits)", "");
+    let mut page = doc.get(pdfcraft_cos::ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+    page.remove(b"Annots");
+    let second = doc.add(pdfcraft_cos::Object::Dict(page));
+    doc.update_dict(pdfcraft_cos::ObjRef { num: 2, generation: 0 }, |d| {
+        d.set(
+            b"Kids".to_vec(),
+            pdfcraft_cos::Object::Array(vec![
+                pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef { num: 3, generation: 0 }),
+                pdfcraft_cos::Object::Ref(second),
+            ]),
+        );
+        d.set(b"Count".to_vec(), pdfcraft_cos::Object::Int(2));
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut session = Session::new();
+    let id = session.open("eligible.pdf", None, bytes, None).unwrap();
+    let d = session.docs.iter_mut().find(|d| d.id == id).unwrap();
+    let mut filler = d.form[0].clone();
+    let mut widget = filler.widgets[0].clone();
+    filler.widgets = (0..pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
+        .map(|tab| {
+            let mut w = widget.clone();
+            w.tab = tab;
+            w
+        })
+        .collect();
+    let mut discarded = d.form[0].clone();
+    discarded.widgets[0].tab = pdfcraft_export::MAX_DOCX_PAGE_SHAPES;
+    discarded.name = "Discarded".into();
+    discarded.kind = pdfcraft_forms::FieldKind::Combo;
+    discarded.value = vec!["large".into(); 2000];
+    let mut shared = d.form[0].clone();
+    shared.name = "Shared".into();
+    shared.widgets[0].tab = pdfcraft_export::MAX_DOCX_PAGE_SHAPES + 1;
+    widget.page = Some(1);
+    widget.tab = 0;
+    shared.widgets.push(widget);
+    let mut budget = MAX_EXPORT_FIELD_BYTES;
+    let first = field_preparation_within(&filler, &mut budget);
+    let second = field_preparation_within(&shared, &mut budget);
+    let limit = MAX_EXPORT_FIELD_BYTES - budget + first.bytes.unwrap() * pdfcraft_export::MAX_DOCX_PAGE_SHAPES + second.bytes.unwrap();
+    d.form = vec![filler, discarded, shared].into();
+    let cos = &d.editor.as_ref().unwrap().cos;
+    let (pages, dropped) = d.export_pages_with(false, 0, &mut pdfcraft_cos::ImageBudget::new(cos), true, MAX_EXPORT_SHAPE_POINTS, limit);
+    assert_eq!(pages[0].fields.len(), pdfcraft_export::MAX_DOCX_PAGE_SHAPES);
+    assert_eq!(pages[1].fields.len(), 1);
+    assert_eq!(pages[1].fields[0].name, "Shared");
+    assert_eq!(dropped, [0]);
+}
+
+#[test]
+fn review_followup_compound_fill_rule_reaches_the_writer() {
+    for (operator, even_odd) in [("f*", true), ("f", false)] {
+        let data = format!("10 10 100 100 re 30 30 40 40 re {operator}");
+        let mut doc = review_followup_field_doc("/FT /Tx", "");
+        let stream = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), data.as_bytes())));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 3, generation: 0 }, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(stream))).unwrap();
+        let mut session = Session::new();
+        let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap());
+        let id = session.open("hole.pdf", None, bytes, None).unwrap();
+        let pages = session.get(id).unwrap().export_pages();
+        assert_eq!(pages[0].shapes[0].even_odd, even_odd);
+        assert_eq!(pages[0].shapes[0].paths.len(), 2);
+    }
+}

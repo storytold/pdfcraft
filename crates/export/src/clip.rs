@@ -145,10 +145,13 @@ pub fn font_family(base_font: &str) -> Vec<String> {
         _ => base_font,
     };
     let name = name.split_once(',').map_or(name, |(family, _)| family);
-    let family = match name.rsplit_once('-') {
-        Some((family, style)) if STYLE_WORDS.iter().any(|w| style.starts_with(w)) => family,
-        _ => name,
-    };
+    let mut family = name;
+    while let Some((prefix, style)) = family.rsplit_once('-') {
+        if !STYLE_WORDS.iter().any(|w| style.starts_with(w)) {
+            break;
+        }
+        family = prefix;
+    }
     let family = ["PSMT", "MT", "PS"].iter().find_map(|tail| family.strip_suffix(tail).filter(|f| !f.is_empty())).unwrap_or(family);
     let mut spaced = String::with_capacity(family.len().min(MAX_FAMILY_CHARS * 2));
     let mut prev: Option<char> = None;
@@ -282,17 +285,28 @@ fn num(v: f64) -> String {
 /// Weight and slant from a PDF font's style suffix, not a word inside its family name.
 pub fn font_weight_and_slant(base: &str) -> (bool, bool) {
     let name = base.to_ascii_lowercase();
-    let style = name.rsplit(['-', ',']).next().unwrap_or(&name);
-    let explicit = style != name;
-    let style = style.trim_end_matches("mt").trim_end_matches("ps");
-    let italic = style.ends_with("italic") || style.ends_with("oblique");
-    let weight = style.trim_end_matches("italic").trim_end_matches("oblique");
-    let bold = if explicit {
-        weight.contains("bold") || weight == "black" || weight == "heavy"
-    } else {
-        weight.ends_with("bold") || weight.ends_with("black") || weight.ends_with("heavy")
-    };
-    (bold, italic)
+    let mut rest = name.as_str();
+    let mut result = (false, false);
+    while let Some((family, suffix)) = rest.rsplit_once(['-', ',']) {
+        let style = suffix.trim_end_matches("mt").trim_end_matches("ps");
+        let italic = style.ends_with("italic") || style.ends_with("oblique");
+        let weight = style.trim_end_matches("italic").trim_end_matches("oblique");
+        let bold = matches!(weight, "bold" | "semibold" | "demibold" | "extrabold" | "ultrabold" | "black" | "heavy");
+        if !bold && !matches!(weight, "" | "regular" | "roman" | "book" | "medium" | "light" | "thin") {
+            break; // A family token, such as the Gothic in MS-Gothic.
+        }
+        result.0 |= bold;
+        result.1 |= italic;
+        rest = family;
+    }
+    if rest == name {
+        // Joined PostScript names still carry a final style: ArialBoldItalicMT.
+        let style = rest.trim_end_matches("mt").trim_end_matches("ps");
+        result.1 = style.ends_with("italic") || style.ends_with("oblique");
+        let weight = style.trim_end_matches("italic").trim_end_matches("oblique");
+        result.0 = weight.ends_with("bold") || weight.ends_with("black") || weight.ends_with("heavy");
+    }
+    result
 }
 
 #[cfg(test)]

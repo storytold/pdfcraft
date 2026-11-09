@@ -947,6 +947,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
 /// A stroked axis-aligned box around `r` ([x0, y0, x1, y1], y up).
 fn boxed(r: [f64; 4]) -> Shape {
     Shape {
+        even_odd: false,
         paths: vec![(vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], true)],
         stroke: Some(Stroke { color: [0.0; 3], width: 0.7, dashed: false }),
         fill: None,
@@ -975,11 +976,17 @@ fn form_page() -> Page {
     // A comb cell's tick, a dashed rule and a free-form (curved) mark.
     shapes.push(Shape { paths: vec![(vec![[80.0, 400.0], [80.0, 404.0]], false)], ..boxed([0.0; 4]) });
     shapes.push(Shape {
+        even_odd: false,
         stroke: Some(Stroke { color: [1.0, 0.0, 0.0], width: 0.0, dashed: true }),
         paths: vec![(vec![[60.0, 380.0], [300.0, 380.0]], false)],
         fill: None,
     });
-    shapes.push(Shape { paths: vec![(vec![[100.0, 300.0], [120.0, 320.0], [140.0, 300.0]], true)], stroke: None, fill: Some([0.5; 3]) });
+    shapes.push(Shape {
+        even_odd: false,
+        paths: vec![(vec![[100.0, 300.0], [120.0, 320.0], [140.0, 300.0]], true)],
+        stroke: None,
+        fill: Some([0.5; 3]),
+    });
     shapes.push(Shape { paths: vec![(vec![[60.0, 500.0], [70.0, 510.0]], false)], ..boxed([0.0; 4]) });
     let fields = vec![
         Field {
@@ -1030,7 +1037,7 @@ fn form_page() -> Page {
             color: [0.0; 3],
             alignment: 0,
             round: false,
-            kind: FieldKind::Check { checked: true },
+            kind: FieldKind::Check { checked: true, on_state: "Yes".into() },
             border: None,
             background: None,
         },
@@ -1043,7 +1050,7 @@ fn form_page() -> Page {
             color: [0.0; 3],
             alignment: 0,
             round: false,
-            kind: FieldKind::Check { checked: false },
+            kind: FieldKind::Check { checked: false, on_state: "Yes".into() },
             border: None,
             background: None,
         },
@@ -1234,7 +1241,7 @@ fn word_bounds_hostile_shapes_and_fields() {
         color: [0.0; 3],
         alignment: 0,
         round: false,
-        kind: FieldKind::Check { checked: true },
+        kind: FieldKind::Check { checked: true, on_state: "Yes".into() },
         border: None,
         background: None,
     });
@@ -1976,7 +1983,7 @@ fn review_point_limits_remap_shared_paint_order() {
 #[test]
 fn review_repeated_choices_and_checks_share_values() {
     for kind in [
-        FieldKind::Check { checked: true },
+        FieldKind::Check { checked: true, on_state: "Yes".into() },
         FieldKind::Choice { value: "First".into(), options: vec!["First".into(), "Second".into()], editable: false },
     ] {
         let mut p = form_page();
@@ -2341,4 +2348,140 @@ fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
     let paragraphs = word_texts(blocks);
     assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
     assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
+}
+
+#[test]
+fn review_followup_explicit_field_sizes_and_scaled_borders_survive() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    p.fields[0].size = 96.0;
+    p.fields[0].rect = [30.0, 300.0, 500.0, 500.0];
+    p.fields[0].border = Some(Stroke { color: [0.0; 3], width: 20.0, dashed: false });
+    let xml = part(&docx(&[p], "Large field"), "word/document.xml");
+    assert!(xml.contains("<w:sz w:val=\"192\"/>"));
+    assert!(xml.contains("<a:ln w=\"254000\">"));
+}
+
+#[test]
+fn review_followup_positioned_rows_follow_reading_order() {
+    let mut p = form_page();
+    p.blocks.clear();
+    p.fields.clear();
+    p.art_framed = true;
+    p.lines = vec![
+        line("Footer", 72.0, 150.0, 40.0),
+        line("Heading", 72.0, 150.0, 700.0),
+        line("Body", 72.0, 100.0, 500.0),
+        Block { bold: true, ..line("bold", 104.0, 132.0, 500.0) },
+    ];
+    let xml = part(&docx(&[p], "Reading order"), "word/document.xml");
+    assert!(xml.find(">Heading</w:t>").unwrap() < xml.find(">Body</w:t>").unwrap());
+    assert!(xml.find("> bold</w:t>").unwrap() < xml.find(">Footer</w:t>").unwrap());
+    assert_eq!(xml.matches("<v:textbox ").count(), 3, "mixed styles still share one row");
+}
+
+#[test]
+fn review_followup_separate_font_style_suffixes() {
+    for font in ["Arial,Bold-Italic", "Arial-Bold-Oblique", "Segoe-UI-Heavy-ItalicMT"] {
+        assert_eq!(font_weight_and_slant(font), (true, true), "{font}");
+    }
+    for font in ["BlackadderITC-Regular", "Boldness-Sans-Regular", "Heavy-Family-Italic"] {
+        assert!(!font_weight_and_slant(font).0, "{font}");
+    }
+}
+
+#[test]
+fn review_followup_checkbox_bindings_distinguish_on_states() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    let check = p.fields[0].clone();
+    p.fields = [("Yes", true), ("Other", false), ("Yes", true)]
+        .into_iter()
+        .map(|(on_state, checked)| Field { kind: FieldKind::Check { checked, on_state: on_state.into() }, ..check.clone() })
+        .collect();
+    let zip = docx(&[p], "Checkbox states");
+    let xml = part(&zip, "word/document.xml");
+    assert_eq!(xml.matches("w:xpath=\"/pc:fields/pc:field[@id='f1']\"").count(), 2);
+    assert_eq!(xml.matches("w:xpath=\"/pc:fields/pc:field[@id='f2']\"").count(), 1);
+    let data = part(&zip, "customXml/item1.xml");
+    assert!(data.contains("<pc:field id=\"f1\">true</pc:field>"));
+    assert!(data.contains("<pc:field id=\"f2\">false</pc:field>"));
+}
+
+#[test]
+fn review_followup_cropped_fields_keep_their_full_offset_in_fixed_textboxes() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    p.fields[0].rect = [-60.0, 200.0, 180.0, 250.0];
+    p.fields[0].kind = FieldKind::Text { value: "ABCDEFGH".into(), multiline: false, comb: None, max_len: None };
+    let xml = part(&docx(&[p.clone()], "Crop"), "word/document.xml");
+    assert!(xml.contains("margin-left:-60.000pt"));
+    assert!(xml.contains("width:240.000pt;height:50.000pt;z-index:1"));
+    assert!(xml.contains("mso-fit-shape-to-text:f"));
+    assert!(!xml.contains("<w:framePr"));
+    p.fields[0].kind = FieldKind::Text { value: "ABCDEFGH".into(), multiline: false, comb: Some(8), max_len: Some(8) };
+    let xml = part(&docx(&[p], "Cropped comb"), "word/document.xml");
+    assert!(xml.contains("width:270.000pt;height:50.000pt;z-index:1"), "last-cell allowance remains inside the textbox");
+}
+
+#[test]
+fn review_followup_partial_page_artwork_keeps_its_group_scale() {
+    let p = Page {
+        width: 300.0,
+        height: 400.0,
+        art_framed: true,
+        shapes: vec![boxed([50.0, 100.0, 150.0, 200.0])],
+        images: vec![Image { ext: "png", bytes: vec![0].into(), rect: [200.0, 300.0, 210.0, 310.0], size: [10.0; 2], rotation: 0.0, flip: false }],
+        ..Default::default()
+    };
+    let (bytes, dropped) = docx_checked(&[p], "Partial artwork");
+    assert!(dropped.is_empty());
+    let xml = part(&bytes, "word/document.xml");
+    let extent = xml.split("name=\"Page extent\"").nth(1).unwrap().split("</wps:wsp>").next().unwrap();
+    assert!(extent.contains("<a:off x=\"0\" y=\"0\"/><a:ext cx=\"3810000\" cy=\"5080000\"/>"));
+    assert!(extent.contains("<a:noFill/><a:ln><a:noFill/></a:ln>"));
+    assert!(xml.contains("<a:off x=\"2540000\" y=\"1143000\"/>"), "the image keeps its original offset");
+}
+
+#[test]
+fn review_followup_compound_fill_work_exhaustion_is_reported() {
+    let mut shape = boxed([10.0, 10.0, 100.0, 100.0]);
+    shape.paths = (0..1000).map(|_| shape.paths[0].clone()).collect();
+    shape.fill = Some([1.0, 0.0, 0.0]);
+    shape.stroke = None;
+    shape.even_odd = true;
+    let page = Page { width: 200.0, height: 200.0, art_framed: true, shapes: vec![shape], ..Default::default() };
+    let (bytes, dropped) = docx_checked(&[page], "Complex fill");
+    assert_eq!(dropped, [0]);
+    assert!(!part(&bytes, "word/document.xml").contains("<v:shape "));
+}
+
+#[test]
+fn review_followup_compound_fills_use_one_geometry_in_both_writers() {
+    for image in [false, true] {
+        let mut p = form_page();
+        p.fields.clear();
+        p.blocks.clear();
+        p.art_framed = true;
+        let mut shape = boxed([10.0, 10.0, 100.0, 100.0]);
+        shape.paths.extend(boxed([40.0, 40.0, 70.0, 70.0]).paths);
+        shape.fill = Some([1.0, 0.0, 0.0]);
+        shape.even_odd = true;
+        shape.stroke = None;
+        p.shapes = vec![shape];
+        p.images.clear();
+        if image {
+            p.images.push(Image { ext: "png", bytes: vec![0].into(), rect: [0.0, 0.0, 10.0, 10.0], size: [10.0; 2], rotation: 0.0, flip: false });
+        }
+        let (zip, dropped) = docx_checked(&[p], "Hole");
+        assert!(dropped.is_empty());
+        let xml = part(&zip, "word/document.xml");
+        if image {
+            assert_eq!(xml.matches("<a:path ").count(), 1);
+            assert_eq!(xml.matches("<a:moveTo>").count(), 4);
+        } else {
+            assert_eq!(xml.matches("<v:shape ").count(), 1);
+            assert!(xml.contains("coordsize=\"21600,21600\""));
+        }
+    }
 }

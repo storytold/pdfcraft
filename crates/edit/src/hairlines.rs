@@ -157,7 +157,7 @@ fn rewrite(
     let mut fixed = 0usize;
     let mut changed = false;
     // Where in `out` the path being built began (None when it began in an earlier stream).
-    let mut path_start: Option<usize> = None;
+    let mut path_start: Option<(usize, f64)> = None;
     let mut out: Vec<Op> = Vec::with_capacity(ops.len() + 8);
     let dict_of = |key: &[u8]| resources.and_then(|r| r.get(key)).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned());
     let xobjects = dict_of(&b"XObject"[..]);
@@ -197,7 +197,7 @@ fn rewrite(
             }
             b"m" | b"re" if !state.in_path => {
                 state.in_path = true;
-                path_start = Some(out.len());
+                path_start = Some((out.len(), state.width));
             }
             b"Do" => {
                 if let Some(Object::Name(name)) = op.operands.first()
@@ -224,17 +224,33 @@ fn rewrite(
                 // left as it is rather than given an operator inside the path.
                 let at = match path_start {
                     Some(i) => Some(i),
-                    None if !state.in_path => Some(out.len()),
+                    None if !state.in_path => Some((out.len(), state.width)),
                     None => None,
                 };
                 state.in_path = false;
                 path_start = None;
                 if thin
                     && scale > 0.0
-                    && let Some(at) = at
+                    && let Some((at, first_width)) = at
                 {
                     let new_w = h.width / scale;
-                    out.insert(at, Op::new("w", vec![Object::Real(new_w)]));
+                    let width = Op::new("w", vec![Object::Real(new_w)]);
+                    if out.get(at..).is_some_and(|path| path.iter().any(|op| matches!(op.op.as_slice(), b"w" | b"gs" | b"q" | b"Q"))) {
+                        let path = out.split_off(at);
+                        let mut path = path.into_iter();
+                        if let Some(first) = path.next() {
+                            // Some readers capture width at the first subpath. Restore it straight
+                            // away so an intervening q saves the original graphics state.
+                            out.push(width.clone());
+                            out.push(first);
+                            out.push(Op::new("w", vec![Object::Real(first_width)]));
+                        }
+                        out.extend(path);
+                        // PDF uses the state at the stroke, after any intervening w, gs or Q.
+                        out.push(width);
+                    } else {
+                        out.insert(at, width);
+                    }
                     out.push(op);
                     out.push(Op::new("w", vec![Object::Real(state.width)]));
                     fixed += 1;

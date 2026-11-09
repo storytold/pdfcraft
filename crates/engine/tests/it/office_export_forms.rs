@@ -99,7 +99,7 @@ fn exporting_a_form_to_word_keeps_its_boxes_text_and_fields_in_place() {
     assert!(plz.rect.iter().zip([60.0, 580.0, 160.0, 592.0]).all(|(a, b)| (a - b).abs() < 0.01), "{:?}", plz.rect);
     assert_eq!(plz.size, 10.0);
     let ja = page.fields.iter().find(|f| f.name == "Ja").unwrap();
-    assert_eq!(ja.kind, FieldKind::Check { checked: true });
+    assert_eq!(ja.kind, FieldKind::Check { checked: true, on_state: "Yes".into() });
 
     // The turned page's rule lands where the page shows it: user (100, 700)–(300, 700) is the
     // upright line x = 700 from y = 512 down to 312 on the 792 × 612 visible page.
@@ -348,9 +348,9 @@ fn a_fields_state_and_flags_reach_the_export() {
     let pages = s.get(id).unwrap().export_pages();
     let fields = &pages[0].fields;
     let field = |name: &str| fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name}: {fields:#?}"));
-    assert_eq!(field("Shown").kind, FieldKind::Check { checked: true }, "no value: the widget's /AS");
-    assert_eq!(field("Stale").kind, FieldKind::Check { checked: true }, "the page shows /AS, not /V");
-    assert_eq!(field("Unset").kind, FieldKind::Check { checked: false }, "/AS /Off with /V on");
+    assert_eq!(field("Shown").kind, FieldKind::Check { checked: true, on_state: "Yes".into() }, "no value: the widget's /AS");
+    assert_eq!(field("Stale").kind, FieldKind::Check { checked: true, on_state: "Yes".into() }, "the page shows /AS, not /V");
+    assert_eq!(field("Unset").kind, FieldKind::Check { checked: false, on_state: "Yes".into() }, "/AS /Off with /V on");
     assert!(matches!(field("Pick").kind, FieldKind::Choice { editable: true, .. }), "{:?}", field("Pick").kind);
     assert!(matches!(field("Plain").kind, FieldKind::Choice { editable: false, .. }), "{:?}", field("Plain").kind);
     assert!(field("Fixed").read_only && !field("Shown").read_only);

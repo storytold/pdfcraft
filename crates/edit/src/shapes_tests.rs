@@ -173,3 +173,52 @@ fn office_regression_excess_saves_do_not_leak_their_transform() {
     assert_eq!(read.shapes.len(), 1);
     assert_eq!(read.shapes[0].subpaths[0].points, [[10.0, 20.0], [30.0, 40.0]]);
 }
+
+#[test]
+fn review_followup_none_colorants_do_not_paint() {
+    for space in ["[/Separation /None /DeviceGray 5 0 R]", "[/DeviceN [/None] /DeviceGray 5 0 R]"] {
+        let doc = page(
+            "/Hidden cs 1 scn 0 0 10 10 re f 1 0 0 RG 20 0 10 10 re B /Hidden CS 1 SCN 0 1 0 rg 40 0 10 10 re B",
+            &format!("/ColorSpace << /Hidden {space} >>"),
+            &["<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>".into()],
+        );
+        let read = reading_shapes(&doc, 0).unwrap();
+        assert_eq!(read.shapes.len(), 2, "{space}");
+        assert_eq!(read.shapes[0].fill, None);
+        assert_eq!(read.shapes[0].stroke.unwrap().color, [1.0, 0.0, 0.0]);
+        assert_eq!(read.shapes[1].stroke, None);
+        assert_eq!(read.shapes[1].fill, Some([0.0, 1.0, 0.0]));
+    }
+}
+
+#[test]
+fn review_followup_shapes_honor_optional_content_and_form_membership() {
+    for config in ["/OFF [5 0 R]", "/BaseState /OFF /ON [6 0 R]", "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R] >>]"] {
+        let doc = build(&[
+            format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << {config} >> >> >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Properties << /Off 5 0 R /On 6 0 R /Both 8 0 R >> /XObject << /Fm 7 0 R >> >> >>".into(),
+            stream("", "/OC /Off BDC 0 0 10 10 re S /Span BMC 20 0 10 10 re S EMC EMC /OC /On BDC 40 0 10 10 re S EMC /Fm Do /OC /Both BDC 60 0 10 10 re S EMC 80 0 10 10 re S"),
+            "<< /Type /OCG /Name (hidden) /Usage << /View << /ViewState /OFF >> >> >>".into(),
+            "<< /Type /OCG /Name (shown) >>".into(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 200 200] /OC 5 0 R", "100 0 10 10 re S"),
+            "<< /Type /OCMD /OCGs [5 0 R 6 0 R] /P /AllOn >>".into(),
+        ]);
+        let read = reading_shapes(&doc, 0).unwrap();
+        assert!(!read.truncated);
+        assert_eq!(read.shapes.iter().map(|s| s.bounds[0]).collect::<Vec<_>>(), [40.0, 80.0], "{config}");
+    }
+}
+
+#[test]
+fn review_followup_hidden_page_fill_does_not_become_a_word_background() {
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Properties << /Hidden 5 0 R >> >> >>".into(),
+        stream("", "/OC /Hidden BDC 1 0 0 rg 0 0 200 200 re f EMC 0 1 0 rg 0 0 200 200 re f"),
+        "<< /Type /OCG /Name (hidden) >>".into(),
+    ]);
+    assert_eq!(crate::page_background(&doc, 0).unwrap(), Some([0.0, 1.0, 0.0]));
+    assert_eq!(reading_shapes(&doc, 0).unwrap().shapes.len(), 1);
+}

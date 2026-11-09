@@ -6,28 +6,31 @@ use super::layout::{Block, Field, FieldKind, Image, Item, Page, Paint, Shape, Ta
 #[path = "docx_art.rs"]
 mod drawing;
 
+#[path = "docx_fill.rs"]
+mod compound;
+
 // This package contains one custom XML store. Its ID must agree in itemProps and every binding.
 const FIELD_STORE_ID: &str = "{A8EA4468-05AB-4E2B-BB18-926B8DA50E55}";
 const FIELD_STORE_NS: &str = "urn:pdfcraft:form-values";
 
 #[derive(Default)]
 struct FieldBindings<'a> {
-    names: std::collections::HashMap<(&'a str, u8), usize>,
+    names: std::collections::HashMap<(&'a str, u8, &'a str), usize>,
     values: Vec<&'a str>,
 }
 
 impl<'a> FieldBindings<'a> {
     fn field(&mut self, field: &'a Field) -> String {
-        let (kind, value) = match &field.kind {
-            FieldKind::Text { value, .. } => (0, value.as_str()),
-            FieldKind::Choice { value, .. } => (1, value.as_str()),
-            FieldKind::Check { checked } => (2, if *checked { "true" } else { "false" }),
+        let (kind, state, value) = match &field.kind {
+            FieldKind::Text { value, .. } => (0, "", value.as_str()),
+            FieldKind::Choice { value, .. } => (1, "", value.as_str()),
+            FieldKind::Check { checked, on_state } => (2, on_state.as_str(), if *checked { "true" } else { "false" }),
             FieldKind::Radio { .. } => return String::new(),
         };
         // The full qualified name identifies the PDF field; the displayed tag is truncated and
-        // two different long names may share it. Each widget binds to the same XML element.
+        // two different long names may share it. Checkboxes share only equivalent on-states.
         let next = self.values.len() + 1;
-        let id = *self.names.entry((&field.name, kind)).or_insert_with(|| {
+        let id = *self.names.entry((&field.name, kind, state)).or_insert_with(|| {
             self.values.push(value);
             next
         });
@@ -377,6 +380,7 @@ pub const MAX_DOCX_PAGE_POINTS: usize = 200_000;
 struct ArtBudget {
     shapes: usize,
     points: usize,
+    fill_work: usize,
     dropped: bool,
     /// Only boundaries actually emitted within both limits can replace a widget's border.
     outlines: Vec<[f64; 4]>,
@@ -414,7 +418,7 @@ fn round_outline(points: &[[f64; 2]], closed: bool) -> Option<[f64; 4]> {
 
 impl ArtBudget {
     fn new() -> Self {
-        Self { shapes: MAX_DOCX_PAGE_SHAPES, points: MAX_DOCX_PAGE_POINTS, dropped: false, outlines: Vec::new() }
+        Self { shapes: MAX_DOCX_PAGE_SHAPES, points: MAX_DOCX_PAGE_POINTS, fill_work: 1_000_000, dropped: false, outlines: Vec::new() }
     }
 
     /// Room for one more shape of `points` points: `false`, and the page marked as having
@@ -444,19 +448,30 @@ fn normalized(points: &[[f64; 2]], closed: bool, filled: bool) -> (Vec<[f64; 2]>
 }
 
 /// One painted path as VML shapes behind the text: a line for a single straight segment, a
-/// rectangle for an axis-aligned box, otherwise a polyline per subpath (holes in a fill are not
-/// kept). Each shape it writes counts against the page's `budget`. `None` for a shape without
+/// rectangle for an axis-aligned box, otherwise a polyline per subpath; compound fills retain
+/// their holes in one geometry. Each shape counts against the page's `budget`. `None` without
 /// points or paint, or when the budget has no room for any of it.
 fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut ArtBudget) -> Option<String> {
-    if s.stroke.is_none() && s.fill.is_none() {
+    shape_xml_with_fill(s, page_height, id, z, budget, s.fill)
+}
+
+fn shape_xml_with_fill(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut ArtBudget, fill: Option<[f64; 3]>) -> Option<String> {
+    if s.stroke.is_none() && fill.is_none() {
         return None;
+    }
+    if fill.is_some() && (s.paths.len() > 1 || s.even_odd) {
+        let mut xml = compound::xml(s, page_height, id, z, budget, false);
+        if s.stroke.is_some() {
+            xml.push_str(&shape_xml_with_fill(s, page_height, id, z, budget, None).unwrap_or_default());
+        }
+        return (!xml.is_empty()).then_some(xml);
     }
     // PDF fills implicitly close an open subpath; its stroke must still stay open (B/B*).
     // Separate the two paints and charge both against the emitted-shape budget.
-    if s.fill.is_some() && s.stroke.is_some() && s.paths.iter().any(|(_, closed)| !closed) {
+    if fill.is_some() && s.stroke.is_some() && s.paths.iter().any(|(_, closed)| !closed) {
         let mut out = String::new();
         for (points, closed) in &s.paths {
-            let mut path = Shape { paths: vec![(points.clone(), *closed)], stroke: s.stroke, fill: s.fill };
+            let mut path = Shape { even_odd: false, paths: vec![(points.clone(), *closed)], stroke: s.stroke, fill };
             if !closed {
                 path.stroke = None;
                 if let Some(xml) = shape_xml(&path, page_height, id, z, budget) {
@@ -487,7 +502,7 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut A
         }
         None => stroke.push_str(" stroked=\"f\""),
     }
-    let paint = |filled: bool| match s.fill.filter(|_| filled) {
+    let paint = |filled: bool| match fill.filter(|_| filled) {
         Some(f) => format!("{stroke} filled=\"t\" fillcolor=\"{}\"", rgb_attr(f)),
         None => format!("{stroke} filled=\"f\""),
     };
@@ -497,7 +512,7 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut A
         .paths
         .iter()
         .filter(|(p, _)| p.len() > 1 && p.iter().flatten().all(|v| v.is_finite()))
-        .map(|(p, closed)| normalized(p, *closed, s.fill.is_some()));
+        .map(|(p, closed)| normalized(p, *closed, fill.is_some()));
     let mut out = String::new();
     for (points, closed) in subpaths {
         // Every subpath left has two points or more, so it writes one shape.
@@ -596,13 +611,14 @@ fn field_rpr(f: &Field, family: &str, size: f64, spacing: f64) -> String {
 /// indentation or alignment.
 fn frame_ppr(r: [f64; 4], page_height: f64, down: f64, extra: &str) -> String {
     let twips = |v: f64| (layout_number(v) * 20.0).round().clamp(0.0, 31680.0) as i64;
+    let position = |v: f64| (layout_number(v) * 20.0).round().clamp(-31680.0, 31680.0) as i64;
     let down = if down.is_finite() { down.clamp(0.0, (r[3] - r[1]).max(0.0)) } else { 0.0 };
     format!(
         "<w:pPr><w:framePr w:w=\"{}\" w:h=\"{}\" w:hRule=\"exact\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"{}\" w:y=\"{}\"/><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>{extra}</w:pPr>",
         twips(r[2] - r[0]).max(20),
         twips(r[3] - r[1] - down).max(20),
-        twips(r[0]),
-        twips(page_height - r[3] + down)
+        position(r[0]),
+        position(page_height - r[3] + down)
     )
 }
 
@@ -626,7 +642,7 @@ fn field_look_xml(f: &Field, page_height: f64, id: usize, outlined: bool) -> Opt
     if !f.valid_rect() {
         return None;
     }
-    let width = border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 12.0) } else { 1.0 });
+    let width = border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 1584.0) } else { 1.0 });
     // DrawingML centres a line on the outline: an outline half the width inside keeps it in the box.
     let inset = (width / 2.0).min(((r[2] - r[0]) / 2.0).max(0.0)).min(((r[3] - r[1]) / 2.0).max(0.0));
     let (x, y) = (emu(layout_number(r[0] + inset)), emu(layout_number(page_height - r[3] + inset)));
@@ -664,13 +680,13 @@ pub(crate) const MAX_FIELD_NAME_CHARS: usize = 128;
 /// field's maximum length is named in the control's title, since Word doesn't limit a control's
 /// length); a check box shows an X when checked (the PDF draws the box itself); a list is a
 /// drop-down.
-fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
+fn field_xml(f: &Field, page_height: f64, binding: &str, clipped: bool, id: usize) -> Option<String> {
     let r = f.rect;
     if !f.valid_rect() {
         return None;
     }
     let (w, h) = (layout_number(r[2] - r[0]).max(1.0), layout_number(r[3] - r[1]).max(1.0));
-    let size = if f.size.is_finite() && f.size > 0.0 { f.size.clamp(2.0, 72.0) } else { f.auto_size() };
+    let size = if f.size.is_finite() && f.size > 0.0 { f.size.clamp(2.0, 1638.0) } else { f.auto_size() };
     // One line of `size` points sits in the middle of the box.
     let middle = |size: f64| ((h - 1.15 * size) / 2.0).max(0.0);
     let label: String = f.name.chars().take(MAX_FIELD_NAME_CHARS).collect();
@@ -685,6 +701,14 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
         1 => "<w:jc w:val=\"center\"/>",
         2 => "<w:jc w:val=\"right\"/>",
         _ => "",
+    };
+    let paragraph_properties = |rect, height, down: f64, extra: &str| {
+        if clipped {
+            let before = (down * 20.0).round().clamp(0.0, 31680.0) as i64;
+            format!("<w:pPr><w:spacing w:before=\"{before}\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>{extra}</w:pPr>")
+        } else {
+            frame_ppr(rect, height, down, extra)
+        }
     };
     let paragraph = match &f.kind {
         FieldKind::Text { value, multiline, comb, max_len } => {
@@ -738,11 +762,11 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
             let rpr = field_rpr(f, &family, size, spacing);
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{lock}{placeholder}{binding}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
-                frame_ppr(frame, page_height, before, &indent),
+                paragraph_properties(frame, page_height, before, &indent),
                 text_xml
             )
         }
-        FieldKind::Check { checked } | FieldKind::Radio { checked, .. } => {
+        FieldKind::Check { checked, .. } | FieldKind::Radio { checked, .. } => {
             let size = (h.min(w) * 0.8).clamp(4.0, 24.0);
             // The X is Arial's, whatever font the PDF's field names (often ZapfDingbats).
             let rpr = field_rpr(f, "Arial", size, 0.0);
@@ -756,7 +780,7 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
             };
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{binding}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
-                frame_ppr(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
+                paragraph_properties(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
                 u8::from(*checked),
                 if *checked { "X" } else { "\u{2002}" }
             )
@@ -773,12 +797,25 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
             let list = if *editable { "comboBox" } else { "dropDownList" };
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{placeholder}{binding}<w:{list}>{items}</w:{list}></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
-                frame_ppr(r, page_height, middle(size), &format!("<w:ind w:left=\"20\"/>{alignment}")),
+                paragraph_properties(r, page_height, middle(size), &format!("<w:ind w:left=\"20\"/>{alignment}")),
                 esc(&text)
             )
         }
     };
-    Some(paragraph)
+    if clipped {
+        // Paragraph frames are moved onto the page by some readers. A fixed textbox retains
+        // its negative offset and clips at the page edge, with the control in local coordinates.
+        let (x, y) = (layout_number(r[0]), layout_number(page_height - r[3]));
+        let w = match &f.kind {
+            FieldKind::Text { comb: Some(n), .. } if *n > 0 => layout_number(w + w / *n as f64),
+            _ => w,
+        };
+        Some(format!(
+            "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr><w:r><w:pict><v:rect id=\"CroppedField{id}\" style=\"position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;z-index:1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" filled=\"f\" stroked=\"f\"><v:textbox inset=\"0,0,0,0\" style=\"mso-fit-shape-to-text:f\"><w:txbxContent>{paragraph}</w:txbxContent></v:textbox><w10:wrap type=\"none\"/></v:rect></w:pict></w:r></w:p>"
+        ))
+    } else {
+        Some(paragraph)
+    }
 }
 
 /// A gap between two pieces of a line wider than this many times their size starts a new
@@ -847,7 +884,19 @@ fn positioned_page<'a>(
     let groups: Vec<Vec<&Block>> = if page.lines.is_empty() {
         reading_order(page, page.blocks.iter().map(|b| (b.rect, b.size, b)).collect()).into_iter().map(|b| vec![b]).collect()
     } else {
-        rows(&page.lines)
+        let groups = rows(&page.lines);
+        reading_order(
+            page,
+            groups
+                .into_iter()
+                .filter_map(|group| {
+                    let first = group.first()?;
+                    let rect =
+                        group.iter().fold(first.rect, |a, b| [a[0].min(b.rect[0]), a[1].min(b.rect[1]), a[2].max(b.rect[2]), a[3].max(b.rect[3])]);
+                    Some((rect, first.size, group))
+                })
+                .collect(),
+        )
     };
     for group in &groups {
         let Some(b) = group.first().copied() else { continue };
@@ -960,7 +1009,9 @@ fn positioned_page<'a>(
     let mut long_list =
         page.fields.iter().take(MAX_DOCX_PAGE_SHAPES).any(|f| !f.valid_rect() || matches!(f.kind, FieldKind::Radio { .. }) && !f.read_only);
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES).filter(|f| f.valid_rect()) {
-        if let Some(xml) = field_xml(f, page.height, &bindings.field(f)) {
+        *shape_id = shape_id.saturating_add(1);
+        let clipped = f.rect[0] < 0.0 || f.rect[1] < 0.0 || f.rect[2] > page.width || f.rect[3] > page.height;
+        if let Some(xml) = field_xml(f, page.height, &bindings.field(f), clipped, *shape_id) {
             s.push_str(&xml);
             long_list |= matches!(&f.kind, FieldKind::Choice { options, .. } if options.len() > MAX_DOCX_LIST_ITEMS);
         }
@@ -1037,6 +1088,7 @@ pub fn docx_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 /// [`docx`], and the pages (0-based) that kept their layout but had more shapes, points or fields
 /// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]), or whose paths
 /// were not all read ([`Page::art_truncated`]): the rest of those are missing from the document.
+/// Compound fills that exceed the bounded tessellation work are omitted and reported too.
 /// A page that flows draws no shapes, so it is never listed for them.
 pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     docx_checked_with_language(pages, title, None)

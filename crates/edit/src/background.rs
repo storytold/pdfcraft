@@ -63,7 +63,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
     let mut rects: Vec<(Quad, bool)> = Vec::new();
     let mut curved = false;
     let mut clip_pending = false;
+    let mut visibility = crate::optional_content::Visibility::new(doc);
+    let mut marked = crate::optional_content::Marked::default();
+    let properties = resources.get(b"Properties").and_then(|p| doc.dict(p)).unwrap_or_default();
     for op in &ops {
+        if marked.update(op, &properties, &mut visibility) {
+            continue;
+        }
         match op.op.as_slice() {
             b"q" => {
                 if saved.len() < MAX_SAVES {
@@ -129,6 +135,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
                 (rects, curved, clip_pending) = (Vec::new(), false, false);
             }
             b"f" | b"F" | b"f*" | b"B" | b"B*" => {
+                if !marked.visible() {
+                    if clip_pending {
+                        st.clip = None;
+                    }
+                    (rects, curved, clip_pending) = (Vec::new(), false, false);
+                    continue;
+                }
                 let opaque = st.plain && st.alpha >= 0.999;
                 // A second rectangle can cut a hole in the one that covers the page: under the
                 // even-odd rule any second one, under nonzero one wound the other way (a
@@ -146,7 +159,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
                 return Ok(st.fill.filter(|_| opaque && covers && !clip_pending).map(|c| c.map(|v| v.clamp(0.0, 1.0))));
             }
             // Anything else painted first: no page background.
-            b"S" | b"s" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"BI" => return Ok(None),
+            b"S" | b"s" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"BI" if marked.visible() => return Ok(None),
+            b"S" | b"s" | b"b" | b"b*" => {
+                if clip_pending {
+                    st.clip = None;
+                }
+                (rects, curved, clip_pending) = (Vec::new(), false, false);
+            }
             _ => {}
         }
     }

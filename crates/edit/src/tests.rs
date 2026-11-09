@@ -9555,18 +9555,20 @@ fn hairlines_are_widened_in_page_content_and_forms() {
     assert_eq!(fixed, crate::hairlines::Fixed { lines: 3, pages: 1, elsewhere: 0 });
     let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
     let text = flat(&page_content_bytes(&doc, 0));
-    assert!(text.contains("0.72 w 10 10 m 100 10 l S"), "zero width → 0.72 pt: {text}");
+    let widths = |doc: &Document| reading_shapes(doc, 0).unwrap().shapes.into_iter().map(|s| s.stroke.unwrap().width).collect::<Vec<_>>();
+    let actual = widths(&doc);
+    assert_eq!(actual.len(), 6);
+    assert!(actual.iter().zip([0.72, 2.0, 0.72, 0.72, 2.0, 0.5]).all(|(a, b)| (*a - b).abs() < 0.0001), "{actual:?}");
     assert!(text.contains("2 w 10 20 m 100 20 l S") && text.contains("0.5 w 10 30 m 100 30 l S"), "wider lines untouched: {text}");
-    assert!(text.contains("1.44 w 0 0 m 10 10 l S"), "under a half-scale CTM the width is doubled: {text}");
     let Object::Stream(fs) = &*doc.get(form) else { panic!() };
     let ft = flat(&fs.decoded().unwrap());
-    assert!(ft.contains("1.44 w 0 0 m 50 50 l S") && ft.contains("4 w 0 50 m 50 0 l S"), "{ft}");
+    assert!(ft.contains("4 w 0 50 m 50 0 l S"), "wider Form stroke is unchanged: {ft}");
     // Nothing left to fix: a second run changes nothing.
     assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0);
     // A stricter threshold catches the 0.5 pt line too, with a custom width.
     let fixed = fix_hairlines(&mut doc, &[0], &Hairlines { narrower_than: 0.6, width: 1.0, ..Hairlines::default() }).unwrap();
     assert_eq!(fixed.lines, 1);
-    assert!(flat(&page_content_bytes(&doc, 0)).contains("1 w 10 30 m 100 30 l S"));
+    assert!((widths(&doc).last().unwrap() - 1.0).abs() < 0.0001);
     assert!(fix_hairlines(&mut doc, &[0], &Hairlines { width: 0.0, ..Hairlines::default() }).is_err());
 }
 
@@ -14823,5 +14825,32 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
             .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
+    }
+}
+
+#[test]
+fn review_followup_hairline_width_survives_intervening_changes() {
+    use crate::hairlines::{Hairlines, fix_hairlines};
+    for (change, after) in [("0.1 w", ""), ("/Thin gs", ""), ("q 2 w Q", ""), ("q", "Q")] {
+        let mut doc = fixture();
+        let page = page_list(&doc)[0].clone();
+        let data = format!("0 w 10 10 m 100 10 l {change} 10 20 m 100 20 l S {after} 10 30 m 100 30 l S");
+        let stream = doc.add(Object::Stream(Stream::flate(Dict::new(), data.as_bytes())));
+        doc.update_dict(page.obj, |d| {
+            d.set(b"Contents".to_vec(), Object::Ref(stream));
+            d.set(
+                b"Resources".to_vec(),
+                Object::Dict(Dict::from_iter([(
+                    b"ExtGState".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Thin".to_vec(), Object::Dict(Dict::from_iter([(b"LW".to_vec(), Object::Real(0.1))])))])),
+                )])),
+            );
+        })
+        .unwrap();
+        assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 2, "{change}");
+        let read = reading_shapes(&doc, 0).unwrap();
+        assert_eq!(read.shapes.len(), 2);
+        assert!(read.shapes.iter().all(|s| (s.stroke.unwrap().width - 0.72).abs() < 0.0001), "{change}: {:?}", read.shapes);
+        assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0, "repair is idempotent: {change}");
     }
 }

@@ -70,6 +70,8 @@ pub struct Stroke {
 /// A painted vector path: a form's rule, box or comb cell, a table border, a filled panel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
+    /// PDF even-odd fill rule; false uses nonzero winding across all contours.
+    pub even_odd: bool,
     /// Each subpath's points on the displayed page in points (y up), and whether it is closed.
     pub paths: Vec<(Vec<[f64; 2]>, bool)>,
     pub stroke: Option<Stroke>,
@@ -83,8 +85,8 @@ pub enum FieldKind {
     /// A text field. `comb`: the number of cells a comb field spreads its characters over;
     /// `max_len`: the most characters it takes.
     Text { value: String, multiline: bool, comb: Option<usize>, max_len: Option<usize> },
-    /// A check box.
-    Check { checked: bool },
+    /// A check box; repeated widgets share a value only when their PDF on-state names match.
+    Check { checked: bool, on_state: String },
     /// One button of a radio group of `buttons` buttons. Word preserves these as locked
     /// controls and reports lost editability through `docx_checked`.
     Radio { checked: bool, buttons: usize },
