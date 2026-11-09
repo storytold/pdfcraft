@@ -200,6 +200,13 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
+/// Whether to use app-drawn window controls: an explicit `PDFCRAFT_TITLEBAR=app`
+/// override wins on any Unix desktop, otherwise only a native Wayland session
+/// on Linux gets them; X11 keeps server-side decorations for tiling (#3467).
+fn use_app_drawn_controls(titlebar_override: bool, is_linux: bool, wayland_display: Option<&str>) -> bool {
+    titlebar_override || (is_linux && wayland_display.is_some_and(|v| !v.is_empty()))
+}
+
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
@@ -242,7 +249,8 @@ fn main() -> eframe::Result {
     // applies on X11 and FreeBSD.
     let titlebar_override =
         cfg!(all(unix, not(target_os = "macos"))) && std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) == Some("app");
-    let window_controls = if titlebar_override || (cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty())) {
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+    let window_controls = if use_app_drawn_controls(titlebar_override, cfg!(target_os = "linux"), wayland_display.as_deref()) {
         decorations::app_drawn()
     } else {
         None
@@ -1033,5 +1041,19 @@ mod x11_decorations_tests {
             "minimum height {min_h} must be below the 520px minimum that left no room for the frame"
         );
         assert!(min_h >= 400.0, "minimum height {min_h} must stay usable for the layout");
+    }
+
+    #[test]
+    fn app_drawn_controls_only_on_wayland_or_with_override() {
+        // X11 Linux without the override keeps server-side decorations.
+        assert!(!super::use_app_drawn_controls(false, true, None));
+        assert!(!super::use_app_drawn_controls(false, true, Some("")));
+        // A native Wayland session on Linux gets app-drawn controls.
+        assert!(super::use_app_drawn_controls(false, true, Some("wayland-1")));
+        // The explicit override wins on X11 and on non-Linux Unix (FreeBSD).
+        assert!(super::use_app_drawn_controls(true, true, None));
+        assert!(super::use_app_drawn_controls(true, false, None));
+        // Without the override, non-Linux never gets them, even with WAYLAND_DISPLAY set.
+        assert!(!super::use_app_drawn_controls(false, false, Some("wayland-1")));
     }
 }
