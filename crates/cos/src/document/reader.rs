@@ -595,7 +595,7 @@ impl Document {
             return;
         }
         let mut located = BTreeMap::new();
-        for (num, offset, generation, _) in object_headers(&self.data) {
+        for (num, offset, generation, _, _) in object_headers(&self.data) {
             located.insert(num, (offset, generation));
         }
         let mut filled = entries.to_map(&self.data);
@@ -650,13 +650,15 @@ impl Document {
         // the renderer's does, and the header's own generation still resolves through
         // `indexed_header_reference`. A body of yet another generation has no slot left (one per
         // number): `N G R` to it reads as null here though the renderer draws it, so it is noted.
+        // The choice goes by the generation as the renderer reads it (`as_drawn`), not the `u16`
+        // a cos reference can carry: `N 65536 obj` is no real `N 0 obj` to the renderer.
         // Per number: the generation of the header it keeps, and every generation seen.
-        let mut kept: BTreeMap<u32, (u16, std::collections::BTreeSet<u16>)> = BTreeMap::new();
-        for &(num, offset, generation, body) in &headers {
-            let (held, seen) = kept.entry(num).or_insert_with(|| (generation, std::collections::BTreeSet::new()));
-            seen.insert(generation);
-            if generation == 0 || *held != 0 {
-                *held = generation;
+        let mut kept: BTreeMap<u32, (i32, std::collections::BTreeSet<i32>)> = BTreeMap::new();
+        for &(num, offset, _, body, as_drawn) in &headers {
+            let (held, seen) = kept.entry(num).or_insert_with(|| (as_drawn, std::collections::BTreeSet::new()));
+            seen.insert(as_drawn);
+            if as_drawn == 0 || *held != 0 {
+                *held = as_drawn;
                 entries.insert(num, XrefEntry::InFile { offset, generation: 0 });
             }
             objstms.push(num);
@@ -671,12 +673,10 @@ impl Document {
         if entries.is_empty() {
             return Err(CosError::Syntax { offset: 0, detail: "no objects found".into() });
         }
-        let left_out: Vec<ObjRef> = kept
-            .iter()
-            .flat_map(|(&num, (held, seen))| seen.iter().filter(move |&&g| g != 0 && g != *held).map(move |&g| ObjRef::new(num, g)))
-            .collect();
+        let left_out: Vec<(u32, i32)> =
+            kept.iter().flat_map(|(&num, (held, seen))| seen.iter().filter(move |&&g| g != 0 && g != *held).map(move |&g| (num, g))).collect();
         if !left_out.is_empty() {
-            let named: Vec<String> = left_out.iter().take(8).map(|r| format!("{} {}", r.num, r.generation)).collect();
+            let named: Vec<String> = left_out.iter().take(8).map(|(num, generation)| format!("{num} {generation}")).collect();
             let more = if left_out.len() > 8 { format!(" and {} more", left_out.len() - 8) } else { String::new() };
             log.push(format!(
                 "rebuilding the cross-reference index left out {} objects that share a number with the object kept for it ({}{more}); references to them read as null",
@@ -789,8 +789,10 @@ fn shifted_subsection_end(data: &[u8], at: usize) -> Option<u32> {
 }
 
 /// Every `N G obj` header in `data`, in file order, as (number, offset, generation, position
-/// after `obj`).
-fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize)> {
+/// after `obj`, generation as the renderer reads it). The renderer's rebuilt table reads G as an
+/// `i32` and takes 0 when it cannot (hayro-syntax `read_object_header`), so a G past `u16`, which
+/// is 0 here, can be another generation there.
+fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize, i32)> {
     let mut headers = Vec::new();
     let mut i = 0;
     while i < data.len() {
@@ -804,8 +806,9 @@ fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize)> {
             if !n.is_empty() && !g.is_empty() && n.iter().all(u8::is_ascii_digit) && g.iter().all(u8::is_ascii_digit) && lx.eat_keyword(b"obj") {
                 let num = std::str::from_utf8(n).ok().and_then(|s| s.parse::<u32>().ok());
                 let generation = std::str::from_utf8(g).ok().and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
+                let as_drawn = std::str::from_utf8(g).ok().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
                 if let Some(num) = num {
-                    headers.push((num, i as u64, generation, lx.pos));
+                    headers.push((num, i as u64, generation, lx.pos, as_drawn));
                 }
                 i = lx.pos;
                 continue;

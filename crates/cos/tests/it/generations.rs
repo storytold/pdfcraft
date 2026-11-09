@@ -515,7 +515,7 @@ const OTHER: &str = "1 0 0 rg 100 100 20 20 re f";
 /// A file with no usable cross-reference data (`startxref` points nowhere), so both cos and the
 /// renderer rebuild it from object headers. The page draws `page_ref`; `bodies` are the
 /// `4 G obj` content streams after it, as (generation, content), in file order (#6759).
-fn rebuilt_page(page_ref: &str, bodies: &[(u16, &str)]) -> Arc<Vec<u8>> {
+fn rebuilt_page(page_ref: &str, bodies: &[(u32, &str)]) -> Arc<Vec<u8>> {
     let mut pdf = format!(
         "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n\
          3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {page_ref} >>\nendobj\n"
@@ -563,10 +563,15 @@ fn a_rebuilt_index_keeps_the_generation_0_body_the_page_draws() {
 #[test]
 fn a_rebuilt_index_answers_generation_0_for_an_object_with_only_another_generation() {
     // The renderer's rebuilt table lets the last header stand in for `N 0 R` when there is no
-    // `N 0 obj` (#5580); cos follows it, and the header's own generation still resolves.
-    for (page_ref, bodies) in
-        [("4 0 R", &[(1, COVER)][..]), ("4 1 R", &[(1, COVER)]), ("4 0 R", &[(1, OTHER), (2, COVER)]), ("4 2 R", &[(1, OTHER), (2, COVER)])]
-    {
+    // `N 0 obj` (#5580); cos follows it, and the header's own generation still resolves. A
+    // generation past `u16` is still another generation to the renderer, not a real `N 0 obj`.
+    for (page_ref, bodies) in [
+        ("4 0 R", &[(1, COVER)][..]),
+        ("4 1 R", &[(1, COVER)]),
+        ("4 0 R", &[(1, OTHER), (2, COVER)]),
+        ("4 2 R", &[(1, OTHER), (2, COVER)]),
+        ("4 0 R", &[(65536, OTHER), (1, COVER)]),
+    ] {
         let bytes = rebuilt_page(page_ref, bodies);
         assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
         let doc = Document::open(bytes).unwrap();
