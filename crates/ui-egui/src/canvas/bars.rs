@@ -67,8 +67,8 @@ pub(super) enum Notice {
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
-/// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// snapshot is, then pages cut at the renderer's limits, then the signature status bar, a
+/// form's scripts having been turned off, security, forms and warnings.
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
@@ -135,6 +135,13 @@ pub(super) fn notices(
         if close {
             return Some(Notice::Close);
         }
+    }
+    // Content cut at the renderer's limits (#623): what is missing is not visible, so the page
+    // is named in a bar of its own, which the signature, form and security bars below can't
+    // replace and dismissing them doesn't hide. Dismissing it covers the pages cut so far: a
+    // page found cut later shows it again.
+    if view.cut_pages.iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
+        cut_pages_bar(view, ui, t);
     }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
@@ -261,6 +268,33 @@ pub(super) fn notices(
     open_security.then_some(Notice::Security).or(toggled)
 }
 
+/// The bar naming the pages whose content was cut at the renderer's limits (#623).
+fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui, t: &Tokens) {
+    let Some(&first) = view.cut_pages.iter().next() else { return };
+    let page = first.saturating_add(1).to_string();
+    let n = view.cut_pages.len();
+    let text = if n == 1 {
+        crate::i18n::fmt(
+            tl!("Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and only part of its text can be found or copied."),
+            &[("page", &page)],
+        )
+    } else {
+        crate::i18n::fmt(
+            tl!(
+                "{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and only part of their text can be found or copied."
+            ),
+            &[("n", &n.to_string()), ("page", &page)],
+        )
+    };
+    let mut dismiss = false;
+    notice_bar(ui, t, "triangle-alert", t.accent_text, text, |ui| {
+        dismiss = icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked();
+    });
+    if dismiss {
+        view.cut_notice_dismissed.extend(view.cut_pages.iter().copied());
+    }
+}
+
 /// One notice bar: an icon and a message on the left, `buttons` (added right to left) on the
 /// right. The buttons are laid out first, so the message only gets the width they leave: it
 /// wraps there (or, when very little is left, is cut short with the full text on hover) instead
@@ -270,8 +304,29 @@ pub(super) fn notices(
 fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
     const ROW: f32 = 28.0;
     const ICON: f32 = 16.0;
+    /// Content width below which the buttons stack under the message.
+    const STACK_BELOW: f32 = 200.0;
+    /// Content width under which stacking is not tried: the message would wrap to a column of a
+    /// few characters, thousands of points tall, and push the hotbar off the screen. Such a width
+    /// is below the smallest supported window, so the single row stays as it was.
+    const STACK_ABOVE: f32 = 100.0;
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
         let width = ui.available_width();
+        if (STACK_ABOVE..STACK_BELOW).contains(&width) {
+            // A narrow document area (a half-width window): the message takes the full width and
+            // the buttons sit on a row of their own below it, rather than squeezing it to nothing.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                let (slot, _) = ui.allocate_exact_size(vec2(ICON, ICON), Sense::hover());
+                icons::paint(ui, Rect::from_center_size(slot.center(), vec2(ICON, ICON)), icon, ICON, icon_color);
+                ui.add(egui::Label::new(egui::RichText::new(text).color(t.text)).wrap());
+            });
+            // The buttons wrap onto further rows when even the full width is too narrow for them all.
+            ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
+                ui.set_min_height(ROW);
+                buttons(ui);
+            });
+            return;
+        }
         ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_height(ROW);
             buttons(ui);
