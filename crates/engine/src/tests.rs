@@ -8990,6 +8990,16 @@ f(1)</script>",
     // field. While each field's redraw read the whole form again (quadratic in the fields), this
     // took about 25 to 60 s; with one reading for all of them it takes about 4 s.
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    // Those layouts drew every field, the 1,000 rows' too, each with its value.
+    let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+    let all = pdfcraft_forms::fields(cos);
+    let drawn = |w: &pdfcraft_forms::Widget| {
+        cos.get(w.obj).as_dict().and_then(|d| d.get(b"AP").cloned()).is_some_and(|ap| cos.resolve(&ap).as_dict().is_some_and(|ap| ap.contains(b"N")))
+    };
+    let undrawn: Vec<&str> = all.iter().filter(|f| !f.widgets.iter().all(drawn)).map(|f| f.name.as_str()).collect();
+    assert!(undrawn.is_empty(), "{} of {} fields have no appearance: {:?}", undrawn.len(), all.len(), &undrawn[..undrawn.len().min(5)]);
+    let price = all.iter().find(|f| f.name == "price").expect("price");
+    assert!(normal_appearance(cos, price.widgets[0].obj.num).contains("(5)"), "{}", normal_appearance(cos, price.widgets[0].obj.num));
 }
 
 #[test]

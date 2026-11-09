@@ -314,7 +314,9 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// fields reads the form once rather than once per name: laying out an XFA form redraws every
 /// field, and a reading per field made that quadratic (seconds for each layout of a 1,000-row
 /// table). A redraw changes only the field's own widgets, so one reading serves every field
-/// redrawn after it.
+/// redrawn after it. Nothing else may change the form between the reading and the redraw: the
+/// field is drawn as it was read (an edited value would be drawn over with the old one), and
+/// re-reading it here would cost the reading this function saves. Redraw by name after an edit.
 pub fn redraw_read_field(doc: &mut Document, field: &Field) -> Result<(), FormError> {
     draw_widgets(doc, field, None)
 }

@@ -5747,6 +5747,29 @@ fn redrawing_fields_already_read_reads_the_form_once() {
     }
 }
 
+/// Two fields with one full name (a malformed form) are each drawn with their own value by a
+/// redraw from one reading; by name, the first would be drawn twice and the second not at all.
+#[test]
+fn redrawing_fields_already_read_draws_each_of_two_same_named_fields() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V (first) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V (second) /Rect [50 650 250 670] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert_eq!(all.iter().filter(|f| f.name == "dup").count(), 2, "{all:?}");
+    for f in &all {
+        redraw_read_field(&mut doc, f).unwrap();
+    }
+    let drawn: Vec<String> = all.iter().map(|f| ap(&doc, &f.widgets[0])).collect();
+    assert!(drawn[0].contains("(first)") && !drawn[0].contains("(second)"), "{drawn:?}");
+    assert!(drawn[1].contains("(second)") && !drawn[1].contains("(first)"), "{drawn:?}");
+}
+
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
 /// the group's buttons in the calculation order; and a text field `name` with two widgets.
 fn radio_group_form() -> Document {
