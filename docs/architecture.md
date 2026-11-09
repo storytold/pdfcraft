@@ -64,7 +64,9 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 - The raster is uploaded to the GPU as a texture; egui draws the interface through wgpu (OpenGL
   fallback when a device can't be configured).
 - Text extraction (reading order, columns, vertical CJK, rotated text) feeds find, select, copy,
-  redaction, export and compare; word-F1 0.98 against `pdftotext` on the corpus.
+  redaction, export and compare; word-F1 0.98 against `pdftotext` on the corpus. Vertical CJK text
+  written without a vertical font — one upright glyph placed on its own, top to bottom, columns
+  right to left — is grouped into columns for selection and copy (`#3712`).
 - The replacement (M2, ADR-0004) is the `model` crate, our own font engine and DisplayList devices;
   only the first pieces of `model` exist. See [gaps.md](gaps.md) gap 2.
 
