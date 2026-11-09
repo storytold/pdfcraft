@@ -441,12 +441,25 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let reset_clicked = gate
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
+    // A click away from the picture (its shape, uncropped, not its bounds) and its crop box and
+    // handles applies the crop and lets the picture go, as Done and then that click would
+    // (#6422). It is pressed away too ([`CropPart::Page`]), so a press on the picture let go just
+    // past it is not one; a control's click is the control's.
+    let pressed_away = matches!(press, PagePress::Mine(Owner::Picture { part: PicturePart::Crop(CropPart::Page), .. }));
+    let away_clicked = gate
+        && resp.clicked()
+        && pressed_away
+        && !(done_clicked || cancel_clicked || reset_clicked)
+        && hover_pos.is_some_and(|p| matches!(crop_part(xf, info, page, Some(image), mode, p), None | Some(CropPart::Page)));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
         mode.drag = None;
-    } else if done_clicked {
+    } else if done_clicked || away_clicked {
         apply_crop_mode(view, image);
+        if away_clicked {
+            view.image_selection = None;
+        }
     } else if cancel_clicked && let Some(s) = view.image_selection.as_mut() {
         s.crop = None;
     }
@@ -580,28 +593,40 @@ pub(crate) fn handle_hit(
 pub(crate) fn crop_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
     let s = view.image_selection.as_ref().filter(|s| s.page == page)?;
     let mode = s.crop.as_ref()?;
-    let crop = |part, icon| Some(Hit::new(Owner::Picture { index: s.index, part: PicturePart::Crop(part) }, Layer::Editor, icon));
+    let part = crop_part(xf, info, page, images.get(s.index), mode, p)?;
+    let icon = match part {
+        CropPart::Page if mode.controls.iter().any(|r| r.contains(p)) => egui::CursorIcon::PointingHand,
+        CropPart::Grip(g) => GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()),
+        CropPart::Keep => egui::CursorIcon::Grab,
+        CropPart::Page | CropPart::Cut => egui::CursorIcon::Default,
+    };
+    Some(Hit::new(Owner::Picture { index: s.index, part: PicturePart::Crop(part) }, Layer::Editor, icon))
+}
+
+/// What of crop mode `mode` on the picture `image` lies under `p` ([`crop_hit`]): a control (as
+/// [`CropPart::Page`]), a grip, the box kept, the picture outside it, or the rest of the page;
+/// `None` off the page, its grips and its controls.
+fn crop_part(xf: &PageXform, info: &DocInfo, page: usize, image: Option<&pdfcraft_engine::PageImage>, mode: &CropMode, p: Pos2) -> Option<CropPart> {
     if mode.controls.iter().any(|r| r.contains(p)) {
-        return crop(CropPart::Page, egui::CursorIcon::PointingHand);
+        return Some(CropPart::Page);
     }
-    let image = images.get(s.index);
     let kept = image.and_then(|image| crop_frames(xf, info, page, image, mode.keep)).map(|(_, k)| k);
     // The grips reach past the page's edge, where those of a picture filling its page lie half.
     if let Some(g) = kept.and_then(|k| crop_handles(k).iter().position(|h| h.distance(p) < CROP_GRIP_REACH)) {
-        return crop(CropPart::Grip(g), GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()));
+        return Some(CropPart::Grip(g));
     }
     if !xf.rect.contains(p) {
         return None;
     }
     if kept.is_some_and(|k| k.contains(p)) {
-        return crop(CropPart::Keep, egui::CursorIcon::Grab);
+        return Some(CropPart::Keep);
     }
     let on_picture = image.is_some_and(|image| {
         let shown = ImageObb::from_image(image, xf, info, page);
         let whole = ImageObb::from_matrix(image.matrix, xf, info, page);
         quad_contains(shown.corners(), p) || quad_contains(whole.corners(), p)
     });
-    crop(if on_picture { CropPart::Cut } else { CropPart::Page }, egui::CursorIcon::Default)
+    Some(if on_picture { CropPart::Cut } else { CropPart::Page })
 }
 
 /// The picture under `p` (its shape, not only its box; for the selected one, its frame, a hole in it
