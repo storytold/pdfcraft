@@ -94,6 +94,11 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
+                Request::CalculationOverridden(message) => {
+                    if self.pending_calc_override.is_none() {
+                        self.pending_calc_override = Some((id, message));
+                    }
+                }
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }

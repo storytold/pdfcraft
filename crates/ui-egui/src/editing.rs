@@ -324,6 +324,17 @@ impl PdfCraftApp {
         false
     }
 
+    /// The user's answer to [`Self::pending_calc_override`]: keep the value typed into the
+    /// calculated field, or go back to the calculated value by undoing the entry (which also
+    /// takes back the mark that kept the calculations off the field). Only the entry in the
+    /// document showing is undone: if another one is active by now, the value stays.
+    pub fn resolve_calc_override(&mut self, keep: bool) {
+        let Some((id, _)) = self.pending_calc_override.take() else { return };
+        if !keep && self.active_ids().is_some_and(|(_, active)| active == id) {
+            self.history_step(true);
+        }
+    }
+
     pub fn redo(&mut self) {
         if self.combine_showing() {
             self.combine_history_step(false);

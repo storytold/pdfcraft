@@ -361,3 +361,72 @@ fn a_form_that_turns_field_highlighting_on_gets_it() {
     h.run_steps(4);
     assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
 }
+
+/// A form with `k2` calculated from `k1`, a calculation the form only recommends
+/// (`<calculate override="warning">`).
+fn recommended_calculation() -> Vec<u8> {
+    pdfcraft_xfa::fixtures::shell(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="k1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
+  <field name="k2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">k1.rawValue * 10</script></calculate></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+    )
+}
+
+fn type_value(h: &mut Harness<'static, PdfCraftApp>, field: &str, value: &str) {
+    let name = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().name.clone()
+    };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name, value: pdfcraft_engine::FieldValue::Text(value.into()) });
+    h.run_steps(3);
+}
+
+fn value(h: &Harness<'static, PdfCraftApp>, field: &str) -> String {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().value.join("")
+}
+
+/// Typing over a recommended calculation asks whether to keep the value: keeping it leaves the
+/// field alone when the calculation's inputs change; using the calculated value (the default,
+/// also what Escape chooses) takes the entry back.
+#[test]
+fn typing_over_a_recommended_calculation_asks_whether_to_keep_the_value() {
+    let mut h = open(recommended_calculation());
+    assert_eq!(value(&h, "k2"), "10");
+    type_value(&mut h, "k2", "5");
+    assert!(h.state().pending_calc_override.is_some());
+    h.get_by_label("Replace the calculated value?");
+    if let Ok(dir) = std::env::var("PDFCRAFT_XFA_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(std::path::Path::new(&dir).join("calculation-override-prompt.png")).unwrap();
+    }
+    h.get_by_label("Keep my value").click();
+    h.run_steps(3);
+    assert!(h.state().pending_calc_override.is_none());
+    type_value(&mut h, "k1", "2");
+    assert_eq!(value(&h, "k2"), "5", "kept over the calculation");
+
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "k2"), h.state().pending_calc_override.is_none()), ("10".to_string(), true));
+    type_value(&mut h, "k1", "3");
+    assert_eq!(value(&h, "k2"), "30", "calculated again");
+
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+}

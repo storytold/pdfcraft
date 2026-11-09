@@ -248,6 +248,53 @@ pub(super) fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
+/// The user typed a value into an XFA field whose calculation the form only recommends
+/// (`<calculate override="warning">`, XFA 3.3 p. 642): keep the value, which the calculations
+/// then leave alone, or go back to the calculated value (the entry is undone). Going back is
+/// the default, and Escape or clicking outside chooses it.
+pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some((id, message)) = app.pending_calc_override.clone() else { return };
+    if app.session.get(id).is_none() {
+        app.pending_calc_override = None;
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut choice = None;
+    let modal = widgets::show_modal(ctx, "calc_override_prompt", |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("triangle-alert", 22.0, t.accent));
+            ui.label(egui::RichText::new(tl!("Replace the calculated value?")).font(theme::semibold(16.0)));
+        });
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(&message).wrap());
+        ui.add_space(6.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(tl!("Keep your value and the form stops calculating this field. Use the calculated value to undo your entry."))
+                    .color(t.text_muted)
+                    .small(),
+            )
+            .wrap(),
+        );
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("Use calculated value"), true).clicked() {
+                choice = Some(false);
+            }
+            if widgets::pill_button(ui, tl!("Keep my value"), false).clicked() {
+                choice = Some(true);
+            }
+        });
+    });
+    if choice.is_none() && modal.should_close() {
+        choice = Some(false);
+    }
+    if let Some(keep) = choice {
+        app.resolve_calc_override(keep);
+    }
+}
+
 /// Absolute document-controlled local paths require consent before any filesystem access.
 pub(super) fn remote_link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(pending) = app.pending_remote_link.clone() else { return };

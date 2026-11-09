@@ -87,11 +87,15 @@ pub struct LiveForm {
 pub struct Overrides {
     pub presence: BTreeMap<String, String>,
     pub access: BTreeMap<String, String>,
+    /// Calculated fields whose value the user typed over a calculation the form only recommends
+    /// (`calculate override="warning"`, XFA 3.3 p. 642), by SOM path, each `1`: the value is an
+    /// override (`value@override`, p. 883), which calculations leave alone.
+    pub overridden: BTreeMap<String, String>,
 }
 
 impl Overrides {
     pub fn is_empty(&self) -> bool {
-        self.presence.is_empty() && self.access.is_empty()
+        self.presence.is_empty() && self.access.is_empty() && self.overridden.is_empty()
     }
 }
 
@@ -127,7 +131,7 @@ pub fn overrides(doc: &Document) -> Overrides {
     let Some((_, acro)) = acroform(doc) else { return out };
     let Some(o) = acro.get(OVERRIDES_KEY).map(|o| doc.resolve(o)) else { return out };
     let Some(d) = o.as_dict() else { return out };
-    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access)] {
+    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access), (&b"Overridden"[..], &mut out.overridden)] {
         if let Some(m) = d.get(which).map(|m| doc.resolve(m))
             && let Some(m) = m.as_dict()
         {
@@ -149,7 +153,7 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         acro.remove(OVERRIDES_KEY);
     } else {
         let mut d = Dict::new();
-        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access)] {
+        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access), ("Overridden", &ov.overridden)] {
             if map.is_empty() {
                 continue;
             }
@@ -166,6 +170,31 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
     }
     Ok(())
+}
+
+/// The template field at `som` (its validation's format test, its calculation's override), for
+/// the checks after the user changes its value; `None` when no template field is there.
+pub fn field_now(tpl: &Template, som: &str) -> Option<Field> {
+    crate::data::template_field(tpl, som).cloned()
+}
+
+/// Whether the user overrode the calculation of the field at `som` (its template value says so,
+/// or [`mark_value_override`] did), so that calculations leave it alone.
+pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
+    match ov.overridden.get(som) {
+        Some(v) => crate::validation_rules::is_override(Some(v)),
+        None => crate::data::template_field(tpl, som).is_some_and(|f| f.value_override),
+    }
+}
+
+/// Keep that the user overrode the calculation of the field at `som`. False when that changed
+/// nothing, or the overrides already hold as many entries as they keep.
+pub fn mark_value_override(ov: &mut Overrides, som: &str) -> bool {
+    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES {
+        return false;
+    }
+    ov.overridden.insert(som.to_string(), "1".to_string());
+    true
 }
 
 fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {

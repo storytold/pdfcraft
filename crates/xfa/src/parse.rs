@@ -10,6 +10,7 @@ use crate::model::{
     Layout, Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script,
     Side, Stroke, Subform, Template, Ui, VAlign, Value,
 };
+use crate::validation_rules::{CalcOverride, Test, is_override};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -815,6 +816,28 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
     (shown, saved)
 }
 
+/// The message `owner` (a `validate` or `calculate`) gives for `test`: the text of its message
+/// named for the test, else the message's one text when that has no name ("used for all
+/// messages issued by the enclosing validate element", XFA 3.3 p. 782).
+fn test_message_of(owner: Option<XmlNode>, test: &str) -> Option<String> {
+    let m = owner.and_then(|v| child(v, "message"))?;
+    let named = children(m, "text").find(|t| t.attribute("name") == Some(test));
+    let only = || {
+        let mut texts = children(m, "text");
+        let first = texts.next().filter(|t| t.attribute("name").is_none_or(|n| n.trim().is_empty()));
+        if texts.next().is_some() { None } else { first }
+    };
+    named.or_else(only).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// The format test of a `<validate>`: its setting (default `warning`, XFA 3.3 p. 880), picture
+/// clause and message.
+fn format_test_of(v: Option<XmlNode>) -> (Test, Option<String>, Option<String>) {
+    let test = Test::parse(v.and_then(|v| v.attribute("formatTest")), Test::Warning);
+    let picture = v.and_then(|v| child(v, "picture")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    (test, picture, test_message_of(v, "formatTest"))
+}
+
 /// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
 /// pictures (edit and data), scripts and access.
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
@@ -865,7 +888,15 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         .map(text_of)
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    let (format_test, format_picture, format_message) = format_test_of(validate_el);
+    let calculate_el = child(n, "calculate");
     Field {
+        format_test,
+        format_picture,
+        format_message,
+        calc_override: CalcOverride::parse(calculate_el.and_then(|c| c.attribute("override"))),
+        calc_message: test_message_of(calculate_el, "override"),
+        value_override: is_override(value_el.and_then(|v| v.attribute("override"))),
         common: parse_common(n, warnings),
         ui: kind,
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
@@ -892,7 +923,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         data_shared: child(n, "bind")
             .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
-        calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
+        calculate: calculate_el.and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
         validate_message,
         required: must_be_filled(validate_el),

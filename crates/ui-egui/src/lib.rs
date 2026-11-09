@@ -777,6 +777,10 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
+    /// The user typed a value into an XFA field the form calculates, and the form recommends its
+    /// calculated value (`<calculate override="warning">`): the value was kept, and the user is asked
+    /// whether to keep it or go back to the calculated value. The document and what the form says.
+    pub pending_calc_override: Option<(DocId, String)>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }

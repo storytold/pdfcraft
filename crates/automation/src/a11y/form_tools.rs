@@ -15,6 +15,8 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Highlight(on) => json!({ "highlight": on }),
         R::SaveAs => json!({ "save_as": true }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
+        // Headless, the value typed stays; undoing the edit goes back to the calculated value.
+        R::CalculationOverridden(m) => json!({ "calculation_overridden": m }),
     }
 }
 

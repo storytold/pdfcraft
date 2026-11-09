@@ -11,6 +11,7 @@ use std::sync::Arc;
 use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaProp, XfaProps};
 use pdfcraft_js::xfa_session::{Script, XfaSession};
 use pdfcraft_xfa::model::{Prop, Props, Template};
+use pdfcraft_xfa::validation_rules as rules;
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
 use crate::js::JsOutput;
@@ -997,6 +998,10 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn calculates(&mut self) -> Result<(), String> {
         let events: Vec<ScriptEvent> = self.live().events.iter().filter(|e| e.activity == "calculate").cloned().collect();
         for ev in &events {
+            // A field whose calculation the user overrode keeps the user's value.
+            if pdfcraft_xfa::value_overridden(self.tpl, &self.ov, &ev.som) {
+                continue;
+            }
             let Some(o) = self.run(ev, "")? else { continue };
             if o.error.is_some() || o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { som, .. } if *som == ev.som)) {
                 continue;
@@ -1234,6 +1239,18 @@ pub(crate) fn on_changes(
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
+        let field = pdfcraft_xfa::field_now(r.tpl, &som);
+        // A value typed into a calculated field: kept in place of the calculation, and the user
+        // asked, when its override says so (see `validation_rules::user_value_overrides`).
+        if let Some(f) = field.as_ref().filter(|f| f.calculate.is_some())
+            && !pdfcraft_xfa::value_overridden(r.tpl, &r.ov, &som)
+            && let Some(m) = rules::user_value_overrides(f.calc_override, f.calc_message.as_deref(), name)
+        {
+            r.run.out.requests.push(Request::CalculationOverridden(m));
+            if pdfcraft_xfa::mark_value_override(&mut r.ov, &som) {
+                r.ov_dirty = true;
+            }
+        }
         for ev in r.events_of(&som, "change") {
             r.run(&ev, &value)?;
         }
@@ -1249,9 +1266,17 @@ pub(crate) fn on_changes(
         if ran_exit {
             exited.push(som.clone());
         }
+        // The format test, then the script test (XFA 3.3 p. 382), when the user leaves the
+        // field (p. 396); the value stays as typed.
+        let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
+        let format_failed = field.as_ref().filter(|f| rules::format_fails(f.format_test, f.format_picture.as_deref(), &value));
+        if let Some(f) = format_failed {
+            r.alert(crate::js::Message::plain(rules::format_message(f.format_message.as_deref(), name)));
+        }
+        let skip_script_message = format_failed.is_some_and(|f| rules::later_tests_skipped(f.format_test));
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
-            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
+            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() && !skip_script_message {
                 r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
             }
         }
@@ -1721,5 +1746,92 @@ mod tests {
         // A changed pick reaches the template, which this document doesn't have.
         let before = [field(text, K::Text, &["same"]), field(list, K::List, &["b", "a"]), field(check, K::CheckBox, &["Yes"])];
         assert!(relayout_changed_text(&mut doc, None, &before).is_err());
+    }
+
+    /// A form with two fields that have a format test (an `error` one with its message, a
+    /// `warning` one by default with a message the single text gives), and three calculated
+    /// fields: one whose calculation the user may override with a warning,
+    /// one that says `disabled` and one that keeps the default.
+    fn checks_form() -> Vec<u8> {
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="V2" w="2in" h="0.3in"><ui><textEdit/></ui><validate formatTest="error"><picture>text{9999}</picture><message><text name="formatTest">Custom format message</text></message></validate></field>
+  <field name="V3" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text>Two digits</text></message></validate></field>
+  <field name="K1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
+  <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
+  <field name="K3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="disabled"><script contentType="application/x-javascript">K1.rawValue * 100</script></calculate></field>
+  <field name="K4" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">K1.rawValue * 1000</script></calculate></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        pdfcraft_xfa::fixtures::shell(template)
+    }
+
+    fn type_into(s: &mut crate::Session, id: crate::DocId, field: &str, value: &str) {
+        let name = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().name.clone();
+        s.apply(id, crate::Edit::SetFieldValue { name, value: pdfcraft_forms::FieldValue::Text(value.into()) }).unwrap();
+    }
+
+    fn value_of(s: &crate::Session, id: crate::DocId, field: &str) -> String {
+        s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().value.join("\n")
+    }
+
+    /// A value that fails its validation's format test says the validation's message when the
+    /// user leaves the field, and stays as typed (XFA 3.3 p. 880, p. 396); one that passes, or
+    /// an empty one, says nothing.
+    #[test]
+    fn a_value_failing_its_format_test_says_the_message_and_stays() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "V2", "abc");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Custom format message"]);
+        assert_eq!(value_of(&s, id, "V2"), "abc");
+        type_into(&mut s, id, "V2", "1234");
+        assert!(s.take_js_output(id).alerts.is_empty());
+        type_into(&mut s, id, "V3", "123");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Two digits"]);
+        type_into(&mut s, id, "V3", "");
+        assert!(s.take_js_output(id).alerts.is_empty());
+    }
+
+    /// A value typed into a field whose calculation the form only recommends is kept, the
+    /// user is asked whether to keep it, and later calculations leave it alone (saved with the
+    /// form); undoing the entry goes back to the calculation. Fields the user didn't override
+    /// keep being calculated, `disabled` among them, as readers do.
+    #[test]
+    fn a_value_typed_over_a_recommended_calculation_stays_until_undone() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        assert_eq!(["K2", "K3", "K4"].map(|f| value_of(&s, id, f)), ["10", "100", "1000"]);
+        type_into(&mut s, id, "K2", "5");
+        let out = s.take_js_output(id);
+        assert!(matches!(out.requests.as_slice(), [Request::CalculationOverridden(m)] if m.contains("K2")), "{out:?}");
+        assert_eq!(value_of(&s, id, "K2"), "5");
+        type_into(&mut s, id, "K1", "2");
+        assert_eq!(["K2", "K3", "K4"].map(|f| value_of(&s, id, f)), ["5", "200", "2000"]);
+        // Kept with the form.
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        let reopened = again.open("saved.pdf", None, saved, None).unwrap();
+        type_into(&mut again, reopened, "K1", "3");
+        assert_eq!(["K2", "K3"].map(|f| value_of(&again, reopened, f)), ["5", "300"]);
+        // Asked again only for a new entry into a field not yet overridden.
+        let _ = again.take_js_output(reopened);
+        type_into(&mut again, reopened, "K2", "6");
+        assert!(again.take_js_output(reopened).requests.is_empty());
+        // Going back: the K1 change, then the entry, undone; the next calculation reaches K2.
+        s.undo(id).unwrap();
+        s.undo(id).unwrap();
+        assert_eq!(value_of(&s, id, "K2"), "10");
+        type_into(&mut s, id, "K1", "4");
+        assert_eq!(value_of(&s, id, "K2"), "40");
     }
 }
