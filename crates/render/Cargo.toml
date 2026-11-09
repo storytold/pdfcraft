@@ -28,6 +28,9 @@ bytemuck = { version = "1" }
 # Resolves relative URI actions against the catalog's /URI /Base, by the rules the browser uses;
 # already in the tree (pdfcraft-engine checks document links with it).
 url = "2.5"
+# Tells combining marks (bidi class NSM: general categories Mn and Me) in extracted text; the
+# version pdfcraft-fonts already uses.
+unicode-bidi = "0.3"
 
 # lopdf (bootstrap) draws random bytes for encryption; on the web they come from the browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

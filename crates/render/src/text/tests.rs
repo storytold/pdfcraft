@@ -1658,6 +1658,257 @@ fn word_gaps_follow_position_not_drawing_order() {
     assert_eq!(layout(v).plain_text(), "שלום עולם");
 }
 
+/// A right-to-left show string in reverse order starts with the space that ends its word, and the next letter is pulled
+/// back over it (ISO 32000-2 §14.8.2.5.3): the space stays a word break after the word, not inside it (pdf.js #11656).
+#[test]
+fn a_space_taken_back_under_the_next_letter_stays_before_it() {
+    let rtl_line = |first: &str| {
+        // Drawn left to right: " הנידמה" with the space's advance taken back, then "רקבמ" after a word gap.
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box(first, 9.9, 0.0, 17.5, 11.0)];
+        let mut x = 17.5;
+        for c in ["נ", "י", "ד", "מ", "ה"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        x += 3.5;
+        for c in ["ר", "ק", "ב", "מ"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        layout(v)
+    };
+    let text = rtl_line("ה");
+    assert_eq!(text.plain_text().trim_end(), "מבקר המדינה");
+    assert_eq!(text.find("המדינה").len(), 1);
+    // The same with punctuation: the question mark ends the line, with no space before it.
+    assert_eq!(rtl_line("?").plain_text().trim_end(), "מבקר המדינ?");
+    // Right-to-left text drawn letter by letter leftwards: the letter after the space ends where the space starts, a
+    // rounding hair over it, and stays on its left.
+    let mut v = Vec::new();
+    let mut x = 60.0;
+    for c in ["ש", "ל", "ו", "ם"] {
+        v.push(em_box(c, x - 6.0, 0.0, x, 11.0));
+        x -= 6.0;
+    }
+    v.push(em_box(" ", x - 3.5, 0.0, x, 11.0));
+    x -= 3.5;
+    v.push(em_box("ע", x - 6.0, 0.0, x + 0.005, 11.0));
+    x -= 6.0;
+    for c in ["ו", "ל", "ם"] {
+        v.push(em_box(c, x - 6.0, 0.0, x, 11.0));
+        x -= 6.0;
+    }
+    assert_eq!(layout(v).plain_text(), "שלום עולם");
+    // A space inside a cluster, under a letter and the mark drawn on it, stays where x order puts it: before the mark.
+    let v = vec![
+        em_box("ש", 9.995, 0.0, 25.0, 11.0),
+        em_box(" ", 10.006, 0.0, 13.5, 11.0),
+        em_box("\u{5B4}", 10.003, 0.0, 12.8, 11.0),
+        em_box("ל", 25.0, 0.0, 31.0, 11.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "ל \u{5B4}ש");
+    // Left-to-right text has no reverse-order show strings: a space taken back there is still placed by position.
+    let v = vec![
+        em_box("a", 0.0, 0.0, 6.0, 11.0),
+        em_box("b", 6.0, 0.0, 12.0, 11.0),
+        em_box(" ", 12.0, 0.0, 15.5, 11.0),
+        em_box("c", 11.9, 0.0, 17.9, 11.0),
+    ];
+    assert_eq!(layout(v).plain_text().trim_end(), "abc");
+    // A space whose advance stands is placed by position, as before.
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box(" ", 6.0, 0.0, 9.5, 11.0), em_box("b", 9.5, 0.0, 15.5, 11.0)];
+    v.push(em_box("c", 15.5, 0.0, 21.5, 11.0));
+    assert_eq!(layout(v).plain_text(), "a bc");
+}
+
+/// A neutral taken back over a space keeps the space before it only inside right-to-left text. On a right-to-left line
+/// drawn in logical order, a parenthesis that opens Latin text and is kerned back into the space before it stays
+/// where its position puts it, as it would on a line without the Hebrew word.
+#[test]
+fn a_taken_back_neutral_beside_latin_text_keeps_its_place() {
+    // Drawn right to left: "שלום", the space, "(" pulled back into the space, then "AB" to its left.
+    let mut v = Vec::new();
+    let mut x = 60.0;
+    for c in ["ש", "ל", "ו", "ם"] {
+        v.push(em_box(c, x - 6.5, 0.0, x, 11.0));
+        x -= 6.5;
+    }
+    v.push(em_box(" ", x - 3.5, 0.0, x, 11.0));
+    x -= 3.5;
+    v.push(em_box("(", x - 2.0, 0.0, x + 2.0, 11.0));
+    x -= 2.0;
+    v.push(em_box("A", x - 13.0, 0.0, x - 6.5, 11.0));
+    v.push(em_box("B", x - 6.5, 0.0, x, 11.0));
+    assert_eq!(layout(v).plain_text(), "שלום (AB");
+    // A number reads as right-to-left beside a neutral: a question mark taken back over the space after "15", drawn in
+    // reverse order, still ends the line with no space before it.
+    let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("?", 9.9, 0.0, 15.0, 11.0)];
+    v.push(em_box("1", 15.0, 0.0, 20.5, 11.0));
+    v.push(em_box("5", 20.5, 0.0, 26.0, 11.0));
+    v.push(em_box(" ", 26.0, 0.0, 29.5, 11.0));
+    let mut x = 29.5;
+    for c in ["ף", "י", "ע", "ס"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim_end(), "סעיף 15?");
+}
+
+/// A mark drawn between a space and the letter taken back over it does not keep them apart: the space still ends the
+/// word before, and the mark follows its letter, whether its box starts right or left of the space's start.
+#[test]
+fn a_mark_between_a_space_and_its_taken_back_letter_keeps_the_space_before_both() {
+    let line = |mark_x0: f32| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("\u{5B8}", mark_x0, 0.0, 17.5, 11.0), em_box("ה", 9.9, 0.0, 17.5, 11.0)];
+        let mut x = 17.5;
+        for c in ["נ", "י", "ד", "מ", "ה"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        x += 3.5;
+        for c in ["ר", "ק", "ב", "מ"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        layout(v).plain_text()
+    };
+    assert_eq!(line(12.0).trim_end(), "מבקר המדינה\u{5B8}");
+    assert_eq!(line(9.95).trim_end(), "מבקר המדינה\u{5B8}");
+    // PDFBOX-5487's Arabic: a tanwin pulled back over the space, and the alef it sits on starting at the space's own
+    // start, so x order puts the alef after the space.
+    let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("\u{64B}", 9.5, 0.0, 16.3, 11.0), em_box("ا", 10.0, 0.0, 12.8, 11.0)];
+    let mut x = 12.8;
+    for c in ["ر", "ي", "ر", "ق", "ت"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    v.push(em_box("ي", 3.0, 0.0, 6.0, 11.0));
+    v.push(em_box("ف", 6.0, 0.0, 9.5, 11.0));
+    assert_eq!(layout(v).plain_text().trim_end(), "تقريراً في");
+}
+
+/// Two taken-back spaces on one line each stay before their letter, and a second space drawn before a taken-back one
+/// stays with it.
+#[test]
+fn two_taken_back_spaces_on_a_line_each_stay_before_their_letter() {
+    // Drawn left to right: " הנידמה" and " רקבמ", each space's advance taken back by its next letter, then " לע".
+    let word = |v: &mut Vec<TextGlyph>, x: &mut f32, first: &str, rest: &[&str]| {
+        v.push(em_box(" ", *x, 0.0, *x + 3.5, 11.0));
+        v.push(em_box(first, *x - 0.1, 0.0, *x + 6.4, 11.0));
+        *x += 6.4;
+        for c in rest {
+            v.push(em_box(c, *x, 0.0, *x + 6.5, 11.0));
+            *x += 6.5;
+        }
+    };
+    let mut v = Vec::new();
+    let mut x = 10.0;
+    word(&mut v, &mut x, "ה", &["נ", "י", "ד", "מ", "ה"]);
+    word(&mut v, &mut x, "ר", &["ק", "ב", "מ"]);
+    // The last word's space keeps its advance.
+    v.push(em_box(" ", x, 0.0, x + 3.5, 11.0));
+    x += 3.5;
+    for c in ["ל", "ע"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim(), "על מבקר המדינה");
+    // Two spaces in a row, the second taken back: both stay before the letter.
+    let mut v = vec![em_box(" ", 6.5, 0.0, 10.0, 11.0), em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("ה", 9.9, 0.0, 17.5, 11.0)];
+    let mut x = 17.5;
+    for c in ["נ", "י", "ד", "מ", "ה"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    // Untrimmed: both spaces follow the word, in drawing order.
+    assert_eq!(layout(v).plain_text(), "המדינה  ");
+}
+
+/// pdf.js issue 11656 (https://github.com/mozilla/pdf.js/issues/11656): its content stream rebuilt with the same
+/// codes, widths, adjustments and `/ToUnicode` on an unembedded font. Each right-to-left show string starts with a
+/// space taken back under the next letter or punctuation; copied text keeps whole words and punctuation after its
+/// word, and the parentheses of "15(ב)(4)" read as before.
+#[test]
+fn issue_11656_layout_reads_whole_words() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let shows: [(f32, f32, &str); 10] = [
+        (
+            386.83,
+            708.96,
+            "[<0003>324<0022>-3<02AD>11<02AC02A5>4<02AB0003>10<02AD02A502AC>4<02B90003>8<02A402AE000302AD>9<02AC02A5>4<02B2>-3<000302AD02A502AC02B9>] TJ",
+        ),
+        (380.71, 708.96, "<0003> Tj"),
+        (
+            329.69,
+            686.62,
+            "[<0003>324<001102A902BA>3<02A902AE02A0000302A302AC>4<02A9000302B8>4<02A102AB>11<000302A902B0>10<02A00003>-2<000F02AD02A902A8>4<02A502A7>13<02A4000302AF02AE000302A302B8>6<02A502A9>5<000302A902B002A0>] TJ",
+        ),
+        (323.57, 686.62, "<0003> Tj"),
+        (446.35, 664.3, "[<0011>10<02AD02A902A3>6<02AC02A9>4<02A4000302AC02AB000302A502AE02AB>] TJ"),
+        (
+            378.19,
+            641.98,
+            "[<000302B3>-2<02A902B202B1>11<000302A902B402AC0003>10<02A402AC02A0000302BA02A5>3<02AC02A5>4<02B2>7<02B4000302A1>-3<02A502A9>5<02A702AC>] TJ",
+        ),
+        (366.19, 641.98, "-0.0278 Tc [<00140018>] TJ 0 Tc"),
+        (346.51, 641.98, "[<000C000B>5<02A1000C>] TJ"),
+        (340.49, 641.98, "[<0017>] TJ"),
+        (236.33, 641.98, "[<0003>324<02A402B002A902A3>4<02AE02A4000302B802B7>16<02A102AE0003>-2<02B7>3<02A502A7>13<02AC0003000B>] TJ"),
+    ];
+    let ops: String = shows.iter().map(|(x, y, show)| format!("BT /F1 11.04 Tf 1 0 0 1 {x} {y} Tm {show} ET\n")).collect();
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0003> <0020> endbfchar 1 beginbfrange <000B> <000C> [<0029> <0028>] endbfrange 3 beginbfchar <000F> <002C> <0011> <002E> <0014> <0031> endbfchar 1 beginbfrange <0017> <0018> <0034> endbfrange 1 beginbfchar <0022> <003F> endbfchar 5 beginbfrange <02A0> <02A1> <05D0> <02A3> <02A5> <05D3> <02A7> <02A9> <05D7> <02AB> <02B4> <05DB> <02B7> <02BA> <05E7> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    let ranges: [(i64, &[i64]); 13] = [
+        (0, &[1000]),
+        (3, &[313]),
+        (11, &[383, 383]),
+        (15, &[303]),
+        (17, &[303]),
+        (20, &[546]),
+        (23, &[546, 546]),
+        (34, &[474]),
+        (672, &[673, 640]),
+        (675, &[601, 685, 274]),
+        (679, &[685, 699, 274]),
+        (683, &[621, 621, 685, 685, 362, 401, 730, 648, 662, 652]),
+        (695, &[677, 569, 815, 709]),
+    ];
+    let w: Vec<Object> = ranges
+        .iter()
+        .flat_map(|(first, widths)| [Object::Integer(*first), Object::Array(widths.iter().map(|&n| Object::Integer(n)).collect())])
+        .collect();
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.as_bytes().to_vec()));
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestHebrew",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "W" => w, "CIDToGIDMap" => "Identity"
+    });
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestHebrew", "Encoding" => "Identity-H", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(612), Object::Integer(792)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let text = extract_page(&Pdf::new(std::sync::Arc::new(bytes)).unwrap(), 0, &InterpreterSettings::default()).unwrap();
+    let plain = text.plain_text();
+    let lines: Vec<&str> = plain.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        [
+            "שלום עולם מה שלום כולם?",
+            "אני יורד מן החוטים, אני כבר ילד אמיתי.",
+            "כמו כל הילדים.",
+            "לחיוב פעולות אלה לפי סעיף 15(ב)(4) לחוק מבקר המדינה"
+        ]
+    );
+    for word in ["המדינה", "כולם?", "אמיתי.", "15(ב)(4)", "(ב)"] {
+        assert_eq!(text.find(word).len(), 1, "{word:?} in {lines:?}");
+    }
+}
+
 /// #2667: a number or punctuation on a right-to-left line must not split it into separately reversed words.
 #[test]
 fn rtl_line_with_number_and_punctuation_reads_in_logical_order() {
@@ -2447,6 +2698,190 @@ fn text_outside_the_crop_box_is_clipped() {
     }
 }
 
+/// One glyph per text object, as a CAD or word-processor PDF writer draws shaped text: `text` in Helvetica
+/// remapped by `/ToUnicode`, base letters 600 units wide, combining marks 0 wide and placed at the pen after their
+/// base shifted by `mark_dx` points (a mark-positioning offset), words 260 units apart, with a space glyph or
+/// without one.
+fn one_glyph_per_show(text: &str, mark_dx: f32, space_glyphs: bool) -> Pdf {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let is_mark = |c: char| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM;
+    let mut chars: Vec<char> = Vec::new();
+    for c in text.chars() {
+        if !chars.contains(&c) {
+            chars.push(c);
+        }
+    }
+    let code = |c: char| 0x21 + chars.iter().position(|&k| k == c).unwrap();
+    let (size, base, space) = (20.0_f32, 600.0_f32, 260.0_f32);
+    let mut ops = String::new();
+    let mut x = 50.0_f32;
+    for c in text.chars() {
+        let at = if is_mark(c) { x + mark_dx } else { x };
+        if c != ' ' || space_glyphs {
+            ops.push_str(&format!("BT /F1 {size} Tf 1 0 0 1 {at:.3} 300 Tm <{:02X}> Tj ET\n", code(c)));
+        }
+        if c == ' ' {
+            x += space * size / 1000.0;
+        } else if !is_mark(c) {
+            x += base * size / 1000.0;
+        }
+    }
+    let width = |c: char| {
+        if is_mark(c) {
+            0
+        } else if c == ' ' {
+            260
+        } else {
+            600
+        }
+    };
+    let widths: Vec<Object> = chars.iter().map(|&c| Object::Integer(width(c))).collect();
+    let pairs: String = chars.iter().map(|&c| format!("<{:02X}> <{:04X}>\n", code(c), u32::from(c))).collect();
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /T def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange {} beginbfchar\n{pairs}endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+        chars.len()
+    );
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let mut differences = vec![Object::Integer(0x21)];
+    differences.extend(chars.iter().map(|_| Object::Name(b"a".to_vec())));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "FirstChar" => 0x21, "LastChar" => 0x20 + chars.len() as i64,
+        "Widths" => widths, "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences }, "ToUnicode" => unicode
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(600), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+}
+
+/// #6517: Thai drawn one glyph per show operation, each zero-advance tone mark or above vowel starting a hair past
+/// its base's advance (or exactly at it, or back over the base), reads in content order: no mark moves after the
+/// next letter, and the word gaps read as spaces whether a space glyph is drawn or not. Copy and Find use this order.
+#[test]
+fn thai_marks_drawn_one_glyph_at_a_time_keep_their_place_and_words() {
+    let thai = "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่";
+    for mark_dx in [0.4, 0.0, -6.0] {
+        for space_glyphs in [false, true] {
+            let text = extract_page(&one_glyph_per_show(thai, mark_dx, space_glyphs), 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(text.plain_text(), thai, "marks {mark_dx} pt past the pen, space glyphs {space_glyphs}");
+            for word in ["ห้อง", "ก๋วยเตี๋ยว", "น้ำ", "ที่นี่"] {
+                assert_eq!(text.find_opts(word, true, true).len(), 1, "{word:?} found as a whole word in {:?}", text.plain_text());
+            }
+        }
+    }
+}
+
+/// Combining marks of other left-to-right scripts ride on their base the same way: Devanagari signs (virama,
+/// anusvara, a below vowel; the spacing vowel sign ि is a letter of its own), and Latin combining accents.
+#[test]
+fn combining_marks_of_other_scripts_keep_their_place() {
+    for text in ["कुछ हिंदी स्कूल", "e\u{301}te\u{301} na\u{303}o"] {
+        let page = extract_page(&one_glyph_per_show(text, 0.4, false), 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(page.plain_text(), text);
+    }
+}
+
+/// A line drawn right to left glyph by glyph still reads by x, and a mark drawn right after its letter moves with
+/// it. A mark that starts far from the glyph before it is not taken for a mark on that glyph: it goes by its own x.
+#[test]
+fn a_mark_moves_with_its_letter_in_a_line_drawn_backwards() {
+    let v = vec![g("c", 24.0, 10.0, 30.0), g("b", 18.0, 10.0, 24.0), g("\u{301}", 24.3, 10.0, 29.3), g("a", 12.0, 10.0, 18.0)];
+    assert_eq!(layout(v).plain_text(), "ab\u{301}c");
+    let v = vec![g("a", 12.0, 10.0, 18.0), g("b", 18.0, 10.0, 24.0), g("c", 24.0, 10.0, 30.0), g("\u{301}", 13.0, 10.0, 18.0)];
+    assert_eq!(layout(v).plain_text(), "a\u{301}bc");
+}
+
+/// A second mark stacked on a letter rides on the letter, not only on the mark before it: a mark drawn back over its
+/// base, then a tone mark a hair past the base's advance, both stay before the next letter.
+#[test]
+fn a_stacked_mark_rides_on_its_base_letter() {
+    let v = vec![g("ก", 12.0, 10.0, 18.0), g("\u{e34}", 10.0, 10.0, 15.0), g("\u{e48}", 19.5, 10.0, 24.5), g("ข", 18.0, 10.0, 24.0)];
+    assert_eq!(layout(v).plain_text(), "ก\u{e34}\u{e48}ข");
+}
+
+/// A mark drawn raised by more than half an em over its letter (a tone mark lifted above an upper vowel) stays on the
+/// letter's line and before the next letter.
+#[test]
+fn a_raised_mark_stays_with_its_letter() {
+    let v = vec![g("ก", 12.0, 10.0, 18.0), g("\u{e48}", 18.4, 16.0, 23.4), g("ข", 18.0, 10.0, 24.0), g("ค", 24.0, 10.0, 30.0)];
+    assert_eq!(layout(v).plain_text(), "ก\u{e48}ขค");
+}
+
+/// A word gap after a mark is measured from its letter's advance: a mark drawn a hair past the pen does not narrow it.
+#[test]
+fn a_word_gap_after_a_mark_is_measured_from_its_letter() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("b", 6.0, 10.0, 12.0), g("\u{301}", 12.4, 10.0, 17.4), g("c", 13.8, 10.0, 19.8), g("d", 19.8, 10.0, 25.8)];
+    assert_eq!(layout(v).plain_text(), "ab\u{301} cd");
+}
+
+/// In a run squeezed to no width, a mark still follows its letter, even when it is drawn past the next letter.
+#[test]
+fn a_mark_in_a_zero_width_run_follows_its_letter() {
+    let v = vec![g("a", 10.0, 10.0, 10.0), g("\u{301}", 10.6, 10.0, 10.6), g("b", 10.3, 10.0, 10.3)];
+    assert_eq!(layout(v).plain_text(), "a\u{301}b");
+}
+
+/// One show string of `text` in Helvetica remapped by `/ToUnicode`, every glyph `width` units wide, combining marks
+/// and spaces included, as a font whose `/Widths` give a mark an advance of its own draws it: each mark moves the pen,
+/// and the next letter starts right at the mark's box.
+fn one_show_string(text: &str, width: i64) -> Pdf {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut chars: Vec<char> = Vec::new();
+    for c in text.chars() {
+        if !chars.contains(&c) {
+            chars.push(c);
+        }
+    }
+    let code = |c: char| 0x21 + chars.iter().position(|&k| k == c).unwrap();
+    let codes: String = text.chars().map(|c| format!("{:02X}", code(c))).collect();
+    let ops = format!("BT /F1 14 Tf 20 220 Td <{codes}> Tj ET");
+    let widths: Vec<Object> = chars.iter().map(|_| Object::Integer(width)).collect();
+    let pairs: String = chars.iter().map(|&c| format!("<{:02X}> <{:04X}>\n", code(c), u32::from(c))).collect();
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /T def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange {} beginbfchar\n{pairs}endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+        chars.len()
+    );
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let mut differences = vec![Object::Integer(0x21)];
+    differences.extend(chars.iter().map(|_| Object::Name(b"a".to_vec())));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "FirstChar" => 0x21, "LastChar" => 0x20 + chars.len() as i64,
+        "Widths" => widths, "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences }, "ToUnicode" => unicode
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(600), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+}
+
+/// A Thai tone mark or above or below vowel whose font gives it an advance of its own (here 300 units, as every
+/// glyph) moves the pen, so the next letter of the word starts a mark's width past its base. The cluster ends at the
+/// mark: no space opens inside "ข้อความ", "เดิม" or "ผู้ใช้", and the space glyphs between the words still read as
+/// spaces.
+#[test]
+fn a_thai_mark_with_its_own_advance_does_not_open_a_word_gap() {
+    let thai = "ข้อความเดิม น้ำ ผู้ใช้";
+    for width in [300, 600] {
+        let text = extract_page(&one_show_string(thai, width), 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(text.plain_text(), thai, "every glyph {width} units wide");
+        for word in ["ข้อความเดิม", "น้ำ", "ผู้ใช้"] {
+            assert_eq!(text.find_opts(word, true, true).len(), 1, "{word:?} found as a whole word in {:?}", text.plain_text());
+        }
+    }
+}
+
 /// A one-page document showing `codes` in a Type 0 font with `encoding` over an embedded
 /// `descendant` (`CIDFontType0` takes the bundled CFF program, `CIDFontType2` a TrueType one)
 /// of the Adobe-Japan1 collection, with `to_unicode` as its `/ToUnicode` CMap when given.
@@ -2705,4 +3140,177 @@ fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
     assert_eq!(text.glyph_at(20.0, 10.0), Some(1), "an edge is in");
     assert_eq!(text.glyph_at(25.0, 5.0), None);
     assert_eq!(PageText::default().glyph_at(0.0, 0.0), None);
+}
+
+/// A combining mark takes the direction of the letter it rides on (UAX #9 W1, nonspacing marks): a Latin accent at the
+/// end of a Latin word on a right-to-left line stays after its letter, not on the far side of it.
+#[test]
+fn a_latin_mark_at_a_word_end_on_a_right_to_left_line_stays_after_its_letter() {
+    // Drawn left to right: "abé" (e and a combining acute riding on it), a space, then "שלום" right to left.
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0), em_box("e", 12.0, 0.0, 18.0, 11.0)];
+    v.push(em_box("\u{301}", 14.0, 0.0, 14.0, 11.0));
+    v.push(em_box(" ", 18.0, 0.0, 21.5, 11.0));
+    let mut x = 21.5;
+    for c in ["ם", "ו", "ל", "ש", "ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim_end(), "שלוםשלום abe\u{301}");
+}
+
+/// A line's edge has the line's direction (UAX #9 X10): on a line of mostly left-to-right text, a neutral taken back
+/// over a space at the line's left edge is not inside right-to-left text, so it stays where its position puts it,
+/// however close a Hebrew word is on its other side.
+#[test]
+fn a_taken_back_neutral_at_the_edge_of_a_left_to_right_line_keeps_its_place() {
+    let line = |words: &[&str]| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("(", 9.9, 0.0, 15.0, 11.0)];
+        let mut x = 15.0;
+        for word in words {
+            for c in word.chars() {
+                v.push(em_box(&c.to_string(), x, 0.0, x + 6.5, 11.0));
+                x += 6.5;
+            }
+            x += 3.5;
+        }
+        layout(v).plain_text()
+    };
+    // Mostly Latin: x order, "(" first.
+    assert_eq!(line(&["םולש", "Hello", "world", "again"]).trim(), "( שלום Hello world again");
+    // Mostly Hebrew: the line's edge is right-to-left, so "(" is taken back with the space, as "?" is in
+    // `a_space_taken_back_under_the_next_letter_stays_before_it`.
+    assert_eq!(line(&["םולש", "םלוע", "AB"]).trim_end(), "AB עולם שלום(");
+}
+
+/// Runs that overprint each other are placed by where their clusters start: a combining mark riding on the second
+/// run's first letter and reaching left of the first run's start does not put the second run first.
+#[test]
+fn a_mark_reaching_left_of_its_letter_does_not_reorder_overprinting_runs() {
+    // A first run "ABCDEF", then a second run drawn back over it, its "c" starting 1 pt right of "A" and the acute on
+    // that "c" reaching 1.5 pt left of "A".
+    let mut v: Vec<TextGlyph> =
+        "ABCDEF".chars().zip(0u8..).map(|(c, k)| em_box(&c.to_string(), 100.0 + 6.0 * f32::from(k), 0.0, 106.0 + 6.0 * f32::from(k), 11.0)).collect();
+    v.push(em_box("c", 101.0, 0.0, 107.0, 11.0));
+    v.push(em_box("\u{301}", 98.5, 0.0, 102.5, 11.0));
+    v.push(em_box("d", 107.0, 0.0, 113.0, 11.0));
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("ABCDEF"), "{text:?}");
+    assert!(text.contains("c\u{301}d"), "{text:?}");
+}
+
+/// A right-to-left mark rides on no glyph, so it keeps its own class: one placed after a Latin
+/// letter, left of the Hebrew letter it belongs to, still reads with the Hebrew word, after its letter.
+#[test]
+fn a_hebrew_mark_after_a_latin_letter_stays_with_the_hebrew_word() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    v.push(em_box("\u{5B8}", 11.9, 0.0, 11.9, 11.0));
+    let mut x = 12.0;
+    for c in ["ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    // The mark follows its letter, the last of "שלום", before the Latin text.
+    assert_eq!(text, "שלום\u{5B8}ab");
+}
+
+/// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
+/// three-letter Hebrew word whose letters each carry two points reads in the same order as without
+/// the points.
+#[test]
+fn marks_do_not_decide_a_lines_direction() {
+    let line = |marks: bool| {
+        let mut v: Vec<TextGlyph> =
+            ["a", "b", "c", "d"].iter().zip(0u8..).map(|(c, k)| em_box(c, 6.0 * f32::from(k), 0.0, 6.0 * f32::from(k) + 6.0, 11.0)).collect();
+        let mut x = 27.5;
+        for c in ["ו", "ל", "ש"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            if marks {
+                v.push(em_box("\u{5B8}", x + 1.0, 0.0, x + 1.0, 11.0));
+                v.push(em_box("\u{5B4}", x + 2.0, 0.0, x + 2.0, 11.0));
+            }
+            x += 6.5;
+        }
+        layout(v).plain_text()
+    };
+    // Compared on the letters alone: the points' own word gaps are not what this is about.
+    let letters = |s: String| s.chars().filter(|&c| c != '\u{5B8}' && c != '\u{5B4}' && c != ' ').collect::<String>();
+    let marked = line(true);
+    for point in ['\u{5B8}', '\u{5B4}'] {
+        assert_eq!(marked.chars().filter(|&c| c == point).count(), 3, "every point is kept: {marked:?}");
+    }
+    assert_eq!(letters(marked), letters(line(false)));
+    assert!(letters(line(true)).starts_with("abcd"), "a mostly Latin line reads Latin first");
+}
+
+/// A ligature glyph counts each of its letters toward a line's direction: a line of an "ffi" ligature, a word gap and
+/// a two-letter Hebrew word reads as the same line with "f", "f" and "i" drawn one by one, Latin first.
+#[test]
+fn a_ligature_counts_each_of_its_letters_toward_a_lines_direction() {
+    let line = |latin: &[&str]| {
+        let mut v: Vec<TextGlyph> = Vec::new();
+        let step = 12.0 / latin.len() as f32;
+        for (k, t) in latin.iter().enumerate() {
+            let x = step * k as f32;
+            v.push(em_box(t, x, 0.0, x + step, 11.0));
+        }
+        v.push(em_box("ל", 16.0, 0.0, 22.5, 11.0));
+        v.push(em_box("ש", 22.5, 0.0, 29.0, 11.0));
+        layout(v).plain_text()
+    };
+    let split = line(&["f", "f", "i"]);
+    assert_eq!(split, "ffi של");
+    assert_eq!(line(&["ffi"]), split);
+}
+
+/// Punctuation of a right-to-left script is not a letter and doesn't decide a line's direction: two Latin letters,
+/// a Hebrew letter and a maqaf and a sof pasuq after it read Latin first.
+#[test]
+fn right_to_left_punctuation_does_not_decide_a_lines_direction() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    let mut x = 16.0;
+    for c in ["\u{5C3}", "\u{5BE}", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("ab"), "{text:?}");
+}
+
+/// An alphabetic nonspacing mark (U+0345) gives the text around a taken-back neutral no direction: a question mark
+/// taken back over the space that starts a reverse-order show string reads as on the same line without the mark.
+#[test]
+fn an_alphabetic_mark_beside_a_taken_back_neutral_gives_it_no_direction() {
+    let line = |mark: bool| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("?", 9.9, 0.0, 15.0, 11.0)];
+        let mut x = 15.0;
+        for c in ["ף", "י", "ע", "ס"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        if mark {
+            v.push(em_box("\u{345}", 14.0, 0.0, 14.0, 11.0));
+        }
+        layout(v).plain_text()
+    };
+    let without = line(false);
+    assert_eq!(line(true).replace('\u{345}', ""), without);
+}
+
+/// A mark of a left-to-right script that rides on no letter has no direction of its own: U+0345 (alphabetic, bidi
+/// class NSM) drawn on the last letter of a Hebrew word, left of it and right after a Latin word, reads with the
+/// Hebrew word, after that letter, as a Hebrew point drawn there does.
+#[test]
+fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    let mut x = 12.0;
+    for c in ["ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        if c == "ם" {
+            v.push(em_box("\u{345}", 11.9, 0.0, 11.9, 11.0));
+        }
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    assert_eq!(text, "שלום\u{345}ab");
 }
