@@ -458,7 +458,7 @@ impl<'a> Inspector<'a> {
         pages
     }
 
-    /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
+    /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
     /// ancestor is already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
     pub(super) fn unlisted_field(&self, id: ObjectId, seen: &HashSet<ObjectId>) -> Option<ObjectId> {
         let mut top = id;
@@ -466,8 +466,10 @@ impl<'a> Inspector<'a> {
         loop {
             let o = Object::Reference(top);
             let d = self.dict(&o)?;
+            // A `/Parent` naming an object the file doesn't hold, or no dictionary, reads as
+            // `null`, the same as no parent (ISO 32000-2 §7.3.9).
             let parent = match d.get(b"Parent") {
-                Ok(Object::Reference(p)) => Some(*p),
+                Ok(Object::Reference(p)) if self.dict(&Object::Reference(*p)).is_some() => Some(*p),
                 _ => None,
             };
             let Some(p) = parent else {

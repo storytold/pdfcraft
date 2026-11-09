@@ -106,10 +106,17 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
             parts.push(t);
         }
-        cur = d.get(b"Parent").and_then(|p| p.as_ref());
+        cur = parent_of(doc, d);
     }
     parts.reverse();
     (!parts.is_empty()).then(|| parts.join("."))
+}
+
+/// The field `d` names as its `/Parent`, when that is a dictionary. A reference to an object the
+/// file doesn't hold reads as `null`, and a `null` entry is the same as an absent one (ISO
+/// 32000-2 §7.3.9): the field is then a root, as if it named no parent.
+fn parent_of(doc: &Document, d: &Dict) -> Option<ObjRef> {
+    d.reference(b"Parent").filter(|p| doc.get(*p).as_dict().is_some())
 }
 
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
@@ -413,7 +420,7 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
     let mut top = r;
     let mut visited = std::collections::HashSet::from([r]);
     loop {
-        let parent = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent"));
+        let parent = doc.get(top).as_dict().and_then(|d| parent_of(doc, d));
         let Some(p) = parent else {
             return if seen.contains(&top) { None } else { Some(top) };
         };
