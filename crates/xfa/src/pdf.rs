@@ -33,6 +33,9 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
+/// Private key on generated date fields: text the date pattern doesn't read is kept, and shown,
+/// as typed, as an XFA form keeps it (the forms layer reads this key).
+pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// Private key on the fields generated to name a signature field by its SOM path, one for each
 /// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
 /// fields they hold.
@@ -62,7 +65,7 @@ pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 /// Most pages searched for earlier pictures.
 const MAX_PAGES_SEARCHED: usize = 10_000;
-/// Most pictures remembered.
+/// Most pictures remembered from earlier passes.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
 
 struct Emitter<'a> {
@@ -107,8 +110,9 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     let mut names = HashSet::new();
     let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
     let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
-    let mut stack: Vec<(Object, String, bool, usize)> =
-        fields.as_array().into_iter().flatten().map(|f| (f.clone(), String::new(), false, 0)).collect();
+    // The accumulated name is shared by the children it is queued for, not copied into each.
+    let mut stack: Vec<(Object, std::rc::Rc<str>, bool, usize)> =
+        fields.as_array().into_iter().flatten().map(|f| (f.clone(), "".into(), false, 0)).collect();
     let mut seen = 0usize;
     while let Some((field, prefix, parent_is_sig, depth)) = stack.pop() {
         seen += 1;
@@ -121,7 +125,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             // Generated to name a signature field: only what it holds is looked at.
             if depth < MAX_FIELD_DEPTH {
                 let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-                stack.extend(kids.into_iter().map(|k| (k, String::new(), false, depth + 1)));
+                stack.extend(kids.into_iter().map(|k| (k, "".into(), false, depth + 1)));
             }
             continue;
         }
@@ -136,12 +140,12 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             continue;
         }
         let name = match d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())) {
-            Some(t) if prefix.is_empty() => t,
-            Some(t) => format!("{prefix}.{t}"),
+            Some(t) if prefix.is_empty() => t.into(),
+            Some(t) => format!("{prefix}.{t}").into(),
             None => prefix,
         };
         if !name.is_empty() {
-            names.insert(name.clone());
+            names.insert(name.to_string());
         }
         let is_sig = match d.name(b"FT") {
             Some(ft) => ft == b"Sig",
@@ -151,7 +155,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
         if is_sig && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some()) {
             // The appearance is on the field when it is its own widget, or on its one widget.
             let appearance = d.get(b"AP").cloned().or_else(|| kids.iter().find_map(|k| doc.resolve(k).as_dict().and_then(|k| k.get(b"AP").cloned())));
-            out.entry(name.clone()).or_insert(Signed { value: value.clone(), appearance });
+            out.entry(name.to_string()).or_insert(Signed { value: value.clone(), appearance });
         }
         if depth < MAX_FIELD_DEPTH {
             stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
@@ -206,6 +210,7 @@ impl Emitter<'_> {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
+                    d.set(DATE_KEY.to_vec(), Object::Bool(true));
                     let mut aa = Dict::new();
                     let pattern = js_string(pattern);
                     aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({pattern});")));
@@ -490,9 +495,9 @@ impl Emitter<'_> {
             return Some(r);
         }
         let r = self.new_image_xobject(data, content_type, &hash)?;
-        if self.images.len() < MAX_REMEMBERED_IMAGES {
-            self.images.insert(hash, r);
-        }
+        // Always remembered: each entry is a hash and a reference to an object this pass wrote
+        // anyway, and a picture past a cap would be decoded and embedded again at every use.
+        self.images.insert(hash, r);
         Some(r)
     }
 
@@ -1038,7 +1043,7 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex32;
+    use super::*;
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {
@@ -1050,5 +1055,32 @@ mod tests {
         let mut ok = b"Ff".to_vec();
         ok.resize(64, b'0');
         assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
+
+    #[test]
+    fn a_picture_past_the_earlier_pass_cap_is_still_embedded_once() {
+        let mut doc = Document::new_empty();
+        let mut em = Emitter {
+            doc: &mut doc,
+            images: HashMap::new(),
+            fields: Vec::new(),
+            radio_groups: HashMap::new(),
+            radio_selected: HashMap::new(),
+            field_count: 0,
+            warnings: Vec::new(),
+            signed: Default::default(),
+            taken: Default::default(),
+            nodes: HashMap::new(),
+        };
+        let png = crate::fixtures::tiny_png();
+        let picture = |i: u32| [png.clone(), i.to_be_bytes().to_vec()].concat();
+        let last = MAX_REMEMBERED_IMAGES as u32 + 10;
+        for i in 0..=last {
+            em.image_xobject(&picture(i), "image/png").expect("decodes");
+        }
+        let before = em.doc.object_numbers().len();
+        let again = em.image_xobject(&picture(last), "image/png").expect("decodes");
+        assert_eq!(em.doc.object_numbers().len(), before, "no new object for a repeated picture");
+        assert_eq!(em.image_xobject(&picture(last), "image/png"), Some(again));
     }
 }
