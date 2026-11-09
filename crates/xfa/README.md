@@ -129,7 +129,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
 ```rust
 if pdfcraft_xfa::is_dynamic(&doc) {
     let report = pdfcraft_xfa::render_into(&mut doc)?;   // pages, fields, warnings
-    for f in pdfcraft_forms::fields(&doc) { pdfcraft_forms::redraw_field(&mut doc, &f.name)?; }
+    for f in pdfcraft_forms::fields(&doc) { pdfcraft_forms::redraw_read_field(&mut doc, &f)?; }   // one reading for all
 }
 let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for tests
 ```

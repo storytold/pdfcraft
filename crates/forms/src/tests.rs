@@ -5721,6 +5721,32 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
 
+/// Redrawing every field from one reading of the form reads it once, not once per field (laying
+/// out an XFA form redraws all of its fields, and a reading per field took seconds for each
+/// layout of a 1,000-row table), and draws what redrawing each field by name draws.
+#[test]
+fn redrawing_fields_already_read_reads_the_form_once() {
+    let mut by_name = fixture();
+    let all = fields(&by_name);
+    assert!(all.len() > 10, "every kind of field: {}", all.len());
+    for f in &all {
+        redraw_field(&mut by_name, &f.name).unwrap();
+    }
+    let mut read_once = fixture();
+    let before = form_reads();
+    for f in fields(&read_once) {
+        redraw_read_field(&mut read_once, &f).unwrap();
+    }
+    let reads = form_reads() - before;
+    assert_eq!(reads, 1, "{reads} readings of the form to redraw {} fields", all.len());
+    // The same objects, numbered alike: every appearance stream and widget.
+    assert_eq!(by_name.object_numbers(), read_once.object_numbers());
+    for n in by_name.object_numbers() {
+        let r = pdfcraft_cos::ObjRef::new(n, 0);
+        assert_eq!(by_name.get(r), read_once.get(r), "object {n}");
+    }
+}
+
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
 /// the group's buttons in the calculation order; and a text field `name` with two widgets.
 fn radio_group_form() -> Document {

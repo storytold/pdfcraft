@@ -310,11 +310,25 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     redraw_widgets(doc, name, None)
 }
 
+/// [`redraw_field`] for a field the caller has already read with [`fields`], so redrawing many
+/// fields reads the form once rather than once per name: laying out an XFA form redraws every
+/// field, and a reading per field made that quadratic (seconds for each layout of a 1,000-row
+/// table). A redraw changes only the field's own widgets, so one reading serves every field
+/// redrawn after it.
+pub fn redraw_read_field(doc: &mut Document, field: &Field) -> Result<(), FormError> {
+    draw_widgets(doc, field, None)
+}
+
 /// `redraw_field` for the widget at index `only` alone (so a caption-only edit leaves the field's
 /// other widgets' appearances as they are), or for every widget when `only` is `None`. Fails with
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    draw_widgets(doc, &f, only)
+}
+
+/// Draw the appearances of `f`'s widgets (only the one at index `only`, when given).
+fn draw_widgets(doc: &mut Document, f: &Field, only: Option<usize>) -> Result<(), FormError> {
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -323,7 +337,7 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (mut s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (mut s, m) = appearance::field_appearance_drawn(doc, f, w, &f.value, true);
                 missing = m;
                 // Thai glyphs are streams of their own.
                 pdfcraft_fonts::shaped_text::store_streams(doc, &mut s.dict);

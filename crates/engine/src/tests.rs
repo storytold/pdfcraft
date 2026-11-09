@@ -8985,7 +8985,11 @@ f(1)</script>",
     assert!(out.errors.iter().any(|l| l.contains("nested")), "{out:?}");
     let o = s.run_javascript(id, "", Some("addRow")).unwrap();
     assert!(o.error.is_some() || rows(&s) <= 50, "{o:?}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    // The click's loop fills the table up to the layout's bound of 1,000 rows, and the form is
+    // laid out again after it and after the calculate that adds a row: each layout redraws every
+    // field. While each field's redraw read the whole form again (quadratic in the fields), this
+    // took about 25 to 60 s; with one reading for all of them it takes about 4 s.
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
 }
 
 #[test]

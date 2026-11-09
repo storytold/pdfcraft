@@ -13,13 +13,15 @@ pub(crate) fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, 
 }
 
 /// Give the fields of a laid-out XFA form their appearances. A signed signature box keeps the
-/// picture its signer's application drew.
+/// picture its signer's application drew. The form is read once for all of its fields: a
+/// reading per field made every layout quadratic, and a script adding rows lays the form out
+/// again many times.
 pub(crate) fn xfa_redraw(doc: &mut pdfcraft_cos::Document) -> Result<(), String> {
     for f in pdfcraft_forms::fields(doc) {
         if f.kind == pdfcraft_forms::FieldKind::Signature && doc.get(f.obj).as_dict().is_some_and(|d| d.contains(b"V")) {
             continue;
         }
-        pdfcraft_forms::redraw_field(doc, &f.name).map_err(|e| format!("{}: {e}", f.name))?;
+        pdfcraft_forms::redraw_read_field(doc, &f).map_err(|e| format!("{}: {e}", f.name))?;
     }
     Ok(())
 }
