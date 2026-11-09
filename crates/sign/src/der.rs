@@ -349,19 +349,9 @@ impl Time {
     /// year is cast exactly as the old code did (`as u32`, wrapping) — no well-formed signing time
     /// is anywhere near that range, and this preserves byte-for-byte the old output everywhere.
     pub fn from_unix(t: i64) -> Time {
-        use chrono::Datelike;
         let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
-        let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
-        // `rest + 719_163` is 719_163..865_259, always a valid CE day.
-        let (year, month, day) = match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
-            Some(d) => {
-                let y = i128::from(d.year()) + i128::from(cycles) * 400;
-                // Match the old `as u32` cast: saturate i128→i64 first (the old year was i64), then wrap into u32.
-                (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }) as u32, d.month(), d.day())
-            }
-            None => (1970, 1, 1), // unreachable
-        };
-        Time { year, month, day, hour: (secs / 3600) as u32, minute: (secs % 3600 / 60) as u32, second: (secs % 60) as u32 }
+        let (year, month, day) = pdfcraft_cos::civil_from_days(days);
+        Time { year: year as u32, month, day, hour: (secs / 3600) as u32, minute: (secs % 3600 / 60) as u32, second: (secs % 60) as u32 }
     }
 
     pub fn add_seconds(&self, s: i64) -> Time {
@@ -465,7 +455,12 @@ pub fn oid(dotted: &str) -> Vec<u8> {
 /// Encode a dotted OID supplied by a caller. Unlike [`oid`], this validates every arc and
 /// never panics on malformed input.
 pub fn try_oid(dotted: &str) -> Result<Vec<u8>, SignError> {
-    let mut arcs = dotted.split('.').map(|a| a.parse::<u64>().map_err(|_| bad("invalid OID arc")));
+    let mut arcs = dotted.split('.').map(|a| {
+        if a.is_empty() || !a.bytes().all(|c| c.is_ascii_digit()) {
+            return Err(bad("invalid OID arc"));
+        }
+        a.parse::<u64>().map_err(|_| bad("invalid OID arc"))
+    });
     let first = arcs.next().ok_or_else(|| bad("empty OID"))??;
     let second = arcs.next().ok_or_else(|| bad("OID needs two arcs"))??;
     if first > 2 || (first < 2 && second >= 40) {
@@ -548,6 +543,14 @@ pub fn algorithm(oid_s: &str, params: Option<&[u8]>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn try_oid_rejects_signs_and_empty_arcs() {
+        for bad in ["+1.2.840", "1.+2", "1.2.-3", "1..2"] {
+            assert!(try_oid(bad).is_err(), "accepted {bad}");
+        }
+        assert_eq!(try_oid("1.2.840.113549").unwrap(), oid("1.2.840.113549"));
+    }
 
     #[test]
     fn round_trips() {

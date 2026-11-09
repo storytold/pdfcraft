@@ -16,6 +16,18 @@ impl PdfCraftApp {
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("hotbar-size", _) => {
+                let size: f32 = value.parse().map_err(|_| "hotbar-size must be 24–64 pixels")?;
+                if !size.is_finite() || !(24.0..=64.0).contains(&size) {
+                    return Err("hotbar-size must be 24–64 pixels".into());
+                }
+                self.hotbar.button_size = size;
+            }
+            ("hotbar-full-side", _) => {
+                self.hotbar.full_side = value.parse().map_err(|_| "hotbar-full-side must be true or false")?;
+            }
+            ("hotbar-tools", _) => self.hotbar.set_tools(value)?,
+            ("hotbar-side", _) => self.hotbar.place(value)?,
             ("language", _) => {
                 let language = i18n::normalize_pref(value).ok_or_else(|| {
                     let codes: Vec<&str> = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect();
@@ -35,8 +47,14 @@ impl PdfCraftApp {
             ("show_page_edge_shadows", _) => {
                 self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
             }
+            ("update_check_at_start", _) => {
+                self.update_check_at_start = value.parse::<bool>().map_err(|_| "update_check_at_start must be true or false")?;
+            }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
+            }
+            ("invert_middle_drag", _) => {
+                self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
@@ -104,6 +122,7 @@ impl PdfCraftApp {
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
+                    "enhance-scan" => Some(Dialog::EnhanceScan),
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
@@ -170,6 +189,12 @@ impl PdfCraftApp {
                     _ => return Err("default-page-gaps must be on or off".into()),
                 };
             }
+            ("recent-files", _) => {
+                let max = crate::RECENT_FILES_MAX;
+                let limit = value.parse().ok().filter(|n| *n <= max).ok_or_else(|| format!("recent-files must be between 0 and {max}"))?;
+                self.recent_limit = limit;
+                self.recent.truncate(limit);
+            }
             ("cover", Some(v)) => {
                 let on = match value {
                     "on" => true,
@@ -209,6 +234,13 @@ impl PdfCraftApp {
                     "left" => side_panels::ToolsSide::Left,
                     "right" => side_panels::ToolsSide::Right,
                     _ => return Err("tools-side must be left or right".into()),
+                }
+            }
+            ("rail-side", _) => {
+                self.side_panels.rail_side = match value {
+                    "left" => side_panels::ToolsSide::Left,
+                    "right" => side_panels::ToolsSide::Right,
+                    _ => return Err("rail-side must be left or right".into()),
                 }
             }
             ("organize", Some(v)) => {
@@ -305,9 +337,12 @@ impl PdfCraftApp {
                     field if field.starts_with("field-") => QuickTool::Field(
                         prepare::FieldTool::from_command(&format!("form.add.{}", &field[6..])).ok_or_else(|| format!("unknown tool {field}"))?,
                     ),
-                    fill if fill.starts_with("fill-") => QuickTool::Fill(
-                        fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?,
-                    ),
+                    fill if fill.starts_with("fill-") => {
+                        let tool =
+                            fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?;
+                        self.fill_tool = tool;
+                        QuickTool::Fill(tool)
+                    }
                     other => {
                         let t = comments::CommentTool::from_command(&format!("comment.{other}")).ok_or_else(|| format!("unknown tool {other}"))?;
                         self.comment_prefs.group_tool[t.group()] = t;
@@ -358,7 +393,7 @@ impl PdfCraftApp {
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
-                v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
+                v.comments.select_only((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
