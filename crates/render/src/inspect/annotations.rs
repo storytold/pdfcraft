@@ -23,11 +23,13 @@ const MAX_ACTION_FIELDS: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the bookmark and link listings, and name, description and embedded-file key
-/// text the attachment listing, keep together. Many bookmarks, links or attachments can share one
-/// long string, which each would otherwise copy. Past it, a bookmark or link to a web address lists
-/// as a URI action without its address, an attachment under its generic name without a
-/// description, and an embedded file whose key does not fit is not listed.
+/// Web-address text and `/QuadPoints` geometry the bookmark and link listings, and name,
+/// description and embedded-file key text the attachment listing, keep together. Many bookmarks,
+/// links or attachments can share one long string or array, which each would otherwise copy. Past
+/// it, a bookmark or link to a web address lists as a URI action without its address (or a link
+/// keeps a relative address unresolved against the document's base), a link is active over its
+/// whole `/Rect`, an attachment is listed under its generic name without a description, and an
+/// embedded file whose key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
@@ -102,6 +104,9 @@ impl<'a> Inspector<'a> {
 
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
+        // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
+        // the budget only shrinks, so they are not read again (review on #4474).
+        let mut unfit_quads: HashSet<ObjectId> = HashSet::new();
         let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
         pages.sort_unstable_by_key(|&(_, page)| page);
         // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
@@ -153,7 +158,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, text_budget) {
+                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
                     if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                         info.has_javascript = true;
                     }
@@ -254,27 +259,68 @@ impl<'a> Inspector<'a> {
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
     /// goes, else what its action `/A` does ([`Self::action_target`]) and the actions its `/Next`
     /// chains after it ([`Self::next_actions`]). `None` when it has no rectangle, or a
-    /// destination or actions that lead nowhere.
-    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
+    /// destination or actions that lead nowhere. `base` is the catalog's `/URI /Base`, which a
+    /// relative URI action is resolved against. `unfit_quads` holds the indirect `/QuadPoints`
+    /// arrays already found too large for the budget.
+    fn link(
+        &self,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        base: Option<&str>,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+    ) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
-        if let Ok(dest) = d.get(b"Dest") {
+        let (target, next) = if let Ok(dest) = d.get(b"Dest") {
             let (to, view) = self.dest(dest, 0)?;
-            return Some(Link { page, index, rect, target: LinkTarget::Page(to, view), next: Vec::new() });
-        }
-        let action = d.get(b"A").ok()?;
-        let a = self.dict(action)?;
-        // Not an action (no `/S`): no link. An action whose operands are unusable does nothing
-        // itself, but the actions chained after it still run ("shall be performed after", §12.6.2,
-        // Table 196): the first of those is then the link's own.
-        self.name(a, b"S")?;
-        let target = self.action_target(a, text_budget);
-        let mut next = self.next_actions(action, a, text_budget);
-        let target = match target {
-            Some(target) => target,
-            None if next.is_empty() => return None,
-            None => next.remove(0),
+            (LinkTarget::Page(to, view), Vec::new())
+        } else {
+            let action = d.get(b"A").ok()?;
+            let a = self.dict(action)?;
+            // Not an action (no `/S`): no link. An action whose operands are unusable does nothing
+            // itself, but the actions chained after it still run ("shall be performed after", §12.6.2,
+            // Table 196): the first of those is then the link's own.
+            self.name(a, b"S")?;
+            let target = self.action_target(a, text_budget);
+            let next = self.next_actions(action, a, text_budget);
+            // Every URI action of the chain is resolved against the base, not only the first.
+            let mut next: Vec<LinkTarget> = next.into_iter().map(|t| with_uri_base(t, base, text_budget)).collect();
+            let target = match target {
+                Some(target) => with_uri_base(target, base, text_budget),
+                None if next.is_empty() => return None,
+                None => next.remove(0),
+            };
+            (target, next)
         };
-        Some(Link { page, index, rect, target, next })
+        // Not read at all once no quadrilateral would fit what is left of the budget, or when this
+        // shared array already did not fit: many links can share one long array, and reading it
+        // again for each would cost its length every time (review on #4474).
+        let shared = d.get(b"QuadPoints").ok().and_then(|o| o.as_reference().ok());
+        let readable = *text_budget >= std::mem::size_of::<[f32; 8]>() && shared.is_none_or(|id| !unfit_quads.contains(&id));
+        let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+            // Read no further than one value past the cap: a longer array isn't used.
+            Ok(Object::Array(q)) if readable && q.len() <= crate::MAX_LINK_QUADS.saturating_mul(8) => {
+                #[cfg(test)]
+                QUAD_ARRAYS_READ.with(|n| n.set(n.get() + 1));
+                let values: Vec<Option<f32>> = q.iter().map(|o| self.resolve(o).as_float().ok()).collect();
+                let quads = crate::link_quads(&values, rect);
+                // Many links can share one long array, which each would otherwise copy. Past the
+                // budget a link is active over its whole `/Rect`.
+                let bytes = std::mem::size_of_val(quads.as_slice());
+                if bytes <= *text_budget {
+                    *text_budget = text_budget.saturating_sub(bytes);
+                    quads
+                } else {
+                    if let Some(id) = shared {
+                        unfit_quads.insert(id);
+                    }
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        };
+        Some(Link { page, index, rect, quads, target, next })
     }
 
     /// What one action dictionary does when a link or a bookmark runs it; `None` when it has no
@@ -814,4 +860,26 @@ fn rect4(o: &Object) -> [f32; 4] {
         }
         _ => [0.0; 4],
     }
+}
+
+/// `target` with a URI action's address resolved against the catalog's `/URI /Base`. The raw
+/// address is spent from `text_budget` already; what the base adds is spent too, or the link
+/// keeps the raw address.
+fn with_uri_base(target: LinkTarget, base: Option<&str>, text_budget: &mut usize) -> LinkTarget {
+    match target {
+        LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
+            Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
+                *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
+                LinkTarget::Uri(resolved)
+            }
+            _ => LinkTarget::Uri(uri),
+        },
+        other => other,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/QuadPoints` arrays whose values were read.
+    pub(super) static QUAD_ARRAYS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
