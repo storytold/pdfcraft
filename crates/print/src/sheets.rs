@@ -7,7 +7,17 @@ use super::{DecodeBudget, Dict, Document, Matrix, Object};
 /// sideways on a letter or A4 sheet), counting each text-showing operator once; form XObjects
 /// are followed a few levels deep.
 pub fn text_reads_up(doc: &Document, index: usize) -> bool {
-    let Some(page) = pdfcraft_model::pages(doc).into_iter().nth(index) else { return false };
+    texts_read_up(doc, &[index]).first().copied().unwrap_or(false)
+}
+
+/// [`text_reads_up`] for each of `indices`, reading the page tree once: once per page, the
+/// whole tree would be walked for every page asked about.
+pub fn texts_read_up(doc: &Document, indices: &[usize]) -> Vec<bool> {
+    let pages = pdfcraft_model::pages(doc);
+    indices.iter().map(|&i| pages.get(i).is_some_and(|page| page_reads_up(doc, page))).collect()
+}
+
+fn page_reads_up(doc: &Document, page: &pdfcraft_model::Page) -> bool {
     let to_display = Matrix(page.view_matrix(doc)).invert().unwrap_or_default();
     let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut score = 0i64;
@@ -20,7 +30,8 @@ pub fn text_reads_up(doc: &Document, index: usize) -> bool {
 
 pub(crate) fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matrix, depth: usize, score: &mut i64, budget: &mut DecodeBudget) {
     let (mut ctm, mut tm, mut stack) = (base, Matrix::IDENTITY, Vec::new());
-    for op in pdfcraft_content::parse(data).ops {
+    // One operator at a time: only the running score is kept, never the stream's operators.
+    for op in pdfcraft_content::ops(data) {
         match op.op.as_slice() {
             // Bounded like the renderer's graphics-state stack: deeper saves are ignored.
             b"q" if stack.len() < 256 => stack.push(ctm),
@@ -39,13 +50,16 @@ pub(crate) fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matr
                 if form.dict.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec)).as_deref() != Some(b"Form".as_slice()) {
                     continue;
                 }
-                let m = form.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or_default();
-                let inner = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_else(|| res.clone());
+                // The visit is paid for before anything else is read, and the form's resources
+                // (or the inherited ones) are borrowed, not copied for each invocation.
                 if !budget.enter_form() {
                     continue;
                 }
+                let m = form.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or_default();
+                let own = form.dict.get(b"Resources").map(|r| doc.resolve(r));
+                let inner = own.as_deref().and_then(Object::as_dict).unwrap_or(res);
                 if let Ok(body) = budget.decode(form) {
-                    text_direction(doc, &body, &inner, m.then(&ctm), depth + 1, score, budget);
+                    text_direction(doc, &body, inner, m.then(&ctm), depth + 1, score, budget);
                 }
             }
             _ => {}
@@ -164,8 +178,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
         Layout::Label { flip } => {
             sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
-        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
-            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate, custom } => {
+            // A predefined count has at most 16 × 16 cells; a custom grid up to 99 each way.
+            let fits = if custom { cols <= crate::MAX_GRID && rows <= crate::MAX_GRID } else { cols.checked_mul(rows).is_some_and(|n| n <= 256) };
+            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && fits);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
@@ -177,7 +193,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
-            let (gc, gr, sheet_landscape) = if cols == rows {
+            let (gc, gr, sheet_landscape) = if custom {
+                // A custom grid is laid out as given, on the sheet as chosen (Auto: portrait).
+                (cols, rows, false)
+            } else if cols == rows {
                 (cols, rows, page_landscape)
             } else if settings.orientation == Orientation::Landscape || (settings.orientation == Orientation::Auto && cols < rows) {
                 // 2 per sheet (1 × 2 on portrait) prints side by side on landscape paper.
