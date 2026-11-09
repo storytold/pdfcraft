@@ -167,6 +167,53 @@ fn reduced_motion_hands_egui_the_whole_step_and_stops_its_animations() {
 }
 
 #[test]
+fn consumed_document_gesture_does_not_keep_shift_for_another_scroll_area() {
+    let ctx = egui::Context::default();
+    let mut motion = Motion::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 300.0));
+    let pointer = Event::PointerMoved(screen.center());
+    let raw = egui::RawInput {
+        screen_rect: Some(screen),
+        time: Some(0.1),
+        events: vec![
+            pointer.clone(),
+            wheel(MouseWheelUnit::Point, Vec2::ZERO, TouchPhase::Start, Modifiers::SHIFT),
+            wheel(MouseWheelUnit::Point, vec2(0.0, -30.0), TouchPhase::Move, Modifiers::SHIFT),
+        ],
+        ..Default::default()
+    };
+    ctx.run_ui(raw, |ui| {
+        motion.begin_pass(ui.ctx(), AnimationEffects::Off);
+        assert_eq!(ui.input(|input| input.smooth_scroll_delta), vec2(-30.0, 0.0));
+        // The document owns the raw gesture and schedules its hidden-wheel reset.
+        crate::canvas::wheel_reset::consumed(ui.ctx());
+        ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+    })
+    .drop_without_applying_deltas();
+
+    let fresh = wheel(MouseWheelUnit::Point, vec2(0.0, -18.0), TouchPhase::Move, Modifiers::NONE);
+    let events = vec![pointer, fresh];
+    let raw = egui::RawInput { screen_rect: Some(screen), time: Some(0.1 + 1.0 / 60.0), events: events.clone(), ..Default::default() };
+    let mut offset = Vec2::ZERO;
+    ctx.run_ui(raw, |ui| {
+        // The real plugin already cleared egui's old gesture and hid its own Cancel.
+        let eguis = ui.input(|input| input.smooth_scroll_delta);
+        assert_eq!(eguis.x, 0.0);
+        assert!(eguis.y < 0.0);
+        assert_eq!(ui.input(|input| input.events.clone()), events);
+        motion.begin_pass(ui.ctx(), AnimationEffects::Off);
+        assert_eq!(ui.input(|input| input.smooth_scroll_delta), vec2(0.0, -18.0), "fresh motion follows the released modifier");
+        let out =
+            egui::ScrollArea::both().id_salt("motion-after-document").scroll_offset(vec2(200.0, 200.0)).auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_min_size(vec2(1000.0, 3000.0));
+            });
+        offset = out.state.clamped_offset();
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(offset, vec2(200.0, 218.0), "the other area receives the complete fresh vertical step");
+}
+
+#[test]
 fn the_preference_overrides_the_system_for_every_animation() {
     use AnimationEffects::{Off, On, System};
     assert_eq!(AnimationEffects::default(), System, "the system's setting is followed unless the user chooses");

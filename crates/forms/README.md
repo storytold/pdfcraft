@@ -45,12 +45,18 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
   background and border, list-box selection.
   The `/DA` font is used when `/DR` has it as a simple font or a composite font with a predefined
-  Unicode CMap; otherwise Helvetica (WinAnsi). A value or button caption the font can't hold
+  Unicode CMap; otherwise Helvetica (WinAnsi). Thai in a text field or combo box that the font
+  can't hold is drawn from the craft-fonts Thai face with Add text's writer
+  (`pdfcraft_fonts::shaped_text`), beside the field's font, keeping `/DA`; a build without a Thai
+  face refuses it. Any other value or button caption the font can't hold
   (Chinese in a Helvetica field, a character beyond U+FFFF in a UCS-2 CMap) is kept, as Acrobat
   keeps it: `/V` is stored as typed, the appearance draws `?` for those characters, the widget is
   marked with the first one (`pdfcraft_fonts::UNDRAWN_MARK`, cleared once all of it can be drawn)
   and the form sets `/NeedAppearances`, so other viewers draw the field from its value with fonts
-  that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`).
+  that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`:
+  the bytes `pdfaid:part` in XMP metadata each filter stage of which decodes within 8 MiB, the cap
+  preflight's Standards panel reads it with; preflight reads the identifier by its namespace, so a
+  packet that gives that namespace another prefix declares PDF/A there and not here).
   `undrawn_fields` lists the marked fields; the engine reports each edit that draws one, and
   flattening refuses to make that `?` permanent.
 - Displaying a form that leaves its appearances to the viewer (`/NeedAppearances`, or a text or
