@@ -92,6 +92,37 @@ pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'
     Some(DecodedContent { data, held })
 }
 
+/// PdfCraft patch (87): what is left of this page's [`MAX_PAGE_CONTENT`].
+pub(crate) fn content_left() -> usize {
+    CONTENT_LEFT.with(core::cell::Cell::get)
+}
+
+/// PdfCraft patch (87): `len` bytes of content held within the page's [`MAX_PAGE_CONTENT`]
+/// until dropped, as [`DecodedContent`] holds what it decoded: content kept from an earlier
+/// decode (a cached Type 3 glyph procedure) counts as it did when it was decoded.
+pub(crate) struct HeldContent(usize);
+
+impl Drop for HeldContent {
+    fn drop(&mut self) {
+        let held = self.0;
+        CONTENT_LEFT.with(|c| c.set(c.get().saturating_add(held).min(MAX_PAGE_CONTENT)));
+    }
+}
+
+/// PdfCraft patch (87): hold `len` bytes of content within what is left of the page's
+/// [`MAX_PAGE_CONTENT`]. `None`, and the page reported truncated, when they don't fit, as
+/// [`decode_content`] skips content the budget can't hold.
+pub(crate) fn hold_content(len: usize) -> Option<HeldContent> {
+    let left = content_left();
+    if left == 0 || left < len {
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+        warn!("page content budget exceeded");
+        return None;
+    }
+    charge_content(len);
+    Some(HeldContent(len))
+}
+
 /// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
 pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
@@ -129,6 +160,22 @@ pub struct InterpreterCache<'a> {
     /// PdfCraft patch: decoded images, shared by every render through this cache so a tile
     /// no longer decodes its page's images again.
     pub(crate) decoded_cache: DecodedImageCache,
+    /// PdfCraft patch (87): what the Type 3 fonts of this cache keep of their decoded glyph
+    /// procedures, together (see `font::type3`).
+    pub(crate) type3_procs: Rc<Type3Procs>,
+}
+
+/// PdfCraft patch (87): decoded Type 3 glyph procedure bytes all the fonts of one
+/// [`InterpreterCache`] keep together. Fonts live as long as the cache, so the bound is on the
+/// cache, not on each font: a document can have thousands of Type 3 fonts.
+pub(crate) const MAX_CACHED_TYPE3_PROCS: usize = 32 << 20;
+
+/// PdfCraft patch (87): the decoded glyph procedure bytes the Type 3 fonts of a cache keep,
+/// and how many procedures they decoded.
+#[derive(Default)]
+pub(crate) struct Type3Procs {
+    pub(crate) held: core::cell::Cell<usize>,
+    pub(crate) decodes: core::cell::Cell<usize>,
 }
 
 impl<'a> Default for InterpreterCache<'a> {
@@ -144,7 +191,15 @@ impl<'a> InterpreterCache<'a> {
             font_cache: Rc::new(RefCell::new(HashMap::new())),
             object_cache: Cache::new(),
             decoded_cache: DecodedImageCache::new(),
+            type3_procs: Rc::default(),
         }
+    }
+
+    /// PdfCraft patch (87): how many Type 3 glyph procedures the fonts of this cache decoded,
+    /// for diagnostics and tests. A procedure kept from an earlier copy of its glyph isn't
+    /// decoded again.
+    pub fn type3_proc_decodes(&self) -> usize {
+        self.type3_procs.decodes.get()
     }
 
     /// PdfCraft patch (32): how many images were decoded through this cache (its misses, not
