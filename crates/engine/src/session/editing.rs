@@ -228,7 +228,13 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        let notices = edit_notices(&edit, &editor.cos, &next);
+        let mut notices = edit_notices(&edit, &editor.cos, &next);
+        // Places applied redactions left that still hold the removed text, and what became of
+        // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
+        notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));
+        if cx.redaction_identification != pdfcraft_redact::Identification::default() {
+            notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
+        }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -485,7 +491,14 @@ impl Session {
             ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
-            matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
+            matches!(
+                e,
+                Edit::AddHeaderFooter { .. }
+                    | Edit::AddWatermark { .. }
+                    | Edit::AddBackground { .. }
+                    | Edit::AddPrinterMarks { .. }
+                    | Edit::RemoveMarks { .. }
+            )
         });
         (touches_added, touches_marks)
     }

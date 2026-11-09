@@ -3,6 +3,30 @@ use super::imposition::decoded_contents;
 use super::settings::{Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
 use super::{DecodeBudget, Dict, Document, Matrix, Object};
 
+/// The CUPS job option that keeps landscape sheets landscape (`orientation-requested` 4).
+///
+/// The print-ready PDF's sheets are already laid out on their paper, but the paper is named
+/// portrait (`Letter`), and without this option CUPS leaves a landscape sheet unrotated and
+/// shrinks it into the portrait paper instead of turning it to fill it (#2713). It is a property
+/// of the whole job, so it is given only when *every* sheet is landscape; a job that mixes
+/// orientations is left to the spooler, as portrait sheets would be turned wrongly.
+pub fn cups_orientation(sheets: &[Sheet]) -> Option<(String, String)> {
+    let landscape = !sheets.is_empty() && sheets.iter().all(|s| s.size.0 > s.size.1);
+    landscape.then(|| ("orientation-requested".to_string(), "4".to_string()))
+}
+
+/// Add [`cups_orientation`] to a CUPS job's `options`, for the Print dialog's jobs and
+/// `doc_print`'s alike, unless they already name an orientation (a driver choice, or one a
+/// caller passed, in any case: CUPS reads option names without regard to case): `lp` must not be
+/// given the option twice. Nothing on Windows, whose print ticket sets each sheet's orientation
+/// itself.
+pub fn add_cups_orientation(options: &mut Vec<(String, String)>, sheets: &[Sheet]) {
+    if cfg!(windows) || options.iter().any(|(k, _)| k.eq_ignore_ascii_case("orientation-requested")) {
+        return;
+    }
+    options.extend(cups_orientation(sheets));
+}
+
 /// Whether most of page `index`'s text runs bottom-to-top as the page displays (a label laid
 /// sideways on a letter or A4 sheet), counting each text-showing operator once; form XObjects
 /// are followed a few levels deep.
