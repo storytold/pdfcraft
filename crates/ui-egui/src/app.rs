@@ -205,6 +205,7 @@ impl PdfCraftApp {
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
             sign_draft: None,
+            presign: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
@@ -709,6 +710,7 @@ impl PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);

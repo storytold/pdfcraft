@@ -383,6 +383,25 @@ impl crate::Document {
     }
 }
 
+/// When a signature field's XFA signing scripts run ([`Session::run_sign_event`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignEvent {
+    /// Just before the field is signed (`preSign`): what it changes is signed too.
+    Before,
+    /// Once the field is signed (`postSign`).
+    After,
+}
+
+impl SignEvent {
+    /// The template's name for the event.
+    pub fn activity(self) -> &'static str {
+        match self {
+            SignEvent::Before => "preSign",
+            SignEvent::After => "postSign",
+        }
+    }
+}
+
 impl Session {
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
     pub fn set_javascript(&mut self, on: bool) {
@@ -449,6 +468,37 @@ impl Session {
         let before = doc.generation;
         self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
         Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
+    /// Run signature field `field`'s XFA signing scripts for `event` in document `id`: `preSign`
+    /// before it is signed, `postSign` after, as one undoable step, as a form's signing events run
+    /// (DA 31's dates the signature and locks the date). `Ok(false)`, with nothing changed, when
+    /// there are none: not a laid-out XFA form, JavaScript off, no such field, or no such script.
+    /// What the scripts said or asked for is in [`Session::take_js_output`].
+    pub fn run_sign_event(&mut self, id: DocId, field: &str, event: SignEvent) -> Result<bool, EditError> {
+        if self.get(id).is_none() {
+            return Err(EditError::NoDocument);
+        }
+        let Some(som) = self.sign_event_som(id, field, event) else { return Ok(false) };
+        self.apply(id, Edit::XfaEvent { som, activity: event.activity().into() })?;
+        Ok(true)
+    }
+
+    /// Whether signature field `field` of document `id` has XFA signing scripts for `event` that
+    /// [`Session::run_sign_event`] would run, without running them.
+    pub fn sign_event_scripted(&self, id: DocId, field: &str, event: SignEvent) -> bool {
+        self.sign_event_som(id, field, event).is_some()
+    }
+
+    /// The SOM path of signature field `field` when it has scripts for `event` to run.
+    fn sign_event_som(&self, id: DocId, field: &str, event: SignEvent) -> Option<String> {
+        if self.js_off {
+            return None;
+        }
+        let doc = self.get(id)?;
+        let (tpl, editor) = (doc.xfa_template.as_ref()?, doc.editor.as_ref()?);
+        let f = doc.form.iter().find(|f| f.name == field)?;
+        crate::xfa::scripted_som(&editor.cos, tpl, f, event.activity())
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
