@@ -5,7 +5,7 @@ use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapsho
 use super::parts::combinable_in;
 use super::parts::{Part, items_of, moved_order, parts_of, range_of, real_folder, takes, title_of};
 use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
-use pdfcraft_engine::order::{FileFacts, file_order};
+use pdfcraft_engine::order::{FileFacts, file_order, in_order};
 
 impl PdfCraftApp {
     /// Show the Combine files tab (File ▸ Combine files…), opening it if needed.
@@ -89,6 +89,8 @@ impl PdfCraftApp {
         self.combine_restore(state);
     }
 
+    /// Puts the list in the order [`file_order`] gives for `by`, ascending or descending, with
+    /// each file as it is, and records the sort for the headings and the Sort menu to show.
     pub(super) fn combine_sort(&mut self, by: SortBy, ascending: bool) {
         let ranks: Vec<u8> = self.combine_draft.iter_mut().map(CombineFile::severity).collect();
         let facts: Vec<FileFacts> = self
@@ -105,8 +107,7 @@ impl PdfCraftApp {
             })
             .collect();
         let order = file_order(&facts, by.file_sort(), ascending);
-        let files = std::mem::take(&mut self.combine_draft);
-        self.combine_draft = order.into_iter().filter_map(|at| files.get(at).cloned()).collect();
+        self.combine_draft = in_order(std::mem::take(&mut self.combine_draft), &order);
         self.combine_tab.sort = Some((by, ascending));
     }
 

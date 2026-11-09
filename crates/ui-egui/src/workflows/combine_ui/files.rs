@@ -19,6 +19,7 @@ impl SortKey {
         self as usize
     }
 
+    /// The column's name as the interface shows it: its heading, and its entry in the Sort menu.
     pub(super) fn label(self) -> &'static str {
         match self {
             SortKey::Name => tl!("File name"),
@@ -65,6 +66,7 @@ impl SortBy {
         SortBy::MENU.into_iter().filter(move |by| !web || !matches!(by, SortBy::Folder | SortBy::Column(SortKey::Modified)))
     }
 
+    /// The sort's name as the Sort menu shows it.
     pub(super) fn label(self) -> &'static str {
         match self {
             SortBy::Column(key) => key.label(),

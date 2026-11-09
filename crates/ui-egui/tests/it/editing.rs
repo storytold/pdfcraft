@@ -1997,6 +1997,20 @@ fn cards_of_files_called_alike_tell_a_screen_reader_their_folders() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// In List view a row shows the name alone and the folder on hover, so a screen reader needs the
+/// folder as the name's description to tell two files called alike apart.
+#[test]
+fn list_rows_of_files_called_alike_tell_a_screen_reader_their_folders() {
+    let (mut h, dir) = combine_folder("combine-list-folders", &[("a.pdf", 1), ("sub/a.pdf", 1)]);
+    h.state_mut().set_option("combine-view", "list").unwrap();
+    h.run_steps(2);
+    let said: Vec<String> = h.get_all_by_label("a.pdf").map(|name| name.accesskit_node().description().unwrap_or_default().to_string()).collect();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said.contains(&dir.display().to_string()), "{said:?}");
+    assert!(said.contains(&dir.join("sub").display().to_string()), "{said:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #569: an image or a text file added to Combine files becomes a PDF as it joins the list, an
 /// ordinary row with its pages.
 #[test]

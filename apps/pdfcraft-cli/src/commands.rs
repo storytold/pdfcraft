@@ -1,4 +1,4 @@
-use pdfcraft_engine::order::FileSort;
+use pdfcraft_engine::order::{FileSort, in_order};
 use pdfcraft_engine::{SortedSource, combine_order, in_real_folder};
 
 use super::options::{
@@ -326,20 +326,23 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     let mut sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     if let Some(by) = sort {
         let order = {
-            let paths: Vec<PathBuf> = inputs.iter().map(|path| in_real_folder(Path::new(path))).collect();
+            let paths: Vec<PathBuf> = inputs
+                .iter()
+                .map(|path| if by == FileSort::Folder { in_real_folder(Path::new(path)) } else { Path::new(path).to_path_buf() })
+                .collect();
             let files: Vec<SortedSource> = sources
                 .iter()
                 .zip(&paths)
                 .map(|((_, bytes), path)| SortedSource {
                     bytes,
                     path,
-                    modified: std::fs::metadata(path).and_then(|m| m.modified()).ok(),
+                    modified: if by == FileSort::Modified { std::fs::metadata(path).and_then(|m| m.modified()).ok() } else { None },
                     password: None,
                 })
                 .collect();
             combine_order(&files, by, !descending)
         };
-        sources = order.iter().filter_map(|at| sources.get(*at).cloned()).collect();
+        sources = in_order(sources, &order);
     }
     let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)

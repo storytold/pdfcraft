@@ -2,7 +2,7 @@ use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
 use super::paths::{child, read_input, read_input_bytes, unused, write_atomic};
 use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
-use pdfcraft_engine::order::FileSort;
+use pdfcraft_engine::order::{FileSort, in_order};
 use pdfcraft_engine::{SortedSource, combine_order, in_real_folder};
 use std::time::SystemTime;
 
@@ -363,10 +363,7 @@ impl Automation {
             combine_order(&sorted, by, !descending.unwrap_or(false))
         });
         let (sources, passwords) = match &order {
-            Some(order) => (
-                order.iter().filter_map(|at| sources.get(*at).cloned()).collect(),
-                order.iter().filter_map(|at| passwords.get(*at).cloned()).collect(),
-            ),
+            Some(order) => (in_order(sources, order), in_order(passwords, order)),
             None => (sources, passwords),
         };
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();

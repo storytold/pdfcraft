@@ -58,6 +58,17 @@ pub fn file_order(files: &[FileFacts<'_>], by: FileSort, ascending: bool) -> Vec
     order.into_iter().map(|(at, _)| at).collect()
 }
 
+/// `items` in the order [`file_order`] gave for them: each position in `order` takes the item at
+/// that place, moved, not copied. A position past the end, or one named a second time, takes
+/// nothing, and an item `order` doesn't name is left out.
+pub fn in_order<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
+    let mut items: Vec<Option<T>> = items.into_iter().map(Some).collect();
+    order.iter().filter_map(|at| items.get_mut(*at).and_then(Option::take)).collect()
+}
+
+/// Where `a` goes against `b` in a sort by `by`: by what `by` reads, the other way round when not
+/// `ascending`, then by name. A file missing what `by` reads goes after one that has it, either
+/// way, and two files missing it go by name.
 fn compare(a: &FileFacts<'_>, b: &FileFacts<'_>, by: FileSort, ascending: bool) -> Ordering {
     let order = match by {
         FileSort::Name => natural(a.name, b.name),
@@ -297,6 +308,22 @@ mod tests {
             let why = FileSort::from_name(wrong).unwrap_err();
             assert!(why.contains("\"modified\"") && why.contains(&format!("{wrong:?}")), "{why}");
         }
+    }
+
+    #[test]
+    fn in_order_moves_each_item_to_its_place() {
+        /// Not `Clone`, so it can only be moved.
+        struct Whole(&'static str);
+        let items = vec![Whole("b"), Whole("c"), Whole("a")];
+        let names: Vec<&str> = in_order(items, &[2, 0, 1]).into_iter().map(|whole| whole.0).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn in_order_takes_nothing_for_a_place_that_is_not_there_or_is_named_again() {
+        assert_eq!(in_order(vec!["a", "b"], &[1, 7, 1, 0]), ["b", "a"]);
+        assert_eq!(in_order(vec!["a", "b"], &[1]), ["b"], "an item no position names is left out");
+        assert!(in_order(Vec::<u8>::new(), &[0]).is_empty());
     }
 
     #[test]
