@@ -392,8 +392,8 @@ impl Same<'_> {
 
     /// Object equality across the two revisions: references resolved in their own revision,
     /// dictionaries regardless of key order, a string by its bytes, a number by its value, and
-    /// stream data byte for byte as stored. A page is compared by reference only, since every
-    /// annotation added to it rewrites it.
+    /// stream data byte for byte as stored. A page, the page tree and the catalog are compared by
+    /// reference only, since every annotation or field added rewrites them.
     fn objects(&mut self, a: &Object, b: &Object, depth: usize) -> Option<bool> {
         self.left = self.left.checked_sub(1)?;
         if depth > MAX_FIELD_DEPTH {
@@ -405,7 +405,14 @@ impl Same<'_> {
                     return Some(true);
                 }
                 let (was, is) = (self.old.get(*x), self.doc.get(*y));
-                if x == y && was.as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Pages"))) {
+                // The document's own structure is compared by reference: a page, the page tree, and
+                // the catalog, which a FieldMDP reference's /Data names (ISO 32000-2 Table 256) and
+                // which holds the whole form, so a field added anywhere would otherwise read as a
+                // change to a locked one. The catalog is the signed revision's /Root, with or
+                // without its /Type.
+                let structural =
+                    Some(*x) == self.old.root() || was.as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Pages" | b"Catalog")));
+                if x == y && structural {
                     return Some(true);
                 }
                 // Each reference followed counts as a level, so a chain of references (or a
@@ -558,6 +565,132 @@ mod tests {
         assert!(!err(lock(vec![("Action", Object::name("All"))]), dict(vec![])));
         let docmdp = dict(vec![("TransformMethod", Object::name("DocMDP"))]);
         assert_eq!(rules(&doc, &sig_field(None), &dict(vec![("Reference", Object::Array(vec![Object::Dict(docmdp)]))])), Ok(Vec::new()));
+    }
+
+    /// A classic-xref PDF of `objs`, numbered from 1, with object 1 as the catalog.
+    fn write_pdf(objs: &[&str]) -> Vec<u8> {
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+{o}
+endobj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    fn open(bytes: Vec<u8>) -> Document {
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// `doc` with `edit` saved as one more revision, read back.
+    fn revised(doc: &Document, edit: impl FnOnce(&mut Document)) -> Document {
+        let mut doc = doc.clone();
+        edit(&mut doc);
+        let options = pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() };
+        open(pdfcraft_cos::write_incremental(&doc, &options).unwrap())
+    }
+
+    fn at(num: u32) -> ObjRef {
+        ObjRef { num, generation: 0 }
+    }
+
+    /// From review on #6763: a FieldMDP reference's `/Data` points at the catalog (ISO 32000-2
+    /// Table 256). A lock that covers the signature's own field compares its value, reference and
+    /// all, and the catalog holds the form: adding a signature in a new field afterwards rewrites
+    /// the form, which is not a change to the locked field. The catalog is compared by reference,
+    /// as pages are. Its own field's appearance is still compared.
+    #[test]
+    fn a_reference_to_the_catalog_is_not_followed_into_the_form() {
+        let lock = "/Action /Include /Fields [(Signature2)]";
+        let old = open(write_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>",
+            &format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature2) /Rect [0 0 100 50] /P 3 0 R /F 4 /V 5 0 R /AP << /N 6 0 R >> /Lock << /Type /SigFieldLock {lock} >> >>"
+            ),
+            &format!(
+                "<< /Type /Sig /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 10] /Contents <00> /Reference [<< /Type /SigRef /TransformMethod /FieldMDP /TransformParams << /Type /TransformParams {lock} /V /1.2 >> /Data 1 0 R >>] >>"
+            ),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 0 >>
+stream
+
+endstream",
+            "<< /Fields [4 0 R] /SigFlags 3 >>",
+        ]));
+        let field = super::super::listing::sig_fields(&old).into_iter().find(|f| f.name == "Signature2").unwrap();
+        let value = field.signature(&old).unwrap();
+        // A second signature in a new top-level field, and the form's resources rewritten.
+        let signed_again = revised(&old, |doc| {
+            let mut v = Dict::new();
+            v.set(b"Type".to_vec(), Object::name("Sig"));
+            v.set(b"Contents".to_vec(), Object::String(PdfString::literal(vec![0])));
+            let v = doc.add(Object::Dict(v));
+            let mut w = Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"FT".to_vec(), Object::name("Sig"));
+            w.set(b"T".to_vec(), Object::String(PdfString::text("Signature1")));
+            w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+            w.set(b"P".to_vec(), Object::Ref(at(3)));
+            w.set(b"V".to_vec(), Object::Ref(v));
+            let w = doc.add(Object::Dict(w));
+            doc.update_dict(at(7), |form| {
+                form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(at(4)), Object::Ref(w)]));
+                form.set(b"DR".to_vec(), Object::Dict(dict(vec![("Font", Object::Dict(Dict::new()))])));
+            })
+            .unwrap();
+            doc.update_dict(at(3), |page| page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(at(4)), Object::Ref(w)]))).unwrap();
+        });
+        assert_eq!(locked_fields(&signed_again, &old, &field, &value), Locked::Kept);
+        // The locked field's own widget repainted is still a change.
+        let repainted = revised(&old, |doc| {
+            doc.update_dict(at(4), |w| w.set(b"AP".to_vec(), Object::Dict(dict(vec![("N", Object::Null)])))).unwrap();
+        });
+        assert_eq!(locked_fields(&repainted, &old, &field, &value), Locked::Changed);
     }
 
     /// More locks than are read is a lock that can't be read.
