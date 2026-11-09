@@ -938,7 +938,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && input.released_over
         && let Some(uri) = view.text_link_uri(i, index)
     {
-        frame.out.clicked_link = Some(LinkTarget::Uri(uri));
+        // No annotation and no `/Next` chain: only its address is followed (`follow_link` reads
+        // the target and the chain, never the page, index or rectangle).
+        frame.out.clicked_link = Some(pdfcraft_render::Link { page: i, index, rect: [0.0; 4], target: LinkTarget::Uri(uri), next: Vec::new() });
     }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
