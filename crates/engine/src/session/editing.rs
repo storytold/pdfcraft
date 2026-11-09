@@ -36,6 +36,7 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
@@ -48,6 +49,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.highlight = highlight;
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
@@ -85,13 +87,20 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            cx.js = Some(js::JsRunner::new(&next, &name, highlight));
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
+        // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
+        // a batch keeps the other edits it holds.
+        if cx.xfa_unchanged && matches!(edit, Edit::XfaEvent { .. }) {
+            take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
+            return Ok(None);
+        }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
@@ -130,7 +139,8 @@ impl Session {
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first.
+        // to date first. The fields whose exit scripts ran are noted once the edit is kept.
+        let mut exited: Vec<String> = Vec::new();
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -139,6 +149,8 @@ impl Session {
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
+            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+            /// resets the form.
             fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
                 match e {
                     Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
@@ -151,19 +163,24 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
+                let highlight = cx.highlight();
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    highlight,
                     time_scale: cx.xfa_time_scale,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                // The next edit of a batch reads the highlight this one's scripts set.
+                let on = run.highlight;
+                cx.set_highlight(on);
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
@@ -201,7 +218,13 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        let notices = edit_notices(&edit, &editor.cos, &next);
+        let mut notices = edit_notices(&edit, &editor.cos, &next);
+        // Places applied redactions left that still hold the removed text, and what became of
+        // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
+        notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));
+        if cx.redaction_identification != pdfcraft_redact::Identification::default() {
+            notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
+        }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -230,6 +253,10 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
+        // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
+        // no reason to skip a later one.
+        doc.xfa_exited.clear();
+        doc.xfa_exited.extend(exited);
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -242,15 +269,11 @@ impl Session {
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
-        doc.js_output.append(cx.xfa_out);
-        if cx.xfa_ran_away {
-            doc.xfa_template = None;
-            doc.xfa_scripts_off = true;
-            doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
-        }
+        take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
         Ok(cx.prepared)
     }
 
+    /// Undo the last edit of document `id`, keeping it for [`Session::redo`]. Returns its label.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
@@ -276,10 +299,13 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
 
+    /// Redo the last edit of document `id` that [`Session::undo`] took back. Returns its label.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
@@ -305,6 +331,8 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
@@ -444,7 +472,14 @@ impl Session {
             ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
-            matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
+            matches!(
+                e,
+                Edit::AddHeaderFooter { .. }
+                    | Edit::AddWatermark { .. }
+                    | Edit::AddBackground { .. }
+                    | Edit::AddPrinterMarks { .. }
+                    | Edit::RemoveMarks { .. }
+            )
         });
         (touches_added, touches_marks)
     }
@@ -571,6 +606,17 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// Hand on what an edit's XFA scripts showed or asked for (`out`), and when one of them ran away,
+/// turn the form's scripts off and say so.
+fn take_xfa_output(doc: &mut Document, out: js::JsOutput, ran_away: bool) {
+    doc.js_output.append(out);
+    if ran_away {
+        doc.xfa_template = None;
+        doc.xfa_scripts_off = true;
+        doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
     }
 }
 

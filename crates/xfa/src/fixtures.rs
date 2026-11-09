@@ -144,6 +144,43 @@ pub fn static_shell(data: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form with one exclusion group `form1[0].page1[0].lang[0]` (items `1` English,
+/// `2` French) bound to the data by name, laid out as an AcroForm radio group whose `/Opt` holds
+/// the items and whose on states are the buttons' positions `/0` and `/1` (ISO 32000-2 Table 230),
+/// as public static forms write it. Its datasets hold `data` (the children of `xfa:data`).
+pub fn static_radio_shell(data: &str) -> Vec<u8> {
+    radio_shell(data, None)
+}
+
+/// [`static_radio_shell`] whose buttons also carry `/PCOn`, the item PdfCraft writes to the data
+/// for the selected button ahead of its `/Opt` entry.
+pub fn static_radio_shell_with_pcon(data: &str, pcon: [&str; 2]) -> Vec<u8> {
+    radio_shell(data, Some(pcon))
+}
+
+fn radio_shell(data: &str, pcon: Option<[&str; 2]>) -> Vec<u8> {
+    let pc = |i: usize| pcon.and_then(|p| p.get(i).map(|v| format!(" /PCOn ({v})"))).unwrap_or_default();
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"><subform name=\"page1\"><exclGroup name=\"lang\"><field name=\"en\"><ui><checkButton shape=\"round\"/></ui><items><integer>1</integer></items></field><field name=\"fr\"><ui><checkButton shape=\"round\"/></ui><items><integer>2</integer></items></field></exclGroup></subform></subform></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
+    );
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [9 0 R 10 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /FT /Btn /Ff 49152 /T (lang[0]) /Parent 7 0 R /Opt [(1) (2)] /V /Off /Kids [9 0 R 10 0 R] >>".to_vec(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [72 700 84 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /0 11 0 R /Off 11 0 R >> >> >>", pc(0))
+            .into_bytes(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [144 700 156 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /1 11 0 R /Off 11 0 R >> >> >>", pc(1))
+            .into_bytes(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    assemble(objs)
+}
+
 /// A static XFA form of `n` text fields `form1[0].page1[0].f<i>[0]` on one page, whose values
 /// (`v<i>`) are only in its datasets, as when another viewer filled it in. The first field is
 /// read-only.
@@ -199,6 +236,30 @@ fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A form with `layout:ready` scripts: the root subform reads the page count and turns field
+/// highlighting on (as forms do with `app.runtimeHighlight`), `stamp` takes a value, `seen` records the highlight its script
+/// reads after the root's, and `pageNo` numbers its page (left to the layout). `note` has a
+/// `form:ready` script, a different event.
+pub fn layout_ready_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">var pages = xfa.layout.pageCount(); if (!app.runtimeHighlight) { app.runtimeHighlight = true; }</script></event>
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="stamp" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = "laid out";</script></event></field>
+  <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = String(app.runtimeHighlight);</script></event></field>
+  <field name="pageNo" w="1in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.page(this);</script></event></field>
+  <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = "form ready";</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
 }
 
 /// A hidden subform `details` a script may show, holding a named field and three unnamed
@@ -584,6 +645,30 @@ pub fn date_pictures_template() -> String {
     .to_string()
 }
 
+/// Two signature boxes: `sign`, whose preSign script shows a notice, fills `when` and locks it, and
+/// whose postSign script fills `after`; and `plain`, with no signing scripts.
+pub fn signing_events_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb" w="7.5in">
+  <field name="when" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui>
+   <event activity="preSign"><script contentType="application/x-javascript">xfa.host.messageBox("Signing notice"); when.rawValue = "signed"; when.access = "readOnly";</script></event>
+   <event activity="postSign"><script contentType="application/x-javascript">after.rawValue = "done";</script></event>
+  </field>
+  <field name="plain" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
 /// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
 /// calculate scripts, every one reading values the earlier ones settled.
@@ -757,4 +842,88 @@ if (this.rawValue == "1") {
 </xdp:xdp>
 "##
     .to_string()
+}
+
+/// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
+/// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
+/// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
+/// with scripts of its own), whose text field `hint` clears its "Type here" when it gains focus, and
+/// whose text field `relay` puts that "Type here" back in `hint` when it loses focus.
+pub fn focus_template() -> String {
+    let js = "application/x-javascript";
+    let count = |name: &str| format!(r#"<script contentType="{js}">{name}.rawValue = Number({name}.rawValue) + 1;</script>"#);
+    let counter = |name: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" access="protected"><ui><textEdit/></ui><value><integer>0</integer></value></field>"#)
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <field name="probe" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ <field name="quiet" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">xfa.host.messageBox("left quiet");</script></event></field>
+ <exclGroup name="size" layout="lr-tb">
+  <field name="small" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>S</text></items></field>
+  <field name="large" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>L</text></items><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ </exclGroup>
+ {}{}{}{}
+ <field name="hint" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>Type here</text></value><event activity="enter"><script contentType="{js}">if (this.rawValue == "Type here") this.rawValue = "";</script></event></field>
+ <field name="relay" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">hint.rawValue = "Type here";</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        count("enters"),
+        count("exits"),
+        count("picks"),
+        count("drops"),
+        counter("exits"),
+        counter("enters"),
+        counter("picks"),
+        counter("drops")
+    )
+}
+
+/// A form whose two draws link their pictures instead of embedding them: `.\logo.png`, which the
+/// PDF keeps in its `XFAImages` name tree (a [`tiny_png`], under a `Kids` node, as producers
+/// split the tree), and `.\missing.png`, which it doesn't (XFA 3.3 pp. 257–258).
+pub fn linked_image_shell() -> Vec<u8> {
+    linked_image_shell_with(b"<< /Kids [7 0 R] >>", br"<< /Limits [(.\\logo.png) (.\\logo.png)] /Names [(.\\logo.png) 8 0 R] >>")
+}
+
+/// [`linked_image_shell`] with its own name tree: `root` is object 6 (the tree the catalog names),
+/// `kid` object 7, and object 8 the PNG.
+pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
+    linked_image_shell_holding(root, kid, TINY_PNG)
+}
+
+/// [`linked_image_shell_with`], object 8 a stream holding `picture` (a [`tiny_png`] there).
+pub fn linked_image_shell_holding(root: &[u8], kid: &[u8], picture: &[u8]) -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <draw name="logo" w="1in" h="1in"><value><image contentType="image/png" href=".\logo.png"/></value></draw>
+  <draw name="gone" w="1in" h="1in"><value><image contentType="image/png" href=".\missing.png"/></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut png = format!("<< /Length {} >>\nstream\n", picture.len()).into_bytes();
+    png.extend_from_slice(picture);
+    png.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Names << /XFAImages 6 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        root.to_vec(),
+        kid.to_vec(),
+        png,
+    ];
+    assemble(objs)
 }
