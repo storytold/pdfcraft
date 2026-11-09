@@ -9361,8 +9361,9 @@ fn soft_masks_handed_keyed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, 
 /// - takes each source sample into the target sample its centre falls in: seven columns
 ///   `0 0 0 255 0 0 0`, drawn three wide and so averaged to four, give `0 0 127 0` (by left edges,
 ///   `0 127 0 0`);
-/// - is never sized past the samples a truncated stream decodes: a mask that says it is 100 rows
-///   but holds 10, drawn 20 high, is handed no rows that no sample covers;
+/// - keeps the height a short stream says it has, its missing samples zeros (patch 67): a mask
+///   that says it is 100 rows but holds 10, drawn 20 high, is handed 32 rows, three opaque, one a
+///   third opaque, and the rest clear;
 /// - is cached per drawn size, rounded up to a power of two: the same image drawn 20 and then 200
 ///   points wide is handed its mask at 32 and then at its own 100, not the first draw's 32 again,
 ///   and drawn 20 and 21 wide it is handed one mask of 32 both times, whether the mask's
@@ -9374,8 +9375,10 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
     let (handed, _) = soft_masks_handed(7, 1, &[0, 0, 0, 255, 0, 0, 0], &[(3, 1)]);
     assert_eq!(handed, vec![(4, 1, vec![0, 0, 127, 0])], "centres, not left edges");
     let (handed, _) = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
-    // 32 wide (20 rounded up to a power of two), and 10 rows, the ones decoded, not 32: all opaque.
-    assert_eq!(handed, vec![(32, 10, vec![255; 32 * 10])], "no uncovered rows");
+    // 32 on a side (20 rounded up to a power of two). Rows 0 to 8 fall in the first three target
+    // rows; the fourth averages row 9 with two missing rows, which are zeros.
+    let rows = |alpha: u8, n: usize| vec![alpha; 32 * n];
+    assert_eq!(handed, vec![(32, 32, [rows(255, 3), rows(85, 1), rows(0, 28)].concat())], "a short mask keeps its height");
     let sizes = |draws: &[(u32, u32)]| -> Vec<(u32, u32)> {
         soft_masks_handed(100, 100, &[255; 100 * 100], draws).0.iter().map(|(w, h, _)| (*w, *h)).collect()
     };
@@ -9477,7 +9480,7 @@ fn spot_colour_images_run_their_tint_transform_once_per_sample_value() {
 
 /// Images converted through patch 28's table keep the colour of every sample: the samples of
 /// a pixel in order, each through its own `/Decode` range, rows that end mid-byte, and an image
-/// whose data stops part-way through a row (that row is padded with decoded zeros, as before).
+/// whose data stops part-way through a row (the rest is padded with raw zeros, patch 67).
 #[test]
 fn images_converted_through_a_table_keep_every_samples_colour() {
     let close = |got: [u8; 3], want: [u8; 3], at: (usize, usize)| {
@@ -9550,10 +9553,13 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     let pdf = image_cache_pdf("q 124 0 0 60 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
     let out = render_first_page(pdf);
     let w = out.width as usize;
-    for y in 0..9 {
+    for y in 0..12 {
         for x in 0..31 {
-            // The rest of the 9th row is decoded zero (black), not sample 0 (0.2 under this range).
-            let gray = if y < 8 || x < 12 { (51.0 + 0.6 * sample(x, y) as f64).round() as u8 } else { 0 };
+            // The rest of the 9th row and rows 10 to 12 are sample 0, 0.2 under this range, as
+            // Chrome draws them (patch 67). They were decoded zero (black), and rows 10 to 12
+            // weren't drawn.
+            let present = y < 8 || (y == 8 && x < 12);
+            let gray = (51.0 + 0.6 * if present { sample(x, y) } else { 0 } as f64).round() as u8;
             // The rows present keep the declared rows' height: 60 pt / 12.
             close(rgb_at(&out.rgba, w, 4 * x + 2, 10 + 5 * y + 2), [gray; 3], (x, y));
         }
@@ -10226,6 +10232,10 @@ mod tiff_predicted_images;
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
+
+// #2780: images and soft masks whose data stops short of their height, and 16-bit data
+// with an odd byte count (vendored hayro-interpret patches 67 and 68).
+mod short_image_data;
 
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
