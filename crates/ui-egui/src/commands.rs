@@ -30,6 +30,9 @@ pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
+/// Go to first / last page beside Home and End (`canvas::navigation`).
+pub(crate) const FIRST_PAGE: Shortcut = Shortcut::cmd_shift("↑");
+pub(crate) const LAST_PAGE: Shortcut = Shortcut::cmd_shift("↓");
 
 /// Whether shortcuts are written the macOS way (`⇧⌘S`) rather than `Ctrl+Shift+S`. egui knows the
 /// platform from the build target, and on the web from the browser's user agent.
@@ -113,6 +116,9 @@ impl PdfCraftApp {
         let done = match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
+                // A command stopped part way through closing or replacing a tab must not leave
+                // the next frame pointing past the last one (#3914).
+                self.keep_active_valid();
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
@@ -214,6 +220,7 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
@@ -326,6 +333,7 @@ impl PdfCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.split" => self.toggle_split(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -796,13 +804,15 @@ impl PdfCraftApp {
     /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
     /// next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
-        let count = self.views.len() + usize::from(self.combine_tab.open);
-        let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
+        // The tabs of the strip being worked in: split view's second pane steps through its own.
+        let place = self.active.and_then(|i| self.place_of(i)).unwrap_or_default();
+        let tabs = self.tabs_in(place);
+        let count = tabs.len() + usize::from(place == crate::panes::Place::Main && self.combine_tab.open);
+        let current = if self.combine_showing() { Some(tabs.len()) } else { self.active.and_then(|a| tabs.iter().position(|&i| i == a)) };
         let Some(next) = tab_after(current, count, forward) else { return };
-        if next < self.views.len() {
-            self.active = Some(next);
-        } else {
-            self.open_combine_tab();
+        match tabs.get(next) {
+            Some(&i) => self.active = Some(i),
+            None => self.open_combine_tab(),
         }
     }
 
@@ -833,6 +843,9 @@ impl PdfCraftApp {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };
+            if ctx.input(|i| altgr_pressed(i, key)) {
+                continue;
+            }
             let mut m = Modifiers::NONE;
             if s.command {
                 m |= Modifiers::COMMAND;
@@ -867,6 +880,17 @@ impl PdfCraftApp {
             self.execute(id);
         }
     }
+}
+
+/// Whether `key` was pressed with Ctrl+Alt this frame. That is how AltGr can reach us, and egui's
+/// shortcut match ignores an extra Alt, so German or Spanish AltGr+ß or AltGr+º, which type a
+/// backslash, would run ⌘\ (and AltGr+8 ⌘[) instead. No registered shortcut uses Alt. On macOS
+/// the command key is not Ctrl, and Option stays free to type a shortcut's character.
+fn altgr_pressed(input: &egui::InputState, key: egui::Key) -> bool {
+    input
+        .events
+        .iter()
+        .any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.ctrl && modifiers.alt))
 }
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From

@@ -210,3 +210,26 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     // A page that isn't there: nothing changes, and it says so.
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
 }
+
+/// #2503 review: a PDF waiting for its password when Combine arrives opens behind the Combine
+/// files tab once unlocked, like one still opening; a prompt that a chosen tool waits on keeps
+/// its focus, since the tool runs on the document in front.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    assert!(app.password_prompt.is_some() && app.views.is_empty());
+    app.combine_paths(&[]);
+    assert!(app.combine_showing());
+    app.submit_password(Some("pw".into()));
+    assert!(app.password_prompt.is_none());
+    assert_eq!(app.views.len(), 1, "the document is open");
+    assert!(app.combine_showing(), "and the Combine files tab still shows");
+
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    app.password_prompt.as_mut().unwrap().then = Some("export.text");
+    app.combine_paths(&[]);
+    assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
+}
