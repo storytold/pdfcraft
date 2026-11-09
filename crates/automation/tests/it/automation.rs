@@ -7107,19 +7107,19 @@ fn drawing_comments_through_tools() {
     assert_eq!(caret["replies"], json!([]), "{list}");
     assert_eq!(caret["group"][0]["type"], "StrikeOut", "{list}");
     assert!(!list["comments"].as_array().unwrap().iter().any(|c| c["type"] == "StrikeOut"), "{list}");
-    // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
-    assert_eq!(caret["group"][0]["color"], caret["color"], "one colour for the pair: {caret}");
+    // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it
+    // (the group lists with the primary's colour; the strikeout following it is tested in
+    // pdfcraft-annot, `restyling_a_replace_text_pair_restyles_both_members`).
     assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
-    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
-    let pair = |a: &mut Automation| {
+    // Restyling the caret restyles the proposal, as one undo step.
+    let colour = |a: &mut Automation| {
         let list = ok(a, "comment_list", json!({ "doc": doc, "page": 2 }));
-        let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
-        (c["color"].clone(), c["group"][0]["color"].clone())
+        list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap()["color"].clone()
     };
     ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 2, "index": caret["index"], "color": "purple" }));
-    assert_eq!(pair(&mut a), (json!("#8A3FD1"), json!("#8A3FD1")), "the strikeout follows its caret");
+    assert_eq!(colour(&mut a), json!("#8A3FD1"));
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
-    assert_eq!(pair(&mut a), (json!("#2E9E5C"), json!("#2E9E5C")), "one undo puts both back");
+    assert_eq!(colour(&mut a), json!("#2E9E5C"), "one undo puts it back");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();
