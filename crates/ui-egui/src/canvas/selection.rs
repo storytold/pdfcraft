@@ -93,6 +93,22 @@ impl DocView {
         Some(s.text(t)).filter(|x| !x.is_empty())
     }
 
+    /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
+    /// formatting. `None` after Select All of the document and for a column selection, which
+    /// copy plain text (a column's rows and tab-separated cells are not paragraphs).
+    pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
+        if self.all_text {
+            return None;
+        }
+        let s = self.selection?;
+        let t = self.texts.get(&s.page)?;
+        let glyphs = match s.span {
+            Span::Run { anchor, head } => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
+            Span::Column { .. } => return None,
+        };
+        Some((s.page, t.clone(), glyphs))
+    }
+
     /// Select every page without navigating; shared by Organize and the Pages sidebar.
     pub fn select_all_pages(&mut self) -> bool {
         self.selected = (0..self.page_count).collect();
@@ -190,7 +206,7 @@ pub(super) fn selection_actions(
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
+    egui::Area::new(egui::Id::unique(("text-selection-actions", view.view_key()))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
         ui.ctx(),
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
