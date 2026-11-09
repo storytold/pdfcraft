@@ -297,7 +297,7 @@ impl PrintDraft {
         if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
             return None;
         }
-        if let Some(pos) = self.matching_paper(size) {
+        if let Some(pos) = print::matching_paper(size) {
             Some(pos)
         } else if !name.is_empty() {
             let norm = (size.0.min(size.1), size.0.max(size.1));
@@ -308,10 +308,14 @@ impl PrintDraft {
                 }
             }) {
                 Some(pos)
+            } else if let Some(pos) = self.matching_paper(size) {
+                Some(pos)
             } else {
                 self.papers.push((name, size));
                 Some(self.papers.len() - 1)
             }
+        } else if let Some(pos) = self.matching_paper(size) {
+            Some(pos)
         } else {
             let custom_name = format!("{:.1} x {:.1} pt", size.0, size.1);
             self.papers.push((custom_name, size));
@@ -435,7 +439,7 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(self.papers.get(self.paper).map(|(name, size)| print::paper_media_option(Some(name), *size)))
+            .chain(Some(print::paper_media_option(Some(self.paper_name()), self.paper_size())))
             .collect(),
         }
     }

@@ -294,8 +294,11 @@ pub fn paper_media(name: Option<&str>, size: (f64, f64)) -> String {
     }
     if let Some(n) = name {
         let is_dim = n.split_once(['x', 'X', '*']).is_some_and(|(w, h)| {
-            w.trim().trim_start_matches("Custom.").trim_start_matches("custom.").parse::<f64>().is_ok()
-                && h.trim().trim_end_matches("pt").trim_end_matches("points").trim().parse::<f64>().is_ok()
+            let parse_dim = |d: &str| {
+                let d = d.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim_end_matches("points").trim_end_matches("pt").trim();
+                d.parse::<f64>().is_ok()
+            };
+            parse_dim(w) && parse_dim(h)
         });
         let is_clean = !n.is_empty()
             && n.len() <= 64

@@ -37,12 +37,16 @@ fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
-/// Parse explicit custom dimensions like "300x500", "300 x 500", "300x500 pt", "Custom.300x500".
+/// Parse explicit custom dimensions like "300x500", "300 x 500", "300x500 pt", "300pt x 500pt", "Custom.300x500".
 fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
-    let s = s.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim_end_matches("pt").trim_end_matches("points").trim();
+    let s = s.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim();
     let (w_str, h_str) = s.split_once(['x', 'X', '*'])?;
-    let w: f64 = w_str.trim().parse().ok()?;
-    let h: f64 = h_str.trim().parse().ok()?;
+    let parse_dim = |d: &str| {
+        let d = d.trim().trim_end_matches("points").trim_end_matches("pt").trim();
+        d.parse::<f64>().ok()
+    };
+    let w = parse_dim(w_str)?;
+    let h = parse_dim(h_str)?;
     if w.is_finite() && h.is_finite() && w >= 72.0 && h >= 72.0 && w <= 14400.0 && h <= 14400.0 { Some((w, h)) } else { None }
 }
 
@@ -346,7 +350,10 @@ mod tests {
         // Non-preset dimensions and driver papers carry their media selection.
         assert_eq!(job(json!({}), Some("300x500")).options, [media("Custom.300x500")]);
         assert_eq!(job(json!({}), Some("300 x 500 pt")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("300pt x 500pt")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("300 pt x 500 pt")).options, [media("Custom.300x500")]);
         assert_eq!(job(json!({}), Some("Custom.300x500")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("Custom.300x500pt")).options, [media("Custom.300x500")]);
 
         assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter")).ok().map(|j| j.printer), Some(None));

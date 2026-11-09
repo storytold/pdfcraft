@@ -223,7 +223,7 @@ pub fn printer_papers(printer: &str) -> Vec<Paper> {
         let size = media.size();
         let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
         let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
-        if w_pts > 0.0 && h_pts > 0.0 {
+        if w_pts.is_finite() && h_pts.is_finite() && w_pts >= 72.0 && h_pts >= 72.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
             let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
                 if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
             });
@@ -252,6 +252,7 @@ fn resolve_paper_name(papers: &[Paper], paper_pts: (f64, f64)) -> Paper {
         .iter()
         .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
         .map(|(n, _)| n.clone())
+        .or_else(|| crate::matching_paper(paper_pts).and_then(|idx| crate::PAPERS.get(idx).map(|(n, _)| n.to_string())))
         .unwrap_or_default();
     (name, (w_pts, h_pts))
 }
