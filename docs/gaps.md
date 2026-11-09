@@ -130,13 +130,13 @@ update the numbers.
 ### 6. Open-issue backlog of wrong results in shipped features
 
 - **Missing:** fixes for the reports of wrong results in features marked `shipped` that are still open
-  (≈ 13 of ≈ 25 on 2026-10-10; not recounted since, and the #799–#821 batch below is closed), plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
+  (not recounted since 2026-10-10; the whole #799–#821 batch below closed that day), plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
 - **Evidence (2026-11-09):** 1,774 open and 1,202 closed issues; 462 open issues carry `bug`, 74
   `priority: critical` and 306 `priority: high`. The critical ones cluster on Windows printing
   (#5661, #5751, #5779, #5870, #6060, #6201, #6372), on launching (#5239, #5553, #6500) and on two
   possible data-loss reports (#6119, #6062).
-- **Evidence (2026-10-10):** 245 open issues. The first batch of `fix(...)` reports was fixed by
-  2026-10-10 (#799, #800, #807, #809, #810, #811, #815, #816, #817, #818, #819, #821). A later
+- **Evidence (2026-10-10):** 245 open issues. The first batch of `fix(...)` reports, all 23 of
+  #799–#821, was closed on 2026-10-10. A later
   batch keeps a cloudy comment flatten cannot draw (#1317), leaves a refused text-box restyle or
   resize unchanged (#1327), keeps arrow defaults off plain lines (#1302), stops a custom text
   match on the separator instead of the next glyph (#1315), and states the vertical-text

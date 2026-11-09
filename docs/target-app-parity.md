@@ -191,7 +191,7 @@ features total and are shown for orientation; the others add to it.
 
 | Dimension | Ready | Weight | Remaining (h) | Counted | Evidence | Doc |
 |---|---|---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth (2026-10-10); 72% breadth (2026-11-09) | 40% | 610–1,100 | base | Area table below | this file |
+| Features (14 areas) | ≈ 49% depth (2026-10-10); ≈ 72% tier-weighted breadth (2026-11-09) | 40% | 610–1,100 | base | Area table below | this file |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | additional | Acrobat-style shell, All tools, Home, command palette; missing single-key accelerators, rulers/guides, multiple windows, popups; user reports #739, #744, #746, #789 (#759 and #844 fixed) | [ui-parity.md](ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 | within features | PDF read/write strong, encrypted output included (#774 fixed); export Word is layout-poor (#773); no Excel export, PowerPoint export partial, no Office/HTML/PostScript import | [file-format-parity.md](file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 | within features | ISO 32000 syntax, encryption, annotations and AcroForm strong; rendering and fonts borrowed from `hayro`; PDF 2.0 extras, linearization, public-key security absent; PDF/A partial, PDF/X/UA none | [pdf-spec-parity.md](pdf-spec-parity.md) |
