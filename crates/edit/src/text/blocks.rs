@@ -1,7 +1,7 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, joined, page_dict, reading_lines, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
+use super::{Document, EditError, HashMap, Object, Op, TextLine, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
@@ -37,6 +37,13 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// The one size a rewrite and the editor set an OCR phrase in, in place of each word's own
+    /// (#3313): the block's size, which for invisible text is its words' median. `None` for
+    /// visible text, whose runs keep their sizes.
+    pub fn phrase_size(&self) -> Option<f64> {
+        (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -270,7 +277,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -297,7 +304,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         patches.insert(s.op, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -335,6 +342,15 @@ pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBloc
 // Keep other whitespace normalization unchanged.
 pub(crate) fn paragraph_separator(c: char) -> bool {
     c.is_whitespace() && c != '\u{3000}'
+}
+
+/// Characters that end a row rather than draw a glyph: the Unicode mandatory breaks (UAX #14
+/// class BK: vertical tab, form feed, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR), the
+/// next line (U+0085), the information separators (bidi class B) and CR/LF. Text pasted from a
+/// browser or Word carries these, so a rewrite moves to the next row instead of asking a font
+/// for an outline no face has (#6272).
+pub(crate) fn row_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{001C}'..='\u{001E}' | '\u{2028}' | '\u{2029}')
 }
 
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
@@ -400,7 +416,7 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 pub struct BlockStyle {
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.
     pub ranges: Vec<RangeStyle>,
-    /// Explicit page font resource (from register_text_font or the page font inventory).
+    /// Explicit page font resource or bundled document-font choice from the page font inventory.
     pub resource: Option<String>,
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,

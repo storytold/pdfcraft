@@ -32,6 +32,7 @@ mod tests;
 mod tests_verify;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
+pub mod user_regex;
 pub mod verify;
 
 use interp::{Mode, Scope, process};
@@ -184,6 +185,14 @@ pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
 }
 
+/// A mark's usable `/QuadPoints` quads ([`pdfcraft_geom::quad_points::usable_quads`]), the set the
+/// comment outlines show. Each one is finite, so the box it folds to is a real one.
+fn quad_points(doc: &Document, d: &Dict) -> Vec<[f64; 8]> {
+    let Some(q) = d.get(b"QuadPoints").map(|q| doc.resolve(q)) else { return Vec::new() };
+    let Some(a) = q.as_array() else { return Vec::new() };
+    pdfcraft_geom::quad_points::usable_quads(a.iter().map(|x| doc.resolve(x).as_f64()))
+}
+
 fn color(doc: &Document, d: &Dict, key: &[u8]) -> Option<Rgb> {
     let v: Vec<f64> = doc.resolve(d.get(key)?).as_array()?.iter().filter_map(Object::as_f64).collect();
     match v.len() {
@@ -228,13 +237,7 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
             if d.name(b"Subtype") != Some(b"Redact") {
                 continue;
             }
-            let quads: Vec<f64> = d
-                .get(b"QuadPoints")
-                .and_then(|q| doc.resolve(q).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
-                .unwrap_or_default();
-            let mut rects: Vec<[f64; 4]> = quads
-                .as_chunks::<8>()
-                .0
+            let mut rects: Vec<[f64; 4]> = quad_points(doc, d)
                 .iter()
                 .map(|q| {
                     let xs = [q[0], q[2], q[4], q[6]];
@@ -246,8 +249,9 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
                         ys.iter().copied().fold(f64::MIN, f64::max),
                     ]
                 })
-                .filter(|r| r.iter().all(|v| v.is_finite()))
                 .collect();
+            // No usable quad (all absent, malformed or non-finite): the mark's `/Rect`, else it
+            // is unreadable and apply refuses it.
             if rects.is_empty()
                 && let Some(r) = rect_of(doc, d.get(b"Rect"))
             {
@@ -290,7 +294,7 @@ pub(crate) fn page_streams_within(
         match &*doc.resolve(o) {
             // Strict: a tolerant decode keeps what precedes corruption and drops the rest, which
             // still draws in viewers that read further; anything not read can't be cleaned.
-            Object::Stream(s) => data.push(budget.decode_strict(s).map_err(|_| RedactError::Unreadable(index + 1))?),
+            Object::Stream(s) => data.push(budget.decode_strict(doc, s).map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }
@@ -820,7 +824,12 @@ fn redact_page_content(
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
                 .iter()
-                .map(|o| match &*doc.resolve(o) {
+                .zip(&list)
+                .zip(&data)
+                .map(|((now, was), read)| match &*doc.resolve(now) {
+                    // Left as it was: what was read above, with its parameters by reference.
+                    _ if now == was => read.clone(),
+                    // Written above by `Stream::flate`, which leaves no `/DecodeParms`.
                     Object::Stream(s) => s.decoded().unwrap_or_default(),
                     _ => Vec::new(),
                 })
