@@ -23,6 +23,7 @@ const OLE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 /// The longest a conversion may run before LibreOffice is stopped. A fresh profile costs a
 /// few seconds on its own; large spreadsheets take longer.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The largest PDF read back from LibreOffice.
