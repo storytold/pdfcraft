@@ -140,8 +140,8 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({
                 "files": {"type":"array","minItems":1,"maxItems":1000,"description":"PDFs in Bates sequence order.","items":{"type":"object","properties":{"input":{"type":"string","minLength":1,"description":"Input PDF path."},"output":{"type":"string","minLength":1,"description":"New output PDF path; must not exist."},"password":{"type":"string","description":"Open or permissions password, if needed."}},"required":["input","output"],"additionalProperties":false}},
                 "start_number": {"type":"integer","minimum":1,"description":"First number in the sequence (default 1)."}, "digits": {"type":"integer","minimum":1,"maximum":12,"description":"Zero-padded number width (default 6)."},
-                "prefix": {"type":"string","maxLength":128,"description":"Text before the number: at most 128 UTF-8 bytes, without # or >>."}, "suffix": {"type":"string","maxLength":128,"description":"Text after the number: at most 128 UTF-8 bytes, without # or >>."},
-                "dry_run": {"type":"boolean","description":"Return each file's inclusive number interval without writing (default false)."}
+                "prefix": {"type":"string","maxLength":128,"description":"Bates prefix, up to 128 characters; cannot contain # or >>."}, "suffix": {"type":"string","maxLength":128,"description":"Bates suffix, up to 128 characters; cannot contain # or >>."},
+                "dry_run": {"type":"boolean","description":"Return each file's inclusive number interval without writing (default false). Output collisions are checked conservatively: Windows compares case-insensitively, while Unix preserves case, so case-sensitive Windows and case-insensitive Unix volumes can differ from normal runs."}
             }), &["files"])),
         t("doc_batch", "Process files and folders", "Run convert, ocr and/or optimize over files and folders, one file at a time. recursive defaults to false. Preserve paths relative to each selected folder inside out_dir; duplicate inputs run once. Skip unsupported files, links and the output subtree. Existing outputs receive numbered names and are never replaced. Continue after per-file errors unless stop_on_error is true. Return completed/failed/skipped counts and per-file results. Discovery is bounded to 10000 entries and 64 folder levels. Convert must be first; each step can appear once. OCR uses installed models. Optimize uses Reduce File Size settings, optionally overriding target ppi (threshold 1.5 times ppi; black-and-white images go to the larger of ppi and 300) and JPEG quality; a larger candidate keeps the original bytes. Sources and open documents are unchanged.")
             .with(schema(json!({
@@ -195,12 +195,21 @@ pub fn tools() -> Vec<ToolDef> {
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),
-        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
+        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. orbit, in place of direction, frames the model as a viewer's orbit control does (the same size from every side) and applies, in order: view (iso, front, right, top or back; default iso) about up (+x, +y, +z, -x, -y or -z; default +z) with the Front view looking along front (an axis perpendicular to up; default +y, or -z when y is up), then turn [yaw, pitch] in degrees (pitch looks down and stops just short of the up axis), then zoom (a factor, the result held within 0.05 to 50) about the picture point zoom_at [right, up] in picture heights from the centre (default the centre), then pan [right, up] in model radii (it moves the target, so the model moves the other way). perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
                 "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
-                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                "perspective": { "type": "boolean" }
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction from the eye towards the model (default [-1, 1, -1]). Mutually exclusive with orbit." },
+                "perspective": { "type": "boolean" },
+                "orbit": { "type": "object", "description": "A viewer's orbit moves, applied in the order of these keys; all optional. Mutually exclusive with direction.", "properties": {
+                    "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"], "description": "The view to start from (default iso)." },
+                    "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that appears upward (default +z)." },
+                    "front": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The axis the Front view looks along, perpendicular to up (default +y, or -z when y is up)." },
+                    "turn": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[yaw, pitch] in degrees, pitch looking down (default [0, 0])." },
+                    "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "A factor on the fitted view (default 1); the result is held within 0.05 to 50." },
+                    "zoom_at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The picture point the zoom keeps still, [right, up] in picture heights from the centre (default [0, 0]). Requires zoom." },
+                    "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
+                }, "additionalProperties": false }
             }), &["doc", "page"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
@@ -237,12 +246,13 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return matches in page order with page and line rectangles in points (origin top-left). Reads growing batches, looking one match past the limit for a continuation. Failed pages do not discard readable matches: warnings contains up to 100 {page, error, error_truncated} entries (errors capped at 1024 UTF-8 bytes), warning_count counts failed pages, and warnings_truncated reports a capped list. complete is false after a page failure or when more matches exist; next is present only for a match-limit continuation.")
+        t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return matches in page order with page and line rectangles in points (origin top-left). Reads growing batches, looking one match past the limit for a continuation. Failed pages do not discard readable matches: warnings contains up to 100 {page, error, error_truncated} entries (errors capped at 1024 UTF-8 bytes), warning_count counts failed pages, and warnings_truncated reports a capped list. complete is false after a page failure or when more matches exist; next is present only for a match-limit continuation. With stop_at_limit the search ends at the limit-th match instead of looking for one more, so a lone early match doesn't read the rest of the document.")
             .ro()
             .cmd("edit.find")
             .with(schema(json!({ "doc": doc(), "query": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "description": "Maximum matches (default 500). When another match exists, next holds start_page and skip to continue. complete is false for either additional matches or failed pages; an exhausted search with warnings has no next." },
                 "start_page": { "type": "integer", "minimum": 1, "description": "Page to start searching from (default 1)." },
-                "skip": { "type": "integer", "minimum": 0, "description": "Matches to pass over on start_page before returning any (default 0)." } }), &["doc", "query"])),
+                "skip": { "type": "integer", "minimum": 0, "description": "Matches to pass over on start_page before returning any (default 0)." },
+                "stop_at_limit": { "type": "boolean", "description": "Stop at the limit-th match without looking for another (default false). The answer then has stopped_at_limit; when true, complete is false and next is only where to resume, so following it may find nothing more." } }), &["doc", "query"])),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(
@@ -698,7 +708,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_print",
             "Print",
-            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, or US #10 Envelope (short names or full preset labels); use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",
+            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, which turns the sheet to suit the grid, or a custom grid of cols across by rows down, each 1-99, on the sheet as oriented (auto prints portrait); order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, or US #10 Envelope (short names or full preset labels); use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",
         )
         .with(schema(
             json!({
@@ -709,6 +719,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster"] },
                 "scale": { "type": "number", "exclusiveMinimum": 0 },
                 "per_sheet": { "type": "integer", "minimum": 1, "maximum": 256 },
+                "cols": { "type": "integer", "minimum": 1, "maximum": 99, "description": "Custom pages per sheet: columns across the sheet; give rows too, and no per_sheet." },
+                "rows": { "type": "integer", "minimum": 1, "maximum": 99, "description": "Custom pages per sheet: rows down the sheet; give cols too, and no per_sheet." },
                 "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] },
                 "border": { "type": "boolean" },
                 "auto_rotate": { "type": "boolean" },
@@ -801,7 +813,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("content_delete", "Delete added content", "Delete an added item (page, index from content_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
-        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url or to_page).")
+        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("link_open", "Open a linked PDF", "Follow a local GoToR link in PdfCraft: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. Named destinations are reported but not applied. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
@@ -809,22 +821,24 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "password": { "type": "string", "description": "Optional password for the linked PDF." }, "allow_absolute": { "type": "boolean", "description": "Explicitly allow an absolute local GoToR target (default false). Existing validation and --root confinement still apply." } }),
                 &["doc", "page", "index"],
             )),
-        t("link_add", "Add a link", "Add a link over rect on page that opens url or goes to to_page. Appearance: visible (rectangle), color, width 1-3, highlight none/invert/outline/inset. Undoable.")
+        t("link_add", "Add a link", "Add a link over rect on page that opens url or goes to to_page, shown at zoom: fit_page (default), fit_width, fit_height, fit_visible, actual, inherit (keep the reader's zoom) or a percentage. Appearance: visible (rectangle), color, width 1-3, highlight none/invert/outline/inset. Undoable.")
             .cmd("edit.link")
             .with(schema(
                 json!({
                     "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                     "url": { "type": "string" }, "to_page": { "type": "integer", "minimum": 1 },
+                    "zoom": { "description": "fit_page, fit_width, fit_height, fit_visible, actual, inherit, or a percentage" },
                     "visible": { "type": "boolean" }, "color": { "type": "string" }, "width": { "type": "number" }, "highlight": { "type": "string", "enum": ["none", "invert", "outline", "inset"] },
                 }),
                 &["doc", "page", "rect"],
             )),
-        t("link_edit", "Edit a link", "Change a link's rect, destination (url or to_page) or appearance. Undoable.")
+        t("link_edit", "Edit a link", "Change a link's rect, destination (url, or to_page and zoom as in link_add; a new to_page keeps the link's zoom, a zoom alone keeps its page) or appearance. Undoable.")
             .with(schema(
                 json!({
                     "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                     "url": { "type": "string" }, "to_page": { "type": "integer", "minimum": 1 },
+                    "zoom": { "description": "fit_page, fit_width, fit_height, fit_visible, actual, inherit, or a percentage" },
                     "visible": { "type": "boolean" }, "color": { "type": "string" }, "width": { "type": "number" }, "highlight": { "type": "string", "enum": ["none", "invert", "outline", "inset"] },
                 }),
                 &["doc", "page", "index"],
