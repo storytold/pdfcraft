@@ -1090,7 +1090,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddLink {
         page: 0,
         rect: [30.0, 230.0, 60.0, 270.0],
-        action: pdfcraft_engine::LinkAction::Page(0),
+        action: pdfcraft_engine::LinkAction::Page { page: 0, zoom: pdfcraft_engine::LinkZoom::FitPage },
         style: pdfcraft_engine::LinkStyle::default(),
     });
     h.state_mut().signature = Some(SavedSig::Image(image));
@@ -2562,10 +2562,17 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     let annot = &session.get(reopened).unwrap().info.annotations[0];
     assert_eq!(annot.contents.as_deref(), Some(text));
     assert!(annot.rect[3] - annot.rect[1] >= 5.0 * 10.0 * 1.2, "the saved box keeps all five lines");
+    // Compared as edits, not saved bytes: a save stamps its time, so two saves a second apart differ.
+    let unchanged = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = h.state().session.get(id).unwrap();
+        (doc.edit_generation(), doc.dirty, doc.can_undo().map(str::to_owned))
+    };
+    let before = unchanged(&h);
     click(&mut h, 50.0, 180.0);
     fill_input(&mut h, [egui::Event::Text("Cancel me".into())]);
     fill_key(&mut h, egui::Key::Enter);
     fill_key(&mut h, egui::Key::Escape);
     assert!(h.state().views[0].fill_text.is_none());
-    assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
+    assert_eq!(unchanged(&h), before, "Escape cancels without writing");
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
 }

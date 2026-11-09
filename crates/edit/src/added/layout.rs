@@ -1,7 +1,6 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
-    shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -55,16 +54,21 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
+        // Widths add up (the standard-14 widths have no kerning), so each word is measured once
+        // and appended in place: a line that never fills (negative character spacing) stays
+        // linear instead of being copied and measured again for every word.
         for word in para.split(' ') {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let word_w = measure(word);
+            let candidate_w = if line.is_empty() { word_w } else { line_w + space + word_w };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl, index));
-                line = word.to_string();
-                line_w = measure(word);
+                line.push_str(word);
+                line_w = word_w;
             } else {
-                line = candidate;
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
                 line_w = candidate_w;
             }
         }
@@ -171,9 +175,7 @@ fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
     words
 }
 
-pub(super) fn is_thai(c: char) -> bool {
-    matches!(u32::from(c), 0x0E00..=0x0E7F)
-}
+pub(super) use pdfcraft_fonts::shaped_text::{Piece, is_thai};
 
 /// Arabic letters, marks, digits and punctuation: an item with any of them is shaped with the
 /// craft-fonts Arabic face.
@@ -253,13 +255,6 @@ fn mirrored(c: char) -> char {
     }
 }
 
-/// A piece of a line with shaped text, in drawing order.
-pub(super) enum Piece {
-    /// Shown in the item's own standard font.
-    Latin(String),
-    Shaped(Vec<ShapedCluster>),
-}
-
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
 pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
@@ -313,14 +308,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             });
         }
     }
-    let width = pieces
-        .iter()
-        .map(|p| match p {
-            Piece::Latin(s) => latin_width(t, s),
-            // Each cluster is shown on its own, so the spacing follows each once.
-            Piece::Shaped(clusters) => clusters.iter().map(|c| c.advance * t.size + t.char_spacing).sum::<f64>(),
-        })
-        .sum();
+    let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| latin_width(t, s));
     Ok((pieces, width))
 }
 
@@ -351,13 +339,7 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
 }
 
 pub(super) fn thai_error(e: GlyphError, text: &str) -> EditError {
-    EditError::Invalid(match e {
-        GlyphError::NoFont => {
-            "Thai text needs a Thai font in this build; rebuild with CRAFT_FONTS_DIR pointing to craft-fonts with a Thai face".into()
-        }
-        GlyphError::Missing => format!("the Thai font can't show \"{text}\""),
-        GlyphError::TooComplex => "the Thai glyphs are too complex; use a shorter text box".into(),
-    })
+    EditError::Invalid(pdfcraft_fonts::shaped_text::thai_message(e, text))
 }
 
 /// The box a text item occupies (height from its lines).

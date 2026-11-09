@@ -531,6 +531,10 @@ pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<
     let num = |s: &String| make_number(s).unwrap_or(0.0);
     match c {
         Calculate::None => None,
+        // A product of no values is 0, as an empty sum, average, minimum or maximum is, not the
+        // empty product 1: a blank quantity × price row reads 0, and a total over the rows
+        // doesn't count it as 1. (The form's `values` leaves out a field that has no value.)
+        Calculate::Simple { op: CalcOp::Product, fields } if fields.iter().all(|f| values(f).is_empty()) => Some("0".into()),
         Calculate::Simple { op, fields } => {
             let xs: Vec<f64> = fields.iter().flat_map(|f| values(f)).map(|v| num(&v)).collect();
             let v = match op {
