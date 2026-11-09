@@ -4,9 +4,6 @@
 //! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
-//! `--combine [files…]` lists the files in Combine files (the file manager's "Combine files" entry,
-//! #585); with a PdfCraft already running, they join its list on Windows and Linux (macOS has
-//! no single-instance hand-off, so there a second `--combine` launch opens a window of its own).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -15,6 +12,8 @@
 //!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
 //!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
+//! `--combine files…` adds the files to the Combine files tab (File Explorer's "Combine files in
+//! PdfCraft", #585), of the PdfCraft already running when there is one.
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
@@ -72,7 +71,7 @@ Options:
   --two-paged                 open command-line PDFs in noncontinuous two-page view
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
-  --combine [files…]          list the files in Combine files
+  --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
@@ -259,8 +258,7 @@ fn main() -> eframe::Result {
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
-    let request = if combine { single_instance::Request::Combine(files.clone()) } else { single_instance::Request::Open(files.clone()) };
-    let instance = match single_instance::claim(&request, may_hand_off) {
+    let instance = match single_instance::claim(&files, may_hand_off, combine) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
@@ -373,7 +371,7 @@ struct Launch {
     options: Vec<(String, String)>,
     control_file: Option<String>,
     create_images: bool,
-    /// `--combine`: the files go to the Combine files list.
+    /// `--combine`: the files go to the Combine files tab.
     combine: bool,
     integrated: bool,
     /// The window buttons the app draws, when the desktop leaves the frame to it.
@@ -469,12 +467,13 @@ fn app_creator<'a>(
             );
         }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
-        if combine {
-            app.combine_paths(&files);
-        } else if create_images {
+        if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
             }
+        } else if combine {
+            app.reopen_last_files(&[]);
+            app.combine_paths(&files);
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).

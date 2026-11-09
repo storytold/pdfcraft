@@ -14,7 +14,9 @@
 //! intercept a launch or open files in this user's window. Inside a Flatpak, `$XDG_RUNTIME_DIR` is
 //! the app's own and is shared by every run of it, so the handoff works there too. The exchange is
 //! one line each way, a JSON request naming absolute paths and `ok`, and the running app opens the
-//! paths exactly as File ▸ Open would.
+//! paths exactly as File ▸ Open would. A `--combine` launch (File Explorer's "Combine files in
+//! PdfCraft", #585, one launch per selected file) hands them over the same way with
+//! `"combine": true`, and the running app adds them to its Combine files tab instead.
 //!
 //! Every failure falls back to the old behaviour: a launch that can't hand its files over within
 //! a few seconds opens its own window. `--new-window`, any other option, or no files at all also
@@ -55,20 +57,13 @@ pub enum Claim {
     Alone,
 }
 
-/// What a launch asks the running PdfCraft to do with its files.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Request {
-    /// Open them as tabs (a double-click, Open With, the "Edit with" entry).
-    Open(Vec<String>),
-    /// Add them to the Combine files list, in this order (the file manager's "Combine files" entry,
-    /// #585). Nothing is combined until Combine is pressed.
-    Combine(Vec<String>),
-}
-
-/// What later launches handed over, in arrival order, and how to wake the UI for it.
+/// Files that later launches handed over, and how to wake the UI for them.
 #[derive(Default)]
 struct Inbox {
-    requests: Vec<Request>,
+    /// The requests in the order they arrived: [`OsEvent::Open`] or, for `--combine`,
+    /// [`OsEvent::Combine`]. One queue, so the UI handles an Open that came after a Combine after
+    /// it, and that Open comes to the front instead of opening behind the Combine files tab.
+    events: Vec<OsEvent>,
     wake: Option<Box<dyn Fn() + Send>>,
 }
 
@@ -84,11 +79,20 @@ impl Server {
         Self { inbox: Arc::default() }
     }
 
-    /// Queue another launch's request and wake the UI.
+    /// Queue files from another launch (to open, or to combine) and wake the UI.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, request: Request) {
+    fn deliver(&self, paths: Vec<String>, combine: bool) {
+        if paths.is_empty() {
+            return;
+        }
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
-        inbox.requests.push(request);
+        // A run of requests of one kind (File Explorer starts one launch per selected file) stays
+        // one event; a request of the other kind starts a new one after it.
+        match (inbox.events.last_mut(), combine) {
+            (Some(OsEvent::Combine(queued)), true) | (Some(OsEvent::Open(queued)), false) => queued.extend(paths),
+            (_, true) => inbox.events.push(OsEvent::Combine(paths)),
+            (_, false) => inbox.events.push(OsEvent::Open(paths)),
+        }
         if let Some(wake) = &inbox.wake {
             wake();
         }
@@ -105,8 +109,8 @@ impl Server {
         let inbox = Arc::clone(&self.inbox);
         let ctx = ctx.clone();
         Box::new(move || {
-            let requests = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).requests);
-            if requests.is_empty() {
+            let events = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).events);
+            if events.is_empty() {
                 return Vec::new();
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -114,51 +118,37 @@ impl Server {
             if native_wayland {
                 ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
             }
-            events(requests)
+            events
         })
     }
 }
 
-/// The window's events for a batch of requests, in arrival order: consecutive requests of one kind
-/// become one event (files to open as tabs, or files for the Combine files list).
-fn events(requests: Vec<Request>) -> Vec<OsEvent> {
-    let mut out: Vec<OsEvent> = Vec::new();
-    for request in requests {
-        match (request, out.last_mut()) {
-            (Request::Open(files), Some(OsEvent::Open(open))) => open.extend(files),
-            (Request::Combine(files), Some(OsEvent::Combine(combine))) => combine.extend(files),
-            (Request::Open(files), _) => out.push(OsEvent::Open(files)),
-            (Request::Combine(files), _) => out.push(OsEvent::Combine(files)),
-        }
-    }
-    out
-}
-
-/// The request a launch sends: `{"open":[…]}` or `{"combine":[…]}`, and a newline.
+/// The request a launch sends: `{"open":[…]}` (with `"combine":true` for `--combine`) and a
+/// newline.
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-pub fn request(request: &Request) -> String {
-    let mut line = match request {
-        Request::Open(paths) => serde_json::json!({ "open": paths }),
-        Request::Combine(paths) => serde_json::json!({ "combine": paths }),
+pub fn request(paths: &[String], combine: bool) -> String {
+    let mut value = serde_json::json!({ "open": paths });
+    if combine {
+        value["combine"] = serde_json::Value::Bool(true);
     }
-    .to_string();
+    let mut line = value.to_string();
     line.push('\n');
     line
 }
 
-/// The request a line holds, or `None` when it isn't one: anything but one JSON object whose
-/// `open` or `combine` is a non-empty list of non-empty strings. A PdfCraft from before Combine
-/// files (#585) refuses a combine request, and that launch opens a window of its own instead.
+/// The paths a request names and whether they are for Combine files, or `None` when it isn't a
+/// request: anything but one JSON object whose `open` is a non-empty list of non-empty strings
+/// (`combine`, when there, must be a boolean).
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-pub fn parse_request(line: &str) -> Option<Request> {
+pub fn parse_request(line: &str) -> Option<(Vec<String>, bool)> {
     let value: serde_json::Value = serde_json::from_str(line.trim_end()).ok()?;
-    let (list, kind): (_, fn(Vec<String>) -> Request) = match (value.get("open"), value.get("combine")) {
-        (Some(open), None) => (open, Request::Open),
-        (None, Some(combine)) => (combine, Request::Combine),
-        _ => return None,
+    let open = value.get("open")?.as_array()?;
+    let paths = open.iter().map(|p| p.as_str().filter(|s| !s.is_empty()).map(str::to_string)).collect::<Option<Vec<String>>>()?;
+    let combine = match value.get("combine") {
+        None => false,
+        Some(c) => c.as_bool()?,
     };
-    let paths = list.as_array()?.iter().map(|p| p.as_str().filter(|s| !s.is_empty()).map(str::to_string)).collect::<Option<Vec<String>>>()?;
-    (!paths.is_empty()).then(|| kind(paths))
+    (!paths.is_empty()).then_some((paths, combine))
 }
 
 /// File arguments made absolute against this launch's working folder, which the running app
@@ -167,19 +157,20 @@ pub fn absolute(paths: &[String]) -> Vec<String> {
     paths.iter().map(|p| std::path::absolute(p).map_or_else(|_| p.clone(), |a| a.to_string_lossy().into_owned())).collect()
 }
 
-/// Decide what this launch does. The request's files are absolute ([`absolute`]); `may_hand_off`
-/// is false when the launch asked for anything besides its files, so it gets its own window.
-pub fn claim(request: &Request, may_hand_off: bool) -> Claim {
+/// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
+/// when the launch asked for anything besides opening (or, with `combine`, combining) files, so
+/// it gets its own window.
+pub fn claim(files: &[String], may_hand_off: bool, combine: bool) -> Claim {
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     {
         match socket_path() {
-            Some(path) => claim_at(&path, request, may_hand_off),
+            Some(path) => claim_at(&path, files, may_hand_off, combine),
             None => Claim::Alone,
         }
     }
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
-        let _ = (request, may_hand_off);
+        let _ = (files, may_hand_off, combine);
         Claim::Alone
     }
 }
@@ -273,7 +264,7 @@ fn election(socket: &std::path::Path) -> Option<std::fs::File> {
 
 /// [`claim`] with the socket at `path`.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-fn claim_at(path: &std::path::Path, request: &Request, may_hand_off: bool) -> Claim {
+fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool, combine: bool) -> Claim {
     // Released when this function returns: by then this launch listens, or has handed over.
     let _election = election(path);
     // Two launches can start together: the one that loses the race to bind hands over to the
@@ -284,7 +275,7 @@ fn claim_at(path: &std::path::Path, request: &Request, may_hand_off: bool) -> Cl
                 if !may_hand_off {
                     return Claim::Alone;
                 }
-                return match hand_off(&stream, request) {
+                return match hand_off(&stream, files, combine) {
                     Ok(()) => Claim::HandedOff,
                     Err(e) => {
                         log::warn!("couldn't hand the files to the running PdfCraft ({e}); opening a new window");
@@ -330,12 +321,12 @@ fn claim_at(path: &std::path::Path, request: &Request, may_hand_off: bool) -> Cl
 
 /// Send `files` over `stream` and wait for the running app's `ok`.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-fn hand_off(stream: &UnixStream, request: &Request) -> std::io::Result<()> {
+fn hand_off(stream: &UnixStream, files: &[String], combine: bool) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
     let mut writer = stream;
-    writer.write_all(self::request(request).as_bytes())?;
+    writer.write_all(request(files, combine).as_bytes())?;
     let mut reply = String::new();
     std::io::BufReader::new(stream.take(16)).read_line(&mut reply)?;
     if reply == "ok\n" { Ok(()) } else { Err(std::io::Error::other("the running PdfCraft didn't confirm")) }
@@ -377,8 +368,8 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     if line.is_empty() {
         return Ok(());
     }
-    let request = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open or combine request"))?;
-    server.deliver(request);
+    let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
+    server.deliver(paths, combine);
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -390,17 +381,12 @@ mod tests {
     #[test]
     fn a_request_names_the_paths_and_round_trips() {
         let paths = vec![r"C:\Users\me\Documents\Quote.pdf".to_string(), r"D:\Scans\Plan „A“ 1.pdf".to_string()];
-        let line = request(&Request::Open(paths.clone()));
+        let line = request(&paths, false);
         assert!(line.ends_with('\n') && !line.trim_end().contains('\n'), "one line");
-        assert_eq!(parse_request(&line), Some(Request::Open(paths)));
-    }
-
-    #[test]
-    fn a_combine_request_names_its_files_and_round_trips() {
-        let paths = vec![r"C:\Scans\Quote.pdf".to_string(), r"C:\Scans\Photo 1.jpg".to_string()];
-        let line = request(&Request::Combine(paths.clone()));
-        assert!(line.starts_with(r#"{"combine":"#) && line.ends_with('\n') && !line.trim_end().contains('\n'), "{line}");
-        assert_eq!(parse_request(&line), Some(Request::Combine(paths)));
+        assert_eq!(parse_request(&line), Some((paths.clone(), false)));
+        assert!(!line.contains("combine"), "an open request says nothing about combining");
+        let line = request(&paths, true);
+        assert_eq!(parse_request(&line), Some((paths, true)), "a --combine launch's request");
     }
 
     #[test]
@@ -414,13 +400,12 @@ mod tests {
             r#"{"open":["a.pdf",3]}"#,
             r#"{"open":"a.pdf"}"#,
             "[\"a.pdf\"]",
-            r#"{"combine":[]}"#,
-            r#"{"combine":[""]}"#,
-            r#"{"combine":"a.pdf"}"#,
-            r#"{"open":["a.pdf"],"combine":["b.pdf"]}"#,
+            r#"{"open":["a.pdf"],"combine":"yes"}"#,
+            r#"{"open":["a.pdf"],"combine":1}"#,
         ] {
             assert_eq!(parse_request(line), None, "{line:?}");
         }
+        assert_eq!(parse_request(r#"{"open":["a.pdf"],"combine":false}"#), Some((vec!["a.pdf".to_string()], false)));
     }
 
     #[test]
@@ -453,13 +438,31 @@ mod tests {
     fn delivered_files_reach_the_ui_once_wake_it_and_bring_the_window_forward() {
         let server = Server::new();
         // Before the window exists: queued, nothing to wake yet.
-        server.deliver(Request::Open(vec!["a.pdf".into()]));
+        server.deliver(vec!["a.pdf".into()], false);
         let ctx = egui::Context::default();
         let mut poll = server.connect(&ctx, false);
-        server.deliver(Request::Open(vec!["b.pdf".into()]));
+        server.deliver(vec!["b.pdf".into()], false);
         let events = poll();
         assert!(matches!(events.as_slice(), [OsEvent::Open(p)] if p == &["a.pdf", "b.pdf"]));
         assert!(poll().is_empty(), "each file is delivered once");
+        // Files to combine (one launch each, from File Explorer) arrive as one Combine event,
+        // apart from files to open.
+        server.deliver(vec!["c.pdf".into()], true);
+        server.deliver(vec!["e.pdf".into()], true);
+        let events = poll();
+        assert!(matches!(events.as_slice(), [OsEvent::Combine(c)] if c == &["c.pdf", "e.pdf"]), "{events:?}");
+        // #2503 review: requests reach the UI in the order they arrived, so an Open after a
+        // Combine is handled after it and comes to the front instead of opening behind the
+        // Combine files tab.
+        server.deliver(vec!["f.pdf".into()], true);
+        server.deliver(vec!["g.pdf".into()], false);
+        server.deliver(vec!["h.pdf".into()], true);
+        let events = poll();
+        assert!(
+            matches!(events.as_slice(), [OsEvent::Combine(f), OsEvent::Open(g), OsEvent::Combine(h)] if f == &["f.pdf"] && g == &["g.pdf"] && h == &["h.pdf"]),
+            "{events:?}"
+        );
+        assert!(poll().is_empty());
     }
 
     #[test]
@@ -497,12 +500,15 @@ mod tests {
     #[test]
     fn a_second_launch_hands_its_files_to_the_first() {
         let path = socket("hand-off");
-        let Claim::Primary(first) = claim_at(&path, &Request::Open(Vec::new()), true) else { panic!("the first launch listens") };
+        let Claim::Primary(first) = claim_at(&path, &[], true, false) else { panic!("the first launch listens") };
         let mut poll = first.connect(&egui::Context::default(), false);
-        assert!(matches!(claim_at(&path, &Request::Open(vec!["C:\\a.pdf".into()]), true), Claim::HandedOff));
+        assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true, false), Claim::HandedOff));
         assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
+        // A --combine launch hands its file over for the Combine files tab (#585).
+        assert!(matches!(claim_at(&path, &["C:\\c.pdf".into()], true, true), Claim::HandedOff));
+        assert!(matches!(poll().as_slice(), [OsEvent::Combine(p)] if p == &["C:\\c.pdf"]));
         // A launch with options keeps its own window and doesn't take over the socket.
-        assert!(matches!(claim_at(&path, &Request::Open(vec!["C:\\b.pdf".into()]), false), Claim::Alone));
+        assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false, false), Claim::Alone));
         assert!(poll().is_empty());
     }
 
@@ -517,7 +523,7 @@ mod tests {
                 let (path, barrier) = (path.clone(), Arc::clone(&barrier));
                 std::thread::spawn(move || {
                     barrier.wait();
-                    claim_at(&path, &Request::Open(vec![format!("C:\\{i}.pdf")]), true)
+                    claim_at(&path, &[format!("C:\\{i}.pdf")], true, false)
                 })
             })
             .collect();
@@ -538,56 +544,6 @@ mod tests {
         }));
         // `symlink_metadata`, not `exists`, which follows the socket's reparse point and can fail.
         assert!(std::fs::symlink_metadata(&path).is_ok(), "the socket file stays behind");
-        assert!(matches!(claim_at(&path, &Request::Open(vec!["C:\\a.pdf".into()]), true), Claim::Primary(_)));
-    }
-
-    #[test]
-    fn opened_and_combined_files_reach_the_ui_in_arrival_order() {
-        let server = Server::new();
-        let mut poll = server.connect(&egui::Context::default(), false);
-        server.deliver(Request::Open(vec!["a.pdf".into()]));
-        server.deliver(Request::Combine(vec!["b.pdf".into()]));
-        server.deliver(Request::Combine(vec!["c.png".into()]));
-        server.deliver(Request::Open(vec!["d.pdf".into()]));
-        let events = poll();
-        assert!(
-            matches!(events.as_slice(), [OsEvent::Open(a), OsEvent::Combine(bc), OsEvent::Open(d)] if a == &["a.pdf"] && bc == &["b.pdf", "c.png"] && d == &["d.pdf"]),
-            "one event per run of one kind"
-        );
-        assert!(poll().is_empty());
-    }
-
-    /// The file manager's "Combine files" on a selection: one launch per selected file, PDFs and
-    /// pictures mixed, all at once (#585). One becomes the window; every other hands its file over
-    /// for the Combine files list, never as a tab.
-    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-    #[test]
-    fn combine_launches_started_together_reach_one_window() {
-        let path = socket("combine");
-        let names = ["1.pdf", "2.png", "3.pdf", "4.jpg", "5.tif", "6.pdf"];
-        let barrier = Arc::new(std::sync::Barrier::new(names.len()));
-        let launches: Vec<_> = names
-            .iter()
-            .map(|name| {
-                let (path, barrier, file) = (path.clone(), Arc::clone(&barrier), name.to_string());
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    (file.clone(), claim_at(&path, &Request::Combine(vec![file]), true))
-                })
-            })
-            .collect();
-        let claims: Vec<(String, Claim)> = launches.into_iter().map(|t| t.join().unwrap()).collect();
-        let window: Vec<&(String, Claim)> = claims.iter().filter(|(_, c)| matches!(c, Claim::Primary(_))).collect();
-        assert_eq!(window.len(), 1, "one window");
-        assert_eq!(claims.iter().filter(|(_, c)| matches!(c, Claim::HandedOff)).count(), names.len() - 1, "the rest hand over");
-        let (own, Claim::Primary(server)) = window[0] else { panic!("the window's claim") };
-        let events = server.connect(&egui::Context::default(), false)();
-        let [OsEvent::Combine(handed)] = events.as_slice() else { panic!("one Combine event and no tabs, got {} events", events.len()) };
-        // The window lists its own file itself; every other file arrived once.
-        let mut handed = handed.clone();
-        handed.sort();
-        let mut expected: Vec<String> = names.iter().map(|n| n.to_string()).filter(|n| n != own).collect();
-        expected.sort();
-        assert_eq!(handed, expected);
+        assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true, false), Claim::Primary(_)));
     }
 }

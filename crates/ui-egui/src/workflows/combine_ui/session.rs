@@ -401,12 +401,30 @@ impl PdfCraftApp {
         let _ = recursive;
     }
 
-    /// Add files named by the operating system or the command line (`--combine`, the file
-    /// manager's "Combine files" entry, #585) to the Combine files list, in the order given (a sorted list stays sorted), and
-    /// show it. Images and text files become PDFs as they join (#569). Nothing is combined until
-    /// Combine is pressed. A file that can't be read is said and left out; the others still join,
-    /// as one undo step.
+    /// Add the files at `paths` to the Combine files list and show it: `pdfcraft --combine` and
+    /// File Explorer's "Combine files in PdfCraft" (#585), where each selected file arrives as a
+    /// launch of its own and the running PdfCraft collects them here. Nothing to add shows the
+    /// tab all the same.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn combine_paths(&mut self, paths: &[String]) {
+        // A file still opening from before (another launch's Open), or waiting for its password,
+        // opens in the background, so finishing doesn't hide the tab shown here; a later Open
+        // still comes to the front. An open that something waits on keeps its focus: a chosen
+        // tool, a link's destination or a recovery runs on the document once it is in front.
+        for pending in &mut self.pending_opens {
+            if pending.then.is_none() && pending.after_open.is_none() && pending.recovered.is_none() {
+                pending.activate = false;
+            }
+        }
+        if let Some(prompt) = self.password_prompt.as_mut()
+            && prompt.then.is_none()
+            && prompt.after_open.is_none()
+            && prompt.recovered.is_none()
+        {
+            prompt.activate = false;
+        }
+        self.open_combine_tab();
+        // A file that can't be read is said and left out; the others still join.
         let mut incoming = Vec::new();
         for path in paths.iter().map(std::path::Path::new) {
             let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
@@ -418,7 +436,9 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
             }
         }
-        self.stage_combine_with(incoming);
+        if !incoming.is_empty() {
+            self.stage_combine_with(incoming);
+        }
     }
 
     /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.
