@@ -209,9 +209,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let mark = self.session.js_output_mark(new);
-        let n = self.session.mark_differences(old, new).map_err(failed)?;
-        let warnings = self.session.take_js_output_since(new, mark).errors;
-        Ok(with_warnings(json!({ "comments": n }), warnings))
+        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
+        Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }

@@ -582,9 +582,8 @@ impl Automation {
     /// Apply `edit` to document `id` and take out the errors it added to the document's script
     /// output, such as the values of an XFA form that could not be written to its data.
     fn apply_with_warnings(&mut self, id: DocId, edit: pdfcraft_engine::Edit) -> Result<Vec<String>> {
-        let mark = self.session.js_output_mark(id);
-        self.session.apply(id, edit).map_err(failed)?;
-        Ok(self.session.take_js_output_since(id, mark).errors)
+        let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
+        Ok(out.errors)
     }
 }
 
