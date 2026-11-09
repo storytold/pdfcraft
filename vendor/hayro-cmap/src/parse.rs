@@ -346,6 +346,8 @@ fn parse_bf_char<F>(
             let _ = scanner.parse_object();
             continue;
         };
+        // PdfCraft patch (4): 1 to 4 (`extract_u32_code` checked).
+        let code_len = u8::try_from(ctx.buf.len()).unwrap_or(0);
         let Ok(dst) = scanner.parse_string() else { continue };
         if dst.decode_into(&mut ctx.buf).is_err() { continue }
         let Some(dst_base) = decode_be(&ctx.buf) else { continue };
@@ -356,6 +358,7 @@ fn parse_bf_char<F>(
                 end: code,
             },
             dst_base,
+            code_len,
         });
     }
 }
@@ -380,6 +383,8 @@ fn parse_bf_range<F>(
             let _ = scanner.parse_object();
             continue;
         };
+        // PdfCraft patch (4): 1 to 4 (`extract_u32_code` checked).
+        let code_len = u8::try_from(ctx.buf.len()).unwrap_or(0);
         let Some(end) = read_u32_code(scanner, &mut ctx.buf) else {
             // Skip the destination object as well to stay aligned.
             let _ = scanner.parse_object();
@@ -396,6 +401,7 @@ fn parse_bf_range<F>(
                 entries.push(BfRange {
                     range: Range { start, end },
                     dst_base,
+                    code_len,
                 });
             }
             Object::Array(array) => {
@@ -416,6 +422,7 @@ fn parse_bf_range<F>(
                             end: code,
                         },
                         dst_base,
+                        code_len,
                     });
                 }
             }
