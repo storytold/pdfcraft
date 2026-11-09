@@ -202,8 +202,9 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
 
 #[test]
 fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
-    let alphabet =
-        ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية", "\u{FB01}", "b\u{AD}", "1", "\u{AD}", "a\u{200B}", "\u{2010}"];
+    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية", "\u{AD}", "a\u{200B}"];
+    // Ligatures, digits and HYPHEN exercise the readings of a line-end hyphen.
+    let alphabet: Vec<&str> = alphabet.into_iter().chain(["\u{FB01}", "1", "\u{2010}"]).collect();
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

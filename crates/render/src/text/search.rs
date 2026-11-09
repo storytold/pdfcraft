@@ -199,7 +199,14 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
 
 /// Non-overlapping hits of `needle` (with its KMP `prefix` table) in `chars`, as glyph ranges.
 /// `zero_width_space` says which characters come right after a skipped zero width space.
-fn search(chars: &[(char, usize)], zero_width_space: &[bool], needle: &[char], prefix: &[usize], whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+fn search(
+    chars: &[(char, usize)],
+    zero_width_space: &[bool],
+    needle: &[char],
+    prefix: &[usize],
+    whole_words: bool,
+    limit: usize,
+) -> Vec<Range<usize>> {
     if needle.len() > chars.len() {
         return Vec::new();
     }
