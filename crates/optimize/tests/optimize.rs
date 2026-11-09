@@ -2450,6 +2450,347 @@ fn discards_and_clean_up() {
     assert!(vp.contains(b"HideToolbar") && !vp.contains(b"Duplex"), "other preferences stay");
 }
 
+fn action(kind: &str) -> Dict {
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name(kind));
+    a
+}
+
+fn with(mut d: Dict, key: &str, value: impl Into<Object>) -> Dict {
+    d.set(key.as_bytes().to_vec(), value);
+    d
+}
+
+/// The kinds of the actions `o` runs, in order: each action, then its `/Next` actions.
+fn kinds(doc: &Document, o: Option<&Object>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(o) = o else { return out };
+    match &*doc.resolve(o) {
+        Object::Array(items) => {
+            for item in items {
+                out.extend(kinds(doc, Some(item)));
+            }
+        }
+        Object::Dict(a) => {
+            out.push(String::from_utf8_lossy(a.name(b"S").unwrap_or_default()).into_owned());
+            out.extend(kinds(doc, a.get(b"Next")));
+        }
+        _ => {}
+    }
+    out
+}
+
+fn dict(doc: &Document, r: ObjRef) -> Dict {
+    doc.get(r).as_dict().cloned().unwrap()
+}
+
+#[test]
+fn form_submit_import_and_reset_actions_are_discarded_and_the_fields_stay() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let triggers = with(Dict::new(), "U", action("ResetForm"));
+    let triggers = with(triggers, "E", with(action("JavaScript"), "JS", Object::String(pdfcraft_cos::PdfString::literal("app.alert(1)"))));
+    let button = with(with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Btn")), "A", action("SubmitForm"));
+    let button = doc.add(Object::Dict(with(button, "AA", triggers)));
+    let import = doc.add(Object::Dict(action("ImportData")));
+    let field = with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Tx"));
+    let field = doc.add(Object::Dict(with(field, "AA", with(Dict::new(), "K", Object::Ref(import)))));
+    let link = with(with(Dict::new(), "Subtype", Object::name("Link")), "A", with(action("GoTo"), "Next", action("SubmitForm")));
+    let link = doc.add(Object::Dict(with(link, "D", Object::Array(vec![Object::Ref(p), Object::name("Fit")]))));
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(button), Object::Ref(field), Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(reset))).unwrap();
+
+    let mut kept = doc.clone();
+    assert_eq!(optimize(&mut kept, &Settings::default()).unwrap().form_actions, 0, "the option is off by default");
+    assert_eq!(kinds(&kept, dict(&kept, button).get(b"A")), ["SubmitForm"]);
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 5, "{r:?}");
+    let annots = dict(&doc, p).get(b"Annots").and_then(|a| a.as_array().cloned()).unwrap();
+    assert_eq!(annots.len(), 3, "the fields and the link stay");
+    let b = dict(&doc, button);
+    assert_eq!(b.name(b"FT"), Some(&b"Btn"[..]));
+    assert!(!b.contains(b"A"), "{b:?}");
+    let aa = b.get(b"AA").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]), "other triggers stay");
+    assert!(!dict(&doc, field).contains(b"AA"), "an emptied /AA goes");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_discarded_form_action_hands_its_place_to_the_actions_after_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    // A reset whose /S is an indirect name.
+    let name = doc.add(Object::name("ResetForm"));
+    let reset = doc.add(Object::Dict(with(with(Dict::new(), "S", Object::Ref(name)), "Next", action("URI"))));
+    let submit = with(
+        action("SubmitForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Ref(reset), Object::Dict(action("Named"))]),
+    );
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    // A reset whose chain comes back to itself.
+    let looped = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(looped, |a| a.set(b"Next".to_vec(), Object::Ref(looped))).unwrap();
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(looped))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "URI", "Named"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_form_action_listed_twice_in_a_chain_gives_way_both_times() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let reset = doc.add(Object::Dict(with(action("ResetForm"), "Next", action("JavaScript"))));
+    let submit = with(action("SubmitForm"), "Next", Object::Array(vec![Object::Ref(reset), Object::Ref(reset)]));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    // An indirect submit that holds a direct reset in its /Next.
+    let root = doc.root().unwrap();
+    let opening = doc.add(Object::Dict(with(action("SubmitForm"), "Next", action("ResetForm"))));
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(opening))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 4, "each action counts once: {r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "JavaScript"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn form_actions_chained_past_the_limit_stop_the_optimization() {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let mut chain = action("ResetForm");
+    for _ in 0..80 {
+        chain = with(action("SubmitForm"), "Next", chain);
+    }
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), chain)).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() });
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == root), "{r:?}");
+}
+
+#[test]
+fn a_next_array_that_lists_itself_is_left_as_it_is() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let looped = doc.add(Object::Null);
+    doc.set(looped, Object::Array(vec![Object::Ref(looped)]));
+    let (first, second) = (doc.add(Object::Null), doc.add(Object::Null));
+    doc.set(first, Object::Array(vec![Object::Ref(second)]));
+    doc.set(second, Object::Array(vec![Object::Ref(first)]));
+    let link = |doc: &mut Document, next: ObjRef| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let (own, pair) = (link(&mut doc, looped), link(&mut doc, first));
+    let submit = with(action("SubmitForm"), "Next", Object::Ref(looped));
+    let button = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(own), Object::Ref(pair), Object::Ref(button)]))).unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+
+    let mut cleaned = doc.clone();
+    let r = optimize(&mut cleaned, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for (l, next) in [(own, looped), (pair, first)] {
+        let a = dict(&cleaned, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+    }
+    assert_eq!(dict(&cleaned, button).get(b"A"), Some(&Object::Ref(looped)), "the submit's /Next takes its place");
+
+    // An array that lists itself and a submit, directly or in an array inside it: a cleaned copy
+    // would still reach the submit.
+    for submit in [Object::Dict(action("SubmitForm")), Object::Array(vec![Object::Dict(action("SubmitForm"))])] {
+        let mut mixed = doc.clone();
+        mixed.set(first, Object::Array(vec![Object::Ref(second), submit]));
+        let r = optimize(&mut mixed, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+    }
+}
+
+/// `referrers` actions whose `/Next` is one shared array of 2,000 actions, a submit among them.
+fn shared_next_array(referrers: usize) -> Document {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let script = doc.add(Object::Dict(action("JavaScript")));
+    let mut items = vec![Object::Ref(script); 1_999];
+    items.push(Object::Dict(action("SubmitForm")));
+    let shared = doc.add(Object::Array(items));
+    for _ in 0..referrers {
+        doc.add(Object::Dict(with(action("GoTo"), "Next", Object::Ref(shared))));
+    }
+    doc
+}
+
+#[test]
+fn a_shared_next_array_cleaned_for_too_many_actions_stops_the_optimization() {
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut doc = shared_next_array(400);
+    assert_eq!(optimize(&mut doc, &settings).unwrap().form_actions, 1);
+    // Each referrer is under the limit for one object; together they pass the document's.
+    let mut doc = shared_next_array(600);
+    let r = optimize(&mut doc, &settings);
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+}
+
+/// 80 direct dictionaries nested in each other under `/Deep`, the innermost one being `inner`.
+fn nested(inner: Dict) -> Object {
+    let mut o = Object::Dict(inner);
+    for _ in 0..80 {
+        o = Object::Dict(with(Dict::new(), "Deep", o));
+    }
+    o
+}
+
+#[test]
+fn deep_nesting_stops_the_optimization_only_when_a_form_action_is_past_the_limit() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let plain = doc.add(nested(with(action("GoTo"), "Next", action("URI"))));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", action("SubmitForm"))));
+    doc.update_dict(p, |d| {
+        d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]));
+        d.set(b"PieceInfo".to_vec(), Object::Ref(plain));
+    })
+    .unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut ok = doc.clone();
+    let r = optimize(&mut ok, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "deep nesting with no form action in it is left as it is: {r:?}");
+
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    for (n, inner) in [
+        action("SubmitForm"),
+        with(Dict::new(), "A", Object::Ref(reset)),
+        with(Dict::new(), "Next", Object::Ref(doc.add(Object::Array(vec![Object::Ref(reset)])))),
+        with(Dict::new(), "AA", Object::Ref(doc.add(Object::Dict(with(Dict::new(), "U", action("ImportData")))))),
+        with(Dict::new(), "AA", with(Dict::new(), "U", Object::Ref(reset))),
+        with(Dict::new(), "Next", Object::Array(vec![Object::Ref(reset)])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut deep = doc.clone();
+        let held = deep.add(nested(inner));
+        deep.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(held))).unwrap();
+        let r = optimize(&mut deep, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == held), "case {n}: {r:?}");
+    }
+}
+
+#[test]
+fn a_shared_additional_actions_dictionary_is_cleaned_for_each_field_that_uses_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let triggers = with(with(Dict::new(), "U", action("SubmitForm")), "E", action("JavaScript"));
+    let shared = doc.add(Object::Dict(triggers));
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "AA", Object::Ref(shared))));
+    let (first, second) = (widget(&mut doc), widget(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for w in [first, second] {
+        assert_eq!(dict(&doc, w).get(b"AA"), Some(&Object::Ref(shared)), "the widgets still share one dictionary: {w:?}");
+    }
+    let aa = dict(&doc, shared);
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]));
+}
+
+#[test]
+fn shared_indirect_actions_and_next_arrays_are_cleaned_once_and_stay_shared() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A shared submit whose /Next is a script that resets the form after it runs.
+    let script = with(action("JavaScript"), "Next", action("ResetForm"));
+    let submit = doc.add(Object::Dict(with(action("SubmitForm"), "Next", script)));
+    let next = doc.add(Object::Array(vec![Object::Dict(action("ImportData")), Object::Dict(action("URI")), Object::Dict(action("Named"))]));
+    let link = |doc: &mut Document| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    let (w1, w2, l1, l2) = (widget(&mut doc), widget(&mut doc), link(&mut doc), link(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([w1, w2, l1, l2].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    for w in [w1, w2] {
+        assert_eq!(dict(&doc, w).get(b"A"), Some(&Object::Ref(submit)), "{w:?}");
+        assert_eq!(kinds(&doc, dict(&doc, w).get(b"A")), ["JavaScript"], "{w:?}");
+    }
+    for l in [l1, l2] {
+        let a = dict(&doc, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+        assert_eq!(kinds(&doc, dict(&doc, l).get(b"A")), ["GoTo", "URI", "Named"], "{l:?}");
+    }
+}
+
+#[test]
+fn a_form_action_in_an_array_inside_an_indirect_next_array_is_counted() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let next = doc.add(Object::Array(vec![Object::Array(vec![Object::Dict(action("ResetForm"))]), Object::Dict(action("URI"))]));
+    let a = with(action("GoTo"), "Next", Object::Ref(next));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo", "URI"]);
+}
+
+#[test]
+fn a_shared_action_run_as_a_next_action_and_as_an_a_entry_stays_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A reset before two actions, run by one link after a GoTo and by another as its /A.
+    let reset = doc.add(Object::Dict(with(
+        action("ResetForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Dict(action("URI"))]),
+    )));
+    let link = |doc: &mut Document, a: Object| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    let after = link(&mut doc, Object::Dict(with(action("GoTo"), "Next", Object::Ref(reset))));
+    let runs = link(&mut doc, Object::Ref(reset));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([after, runs].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, reset).name(b"S"), Some(&b"JavaScript"[..]), "the reset's place is taken by a dictionary");
+    assert_eq!(dict(&doc, runs).get(b"A"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, runs).get(b"A")), ["JavaScript", "URI"]);
+    let a = dict(&doc, after).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!(a.get(b"Next"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, after).get(b"A")), ["GoTo", "JavaScript", "URI"]);
+}
+
+#[test]
+fn a_shared_submit_whose_script_runs_it_again_gives_way_to_the_script() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // The widget comes first, so the walk reaches the submit through it.
+    let widget = doc.add(Object::Null);
+    let submit = doc.add(Object::Null);
+    doc.set(widget, Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    doc.set(submit, Object::Dict(with(action("SubmitForm"), "Next", with(action("JavaScript"), "Next", Object::Ref(submit)))));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, widget).get(b"A"), Some(&Object::Ref(submit)));
+    let script = dict(&doc, submit);
+    assert_eq!((script.name(b"S"), script.get(b"Next")), (Some(&b"JavaScript"[..]), Some(&Object::Ref(submit))), "the script runs itself again");
+}
+
 #[test]
 fn space_audit_shares_the_file_out_by_kind() {
     let mut doc = Document::new_empty();
@@ -3094,6 +3435,52 @@ fn drawn_images(doc: &Document) -> Vec<Stream> {
             _ => panic!("image"),
         })
         .collect()
+}
+
+/// A tolerated row must not be regrouped after its highest tile moves during X sorting.
+#[test]
+fn fragment_row_tolerance_preserves_every_tiles_pixels() {
+    for aligned in [true, false] {
+        for merge_fragments in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut refs = Vec::new();
+            for gray in [20u8, 80, 140, 220] {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Image"));
+                d.set(b"Width".to_vec(), Object::Int(10));
+                d.set(b"Height".to_vec(), Object::Int(10));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                refs.push(doc.add(Object::Stream(Stream::flate(d, &[gray; 100]))));
+            }
+            let content = if aligned {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 10 10 0 cm /T1 Do Q q 10 0 0 10 20 0 cm /T2 Do Q q 10 0 0 10 30 0 cm /T3 Do Q"
+            } else {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 9.992 10 0.009 cm /T1 Do Q q 10 0 0 9.982 20 0.018 cm /T2 Do Q q 10 0 0 9.991 30 0.009 cm /T3 Do Q"
+            };
+            page(&mut doc, &[("T0", refs[0]), ("T1", refs[1]), ("T2", refs[2]), ("T3", refs[3])], content);
+            let off = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+            let report = optimize(&mut doc, &Settings { merge_fragments, color: off, gray: off, ..Settings::default() }).unwrap();
+            // Save and reopen, then inspect only images still drawn by the optimized page.
+            let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let drawn = drawn_images(&doc);
+            if report.fragments_merged == 0 {
+                assert_eq!(report.merged_images, 0);
+                assert_eq!(drawn.len(), 4);
+                for (image, gray) in drawn.iter().zip([20u8, 80, 140, 220]) {
+                    assert_eq!(image.decoded().unwrap(), [gray; 100]);
+                }
+            } else {
+                assert!(merge_fragments);
+                assert_eq!((report.fragments_merged, report.merged_images, drawn.len()), (4, 1, 1));
+                let image = &drawn[0];
+                assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(40), Some(10)));
+                let row: Vec<_> = [20u8, 80, 140, 220].into_iter().flat_map(|gray| [gray; 10]).collect();
+                assert_eq!(image.decoded().unwrap(), row.repeat(10), "aligned={aligned}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -4220,6 +4607,107 @@ fn recolouring_keeps_soft_masks_and_leaves_matted_pictures() {
     matted.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(0); 3]));
     let matted = doc.add(Object::Stream(Stream::flate(matted, &[128])));
     assert!(recolour_image(&doc, &picture(matted), ImageTarget::Gray).is_none());
+}
+
+#[test]
+fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let dict_dest = |target: ObjRef| {
+        let mut d = Dict::new();
+        d.set(b"D".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+        Object::Dict(d)
+    };
+    let link = |doc: &mut Document, dest: Object| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d.set(b"Dest".to_vec(), dest);
+        Object::Ref(doc.add(Object::Dict(d)))
+    };
+    let missing = ObjRef::new(999, 0);
+    // Links: (1) explicit dictionary destination to `p` (valid), (2) explicit dictionary
+    // destination to `missing` (invalid), (3) named destination "dict_ok" whose value is
+    // `<< /D [p /Fit] >>` (valid), (4) named destination "broken_tree" whose target page is
+    // `missing` (invalid).
+    let annots = vec![
+        link(&mut doc, dict_dest(p)),
+        link(&mut doc, dict_dest(missing)),
+        link(&mut doc, Object::Array(vec![Object::Int(i64::from(u32::MAX) + 1), Object::name("Fit")])),
+        link(&mut doc, s("dict_ok")),
+        link(&mut doc, s("broken_tree")),
+    ];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    // Bookmark with an indirect GoTo action pointing to "broken_old" in catalog /Dests (whose
+    // page is `missing`), and a second bookmark pointing to "old_ok" in catalog /Dests.
+    let outlines = doc.add(Object::Null);
+    let mut goto_broken = Dict::new();
+    goto_broken.set(b"S".to_vec(), Object::name("GoTo"));
+    goto_broken.set(b"D".to_vec(), Object::name("broken_old"));
+    let goto_broken = doc.add(Object::Dict(goto_broken));
+    let mut bm_broken = Dict::new();
+    bm_broken.set(b"Title".to_vec(), s("Broken"));
+    bm_broken.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_broken.set(b"A".to_vec(), Object::Ref(goto_broken));
+    let bm_broken = doc.add(Object::Dict(bm_broken));
+    let mut bm_ok = Dict::new();
+    bm_ok.set(b"Title".to_vec(), s("Ok"));
+    bm_ok.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_ok.set(b"Dest".to_vec(), Object::name("old_ok"));
+    let bm_ok = doc.add(Object::Dict(bm_ok));
+    doc.update_dict(bm_broken, |d| d.set(b"Next".to_vec(), Object::Ref(bm_ok))).unwrap();
+    let mut o = Dict::new();
+    o.set(b"First".to_vec(), Object::Ref(bm_broken));
+    o.set(b"Last".to_vec(), Object::Ref(bm_ok));
+    doc.set(outlines, Object::Dict(o));
+
+    // /Names /Dests has "broken_tree" (pointing to `missing`) and "dict_ok" (`<< /D [p /Fit] >>`).
+    let broken_dest = doc.add(dict_dest(missing));
+    let ok_dest = doc.add(dict_dest(p));
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("broken_tree"), Object::Ref(broken_dest), s("dict_ok"), Object::Ref(ok_dest)]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+
+    // Catalog /Dests has "broken_old" (pointing to `missing`) and "old_ok" (`<< /D [p /Fit] >>`).
+    let mut old_dests = Dict::new();
+    old_dests.set(b"broken_old".to_vec(), Object::Array(vec![Object::Ref(missing), Object::name("Fit")]));
+    old_dests.set(b"old_ok".to_vec(), dict_dest(p));
+    let old_dests = doc.add(Object::Dict(old_dests));
+
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"Names".to_vec(), Object::Dict(names));
+        c.set(b"Dests".to_vec(), Object::Ref(old_dests));
+        c.set(b"Outlines".to_vec(), Object::Ref(outlines));
+    })
+    .unwrap();
+
+    // Space audit claims both /Names /Dests and catalog /Dests under NamedDestinations.
+    let only_tree = {
+        let mut d = doc.clone();
+        d.update_dict(root, |c| {
+            c.remove(b"Dests");
+        })
+        .unwrap();
+        audit_space(&d, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes
+    };
+    let both_tables = audit_space(&doc, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes;
+    assert!(both_tables > only_tree, "catalog /Dests is counted alongside /Names /Dests: {both_tables} vs {only_tree}");
+
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((report.invalid_links, report.invalid_bookmarks, report.unreferenced_dests), (3, 1, 2), "{report:?}");
+    let left_links = doc.get(p).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(left_links, 2, "the two valid dictionary/named links remain");
+    assert!(doc.get(bm_broken).as_dict().unwrap().get(b"A").is_none(), "broken bookmark action is cleared");
+    assert!(doc.get(bm_ok).as_dict().unwrap().get(b"Dest").is_some(), "valid bookmark destination stays");
+    assert_eq!(named_dest_keys(&doc), vec![b"dict_ok".to_vec()]);
+    let left_old = doc.get(old_dests).as_dict().cloned().unwrap();
+    assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
 }
 
 /// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.

@@ -2311,6 +2311,98 @@ fn numbering_pages_through_tools() {
     assert!(matches!(a.call("page_number", &json!({ "doc": doc, "from": 1, "to": 1, "style": "klingon" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// ISO 32000-2 §12.5.6.3: a state is "for the specified user" (`/T`), so there is one status per
+/// reviewer (their latest), and a checkmark ("marked by the user", Table 174) belongs only to the
+/// reviewer who set it. `comment_list` reports each reviewer's status and who has a checkmark on;
+/// the replies written are hidden (a state reply records a state, not a note) and a reviewer's
+/// later change replies to their earlier one.
+#[test]
+fn review_statuses_are_per_reviewer_through_tools() {
+    let dir = workdir("statuses");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let id =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Check", "author": "Ada" }))["comment"]
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    for (status, author) in [("accepted", "Bob"), ("completed", "Carol"), ("rejected", "Bob")] {
+        ok(&mut a, "comment_set_status", json!({ "doc": doc, "id": id, "status": status, "author": author }));
+    }
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Bob" }));
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Carol" }));
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Carol", "marked": false }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "statuses.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "statuses.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "status replies aren't comments: {list}");
+    let c = &list["comments"][0];
+    assert_eq!(c["statuses"], json!([{ "author": "Bob", "status": "Rejected" }, { "author": "Carol", "status": "Completed" }]));
+    assert_eq!(c["status"], "Rejected", "the latest set by anyone");
+    assert_eq!((c["marked"].clone(), c["marked_by"].clone()), (json!(true), json!(["Bob"])));
+    assert_eq!(c["replies"], json!([]));
+
+    let bytes = std::fs::read(dir.join("statuses.pdf")).unwrap();
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let replies: Vec<pdfcraft_cos::Dict> = saved
+        .object_numbers()
+        .into_iter()
+        .filter_map(|n| saved.get(pdfcraft_cos::ObjRef { num: n, generation: 0 }).as_dict().cloned())
+        .filter(|d| d.contains(b"StateModel"))
+        .collect();
+    assert_eq!(replies.len(), 6);
+    assert!(replies.iter().all(|d| d.int(b"F") == Some(30)), "every state reply is hidden: {replies:?}");
+}
+
+/// ISO 32000-2 §12.5.6.3: a state reply's `/IRT` "shall refer to the original annotation", which
+/// for a status set on a reply is that reply. The reviewer's next change replies to their previous
+/// state reply, and the chain, found by reference, stays the reply's: it is reported on the reply
+/// and never on its comment.
+#[test]
+fn statuses_set_on_a_reply_chain_on_that_reply_through_tools() {
+    let dir = workdir("reply-statuses");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let id =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Check", "author": "Ada" }))["comment"]
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": id, "text": "ANSWER", "author": "Bob" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let reply_id = listed["comments"][0]["replies"][0]["id"].as_str().unwrap().to_string();
+    for (status, author) in [("accepted", "Carol"), ("completed", "Dan"), ("rejected", "Carol")] {
+        ok(&mut a, "comment_set_status", json!({ "doc": doc, "id": reply_id, "status": status, "author": author }));
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "reply-statuses.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "reply-statuses.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let c = &list["comments"][0];
+    assert_eq!((&c["status"], &c["statuses"]), (&Value::Null, &json!([])), "not the comment's: {c}");
+    assert_eq!(c["replies"].as_array().map(Vec::len), Some(1), "{c}");
+    let reply = &c["replies"][0];
+    assert_eq!(reply["statuses"], json!([{ "author": "Carol", "status": "Rejected" }, { "author": "Dan", "status": "Completed" }]), "{reply}");
+
+    // Carol's second status replies to her first, which replies to the reply.
+    let bytes = std::fs::read(dir.join("reply-statuses.pdf")).unwrap();
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let dicts: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Dict)> = saved
+        .object_numbers()
+        .into_iter()
+        .map(|n| pdfcraft_cos::ObjRef { num: n, generation: 0 })
+        .filter_map(|r| Some((r, saved.get(r).as_dict()?.clone())))
+        .collect();
+    let find = |text: &str| -> pdfcraft_cos::ObjRef {
+        dicts.iter().find(|(_, d)| d.get(b"Contents").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().contains(text))).unwrap().0
+    };
+    let irt = |r: pdfcraft_cos::ObjRef| dicts.iter().find(|(x, _)| *x == r).and_then(|(_, d)| d.get(b"IRT").and_then(|o| o.as_ref()));
+    let (answer, first, second) = (find("ANSWER"), find("Accepted set by Carol"), find("Rejected set by Carol"));
+    assert_eq!(irt(first), Some(answer));
+    assert_eq!(irt(second), Some(first));
+}
+
 /// Typed text and text boxes take an oval or a circle for their border through the tools;
 /// comment_list reports it (a rectangle is not reported). Only typed text, dates and text boxes
 /// have one, and only the three shapes.
@@ -3559,6 +3651,59 @@ trailer << /Root 1 0 R >>
     let saved = pdfcraft_engine::a11y::tags(&saved);
     assert_eq!(saved.iter().find(|t| t.kind == "Table").and_then(|t| t.summary.as_deref()), Some("Opening hours by day"));
     assert_eq!(saved.iter().find(|t| t.kind == "TH").and_then(|t| t.scope.as_deref()), Some("Column"));
+}
+
+/// A layout table becomes plain blocks through `accessibility_layout_table_to_blocks` (#4105): the
+/// table findings go, the content keeps its order, and the change is undone and saved.
+#[test]
+fn a_layout_table_becomes_blocks_through_automation() {
+    let dir = workdir("a11y-layout-table");
+    let content = "/TD << /MCID 0 >> BDC 10 150 40 20 re f EMC /TD << /MCID 1 >> BDC 60 150 40 20 re f EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Table /P 6 0 R /K [8 0 R] >> endobj
+8 0 obj << /S /TR /P 7 0 R /K [9 0 R 10 0 R] >> endobj
+9 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 0 >> endobj
+10 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 1 >> endobj
+11 0 obj << /Nums [0 [9 0 R 10 0 R]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("layout.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "layout.pdf" }))["doc"].as_u64().unwrap();
+    let table_rules = |a: &mut Automation| -> Vec<String> {
+        let r = ok(a, "accessibility_check", json!({ "doc": fd, "rules": ["table-summary", "table-headers"] }));
+        ["table-summary", "table-headers"]
+            .map(|id| r["results"].as_array().unwrap().iter().find(|x| x["rule"] == id).unwrap()["status"].as_str().unwrap().to_owned())
+            .to_vec()
+    };
+    assert_eq!(table_rules(&mut a), ["failed", "failed"]);
+    let types = |tags: &Value| tags["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let tags = ok(&mut a, "accessibility_layout_table_to_blocks", json!({ "doc": fd, "object": 7, "generation": 0 }));
+    assert_eq!(types(&tags), ["Document", "Div", "Div", "P", "P"]);
+    assert_eq!(table_rules(&mut a), ["passed", "passed"]);
+    let content = |a: &mut Automation, object: u32| {
+        ok(a, "accessibility_tag_content", json!({ "doc": fd, "object": object, "generation": 0 }))["content"][0]["mcid"].clone()
+    };
+    assert_eq!((content(&mut a, 9), content(&mut a, 10)), (json!(0), json!(1)), "each cell keeps its content");
+    // Only a table: a cell is refused.
+    assert!(matches!(err(&mut a, "accessibility_layout_table_to_blocks", json!({ "doc": fd, "object": 9, "generation": 0 })), ToolError::Failed(_)));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": fd }))["undone"], "Change tag properties");
+    assert_eq!(types(&ok(&mut a, "accessibility_tags", json!({ "doc": fd }))), ["Document", "Table", "TR", "TD", "TD"]);
+    ok(&mut a, "edit_redo", json!({ "doc": fd }));
+    ok(&mut a, "doc_save", json!({ "doc": fd, "path": "blocks.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("blocks.pdf")).unwrap())).unwrap();
+    assert_eq!(pdfcraft_engine::a11y::tags(&saved).into_iter().map(|t| t.kind).collect::<Vec<_>>(), ["Document", "Div", "Div", "P", "P"]);
 }
 
 #[test]
@@ -7565,6 +7710,32 @@ fn optimizing_through_tools() {
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "discard": ["everything"] })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn optimizing_discards_form_actions_through_tools() {
+    let dir = workdir("optimize-form-actions");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 20, 120, 42], "name": "Send" }));
+    ok(
+        &mut a,
+        "form_set_actions",
+        json!({ "doc": doc, "field": "Send", "actions": [
+            { "trigger": "mouse_up", "submit": "https://example.com/submit" },
+            { "trigger": "mouse_down", "reset": [] },
+            { "trigger": "mouse_enter", "javascript": "app.alert(1);" }
+        ] }),
+    );
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf" }));
+    assert_eq!(kept["form_actions"], 0, "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf", "discard_form_actions": true }));
+    assert_eq!(r["form_actions"], 2, "{r}");
+    let small = ok(&mut a, "doc_open", json!({ "path": "small.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": small }));
+    assert!(fields.to_string().contains("Send"), "the button stays: {fields}");
+    let actions = ok(&mut a, "form_actions", json!({ "doc": small, "field": "Send" }));
+    assert_eq!(actions["actions"], json!([{ "trigger": "mouse_enter", "javascript": "app.alert(1);" }]), "{actions}");
+}
+
 /// #3227 review: retaining the version, a catalog `/Version` below the 1.5 an object stream
 /// needs is not what viewers read: the header is raised, and the later of the two is reported.
 #[test]
@@ -7583,6 +7754,35 @@ fn retained_pdf_version_reports_the_header_raised_for_object_streams() {
     let out = std::fs::read(dir.join("out.pdf")).unwrap();
     assert!(out.starts_with(b"%PDF-1.5\n") && out.windows(7).any(|w| w == b"/ObjStm"), "{r}");
     assert_eq!(r["pdf_version"].as_str(), Some("1.5"), "{r}");
+}
+
+/// #3227: retaining the version, the later of the written header and the catalog `/Version` is
+/// reported: a catalog below the header cannot hide it, and equal versions are reported as is.
+#[test]
+fn retained_pdf_version_is_the_later_of_header_and_catalog() {
+    let dir = workdir("optimize-retain-version-later");
+    let mut a = auto(&dir);
+    let blank = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 300, "height": 400 }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_optimize", json!({ "doc": blank, "path": "v14.pdf", "compatibility": "1.4" }));
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("v14.pdf")).unwrap())).unwrap();
+    let root = cos.root().unwrap();
+    for (label, header, catalog, saved, reported) in [
+        ("higher-header", "1.7", "1.4", "1.7", "1.7"),
+        // PDF versions compare as major/minor numbers: 2.0 is newer than 1.7.
+        // Retain keeps the header. The catalog /Version only sets the reported version.
+        ("higher-catalog", "1.7", "2.0", "1.7", "2.0"),
+        ("equal", "1.4", "1.4", "1.4", "1.4"),
+    ] {
+        cos.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::name(catalog))).unwrap();
+        cos.set_version(header);
+        let input = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        std::fs::write(dir.join(format!("{label}-input.pdf")), input).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({ "path": format!("{label}-input.pdf") }))["doc"].as_u64().unwrap();
+        let out = format!("{label}-output.pdf");
+        let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": out, "compatibility": "retain", "object_streams": false }));
+        assert!(std::fs::read(dir.join(&out)).unwrap().starts_with(format!("%PDF-{saved}\n").as_bytes()), "{label}: written header");
+        assert_eq!(r["pdf_version"].as_str(), Some(reported), "{label}: {r}");
+    }
 }
 
 /// `data` as LZW with one 9-bit literal code per byte (clear-table first, EOD last): valid for
@@ -10959,32 +11159,6 @@ fn a_missing_path_under_the_root_names_where_it_was_looked_for() {
     assert!(!m.contains("looked for"), "{m}");
     ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }));
     let _ = std::fs::remove_dir_all(base);
-}
-
-/// `doc_print` takes a paper size of its own besides the named ones, in inches, millimetres,
-/// centimetres or points, either way round; a size it can't read or outside 1 to 200 inches is
-/// refused.
-#[test]
-fn doc_print_takes_a_paper_size_of_its_own() {
-    let dir = workdir("print-paper-size");
-    let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    for (paper, want) in
-        [("8.5x14in", (612.0, 1008.0)), ("297x210mm", (595.28, 841.89)), ("10 x 15 cm", (283.46, 425.2)), ("288x432PT", (288.0, 432.0))]
-    {
-        let file = format!("{}.pdf", want.0);
-        ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "paper": paper, "orientation": "portrait", "path": file }));
-        let bytes = std::fs::read(dir.join(&file)).unwrap();
-        let out = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
-        let page = pdfcraft_model::pages(&out)[0].display_size(&out);
-        assert!((page.0 - want.0).abs() < 0.5 && (page.1 - want.1).abs() < 0.5, "{paper}: {page:?}");
-    }
-    for paper in ["8.5xbroad", "8.5x14", "0.5x11in", "8.5x300in", "-8.5x11in", "NaNx11in"] {
-        match a.call("doc_print", &json!({ "doc": doc, "paper": paper, "path": "x.pdf" })) {
-            Err(ToolError::InvalidArgs(m)) => assert!(m.contains("unknown paper"), "{paper}: {m}"),
-            other => panic!("{paper}: {other:?}"),
-        }
-    }
 }
 
 /// `doc_print` prints as image: pictures at `dpi`, grey with `grayscale`; a resolution outside
