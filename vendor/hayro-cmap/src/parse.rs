@@ -15,6 +15,9 @@ struct Context<F> {
     get_cmap: F,
 }
 
+/// PdfCraft patch (3): most unreadable tokens one CMap may step over before its scan stops.
+pub(crate) const MAX_SKIPPED: usize = 1024;
+
 pub(crate) fn parse_inner<'a>(
     data: &[u8],
     get_cmap: impl Fn(CMapName<'_>) -> Option<&'a [u8]> + Clone + 'a,
@@ -61,10 +64,20 @@ pub(crate) fn parse_inner<'a>(
     // must see failure rather than an empty map, so its encoding fallback
     // paths run exactly as they did before the tolerant-usecmap change.
     let mut usecmap_failed = false;
+    let mut skipped = 0usize;
     while !scanner.at_end() {
-        let Ok(obj) = scanner.parse_object() else {
+        // PdfCraft patch (3): a token that can't be read (a stray `>` after a CMap name, a
+        // name with spaces in it, both written into ToUnicode CMaps) is stepped over, so the
+        // mappings after it are still read; it used to end the scan before any of them.
+        // At most `MAX_SKIPPED` such tokens: a failed read may scan to the end of the data (an
+        // unclosed string), so a stream of them would cost its length squared.
+        let Ok(obj) = scanner.parse_object_or_skip() else {
             truncated = true;
-            break;
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                break;
+            }
+            continue;
         };
 
         let Object::Name(name) = &obj else { continue };
@@ -333,6 +346,8 @@ fn parse_bf_char<F>(
             let _ = scanner.parse_object();
             continue;
         };
+        // PdfCraft patch (4): 1 to 4 (`extract_u32_code` checked).
+        let code_len = u8::try_from(ctx.buf.len()).unwrap_or(0);
         let Ok(dst) = scanner.parse_string() else { continue };
         if dst.decode_into(&mut ctx.buf).is_err() { continue }
         let Some(dst_base) = decode_be(&ctx.buf) else { continue };
@@ -343,6 +358,7 @@ fn parse_bf_char<F>(
                 end: code,
             },
             dst_base,
+            code_len,
         });
     }
 }
@@ -367,6 +383,8 @@ fn parse_bf_range<F>(
             let _ = scanner.parse_object();
             continue;
         };
+        // PdfCraft patch (4): 1 to 4 (`extract_u32_code` checked).
+        let code_len = u8::try_from(ctx.buf.len()).unwrap_or(0);
         let Some(end) = read_u32_code(scanner, &mut ctx.buf) else {
             // Skip the destination object as well to stay aligned.
             let _ = scanner.parse_object();
@@ -383,6 +401,7 @@ fn parse_bf_range<F>(
                 entries.push(BfRange {
                     range: Range { start, end },
                     dst_base,
+                    code_len,
                 });
             }
             Object::Array(array) => {
@@ -403,6 +422,7 @@ fn parse_bf_range<F>(
                             end: code,
                         },
                         dst_base,
+                        code_len,
                     });
                 }
             }

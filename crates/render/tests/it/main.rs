@@ -1,6 +1,7 @@
 //! The crate's integration tests, linked into one test binary.
 
 mod cid_fallback_query;
+mod fill_stroke_knockout;
 mod indexed_lookup;
 mod inline_image_ei;
 mod jbig2_invariants;
@@ -14,6 +15,7 @@ mod search;
 mod separation_all;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
+mod stroke_zero_end_tangent;
 mod substitute_widths;
 mod tiling_cell_placement;
 mod type3_text_clip;

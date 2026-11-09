@@ -183,12 +183,17 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
             .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
-    // a negative.
-    let as_is_negative = jpeg && !inverted && matches!(space(doc, s.dict.get(b"ColorSpace")), Ok(Space::Cmyk));
+    // a negative. The space is read once: an indexed one's lookup table is paid for each time.
+    let read = (jpeg && !inverted).then(|| space(doc, s.dict.get(b"ColorSpace"), budget));
+    let as_is_negative = matches!(read, Some(Ok(Space::Cmyk)));
     if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
         return as_is();
     }
-    let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
+    let mut space = match read {
+        _ if mask => Space::Gray,
+        Some(read) => read?,
+        None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
+    };
     let (samples, bpc) = if jpeg {
         if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
             return Err(FilterError::Spent.to_string());
@@ -297,9 +302,14 @@ thread_local! {
 }
 
 /// The size a JPEG's header gives, which is what decoding it goes by, whatever its dictionary
-/// says: an image of one pixel can hold a header of 500 megapixels.
+/// says: an image of one pixel can hold a header of 500 megapixels. `None`, as for a JPEG that
+/// can't be read, when its metadata would take the decoder quadratic time
+/// ([`decodable_metadata`](crate::upright_image::decodable_metadata)).
 fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+    if !crate::upright_image::decodable_metadata(data) {
+        return None;
+    }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
@@ -324,6 +334,15 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
+    // Past the decoder's metadata bound, drop the Extended XMP chunks rather than the mask:
+    // decoded as it stands, an over-chunked JPEG is written as is, without its /SMask.
+    let stripped;
+    let data = if crate::upright_image::decodable_metadata(data) {
+        data
+    } else {
+        stripped = crate::upright_image::without_extended_xmp(data);
+        &stripped[..]
+    };
     let img = jpeg_of_size(data, w, h)?;
     Some(match space {
         Space::Gray => (img.into_luma8().into_raw(), Space::Gray),
@@ -335,6 +354,15 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
 fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    // Past the decoder's metadata bound, decode the image without its Extended XMP chunks
+    // rather than not at all: written out as stored, a CMYK JPEG shows inverted colours.
+    let stripped;
+    let data = if crate::upright_image::decodable_metadata(data) {
+        data
+    } else {
+        stripped = crate::upright_image::without_extended_xmp(data);
+        &stripped[..]
+    };
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
@@ -436,7 +464,10 @@ impl Space {
 /// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
 const MAX_LOOKUP: usize = 64 << 10;
 
-fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
+/// The colour space `cs` names; an indexed one's lookup table is read within `budget`, as the
+/// image's samples are, since each image reads it again and its filters can do work that makes
+/// nothing.
+fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
     let unsupported = |n: &[u8]| Err(format!("{} images can't be exported yet", String::from_utf8_lossy(n)));
@@ -470,7 +501,7 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
-                let base = space(doc, a.get(1))?;
+                let base = space(doc, a.get(1), budget)?;
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),
@@ -478,10 +509,14 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
                     // Through its parameters given by reference too, as the image's samples.
-                    Some(Object::Stream(t)) => doc
-                        .with_direct_parms(t)
-                        .decoded_within(MAX_LOOKUP)
-                        .map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?,
+                    Some(Object::Stream(t)) => {
+                        let refused = budget.refused();
+                        match budget.decode_filters(doc, t, MAX_LOOKUP) {
+                            Ok(table) => table,
+                            Err(_) if budget.refused() > refused => return Err(FilterError::Spent.to_string()),
+                            Err(_) => return Err("an indexed colour space with an oversized or damaged lookup table".into()),
+                        }
+                    }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
                 Ok(Space::Indexed(Box::new(base), hival, table))
