@@ -3,11 +3,12 @@
 //! survive undo and reopening), and laying the form out again after scripts changed it.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::data::{DataNode, data_path, parse_datasets};
-use crate::model::{Access, Field, Node, Presence, Script, SomIndices, Template};
+use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template};
 use crate::{Report, XfaError};
 
 /// Private key on the AcroForm: presence scripts set, by SOM path.
@@ -49,6 +50,9 @@ pub struct FormNode {
     pub children: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
     pub display_picture: Option<String>,
+    /// The object's attributes and property elements as the template gives them, for scripts to
+    /// read: shared with the template and every other instance of the object, never copied.
+    pub props: Arc<Props>,
 }
 
 /// A script the template runs for an event of one node instance.
@@ -269,6 +273,7 @@ impl Walker<'_> {
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
+            props: Arc::clone(&f.common.props),
         }
     }
 
@@ -333,6 +338,7 @@ impl Walker<'_> {
                             index,
                             children,
                             display_picture: None,
+                            props: Arc::clone(&sf.common.props),
                         });
                     }
                 }
@@ -349,6 +355,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
+                        props: Arc::clone(&a.common.props),
                         ..Default::default()
                     });
                 }
@@ -360,6 +367,7 @@ impl Walker<'_> {
                         som: som.clone(),
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
+                        props: Arc::clone(&d.common.props),
                         presence: self.presence(d.common.name.as_deref(), &som, d.common.presence),
                         access: "open".into(),
                         occur_min: 1,
@@ -393,6 +401,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
+                        props: Arc::clone(&g.common.props),
                         ..Default::default()
                     });
                 }
