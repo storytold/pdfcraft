@@ -724,6 +724,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "device": { "type": "string", "description": "Scanner device ID or name from scanners tool." },
                 "color": { "type": "string", "enum": ["color", "gray", "bw"], "description": "Color acquisition mode." },
                 "dpi": { "type": "integer", "enum": [75, 150, 300, 600], "description": "Scan resolution." },
+                "source": { "type": "string", "enum": ["auto", "flatbed", "feeder"], "description": "Paper source: auto, flatbed or feeder (ADF)." },
+                "duplex": { "type": "string", "enum": ["simplex", "duplex"], "description": "Scan sides: simplex (1-sided) or duplex (2-sided)." },
+                "all": { "type": "boolean", "description": "Whether to scan all pages from the feeder (continuous multipage)." },
                 "doc": doc(),
                 "out": { "type": "string", "description": "Optional output path to save the generated PDF." },
                 "ui": { "type": "boolean", "description": "Whether to invoke system scanner dialog (Windows only)." }
