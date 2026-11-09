@@ -42,4 +42,4 @@ pub use settings::{
 };
 #[cfg(test)]
 use sheets::text_direction;
-pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up};
+pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up};
