@@ -907,6 +907,75 @@ fn a_block_split_across_very_many_pages_spends_the_layout_budget() {
 }
 
 #[test]
+fn large_text_drawn_in_many_instances_spends_the_draw_budget() {
+    // A draw whose text overflows its fixed height is re-measured up to six times to shrink it,
+    // and a repeating subform draws it once per instance. Large text drawn in many instances
+    // used to cost one full text layout per instance per pass, for seconds of work on a small
+    // file; each pass now counts its characters against the draw budget.
+    let words = "word ".repeat(4000); // 20,000 characters
+    let draw = format!("<draw w=\"1in\" h=\"0.5in\"><value><text>{words}</text></value></draw>");
+    let many =
+        format!("<template><subform layout=\"tb\"><subform layout=\"tb\"><occur initial=\"50\" max=\"-1\"/>{draw}</subform></subform></template>");
+    assert!(matches!(layout_xml(&many), Err(XfaError::TooLarge(_))), "large text in many instances must be refused");
+    // One copy of the same draw lays out: the budget does not reject an ordinary form.
+    let one = format!("<template><subform layout=\"tb\">{draw}</subform></template>");
+    assert!(layout_xml(&one).is_ok(), "a single large draw must lay out");
+}
+
+/// The draw budget counts the values of embedded fields as well as the text around them: a short
+/// text embedding a long value, drawn in many instances, is as much work as the value written out
+/// each time (CodeRabbit review on #5852).
+#[test]
+fn embedded_values_drawn_in_many_instances_spend_the_draw_budget() {
+    let value = "word ".repeat(4000); // 20,000 characters
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let draw = format!(
+        r#"<draw w="1in" h="0.5in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw>"#
+    );
+    let field = format!(r#"<field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field>"#);
+    let many =
+        format!(r#"<template><subform layout="tb">{field}<subform layout="tb"><occur initial="50" max="-1"/>{draw}</subform></subform></template>"#);
+    assert!(matches!(layout_xml(&many), Err(XfaError::TooLarge(_))), "a long embedded value in many instances must be refused");
+    // One copy lays out: the budget does not reject an ordinary form.
+    let one = format!(r#"<template><subform layout="tb">{field}{draw}</subform></template>"#);
+    assert!(layout_xml(&one).is_ok(), "a single draw embedding a long value must lay out");
+}
+
+/// The last layout pass of a draw counts against the budget too: a draw that fits is measured
+/// once and laid out once, each pass expanding its embedded value, and when the form's last draw
+/// crosses the budget in that final pass it is still refused (CodeRabbit review on #5852).
+#[test]
+fn the_draw_that_crosses_the_budget_in_its_last_pass_is_refused() {
+    // 15,000 characters: with the 1 MiB test budget, the tenth such draw crosses it during its
+    // final layout pass, after every check before that pass has passed.
+    let value = "word ".repeat(3000);
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let form = |n: usize| {
+        format!(
+            r#"<template><subform layout="tb"><field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field><subform layout="tb"><occur initial="{n}" max="-1"/><draw w="7in" h="9in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw></subform></subform></template>"#
+        )
+    };
+    assert!(layout_xml(&form(9)).is_ok());
+    assert!(matches!(layout_xml(&form(10)), Err(XfaError::TooLarge(_))), "the draw crossing the budget in its last pass must be refused");
+}
+
+/// Once a fit pass spends the budget, no more passes are made: a draw that doesn't fit and embeds
+/// a long value is measured once, not seven times, before it is refused (CodeRabbit review on
+/// #5852).
+#[test]
+fn fit_passes_stop_once_the_draw_budget_is_spent() {
+    let value = "word ".repeat(text::MAX_EMBEDDED / 5 + 1000);
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let tpl = format!(
+        r#"<template><subform layout="tb"><field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field><draw w="1in" h="0.5in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw></subform></template>"#
+    );
+    crate::layout::EMBED_COPIED.with(|c| c.set(0));
+    assert!(matches!(layout_xml(&tpl), Err(XfaError::TooLarge(_))));
+    let copied = crate::layout::EMBED_COPIED.with(|c| c.get());
+    assert!(copied <= 2 * text::MAX_EMBEDDED as u64, "{copied} bytes copied: more passes after the budget was spent");
+}
+
+#[test]
 fn a_packet_stream_listed_many_times_is_read_once() {
     let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
     let packet = pdfcraft_cos::ObjRef::new(5, 0);
@@ -4200,7 +4269,12 @@ fn embedded_values_are_copied_out_only_as_far_as_the_budget() {
 </subform></template>"#
     );
     crate::layout::EMBED_COPIED.with(|c| c.set(0));
-    layout_xml(&tpl).unwrap();
+    // The draw budget counts embedded values too (1 MiB in tests), so it may stop the draw
+    // before its last pass; either way no more than this is copied out.
+    match layout_xml(&tpl) {
+        Ok(_) | Err(XfaError::TooLarge(_)) => {}
+        Err(e) => panic!("{e:?}"),
+    }
     let copied = crate::layout::EMBED_COPIED.with(|c| c.get());
     // The draw is measured at most seven times before it is laid out once.
     assert!(copied <= 8 * text::MAX_EMBEDDED as u64 + 8 * 4 * 201, "{copied} bytes of embedded values copied");
