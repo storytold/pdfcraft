@@ -26,29 +26,70 @@ pub struct JsOutput {
     pub doc_errors: Vec<String>,
 }
 
+/// Console lines one output keeps, from every script an edit runs together (a form's
+/// calculations, say): each run's own cap ([`pdfcraft_js::xfa::MAX_CONSOLE`]) would otherwise
+/// be multiplied by the number of fields a document declares.
+pub const MAX_CONSOLE_LINES: usize = 10_000;
+/// Bytes of console text one output keeps, for the same reason.
+pub const MAX_CONSOLE_BYTES: usize = 1 << 20;
+/// Alerts one output keeps.
+pub const MAX_ALERTS: usize = 1_000;
+
 impl JsOutput {
     /// Whether scripts produced nothing: no alerts, console lines, requests or errors.
     pub fn is_empty(&self) -> bool {
         self.alerts.is_empty() && self.console.is_empty() && self.requests.is_empty() && self.errors.is_empty()
     }
 
+    /// Adds `lines` to the console within [`MAX_CONSOLE_LINES`] and [`MAX_CONSOLE_BYTES`]; what
+    /// is past them is left out, which one closing line says.
+    fn say(&mut self, lines: impl IntoIterator<Item = String>) {
+        let note = format!("more console lines were left out: the scripts printed more than {MAX_CONSOLE_LINES} lines or {MAX_CONSOLE_BYTES} bytes");
+        // Once the notice is written the console is closed: nothing may follow it, and a later
+        // rejection must not add a second copy.
+        if self.console.last() == Some(&note) {
+            return;
+        }
+        let mut bytes: usize = self.console.iter().map(String::len).sum();
+        let mut dropped = false;
+        for l in lines {
+            if self.console.len() >= MAX_CONSOLE_LINES || bytes.saturating_add(l.len()) > MAX_CONSOLE_BYTES {
+                dropped = true;
+                break;
+            }
+            bytes += l.len();
+            self.console.push(l);
+        }
+        if dropped && !self.console.iter().any(|l| l == &note) {
+            self.console.push(note);
+        }
+    }
+
+    /// Adds `alerts` within [`MAX_ALERTS`].
+    fn alert(&mut self, alerts: impl IntoIterator<Item = Message>) {
+        let room = MAX_ALERTS.saturating_sub(self.alerts.len());
+        self.alerts.extend(alerts.into_iter().take(room));
+    }
+
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to show a side panel or open Save As, which is noted on the console
     /// and dropped.
     fn absorb(&mut self, o: &Outcome) {
-        self.alerts.extend(o.alerts.iter().cloned());
-        self.console.extend(o.console.iter().cloned());
+        self.alert(o.alerts.iter().cloned());
+        self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
         // button's may show or hide a side panel, or open Save As.
+        // The warnings go through `say` like any other console line, so they count against the
+        // line and byte caps instead of growing the console past them.
+        let mut notes = Vec::new();
         for r in &o.requests {
             match r {
-                Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
-                Request::SaveAs => {
-                    self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
-                }
+                Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
+                Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
                 r => self.requests.push(r.clone()),
             }
         }
+        self.say(notes);
         self.errors.extend(o.error.iter().cloned());
         // The document scripts run before every field script, so a failing one would repeat
         // once per calculation; it is reported once.
@@ -61,8 +102,8 @@ impl JsOutput {
     }
 
     pub(crate) fn append(&mut self, other: JsOutput) {
-        self.alerts.extend(other.alerts);
-        self.console.extend(other.console);
+        self.alert(other.alerts);
+        self.say(other.console);
         self.requests.extend(other.requests);
         // As in `absorb`: a document script's error, already reported, is not repeated; a field
         // script's errors are each their own, even one worded like a document script's.
@@ -118,6 +159,7 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
     s.display = display;
+    s.rect = f.widgets.first().map(|w| w.rect);
     s.char_limit = f.max_len;
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
@@ -147,8 +189,9 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                rect: (a.rect != b.rect).then_some(a.rect).flatten(),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some()).then_some(c)
+            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some() || c.rect.is_some()).then_some(c)
         })
         .collect()
 }
@@ -376,17 +419,30 @@ impl Session {
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
-        for names in resets {
-            let all: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-            let names = (!names.is_empty())
-                .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
-            edits.push(Edit::ResetForm { names });
+        if !resets.is_empty() {
+            let all: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+            edits.push(Edit::ResetForm { names: reset_targets(&all, &resets) });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
         Ok(o)
     }
+}
+
+/// The fields every `resetForm` call of one script asked for, as one reset: a reset is to the
+/// defaults, so resetting the union once does what each call in turn would, and recalculates
+/// once. `None` is the whole form (a call with no names). A field is named by a selector that
+/// is its name or the name of a field above it, looked up in a set of the selectors, so the
+/// work is the fields times their depth, not the fields times the selectors, which a script
+/// controls.
+fn reset_targets(fields: &[&str], requests: &[Vec<String>]) -> Option<Vec<String>> {
+    if requests.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let wanted: std::collections::HashSet<&str> = requests.iter().flatten().map(String::as_str).collect();
+    let matched = |name: &str| name.match_indices('.').map(|(i, _)| &name[..i]).chain(std::iter::once(name)).any(|p| wanted.contains(p));
+    Some(fields.iter().filter(|n| matched(n)).map(|n| n.to_string()).collect())
 }
 
 /// A page's words for form-field detection, in user space (underscore runs split from the
@@ -537,6 +593,47 @@ impl Session {
 #[cfg(test)]
 mod review_tests {
     use super::*;
+
+    /// Many `resetForm` calls with many selectors over a big form: one reset of the union, found
+    /// by looking each field's name and parents up, not by comparing every field with every
+    /// selector.
+    #[test]
+    fn reset_requests_are_coalesced_and_matched_through_an_index() {
+        let fields: Vec<String> = (0..20_000).map(|i| format!("group{}.row{i}.cell", i % 100)).collect();
+        let names: Vec<&str> = fields.iter().map(String::as_str).collect();
+        let requests: Vec<Vec<String>> = (0..1_000).map(|k| (0..20).map(|j| format!("nothing{}", k * 20 + j)).collect()).collect();
+        let started = std::time::Instant::now();
+        assert_eq!(reset_targets(&names, &requests), Some(Vec::new()), "no selector names a field");
+        let mut requests = requests;
+        requests.push(vec!["group7".into(), "group7.row7.cell".into(), "group8.row8".into()]);
+        let hit = reset_targets(&names, &requests).unwrap();
+        assert_eq!(hit.len(), 200 + 1, "group7 has 200 fields, one more by its exact name");
+        assert!(hit.iter().all(|n| n.starts_with("group7.") || n == "group8.row8.cell"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+        requests.push(Vec::new());
+        assert_eq!(reset_targets(&names, &requests), None, "a call without names resets the whole form");
+    }
+
+    /// A form of many calculated fields, each printing its own cap of console lines, keeps a
+    /// bounded console: past the budget, lines are left out and one closing line says so.
+    #[test]
+    fn console_output_of_one_edit_is_bounded() {
+        let mut out = JsOutput::default();
+        let line = "x".repeat(4_096);
+        let run = Outcome { console: vec![line; 1_000], alerts: vec![Message::plain("hi"); 100], ..Default::default() };
+        for _ in 0..1_000 {
+            out.absorb(&run);
+        }
+        let bytes: usize = out.console.iter().map(String::len).sum();
+        assert!(bytes <= MAX_CONSOLE_BYTES + 256, "{bytes} bytes kept");
+        assert!(out.console.len() <= MAX_CONSOLE_LINES + 1, "{} lines kept", out.console.len());
+        assert!(out.console.last().unwrap().starts_with("more console lines were left out"));
+        assert_eq!(out.console.iter().filter(|l| l.starts_with("more console lines")).count(), 1, "said once");
+        assert_eq!(out.alerts.len(), MAX_ALERTS);
+        let mut merged = JsOutput::default();
+        merged.append(out);
+        assert!(merged.console.len() <= MAX_CONSOLE_LINES + 1);
+    }
 
     /// A long run of underscores (a form's blank) is read in one pass: each glyph is compared with
     /// the word so far without reading the word again.

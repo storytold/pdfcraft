@@ -21,6 +21,10 @@ const MAX_IMAGE: usize = 32 << 20;
 const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
+/// Most content areas kept on one page area. A master page has a handful (the most in the
+/// 500-form corpus is nine); laying a splittable subform out across tens of thousands of them,
+/// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
+const MAX_CONTENT_AREAS: usize = 128;
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -612,7 +616,19 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
                     attr_measure(c, "h").unwrap_or(height).clamp(1.0, height),
                 )
             })
+            .take(MAX_CONTENT_AREAS + 1)
             .collect();
+        if content.len() > MAX_CONTENT_AREAS {
+            content.truncate(MAX_CONTENT_AREAS);
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them. It is
+            // kept first, so whether it was said is one comparison, not a scan of every warning
+            // for every page area (nothing else is put first).
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if warnings.first() != Some(&said) {
+                warnings.insert(0, said);
+            }
+        }
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
@@ -707,12 +723,53 @@ pub fn numbers_pages(script: &str, formcalc: bool) -> bool {
 fn own_page_role(script: &str, formcalc: bool) -> Option<PageRole> {
     let code = code_of(script, formcalc);
     let own = own_assignments(&code, formcalc);
-    if own.iter().any(|rhs| calls_layout(rhs, "pageCount")) {
+    // On screen every page is a sheet of its own, so the sheet count is the page count, and the
+    // sheet number a form shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
+    let sheet_number = |rhs: &str| {
+        let compact: String = rhs.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+    };
+    if own.iter().any(|rhs| calls_layout(rhs, "pageCount") || calls_layout(rhs, "sheetCount")) {
         Some(PageRole::Count)
-    } else if own.iter().any(|rhs| calls_layout(rhs, "page") || calls_layout(rhs, "absPage")) {
+    } else if own.iter().any(|rhs| calls_layout(rhs, "page") || calls_layout(rhs, "absPage") || sheet_number(rhs)) {
         Some(PageRole::Number)
     } else {
         None
+    }
+}
+
+/// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
+/// [`MAX_DEPTH`].
+fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>, depth: usize) {
+    fn of(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Rich(r) = value {
+            out.extend(r.paragraphs.iter().flat_map(|p| p.runs.iter()).filter_map(|r| r.embed.clone()));
+        }
+    }
+    fn field(f: &Field, out: &mut std::collections::BTreeSet<String>) {
+        of(&f.value, out);
+        if let Some(c) = &f.caption {
+            of(&c.value, out);
+        }
+    }
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Draw(d) => of(&d.value, out),
+            Node::Field(f) => field(f, out),
+            Node::ExclGroup(g) => g.fields.iter().for_each(|f| field(f, out)),
+            Node::Subform(s) => {
+                collect_embedded(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_embedded(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_embedded(&a.children, out, depth + 1),
+        }
     }
 }
 
@@ -914,8 +971,18 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
     let mut page_roles = Vec::new();
-    collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    let root_node = [Node::Subform(Box::new(root_sf.clone()))];
+    collect_page_roles(&root_node, &mut page_roles, 0);
+    let mut embedded = std::collections::BTreeSet::new();
+    collect_embedded(&root_node, &mut embedded, 0);
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default() };
+    let paths = crate::data::fields_with_ids(&tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
+        .collect();
+    tpl.embedded_paths = paths;
+    Ok((tpl, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {
