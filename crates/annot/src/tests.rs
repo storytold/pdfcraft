@@ -1731,6 +1731,9 @@ fn a_foreign_text_given_by_reference_is_not_redrawn_as_question_marks() {
     let err = set_style(&mut doc, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap_err();
     assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("U+6B22")), "{err:?}");
     assert_eq!(list(&doc, 0)[0], before, "the appearance and the style are kept");
+    let err = set_rect(&mut doc, 0, 0, [100.0, 100.0, 350.0, 130.0], &meta("")).unwrap_err();
+    assert!(matches!(&err, AnnotError::Undrawable(_)), "{err:?}");
+    assert_eq!(list(&doc, 0)[0], before, "a refused resize keeps the rectangle");
 }
 
 /// `/Subtype` given by reference (§7.3.10): a square without an appearance is still drawn for
@@ -1768,7 +1771,7 @@ fn edits_keep_values_given_by_reference() {
     let mut doc = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
-        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 14 0 R 15 0 R] >>",
         b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /C [1 0 0] /IC [0 0 1] /CA 8 0 R >>",
         b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextTypeWriter /Rect 9 0 R /DA 10 0 R /Contents 11 0 R /BS << /W 1 >> >>",
         b"<< /Type /Annot /Subtype /Ink /Rect [99 99 151 151] /InkList 12 0 R /C [0 0 0] /BS << /W 1 >> >>",
@@ -1779,6 +1782,9 @@ fn edits_keep_values_given_by_reference() {
         b"(typed)",
         b"[[100 100 150 150]]",
         b"[200 200 300 300]",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [10 300 150 330] /DA 16 0 R /Contents (size) >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [10 340 150 370] /DA 16 0 R /Contents (border) >>",
+        b"(1 0 0 rg /Helv 12 Tf)",
     ]);
     set_part_opacity(&mut doc, 0, 0, Some(0.2), None, &meta("")).expect("fill opacity");
     let square = list(&doc, 0).remove(0);
@@ -1800,6 +1806,12 @@ fn edits_keep_values_given_by_reference() {
     set_style(&mut doc, 0, 3, StyleChange::new(None, None, None, Some(ends)), &meta("")).expect("line endings");
     let line = rect(&list(&doc, 0)[3]);
     assert!(line[0] < 199.0 && line[2] > 301.0, "the rectangle has room for the arrows: {line:?}");
+
+    set_font_size(&mut doc, 0, 4, 20.0, &meta("")).expect("font size");
+    assert!(text(&list(&doc, 0)[4], b"DA").starts_with("1 0 0 rg"), "the text colour is kept: {}", text(&list(&doc, 0)[4], b"DA"));
+    set_border_color(&mut doc, 0, 5, Some([0.0, 0.0, 1.0]), &meta("")).expect("border colour");
+    let da = text(&list(&doc, 0)[5], b"DA");
+    assert!(da.starts_with("1 0 0 rg") && da.contains("/Helv 12 Tf"), "the text colour and size are kept: {da}");
 }
 
 /// `/RD` is optional (Table 177): new text in a callout without it re-fits its box, which is its
