@@ -1298,6 +1298,8 @@ struct PageEnv<'a> {
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
+    /// The custom stamp's line, filled in now (#1741).
+    custom_line: &'a Option<String>,
     custom_stamp: &'a Option<crate::stamps_ui::CustomStamp>,
     date_text: &'a Result<String, String>,
     doc: &'a pdfcraft_engine::Document,
@@ -3197,6 +3199,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let custom_line = custom_stamp.as_ref().and_then(|cs| cs.line.as_deref()).map(|t| app.session.stamp_line(t, &author));
     let mut open_props: Option<(usize, usize)> = None;
     let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     // The table being set up in its window, shown on its own document's page.
@@ -3239,6 +3242,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         comments_hidden,
         content_h,
         content_w,
+        custom_line: &custom_line,
         custom_stamp: &custom_stamp,
         date_text: &date_text,
         doc,

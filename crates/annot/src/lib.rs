@@ -29,7 +29,10 @@ mod types;
 
 #[cfg(test)]
 use create::num_array;
-pub use create::{CALLOUT_KNEE_LINE, Side, add_annotation, callout_attach, callout_knee, callout_knee_on, callout_side, orient_image_stamp};
+pub use create::{
+    CALLOUT_KNEE_LINE, CUSTOM_LINE_BAND, CUSTOM_LINE_TEXT, Side, add_annotation, callout_attach, callout_knee, callout_knee_on, callout_side,
+    custom_stamp_size, orient_image_stamp,
+};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{PopupInfo, Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
 #[cfg(test)]
