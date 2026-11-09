@@ -1,7 +1,8 @@
 use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
-use super::modify::{fillable, touch, unlocked};
+use super::modify::{callout_line, callout_text_box, fillable, touch, unlocked};
+use super::text_style;
 use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -23,7 +24,8 @@ pub struct Summary {
     pub in_reply_to: Option<String>,
     /// The page and `/Annots` position `/IRT` points at, by reference (`/NM` need not be unique).
     pub parent: Option<(usize, usize)>,
-    /// `/RT /Group`: grouped with the `/IRT` annotation (Replace Text's caret), not a reply to it.
+    /// `/RT /Group`: with an `/IRT` reference, a subordinate of the group whose primary that is
+    /// ([`is_group_subordinate`]), not a reply to it.
     pub grouped: bool,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -35,9 +37,66 @@ pub struct Summary {
     pub fill_sign: bool,
     /// The NoRotate flag (`/F` bit 5), as `pdfcraft_render::Annotation::no_rotate`.
     pub no_rotate: bool,
-    /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
-    /// (`/Vertices`), in user space; empty for other comments.
+    /// A line's two ends (`/L`), the corners of connected lines, a polygon or a cloud
+    /// (`/Vertices`), or a callout's arrow point and knee (`/CL` without its end, which follows
+    /// the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
+    pub text_box: Option<[f32; 4]>,
+    /// The comment's pop-up window (`/Popup`), when it has one.
+    pub popup: Option<PopupInfo>,
+}
+
+impl Summary {
+    /// A subordinate of a group (`/RT /Group` with an `/IRT` to a listed comment, ISO 32000-2
+    /// §12.5.6.2): part of its primary's comment, not a reply. As
+    /// `pdfcraft_render::Annotation::is_group_member`, which also drops a looping `/IRT`.
+    pub fn is_group_member(&self) -> bool {
+        self.grouped && self.parent.is_some()
+    }
+}
+
+/// A comment's pop-up window (ISO 32000-2 §12.5.6.14): where it sits on the page and whether it
+/// is shown open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupInfo {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f32; 4],
+    /// `/Open` of the `/Popup` annotation.
+    pub open: bool,
+}
+
+/// The pop-up the comment `annot` (the object `own`, when it is one of its own) names in
+/// `/Popup`, when it is the comment's: a pop-up annotation whose `/Parent`, if it has one, is a
+/// reference to the comment. A `/Popup` naming another annotation, or a pop-up of another
+/// comment, isn't. ISO 32000-2:2020 §12.5.6.14, Table 186: `/Parent` is "(Optional; shall be
+/// an indirect reference)".
+pub(crate) fn own_popup(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<ObjRef> {
+    let pr = annot.reference(b"Popup")?;
+    let is_own = doc.get(pr).as_dict().is_some_and(|pd| {
+        pd.name(b"Subtype") == Some(b"Popup")
+            && pd
+                .get(b"Parent")
+                .is_none_or(|parent| parent.as_ref().is_some_and(|parent| own.is_some_and(|own| final_ref(doc, parent) == final_ref(doc, own))))
+    });
+    is_own.then_some(pr)
+}
+
+/// The comment's own pop-up (see [`own_popup`]), as [`PopupInfo`]: `None` when it has none or it
+/// is unreadable.
+pub(crate) fn popup_info(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<PopupInfo> {
+    // Another annotation's rectangle and open state aren't this comment's (review on #2137).
+    let r = own_popup(doc, own, annot)?;
+    let p = doc.get(r);
+    let p = p.as_dict()?;
+    let rect: Vec<f32> = doc.resolve(p.get(b"Rect")?).as_array()?.iter().filter_map(|v| doc.resolve(v).as_f64().map(|x| x as f32)).collect();
+    // Four numbers that are finite as `f32` (a huge one becomes infinite), corners in any order.
+    let [x0, y0, x1, y1] = rect[..] else { return None };
+    if !rect.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let open = p.get(b"Open").map(|o| doc.resolve(o)).is_some_and(|o| matches!(&*o, Object::Bool(true)));
+    Some(PopupInfo { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], open })
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -72,6 +131,15 @@ fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
         }
     }
     r
+}
+
+/// Whether an annotation is a subordinate of a group rather than a reply: `/RT /Group` with an
+/// `/IRT` reference (ISO 32000-2 §12.5.6.2, Table 172). The group's primary is the `/IRT`
+/// annotation, and the subordinate's own text, author, colour, dates and pop-up are ignored.
+/// `/RT` is `R` by default, and a value other than `Group` reads as `R` too. Keep in step with
+/// `pdfcraft_render::inspect`.
+pub fn is_group_subordinate(d: &Dict) -> bool {
+    d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
 }
 
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
@@ -130,15 +198,29 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                     pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|q| q.map(|v| v as f32)).collect()
                 })
                 .unwrap_or_default();
-            // Keep in step with `pdfcraft_render::inspect`.
+            // Keep in step with `pdfcraft_render::inspect`: a callout gives its points only with a
+            // readable text box, without which they can't be changed either.
+            let callout = (subtype == "FreeText").then(|| callout_line(doc, d).zip(callout_text_box(doc, d))).flatten();
             let points = match subtype.as_str() {
                 "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
                 "PolyLine" | "Polygon" => nums(b"Vertices").as_chunks::<2>().0.to_vec(),
+                "FreeText" => callout
+                    .as_ref()
+                    .and_then(|(line, _)| line.split_last())
+                    .map(|(_, lead)| lead.iter().map(|p| [p[0] as f32, p[1] as f32]).collect())
+                    .unwrap_or_default(),
                 _ => Vec::new(),
             };
+            let text_box = callout.map(|(_, t)| t.map(|v| v as f32));
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
+            // A group is one page's, as Acrobat reads it: a subordinate whose primary is on
+            // another page is a comment of its own (keep in step with
+            // `pdfcraft_render::link_replies`).
+            let grouped = d.name(b"RT") == Some(b"Group");
+            let cross_page = grouped && parent.is_some_and(|(p, _)| p != page);
+            let (parent, in_reply_to) = if cross_page { (None, None) } else { (parent, in_reply_to) };
             out.push(Summary {
                 page,
                 index,
@@ -151,7 +233,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
                 parent,
-                grouped: d.name(b"RT") == Some(b"Group"),
+                grouped,
                 rect,
                 color,
                 // A reply that gives only `/StateModel` has the model's default state (ISO 32000-2
@@ -167,6 +249,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                text_box,
+                popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), d),
             });
         }
     }
@@ -256,10 +340,15 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let direct = crate::draw::with_direct_values(doc, raw);
     let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
+    // A text box reports the colour and size it is drawn in (`/DA`, or `/DS` where it sets one).
+    let style = (subtype == "FreeText").then(|| text_style::text_style(d, None));
+    let color = match &style {
+        Some(s) => Some(s.color),
+        None => drawn_color(d, b"C"),
+    };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
         if subtype == "FreeText" {
-            if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
+            appearance::border_width(d)
         } else {
             d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0)
         }
@@ -276,7 +365,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
-        font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        font_size: style.map(|s| s.size),
         border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
