@@ -258,3 +258,54 @@ fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "nothing under the dialog's backdrop can be clicked");
 }
+
+#[test]
+fn a_dialog_keeps_its_own_height_after_a_taller_one() {
+    // #5118: Print opened after Preferences was as tall as Preferences, with blank space below
+    // its buttons. Every dialog shares one modal, which kept the last dialog's size.
+    use pdfcraft_ui_egui::Dialog;
+    for dialog in [Dialog::Print, Dialog::RotatePages] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("doc.pdf", None, fixture()).unwrap();
+            app
+        });
+        let show = |h: &mut Harness<'_, PdfCraftApp>, d: Dialog| {
+            h.state_mut().dialog = None;
+            h.run_steps(2);
+            h.state_mut().dialog = Some(d);
+            h.run_steps(6);
+            card(h, "dialog")
+        };
+        let fresh = show(&mut h, dialog);
+        let prefs = show(&mut h, Dialog::Preferences);
+        assert!(prefs.height() > fresh.height() + 20.0, "{dialog:?} {fresh:?} isn't shorter than Preferences {prefs:?}");
+        let after = show(&mut h, dialog);
+        assert!((after.height() - fresh.height()).abs() < 1.0, "{dialog:?} {fresh:?}, after Preferences {after:?}");
+    }
+}
+
+#[test]
+fn each_kind_of_marks_dialog_keeps_its_own_height() {
+    // #5118: Header & Footer, Watermark and Background are one `Dialog::Marks` with different
+    // contents. Background opened after Header & Footer kept the taller dialog's height.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, fixture()).unwrap();
+        app
+    });
+    let show = |h: &mut Harness<'_, PdfCraftApp>, d: &str| {
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        h.state_mut().set_option("dialog", d).unwrap();
+        h.run_steps(6);
+        card(h, "dialog")
+    };
+    let fresh = show(&mut h, "background");
+    let header = show(&mut h, "header-footer");
+    assert!(header.height() > fresh.height() + 20.0, "Background {fresh:?} isn't shorter than Header & Footer {header:?}");
+    let after = show(&mut h, "background");
+    assert!((after.height() - fresh.height()).abs() < 1.0, "Background {fresh:?}, after Header & Footer {after:?}");
+}

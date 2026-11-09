@@ -20,17 +20,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
     let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
     Some(match a.name(b"S")? {
         b"ResetForm" => {
-            let fields = a
-                .get(b"Fields")
-                .map(|f| doc.resolve(f))
-                .and_then(|f| f.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|o| match o {
-                    Object::Ref(r) => doc.get(*r).as_dict().and_then(|fd| fd.get(b"T").and_then(|t| text_of(&doc.resolve(t)))),
-                    other => text_of(&doc.resolve(other)),
-                })
-                .collect();
+            let fields = a.get(b"Fields").map(|f| action_fields(doc, f)).unwrap_or_default();
             let exclude = a.get(b"Flags").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 1 != 0;
             af::ButtonAction::Reset { fields, exclude }
         }
@@ -48,18 +38,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
         b"Hide" => {
-            // /T: a field name, an annotation (or field) reference, or an array of them.
-            let target = |o: &Object| match o {
-                Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(o))),
-                other => text_of(other),
-            };
-            let fields = match a.get(b"T") {
-                Some(t) => match &*doc.resolve(t) {
-                    Object::Array(items) => items.iter().filter_map(target).collect(),
-                    _ => target(t).into_iter().collect(),
-                },
-                None => Vec::new(),
-            };
+            let fields = a.get(b"T").map(|t| action_fields(doc, t)).unwrap_or_default();
             let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));
             af::ButtonAction::ShowHide { fields, hide }
         }
@@ -89,6 +68,19 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         b"JavaScript" => af::button_script(&script(doc, &action, scripts)?),
         _ => return None,
     })
+}
+
+/// The field names targeted by a `ResetForm` (`/Fields`) or `Hide` (`/T`) action entry: a field
+/// name string, an indirect field or widget dictionary reference, or an array of them.
+pub(crate) fn action_fields(doc: &Document, o: &Object) -> Vec<String> {
+    let target = |item: &Object| match item {
+        Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(item))),
+        other => text_of(other),
+    };
+    match &*doc.resolve(o) {
+        Object::Array(items) => items.iter().filter_map(target).collect(),
+        _ => target(o).into_iter().collect(),
+    }
 }
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
