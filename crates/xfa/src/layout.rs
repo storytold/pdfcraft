@@ -16,7 +16,7 @@ use crate::XfaError;
 use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -28,9 +28,9 @@ mod items;
 mod measure;
 mod pages;
 
-use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
+use common::{collect_names, collect_values};
 pub(crate) use items::UNDERLINE_DROP;
 pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
@@ -52,8 +52,17 @@ const MAX_MEASURES: usize = 2_000_000;
 const MAX_DRAW_CHARS: usize = 256 << 20;
 #[cfg(test)]
 const MAX_DRAW_CHARS: usize = 1 << 20;
-/// Most initial instances of one repeating subform.
-const MAX_INSTANCES: usize = 50;
+/// Most instances of one repeating subform laid out (a row the data adds, or the template's
+/// initial count). `occur max="-1"` sets no upper boundary (XFA 3.3, "The occur element",
+/// p. 786), so this only bounds the work of a hostile or runaway form: a long list or table
+/// is laid out whole up to here, and the rows past it are reported ([`Layouter::warn_truncated`]).
+/// It matches the largest `occur` count the parser reads and the most rows one script run may
+/// add (`MAX_ADDED` in pdfcraft-js). Laying out and listing the fields grows faster than the
+/// row count (one text field a row: 1,000 rows open in about 3 s in a debug build, 2,000 in
+/// about 13 s), so a much larger bound would let one list stall the app. The layout budgets
+/// ([`MAX_MEASURES`], [`MAX_ITEMS`], [`MAX_PAGES`]) still bound the form as a whole, however
+/// its repeats nest.
+pub(crate) const MAX_INSTANCES: usize = 1_000;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
 const MAX_DATA_IMAGE: usize = 32 << 20;
 /// Most picture bytes one layout keeps, all copies together. Each laid-out picture holds its
@@ -90,8 +99,9 @@ impl Ctx {
     }
 }
 
-/// (address of a subform or area in the template, available width bits, depth).
-type MeasureKey = (usize, u64, usize);
+/// (address of a subform or area in the template, available width bits, depth, SOM path of the
+/// instance measured when data drives the layout).
+type MeasureKey = (usize, u64, usize, String);
 
 /// A cached size, with the inherited text defaults it was measured with.
 struct Measured {
@@ -158,6 +168,11 @@ struct Layouter<'t> {
     pages: Vec<Page>,
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
+    /// Every PDF field name handed out so far.
+    taken: HashSet<String>,
+    /// The names the template's fields, groups and groups' members take as written
+    /// ([`common::collect_names`]), which a made-up `_2`, `_3` name must not take.
+    template_names: HashSet<String>,
     /// Field values by `id`, for embedded fields in rich text.
     values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
@@ -180,9 +195,16 @@ struct Layouter<'t> {
     splitting: Option<Splitting>,
     /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
     field_border: Option<(usize, usize)>,
+    /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
+    views: Views,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
+    /// What scripts set on page-master content, applied to each page's copy by its own SOM path.
+    overrides: Option<&'t crate::script::Overrides>,
+    /// The pages' copies of master content that overrides changed, kept for the whole layout so
+    /// their addresses stay unique (the measurement cache keys on them).
+    master_copies: Vec<Rc<Vec<Node>>>,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -195,6 +217,17 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, None)
+}
+
+/// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
+/// field hidden on the second page made from a page area is hidden there only. The rest of the
+/// template takes `ov` before this ([`crate::script::apply_overrides`]).
+pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov))
+}
+
+fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -210,6 +243,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
+    let mut template_names = HashSet::new();
+    collect_names(std::slice::from_ref(&root_node), &mut template_names, 0);
     let mut l = Layouter {
         tpl,
         data,
@@ -218,6 +253,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         pages: Vec::new(),
         cur: None,
         names: HashMap::new(),
+        taken: HashSet::new(),
+        template_names,
         values,
         warnings: Vec::new(),
         warned: HashSet::new(),
@@ -230,7 +267,10 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         leaves: Vec::new(),
         splitting: None,
         field_border: None,
+        views: Views::ALL,
         frames: Vec::new(),
+        overrides,
+        master_copies: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
@@ -255,6 +295,7 @@ fn fill_page_count(items: &mut [Item], count: &str) {
         match it {
             Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
             Item::Turned(t) => fill_page_count(&mut t.items, count),
+            Item::Only { item, .. } => fill_page_count(std::slice::from_mut(item.as_mut()), count),
             _ => {}
         }
     }

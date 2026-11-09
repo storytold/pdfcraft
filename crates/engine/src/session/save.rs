@@ -146,6 +146,8 @@ impl Session {
         Self::adopt_keys(doc);
         doc.xfa_calc_deps = Arc::default();
         Self::sync_dirty(doc);
+        // The changes whose exits ran are gone with the rest: skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
     }
