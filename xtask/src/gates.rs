@@ -332,9 +332,9 @@ impl PrivateDir {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
         for attempt in 0..100u32 {
             let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{attempt}", std::process::id()));
-            let builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            let mut builder = builder;
+            // Only Unix sets a mode on the builder.
+            #[cfg_attr(not(unix), allow(unused_mut))]
+            let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
             // `create`, not `create_all`: a name that is already there is never used.
