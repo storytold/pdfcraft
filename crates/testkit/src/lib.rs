@@ -22,10 +22,18 @@
 //! assert!(bytes.ends_with(b"%%EOF\n"));
 //! ```
 //!
+//! [`ScratchDir`] and [`ScratchFile`] are the other half: one way for a test to get a folder to
+//! write in that is gone when the test ends, instead of one more `pdfcraft-*` folder left in the
+//! temporary directory by every run (#6028).
+//!
 //! This crate is test scaffolding (`Class::Testkit` in `xtask/src/layers.rs`): a dev-dependency
 //! only, never compiled into the product.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod scratch;
+
+pub use scratch::{ScratchDir, ScratchFile};
 
 /// A small PDF with a classic cross-reference table, built one object at a time.
 ///

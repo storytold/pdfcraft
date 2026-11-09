@@ -310,10 +310,10 @@ fn dirty(h: &Harness<'static, PdfCraftApp>) -> bool {
     app.session.get(app.views[0].id).is_some_and(|d| d.dirty)
 }
 
-fn temp_path(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-tests-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+/// `name` in a scratch folder of its own, removed with whatever the test wrote there when the
+/// returned value is dropped at the end of the test (#6028). Some tests use it as a folder.
+fn temp_path(name: &str) -> pdfcraft_testkit::ScratchFile {
+    pdfcraft_testkit::ScratchFile::new("ui-tests", name).unwrap()
 }
 
 #[test]
@@ -2694,8 +2694,7 @@ fn asynchronous_launch_display(explicit: bool) {
     assert!(h.state().views[2].continuous());
     let persisted: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
     assert_eq!(persisted["default_layout"], "continuous");
-    std::fs::remove_file(path).unwrap();
-    std::fs::remove_file(second_path).unwrap();
+    // Both files go with `path`'s scratch folder when the test ends.
 }
 
 #[test]

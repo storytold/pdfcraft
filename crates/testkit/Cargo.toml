@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-testkit"
-description = "Synthetic PDF fixtures for PdfCraft's tests: one way to write the bytes, so the tests differ only where they mean to"
+description = "Synthetic PDF fixtures and self-removing scratch folders for PdfCraft's tests: one way to do each, so the tests differ only where they mean to"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

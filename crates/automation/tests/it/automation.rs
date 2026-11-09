@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "mcp")]
 use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
+use pdfcraft_testkit::ScratchDir;
 use serde_json::{Value, json};
 
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
@@ -131,13 +132,10 @@ fn protected_fixture(password: &str) -> Vec<u8> {
     session.save_bytes(id).unwrap().as_ref().clone()
 }
 
-/// A fresh directory with `a.pdf` (3 pages) and `b.pdf` (2 pages).
-#[track_caller]
-fn workdir(test: &str) -> PathBuf {
-    let caller = std::panic::Location::caller();
-    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-{test}-{}-{}-{}", std::process::id(), caller.line(), caller.column(),));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// A fresh folder with `a.pdf` (3 pages) and `b.pdf` (2 pages), removed when the test ends
+/// (#6028). Every call gets a folder of its own, so two call sites in one test never share one.
+fn workdir(test: &str) -> ScratchDir {
+    let dir = ScratchDir::new(&format!("automation-{test}")).unwrap();
     std::fs::write(dir.join("a.pdf"), fixture(3)).unwrap();
     std::fs::write(dir.join("b.pdf"), fixture(2)).unwrap();
     dir
@@ -150,17 +148,12 @@ fn workdir_call_sites_do_not_delete_each_other() {
     std::fs::write(&sentinel, b"first call site").unwrap();
 
     let second = workdir("same-tag");
-    let paths_differ = first != second;
+    let paths_differ = first.path() != second.path();
     let sentinel_bytes = std::fs::read(&sentinel).ok();
     let first_a = std::fs::read(first.join("a.pdf")).ok();
     let first_b = std::fs::read(first.join("b.pdf")).ok();
     let second_a = std::fs::read(second.join("a.pdf")).ok();
     let second_b = std::fs::read(second.join("b.pdf")).ok();
-
-    let _ = std::fs::remove_dir_all(&first);
-    if paths_differ {
-        let _ = std::fs::remove_dir_all(&second);
-    }
 
     assert!(paths_differ, "distinct call sites shared {first:?}");
     assert_eq!(sentinel_bytes.as_deref(), Some(&b"first call site"[..]));
