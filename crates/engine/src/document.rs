@@ -32,7 +32,8 @@ pub struct Document {
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
-    /// The generation last handed out by `autosave_snapshots`.
+    /// The generation last handed out by `autosave_snapshots`, or another one when storing that
+    /// snapshot failed (`autosave_failed`), so it is due again.
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,

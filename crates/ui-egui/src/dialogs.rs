@@ -1846,6 +1846,9 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();
             let n: usize = app.hidden_draft.found.iter().filter(|f| f.2).map(|f| f.1).sum();
             if app.apply_edit(Edit::RemoveHidden { which }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if n == 1 {
                     app.notify_tr("Removed 1 hidden item. Save to remove them from the file.");
                 } else {
@@ -1854,11 +1857,17 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             }
         }
         Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            if let Some((_, id)) = app.active_ids() {
+                app.renew_recovery(id);
+            }
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if marks == 1 {
                     app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
                 } else {
