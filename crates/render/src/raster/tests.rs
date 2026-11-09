@@ -9238,6 +9238,183 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
     assert_eq!((page.width, page.height), (200, 100));
 }
 
+/// A one-page file: a 200 x 100 page, its offsets right.
+fn one_page_file() -> Vec<u8> {
+    one_page_file_with(false)
+}
+
+/// The same, and with `stale` a 999 x 999 copy of the page after it that the table does not
+/// name: a file read through its table shows 200 x 100, one rebuilt from object headers 999 x 999.
+fn one_page_file_with(stale: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >>"]
+    {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    if stale {
+        out.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// `base` with an incremental update appended: a new 300 x 150 first page whose content stream is
+/// `padding` bytes long, and the page tree redefined to hold both pages. With `footer` the update
+/// ends in its trailer, `startxref` and `%%EOF`; without, it stops after its cross-reference rows,
+/// as a save cut short does.
+fn with_update(base: &[u8], padding: usize, footer: bool) -> Vec<u8> {
+    let prev = base
+        .windows(9)
+        .rposition(|w| w == b"startxref")
+        .map(|p| String::from_utf8_lossy(&base[p + 9..]).split_whitespace().next().unwrap_or("").to_string())
+        .unwrap();
+    let mut out = base.to_vec();
+    let mut offsets = vec![(4, out.len())];
+    out.extend_from_slice(b"4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >>\nendobj\n");
+    offsets.push((5, out.len()));
+    out.extend_from_slice(format!("5 0 obj\n<< /Length {padding} >>\nstream\n").as_bytes());
+    out.extend(std::iter::repeat_n(b' ', padding));
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    offsets.push((2, out.len()));
+    out.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [4 0 R 3 0 R] /Count 2 >>\nendobj\n");
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+    for (num, o) in offsets {
+        out.extend_from_slice(format!("{num} 1\n{o:010} 00000 n \n").as_bytes());
+    }
+    if footer {
+        out.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    }
+    out
+}
+
+/// What the renderer shows of `file` (page count and the first page's size) and what the
+/// document model reads (the page tree's /Count), for comparing the two.
+fn renderer_and_model_pages(file: Vec<u8>) -> ((usize, (u32, u32)), i64) {
+    let bytes = Arc::new(file);
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let count = r.page_count();
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let model = pages.as_dict().and_then(|d| d.int(b"Count")).unwrap();
+    ((count, (page.width, page.height)), model)
+}
+
+/// PDFBOX-3934, PDFBOX-3787: the last incremental update was cut off after its cross-reference
+/// rows, with no trailer, `startxref` or `%%EOF`, so the last `startxref` in the file is the
+/// older revision's, more than the footer window (4 KiB) from the end, and objects follow it.
+/// The update's objects are the latest revision (ISO 32000-2 §7.5.6); the document model rebuilds
+/// the file from object headers and reads them. The renderer read the older table the last
+/// `startxref` names instead and showed one page where the model has two. It now rebuilds too.
+#[test]
+fn an_update_cut_off_before_its_trailer_shows_its_pages_as_the_model_reads_them() {
+    let file = with_update(&one_page_file(), 5000, false);
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!(model, 2, "the model reads the update");
+    assert_eq!(count, 2, "the renderer shows the update's page tree");
+    assert_eq!(size, (300, 150), "and its new first page");
+}
+
+/// The same update with its footer is read through its table as before: renderer and model both
+/// show its two pages.
+#[test]
+fn a_complete_update_reads_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, true));
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// A file with data after `%%EOF` that holds no object header (a web page glued to a served file)
+/// is read through its table by the renderer, as before: the file has a stale copy of its page that
+/// only a rebuild would show. The model, finding no `startxref` in its footer window, rebuilds from
+/// object headers and takes that stale 999 x 999 copy, so here the two still differ, as they did
+/// before this change.
+#[test]
+fn trailing_data_without_objects_reads_as_before() {
+    let mut junk = one_page_file_with(true);
+    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name, 4294967296 0 obj</p>");
+    junk.extend(std::iter::repeat_n(b' ', 5000));
+    junk.extend_from_slice(b"</html>\n");
+    assert_eq!(model_first_media_box(&junk), [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
+    let ((count, size), model) = renderer_and_model_pages(junk);
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// The /MediaBox of the first page in the document model's page tree (its first /Kids entry).
+fn model_first_media_box(file: &[u8]) -> Vec<f64> {
+    let doc = pdfcraft_cos::Document::open(Arc::new(file.to_vec())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let kid = doc.resolve(pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().first().unwrap());
+    kid.as_dict().unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().filter_map(|x| x.as_f64()).collect()
+}
+
+/// A cut-off update on `one_page_file` whose object headers are written `N G obj{after}<<` in place
+/// of `N G obj\n<<`. Only the update is rewritten, so the base file's table stays at the offset
+/// its `startxref` names and reading it raises no error that would rebuild the file anyway: the
+/// update is found only if the header scan accepts what follows `obj`.
+fn cut_off_update_with_headers(after: &str) -> Vec<u8> {
+    let base = one_page_file();
+    let mut file = with_update(&base, 5000, false);
+    let update = String::from_utf8(file.split_off(base.len())).unwrap();
+    assert_eq!(update.matches(" obj\n<<").count(), 3, "every updated header is rewritten");
+    file.extend_from_slice(update.replace(" obj\n<<", &format!(" obj{after}<<")).as_bytes());
+    file
+}
+
+/// A cut-off update whose object headers run straight into their dictionaries (`4 0 obj<<`) is
+/// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.3, Table 2), and the renderer
+/// shows the update's new first page, as the model does.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
+    let file = cut_off_update_with_headers("");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// The same with a comment straight after the keyword (`4 0 obj%comment`): `%` is a delimiter
+/// that starts a comment (ISO 32000-2 §7.2.3 Table 2, §7.2.4), so it ends the keyword too.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_comment_is_rebuilt() {
+    let file = cut_off_update_with_headers("%comment\n");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// A cut-off update that ends within the footer window leaves the older `startxref` near the end,
+/// which the model reads too: both keep the older revision there.
+#[test]
+fn a_short_cut_off_update_reads_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 100, false));
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// A file cut short in the middle of its last update, whose new page tree names a page that is
+/// not there: the rebuilt table finds no page, so the older table is read and the file still
+/// opens with the page it had, rather than not at all.
+#[test]
+fn an_update_cut_off_before_its_new_pages_keeps_the_older_table() {
+    let file = String::from_utf8(with_update(&one_page_file(), 5000, false)).unwrap().replace("4 0 obj", "9 0 obj").into_bytes();
+    let mut r = PageRenderer::new(Arc::new(file), RenderConfig::default());
+    assert_eq!(r.page_count(), 1);
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
+}
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]
@@ -9779,4 +9956,98 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
             assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");
         }
     }
+}
+
+/// Data after `%%EOF` that holds an object header, past the footer window, is read the way the
+/// document model reads it: the model rebuilds the file from object headers and takes the later
+/// definition of the page, and the renderer shows that same page, so the two still agree.
+#[test]
+fn trailing_data_with_an_object_header_reads_as_the_model_reads_it() {
+    let mut f = one_page_file();
+    f.extend_from_slice(
+        b"<html><pre>
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>
+endobj
+</pre>",
+    );
+    f.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = pdfcraft_cos::Document::open(Arc::new(f.clone())).unwrap();
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let model_box = page.as_dict().and_then(|d| d.get(b"MediaBox").cloned());
+    assert_eq!(model_box, Some(pdfcraft_cos::Object::Array([0, 0, 999, 999].map(pdfcraft_cos::Object::Int).to_vec())), "the model");
+    let ((count, size), model) = renderer_and_model_pages(f);
+    assert_eq!((count, size, model), (1, (999, 999), 1), "the renderer, as the model");
+}
+
+/// An encrypted file whose last update was cut off is still refused with a wrong password, and
+/// opened with the right one.
+#[test]
+fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let mut doc = Document::open(Arc::new(one_page_file())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let base = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let file = Arc::new(with_update(&base, 5000, false));
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        (r.page_count(), page.error.is_none(), (page.width, page.height))
+    };
+    let (_, drawn, _) = open("wrong");
+    assert!(!drawn, "a wrong password opens nothing");
+    let (count, drawn, _) = open("user");
+    assert!(count >= 1 && drawn, "the right one opens it");
+}
+
+/// An encrypted file whose cut-off update ends in a trailer dictionary without `/Encrypt`: the rebuild would take that
+/// later dictionary and read the encrypted content as plain bytes, so it is not taken. A wrong password is still
+/// refused, and the right one opens the table the last `startxref` names, its content decrypted and drawn.
+#[test]
+fn a_rebuild_whose_trailer_lacks_the_encryption_dictionary_is_not_taken() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let plain = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut doc = Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let root = doc.root().unwrap();
+    let mut file = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // The update: one object, past the 4 KiB footer window, and a trailer without `/Encrypt`, cut off before its
+    // `startxref`.
+    file.extend_from_slice(b"900 0 obj\n<< /Length 5000 >>\nstream\n");
+    file.extend(std::iter::repeat_n(b' ', 5000));
+    file.extend_from_slice(format!("\nendstream\nendobj\ntrailer\n<< /Size 901 /Root {} {} R >>\n", root.num, root.generation).as_bytes());
+    let file = Arc::new(file);
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        page.error.is_none().then(|| rgb_at(&page.rgba, page.width as usize, 30, page.height as usize - 30))
+    };
+    assert_eq!(open("wrong"), None, "a wrong password opens nothing");
+    assert_eq!(open(""), None, "nor does none");
+    assert_eq!(open("user"), Some([0, 0, 255]), "the right one draws the decrypted content");
 }

@@ -632,6 +632,15 @@ impl XRef {
         locked.xref_map = xref_map;
     }
 
+    /// PdfCraft patch: (hayro-syntax (43)) whether objects read through this table are
+    /// decrypted.
+    pub(crate) fn is_encrypted(&self) -> bool {
+        match &self.0 {
+            Inner::Dummy => false,
+            Inner::Some(r) => !matches!(r.decryptor.as_ref(), Decryptor::None),
+        }
+    }
+
     #[inline]
     pub(crate) fn needs_decryption(&self, ctx: &ReaderContext<'_>) -> bool {
         match &self.0 {
@@ -874,6 +883,11 @@ pub(crate) enum XRefInput<'a> {
     RootRef(ObjectIdentifier),
 }
 
+/// PdfCraft patch: (hayro-syntax (43)) how far from the end of the file a `startxref` counts as
+/// the file's own footer, as `pdfcraft-cos` judges it (ISO 32000-2 §7.5.5 puts it on the last lines
+/// of the file).
+const STARTXREF_TAIL: usize = 4096;
+
 pub(crate) fn find_last_xref_pos(data: &[u8]) -> Option<usize> {
     let needle = b"startxref";
     let pos = findr_needle(data, needle)?;
@@ -882,6 +896,83 @@ pub(crate) fn find_last_xref_pos(data: &[u8]) -> Option<usize> {
     finder.forward_tag(needle)?;
     finder.skip_white_spaces_and_comments();
     finder.read_without_context::<i32>()?.try_into().ok()
+}
+
+/// PdfCraft patch: (hayro-syntax (43)) whether the last update of the file was cut off before its
+/// own cross-reference section and trailer: the last `startxref` is not near the end of the file
+/// and objects follow it. That section would supersede the older ones (ISO 32000-2 §7.5.6), so
+/// the update's objects are the document; reading the older table the last `startxref` names
+/// shows a revision the document model (`pdfcraft-cos`, which rebuilds such a file from its
+/// object headers) does not have. A `startxref` near the end, or one followed only by other data
+/// (trailing junk), is no cut-off update.
+pub(crate) fn cut_off_update_follows(data: &[u8]) -> bool {
+    let needle = b"startxref";
+    findr_needle(data, needle).is_some_and(|pos| {
+        pos < data.len().saturating_sub(STARTXREF_TAIL)
+            && data
+                .get(pos.saturating_add(needle.len())..)
+                .is_some_and(has_object_header)
+    })
+}
+
+/// PdfCraft patch: (hayro-syntax (43)) whether `data` holds an `N G obj` header: two runs of
+/// digits and the keyword, separated by white space, at the start of the data or after white
+/// space or `>`, the keyword ended by white space, a delimiter or the end of the data (ISO
+/// 32000-2 §7.2.3, Table 2), as the document model's repair scan reads it: `1 0 obj_name` is
+/// no header, and neither is one whose object number doesn't fit 32 bits (`4294967296 0 obj`),
+/// which that scan skips too. One linear pass, no allocation.
+fn has_object_header(data: &[u8]) -> bool {
+    let digits = |from: usize| {
+        data.get(from..).map_or(0, |rest| {
+            rest.iter().take_while(|b| b.is_ascii_digit()).count()
+        })
+    };
+    let spaces = |from: usize| {
+        data.get(from..).map_or(0, |rest| {
+            rest.iter()
+                .take_while(|&&b| is_white_space_character(b))
+                .count()
+        })
+    };
+    let mut i = 0;
+    while i < data.len() {
+        let at_start = i
+            .checked_sub(1)
+            .and_then(|prev| data.get(prev))
+            .is_none_or(|&b| is_white_space_character(b) || b == b'>');
+        let n = if at_start { digits(i) } else { 0 };
+        if n == 0 {
+            i += 1;
+            continue;
+        }
+        let mut at = i + n;
+        let s1 = spaces(at);
+        at += s1;
+        let g = digits(at);
+        at += g;
+        let s2 = spaces(at);
+        at += s2;
+        // The object number as the model reads it, a 32-bit unsigned integer.
+        let number_fits = data
+            .get(i..i + n)
+            .and_then(|d| core::str::from_utf8(d).ok())
+            .is_some_and(|d| d.parse::<u32>().is_ok());
+        if number_fits
+            && s1 > 0
+            && g > 0
+            && s2 > 0
+            && data.get(at..).is_some_and(|rest| rest.starts_with(b"obj"))
+            && data.get(at + 3).is_none_or(|&b| {
+                is_white_space_character(b)
+                    || matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+            })
+        {
+            return true;
+        }
+        // Past the digits read: none of them starts a header.
+        i += n;
+    }
+    false
 }
 
 /// A type of xref entry.
