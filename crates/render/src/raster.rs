@@ -107,7 +107,8 @@ impl RenderConfig {
     }
 
     /// Build interpreter settings with layer and comment preferences and a font resolver that
-    /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
+    /// tries approved per-glyph faces, bundled Japanese faces, opt-in installed CJK faces, then
+    /// standard substitutes.
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
@@ -119,7 +120,10 @@ impl RenderConfig {
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
             font_resolver: Arc::new(move |query| {
-                japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
+                crate::glyph_fallback::resolve(query)
+                    .or_else(|| japanese_fallback(query))
+                    .or_else(|| system_fonts.then(|| system_fallback(query)).flatten())
+                    .or_else(|| standard(query))
             }),
             jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
             ..defaults

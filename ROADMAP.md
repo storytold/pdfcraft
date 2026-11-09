@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** patch (M2 / PR #3034: refreshed against main; preserved display-only CJK fallback and render budgets; duplicate thumbnail fix replaced by upstream coverage; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
@@ -36,6 +38,7 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** patch (M2 / PR #3034: fallback outlines never widen to oversized PDF advances; Greek iota regressions; vendored fallback patch renumbered to (71); estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
@@ -58,6 +61,8 @@
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M2, #3574: named form properties retain page origin and own dictionary boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M4: initial-view options resolve indirect boolean preferences; estimates unchanged)
 > **Last reviewed:** 2026-10-16; **Last updated:** 2026-10-16; **Change:** minor (M5 #2669, item 5: reply groups and page root counts per frame; estimates unchanged)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M2 / PR #3034 review: Unicode alias advances, empty-primary-outline fallback and shared bundled bytes; estimates unchanged)
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M5, PR #1971: bounded nested FDF export excludes source page/page-tree dictionaries; refreshed against upstream 4db6ac4a; estimates unchanged)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M7 #2517: a partial rewrite keeps its marker around a kept row, and off the next marked region; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M7: the Edit text caret is as tall as the row it is on; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: CSV tab-containing headers; estimates unchanged)
@@ -238,8 +243,12 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-09 (M2, PR #3034):** Refreshed against main, preserving per-character fallback, display-only installed CJK faces and renderer budgets. The upstream thumbnail cleanup and its regressions replace the duplicate follow-up; estimates unchanged.
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
+- **2026-10-29 (M2, PR #3034):** Fallback outlines narrow to smaller PDF widths but never widen to larger ones, matching patch (57). Greek iota variants retain their design with flat/oversized widths; PDF advances and following-glyph positions remain authoritative. Regular/bold TrueType and Type1 regressions cover zero, narrow and oversized widths. Integrated current main, retained both progress histories and renumbered the fallback patch to (71) to avoid the upstream (35) mesh patch; estimates unchanged.
+- **2026-10-20 (M2, PR #3034 review):** Unicode aliases without PDF widths use the primary standard advance; named/cmap glyphs without contours reach alternate outlines or missing-glyph boxes. Regressions fail before the fixes. Renderer and interface share the existing SemiBold/Mono bytes; patch markers consistently use (35). Estimates unchanged.
 - **2026-11-08 (M5, comment exchange):** Comments keep their formatting and appearance through XFDF and FDF. XFDF export and import carry rich text, default style, border width, style and dash pattern, rotation, justification, fringe, line leaders and captions, the caret symbol and redaction overlay text as XFDF 3.0 (ISO 19444-1) names them, and a stamp's appearance as `<appearance>` (the DICT/STREAM/DATA encoding, bounded); copy and paste carries every comment's appearance. FDF export keeps a stamp's /AP with its forms and images, as XFDF does, and FDF import keeps any /AP the file carries (ISO 32000-2 §12.7.8.3.4). The intent goes out as both `intent` and `IT`. An unreadable XFDF appearance is left out, said in the import report and the repair log, and the comment is drawn by PdfCraft; an FDF past the import budget is refused whole. A redaction mark is always drawn by PdfCraft.
 
 - **2026-11-07 (M2, #6449):** A non-embedded Times New Roman set as a TrueType CID font (`TimesNewRoman,Bold`, `TimesNewRomanPSMT` and the other faces) draws the glyphs its codes name, as the non-embedded Arial does: its first 258 glyphs follow the same standard Macintosh order, which the embedded Times New Roman subsets of a public French form confirm in 941 of 942 `/ToUnicode` entries (vendored hayro-interpret patch 88). That form drew "Salarié(e) du régime général" as "Salari²*g+f w't²i lo g'ì²p²tcn" and "changement" as "ej angement". Times and Times New Roman MT Std are not read this way.
@@ -407,6 +416,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-18 (M6, #2892):** Push-button normal labels are editable per widget through Options and form_set_props, independently of field names; rendering, undo/redo and incremental/full save/reopen are covered. Estimates unchanged.
 
 - **2026-10-18 (M7, #3212):** Headers, Bates numbers, watermarks and added text stay visible after unfinished marked content, with original content preserved.
+- **2026-10-18 (M2, PR #3034 review):** Missing glyphs in standard fonts without PDF widths or standard metrics use the alternate face's natural advance instead of overlapping. Cyrillic/Greek placement and raster regressions cover the correction; explicit zero and missing-width values retain priority. Estimates unchanged.
+
+- **2026-10-18 (M2, PR #3034 refresh):** Rebased the missing-glyph fallback onto current main, preserving both sets of roadmap entries and renumbering its vendored patch to (35). Rendering behavior and milestone estimates unchanged.
 - **2026-10-18 (M12, #2589):** Active XFA skips PDF-container fallback scripts while retaining requested messages and saved scripts; ordinary/static/unlaid-out documents and explicit console/field calls keep their existing behavior. Estimates unchanged.
 - **2026-10-18 (M7, #2592):** Styled fallback fonts batch up to 240 glyphs per actual face and retain source styles. Budget refusal and distinct same-BaseFont descriptor weights have mutation-checked regressions; coverage and complex mixed runs remain limited. Estimates unchanged.
 - **2026-10-18 (M7, #3187):** Added-image automation normalizes extreme signed rotation angles before combining them with the current orientation; integer bounds, history, pixels, save/reopen and MCP have regressions. Estimates unchanged.
@@ -433,6 +445,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-16 (M10, #1201 partial):** Lossless image export applies each component's Decode pair. Indexed values round and clip before palette lookup. Color-key masks keep raw samples. The existing 16-bit precision limit remains. JPEG and mask Decode, ICC transforms, and calibrated colors remain outside this fix. Estimates unchanged.
 - **2026-10-16 (M3, #2739):** Wrapped revision buttons stay above Binding in Document Properties. A synthetic regression checks control bounds and opens a saved revision at two viewport widths. Estimates unchanged.
 - **2026-10-19 (M7, tracked text):** Editable paragraphs and object labels distinguish repeated glyph tracking from word gaps in TJ arrays and separately positioned glyphs. Synthetic regressions cover character spacing, horizontal scaling, rotated baselines, larger word gaps, and rows of one-glyph words or cells (inferred tracking is capped at half an em, so `a b c` and digit or Y/N columns keep their spaces). Estimates unchanged.
+
+- 2026-10-17 — M2 / #2908: non-embedded simple fonts retain primary glyphs and use approved bundled outlines for missing Cyrillic/other covered characters; PDF advances and extraction remain unchanged. Exact absent font designs and uncovered scripts remain limited; estimates unchanged.
 - **2026-10-16 (M9, #79):** a signature appearance that follows the named-layer convention (its /N draws one Form that holds and draws n1 and n3) shows the signature's real state: n1, n3 and n4 are redrawn in the display copy with the panel's icons and a caption in the interface language (Helvetica; else shaped in embedded Inter, or in a craft-fonts face for Arabic, Japanese and Telugu; else English, as Chinese always is). Exports, both print modes and the CLI's render show the redrawn state; saves never do. Every signature keeps its badge, since a document can clip or cover its own layers. Estimates unchanged.
 - **2026-10-16 (M9):** the page validation overlay moves to the widget's bottom-right corner as it lies on the page (so it turns with the page and the view) and takes a quarter of the widget's shorter side, at most 48 screen points, so it annotates the signer's artwork from a corner instead of covering the middle of it; a field too small for a legible mark keeps its outline, a rectangle the screen cannot place is not drawn at all, and the whole widget answers the pointer. Estimates unchanged.
 - **2026-10-16 (M5, #2669, item 5):** The Comments panel groups replies by name and counts all page roots once per frame. Estimates unchanged.
