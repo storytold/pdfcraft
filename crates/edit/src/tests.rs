@@ -15742,13 +15742,15 @@ fn a_row_that_wraps_in_the_arabic_fallback_keeps_the_rows_above_it_in_place() {
 
 /// The rows of a paragraph an edit in the Arabic fallback leaves as they were (the same text and
 /// look, not moved by a row above that wrapped) keep their own drawing: a heading over the edited
-/// row keeps its font, and the fallback's wider face can no longer make it wrap.
+/// row keeps its font, and laid out again in the fallback's faces it can no longer wrap.
 #[test]
 fn rows_an_arabic_fallback_edit_leaves_alone_keep_their_own_font() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
         return;
     }
-    let mut doc = text_page("BT /F1 18 Tf 300 700 Td (A heading row) Tj ET BT /F1 12 Tf 300 676 Td (SECA Heritage) Tj ET");
+    // The heading is set tighter than its widths (TJ), so laid out again it wouldn't fit its row.
+    let mut doc =
+        text_page("BT /F1 18 Tf 300 700 Td [(A)300( heading)300( row)300( set)300( tight)] TJ ET BT /F1 12 Tf 300 676 Td (SECA Heritage) Tj ET");
     let blocks = text::text_blocks(&doc, 0).unwrap();
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     let draft = format!("{} تم", blocks[0].editor_text);
@@ -15762,7 +15764,7 @@ fn rows_an_arabic_fallback_edit_leaves_alone_keep_their_own_font() {
     assert_eq!(heading[0].font, "F1", "the heading keeps its own drawing: {lines:?}");
     assert_eq!(heading[0].rect, before[0].rect, "{lines:?}");
     let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(content.contains("(A heading row) Tj"), "the heading's own show is kept: {content}");
+    assert!(content.contains("[(A)300( heading)300( row)300( set)300( tight)] TJ"), "the heading's own show is kept: {content}");
     assert!(shown_faces(&doc, 0).contains("NotoSansArabic"), "the edited row takes the fallback");
 }
 
