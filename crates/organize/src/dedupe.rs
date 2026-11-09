@@ -45,6 +45,39 @@ fn is_resource(o: &Object) -> bool {
 /// out on purpose: it names optional content groups, whose identity matters.
 const RESOURCE_CATEGORIES: &[&[u8]] = &[b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font"];
 
+/// Whether `d` carries annotation, page, field, or structure identity rather than resource data.
+/// Annotations often omit `/Type /Annot` (ISO 32000-2 Table 166 requires `/Subtype` and `/Rect`),
+/// whereas resource dictionaries and category maps never carry `/Rect`, `/Popup`, `/IRT`, or `/FT`.
+fn is_identity_dict(doc: &Document, d: &pdfcraft_cos::Dict) -> bool {
+    if let Some(t) = d.get(b"Type").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_name)
+        && !RESOURCE_TYPES.contains(&t)
+    {
+        return true;
+    }
+    d.contains(b"Rect") || d.contains(b"Popup") || d.contains(b"IRT") || d.contains(b"FT") || d.contains(b"Parent")
+}
+
+/// Whether a category member has the expected resource shape and is not an identity-bearing
+/// dictionary such as an annotation or form field.
+fn category_entry(doc: &Document, category: &[u8], value: &Object) -> bool {
+    let value = doc.resolve(value);
+    match category {
+        b"Font" | b"ExtGState" => matches!(&*value, Object::Dict(d) if !is_identity_dict(doc, d)),
+        b"XObject" => matches!(&*value, Object::Stream(s) if !is_identity_dict(doc, &s.dict)),
+        b"Pattern" | b"Shading" => match &*value {
+            Object::Dict(d) => !is_identity_dict(doc, d),
+            Object::Stream(s) => !is_identity_dict(doc, &s.dict),
+            _ => false,
+        },
+        b"ColorSpace" => match &*value {
+            Object::Name(name) => matches!(name.as_slice(), b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern"),
+            Object::Array(items) => items.first().and_then(Object::as_name).is_some_and(|name| COLOR_SPACE_FAMILIES.contains(&name)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// References listed in any `/Resources` dictionary reachable inside `o` (pages, forms, Type 3
 /// fonts, annotation appearances), including the `/Resources` dictionary itself when indirect.
 fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) {
@@ -69,6 +102,15 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
                 for cat in RESOURCE_CATEGORIES {
                     let entries = res.get(cat).map(|c| doc.resolve(c));
                     if let Some(entries) = entries.as_ref().and_then(|e| e.as_dict()) {
+                        // A malformed category can point directly at an annotation or list
+                        // annotations inside a category map. Only resource-name maps whose
+                        // members are non-identity resources are containers.
+                        if is_identity_dict(doc, entries) || !entries.iter().all(|(_, value)| category_entry(doc, cat, value)) {
+                            continue;
+                        }
+                        if let Some(Object::Ref(cat_ref)) = res.get(cat) {
+                            out.insert(*cat_ref);
+                        }
                         out.extend(entries.iter().filter_map(|(_, v)| if let Object::Ref(r) = v { Some(*r) } else { None }));
                     }
                 }
@@ -189,11 +231,15 @@ fn contains_ref(o: &Object, map: &HashMap<ObjRef, ObjRef>) -> bool {
 /// Merge duplicate resources among `candidates` (into each other or into equal objects already
 /// in `doc`), rewrite references inside `candidates`, and free the merged-away objects.
 /// When `index_existing` is false, only candidates are compared (a brand-new document).
+/// Repeated candidates are processed once, by complete object reference.
 /// Returns how many objects were removed.
 pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existing: bool) -> usize {
     let cand: HashSet<ObjRef> = candidates.iter().copied().collect();
     let mut sorted: Vec<ObjRef> = candidates.to_vec();
-    sorted.sort_unstable_by_key(|r| r.num);
+    sorted.sort_unstable_by_key(|r| (r.num, r.generation));
+    // A repeated candidate must not merge into itself: that would cycle `canon` and free
+    // the canonical object. Keep generations distinct when normalizing references.
+    sorted.dedup();
     // Existing objects first, so candidates merge into them rather than the reverse.
     let mut all: Vec<(ObjRef, std::sync::Arc<Object>)> = Vec::new();
     if index_existing {
@@ -271,6 +317,37 @@ mod tests {
         d.set(b"BaseFont".to_vec(), Object::name(name));
         d.set(b"FontFile".to_vec(), Object::Ref(file));
         doc.add(Object::Dict(d))
+    }
+
+    #[test]
+    fn repeated_candidate_keeps_the_canonical_object() {
+        for index_existing in [false, true] {
+            let mut doc = Document::new_empty();
+            let r = doc.add(stream(b"glyphs"));
+            assert_eq!(dedupe_resources(&mut doc, &[r, r], index_existing), 0);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+        }
+    }
+
+    #[test]
+    fn repeated_candidate_with_referrer_terminates_and_keeps_generations() {
+        for index_existing in [false, true] {
+            let mut doc = Document::new_empty();
+            let r = ObjRef::new(20, 7);
+            doc.set(r, stream(b"glyphs"));
+            let s = font(&mut doc, r, "A");
+            assert_eq!(dedupe_resources(&mut doc, &[r, r, s], index_existing), 0);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+            assert_eq!(doc.generation(r.num), 7);
+            assert_eq!(doc.get(s).as_dict().unwrap().get(b"FontFile"), Some(&Object::Ref(r)));
+
+            let duplicate = ObjRef::new(30, 9);
+            doc.set(duplicate, stream(b"glyphs"));
+            let t = font(&mut doc, duplicate, "B");
+            assert_eq!(dedupe_resources(&mut doc, &[r, r, s, duplicate, duplicate, t], index_existing), 1);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+            assert_eq!(doc.get(t).as_dict().unwrap().get(b"FontFile"), Some(&Object::Ref(r)));
+        }
     }
 
     #[test]
@@ -366,5 +443,54 @@ mod tests {
         assert!(doc.object_numbers().contains(&old.num));
         let cs = doc.get(h).as_dict().unwrap().get(b"CS").unwrap().clone();
         assert_eq!(cs, Object::Array(vec![Object::name("ICCBased"), Object::Ref(old)]));
+    }
+
+    #[test]
+    fn indirect_resource_category_and_resources_dictionaries_merge() {
+        let mut doc = Document::new_empty();
+        let mut gs = Dict::new();
+        gs.set(b"CA".to_vec(), Object::Real(0.5));
+        let g1 = doc.add(Object::Dict(gs.clone()));
+        let g2 = doc.add(Object::Dict(gs));
+
+        let page_with_indirect_res = |doc: &mut Document, g: ObjRef| {
+            let mut ext = Dict::new();
+            ext.set(b"G0".to_vec(), Object::Ref(g));
+            let ext_ref = doc.add(Object::Dict(ext));
+            let mut res = Dict::new();
+            res.set(b"ExtGState".to_vec(), Object::Ref(ext_ref));
+            let res_ref = doc.add(Object::Dict(res));
+            let mut p = Dict::new();
+            p.set(b"Type".to_vec(), Object::name("Page"));
+            p.set(b"Resources".to_vec(), Object::Ref(res_ref));
+            let p_ref = doc.add(Object::Dict(p));
+            (ext_ref, res_ref, p_ref)
+        };
+        let (ext1, res1, p1) = page_with_indirect_res(&mut doc, g1);
+        let (ext2, res2, p2) = page_with_indirect_res(&mut doc, g2);
+        assert_eq!(dedupe_resources(&mut doc, &[g1, g2, ext1, res1, p1, ext2, res2, p2], false), 3);
+        assert_eq!(doc.get(p1).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
+        assert_eq!(doc.get(p2).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
+        assert_eq!(doc.get(res1).as_dict().unwrap().get(b"ExtGState"), Some(&Object::Ref(ext1)));
+
+        // Distinct font maps (`F1` and `F10` with different fonts on one page vs the same on another)
+        // deduplicate identical fonts while preserving distinct `F1`/`F10` entries.
+        let ff1 = doc.add(stream(b"font-f1"));
+        let ff10 = doc.add(stream(b"font-f10"));
+        let f1_a = font(&mut doc, ff1, "Helvetica");
+        let f10_a = font(&mut doc, ff10, "Courier");
+        let f1_b = font(&mut doc, ff1, "Helvetica");
+        let f10_b = font(&mut doc, ff10, "Times-Roman");
+        let mut fmap_a = Dict::new();
+        fmap_a.set(b"F1".to_vec(), Object::Ref(f1_a));
+        fmap_a.set(b"F10".to_vec(), Object::Ref(f10_a));
+        let fmap_a_ref = doc.add(Object::Dict(fmap_a));
+        let mut fmap_b = Dict::new();
+        fmap_b.set(b"F1".to_vec(), Object::Ref(f1_b));
+        fmap_b.set(b"F10".to_vec(), Object::Ref(f10_b));
+        let fmap_b_ref = doc.add(Object::Dict(fmap_b));
+        assert_eq!(dedupe_resources(&mut doc, &[f1_a, f10_a, f1_b, f10_b, fmap_a_ref, fmap_b_ref], false), 1);
+        assert_eq!(doc.get(fmap_b_ref).as_dict().unwrap().get(b"F1"), Some(&Object::Ref(f1_a)));
+        assert_eq!(doc.get(fmap_b_ref).as_dict().unwrap().get(b"F10"), Some(&Object::Ref(f10_b)));
     }
 }

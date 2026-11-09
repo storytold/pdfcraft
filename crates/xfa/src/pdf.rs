@@ -33,6 +33,9 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
+/// Private key on generated date fields: text the date pattern doesn't read is kept, and shown,
+/// as typed, as an XFA form keeps it (the forms layer reads this key).
+pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// Private key on the fields generated to name a signature field by its SOM path, one for each
 /// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
 /// fields they hold.
@@ -62,7 +65,7 @@ pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 /// Most pages searched for earlier pictures.
 const MAX_PAGES_SEARCHED: usize = 10_000;
-/// Most pictures remembered.
+/// Most pictures remembered from earlier passes.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
 
 struct Emitter<'a> {
@@ -206,6 +209,7 @@ impl Emitter<'_> {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
+                    d.set(DATE_KEY.to_vec(), Object::Bool(true));
                     let mut aa = Dict::new();
                     let pattern = js_string(pattern);
                     aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({pattern});")));
@@ -488,9 +492,9 @@ impl Emitter<'_> {
             return Some(r);
         }
         let r = self.new_image_xobject(data, content_type, &hash)?;
-        if self.images.len() < MAX_REMEMBERED_IMAGES {
-            self.images.insert(hash, r);
-        }
+        // Always remembered: each entry is a hash and a reference to an object this pass wrote
+        // anyway, and a picture past a cap would be decoded and embedded again at every use.
+        self.images.insert(hash, r);
         Some(r)
     }
 
@@ -1036,7 +1040,7 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex32;
+    use super::*;
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {
@@ -1048,5 +1052,32 @@ mod tests {
         let mut ok = b"Ff".to_vec();
         ok.resize(64, b'0');
         assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
+
+    #[test]
+    fn a_picture_past_the_earlier_pass_cap_is_still_embedded_once() {
+        let mut doc = Document::new_empty();
+        let mut em = Emitter {
+            doc: &mut doc,
+            images: HashMap::new(),
+            fields: Vec::new(),
+            radio_groups: HashMap::new(),
+            radio_selected: HashMap::new(),
+            field_count: 0,
+            warnings: Vec::new(),
+            signed: Default::default(),
+            taken: Default::default(),
+            nodes: HashMap::new(),
+        };
+        let png = crate::fixtures::tiny_png();
+        let picture = |i: u32| [png.clone(), i.to_be_bytes().to_vec()].concat();
+        let last = MAX_REMEMBERED_IMAGES as u32 + 10;
+        for i in 0..=last {
+            em.image_xobject(&picture(i), "image/png").expect("decodes");
+        }
+        let before = em.doc.object_numbers().len();
+        let again = em.image_xobject(&picture(last), "image/png").expect("decodes");
+        assert_eq!(em.doc.object_numbers().len(), before, "no new object for a repeated picture");
+        assert_eq!(em.image_xobject(&picture(last), "image/png"), Some(again));
     }
 }
