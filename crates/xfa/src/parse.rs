@@ -7,8 +7,8 @@ use roxmltree::Node as XmlNode;
 use crate::XfaError;
 use crate::model::{
     Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -140,26 +140,36 @@ fn parse_fill(n: Option<XmlNode>) -> Option<Color> {
     Some(parse_color(child(n, "color")).unwrap_or(Color::WHITE))
 }
 
-/// `<border>`: edges in XFA order. One edge applies to all four; two: top/bottom then
-/// left/right; three: top, left/right, bottom; four: top, right, bottom, left.
+/// `<border>`: edges top, right, bottom, left (XFA 3.3 p. 38), the sides not listed drawn as
+/// readers draw them ([`drawn_side`]), not as p. 38's text says.
 fn parse_border(n: Option<XmlNode>) -> Option<Border> {
     let n = n?;
-    let edges: Vec<Edge> = children(n, "edge").map(parse_edge).collect();
-    let d = Edge::default();
-    let e = |i: usize| edges.get(i).copied().unwrap_or(d);
-    let four = match edges.len() {
-        0 => [d; 4],
-        1 => [e(0); 4],
-        2 => [e(0), e(1), e(0), e(1)],
-        3 => [e(0), e(1), e(2), e(1)],
-        _ => [e(0), e(1), e(2), e(3)],
-    };
+    let edges: Vec<Edge> = children(n, "edge").take(4).map(parse_edge).collect();
+    let four = std::array::from_fn(|i| drawn_side(edges.len(), i).and_then(|k| edges.get(k).copied()).unwrap_or_default());
     Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
 }
 
+/// Which of the `listed` edges (or corners) of a border is drawn on side `index`: edges go
+/// top, right, bottom, left and corners top-left, top-right, bottom-right, bottom-left (XFA 3.3
+/// p. 38). For a border that lists fewer than four, p. 38 says the last one listed is reused
+/// for the rest; readers draw a side not listed from the edge or corner on the same side
+/// instead, and so does this: one serves every side, two alternate (0, 1, 0, 1), three reuse
+/// the second for the fourth (0, 1, 2, 1). Edges already followed the readers; corners now do
+/// too. The scripting host's reads mirror the same pattern so a script reads what is drawn.
+/// `None` when none is listed.
+pub(crate) fn drawn_side(listed: usize, index: usize) -> Option<usize> {
+    match listed {
+        0 => None,
+        _ if index < listed => Some(index),
+        1 => Some(0),
+        2 => Some(index % 2),
+        _ => Some(1),
+    }
+}
+
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
-/// bottom-left: one applies to all four, and a corner not given is the last one given. Without
-/// any, the corners are square.
+/// bottom-left, the ones not listed drawn as [`drawn_side`] picks, as edges are. Without any,
+/// the corners are square.
 fn parse_corners(n: XmlNode) -> [Corner; 4] {
     let given: Vec<Corner> = children(n, "corner")
         .take(4)
@@ -169,8 +179,7 @@ fn parse_corners(n: XmlNode) -> [Corner; 4] {
             inverted: c.attribute("inverted") == Some("1"),
         })
         .collect();
-    let Some(last) = given.last().copied() else { return [Corner::default(); 4] };
-    std::array::from_fn(|i| given.get(i).copied().unwrap_or(last))
+    std::array::from_fn(|i| drawn_side(given.len(), i).and_then(|k| given.get(k).copied()).unwrap_or_default())
 }
 
 /// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
@@ -202,6 +211,25 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `relevant`: a space-separated list of views, each `+name` (or `name`) or `-name`. What it says
+/// about printing (`Some(true)` for `+print`, `Some(false)` for `-print`; the last one counts), and
+/// the first token about any other view, which is left aside.
+fn parse_relevant(s: Option<&str>) -> (Option<bool>, Option<String>) {
+    let (mut print, mut other) = (None, None);
+    for token in s.unwrap_or_default().split_whitespace().take(64) {
+        match token {
+            "+print" | "print" => print = Some(true),
+            "-print" => print = Some(false),
+            _ => {
+                if other.is_none() {
+                    other = Some(token.chars().take(64).collect());
+                }
+            }
+        }
+    }
+    (print, other)
+}
+
 /// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
 /// anything else leaves the object as it stands.
 fn quarter_turns(rotate: Option<&str>) -> u8 {
@@ -212,8 +240,11 @@ fn quarter_turns(rotate: Option<&str>) -> u8 {
     turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
 }
 
-fn parse_common(n: XmlNode) -> Common {
+/// What element `n` shares with every container and leaf ([`Common`]).
+fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
+    let (relevant, relevant_other) = parse_relevant(n.attribute("relevant"));
     Common {
+        props: std::sync::Arc::new(parse_props(n, warnings)),
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
         id: n.attribute("id").map(str::to_string),
         x: attr_measure(n, "x"),
@@ -227,12 +258,255 @@ fn parse_common(n: XmlNode) -> Common {
         min_h: attr_measure(n, "minH"),
         max_h: attr_measure(n, "maxH"),
         presence: Presence::parse(n.attribute("presence")),
+        relevant,
+        relevant_other,
         margin: parse_margin(child(n, "margin")),
         border: parse_border(child(n, "border")),
         font: parse_font(child(n, "font")),
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
     }
+}
+
+/// The property elements of an object that scripts read through the object model (XFA 3.3
+/// ch. 17: border p. 629, font p. 741, para p. 800, margin p. 776, ui p. 877, validate p. 880,
+/// occur p. 786, break p. 632, breakBefore p. 637, breakAfter p. 635, assist p. 609, format
+/// p. 745, value p. 882, bind p. 623, desc p. 674, extras p. 724, keep p. 762, caption p. 643,
+/// items p. 758, calculate p. 641).
+const PROP_TAGS: &[&str] = &[
+    "border",
+    "font",
+    "para",
+    "margin",
+    "ui",
+    "validate",
+    "occur",
+    "break",
+    "breakBefore",
+    "breakAfter",
+    "assist",
+    "format",
+    "value",
+    "bind",
+    "desc",
+    "extras",
+    "keep",
+    "caption",
+    "items",
+    "calculate",
+];
+/// Most property elements kept for one object, all levels together. A field written by a form
+/// designer holds about 40 (four edges and corners with their colours, a fill, a font, a widget
+/// with its own border); past this the rest are left out and a warning says so.
+pub const MAX_OBJECT_PROPS: usize = 256;
+/// Most bytes of tags, attribute names, values and text kept for one object's properties: a
+/// designer's field holds well under 2 KiB.
+pub const MAX_OBJECT_PROP_BYTES: usize = 16 << 10;
+/// Deepest property element kept below an object (`ui > textEdit > border > edge > color` is 5).
+const MAX_PROP_DEPTH: usize = 8;
+/// Most attributes kept on one element.
+const MAX_PROP_ATTRS: usize = 64;
+/// Longest validation or calculation script kept for scripts to read, in bytes: the script
+/// engine's own limit on a script (`pdfcraft_js`'s `MAX_SCRIPT_BYTES`), past which it would not run anyway.
+const MAX_VALIDATE_SCRIPT_BYTES: usize = 256 * 1024;
+/// The warning when an object's properties passed a limit.
+pub const PROPS_CUT_WARNING: &str = "an object has more property elements, attributes or text than scripts are given; the rest are left out";
+
+/// What is left of one object's property budget.
+struct PropBudget {
+    elements: usize,
+    bytes: usize,
+    cut: bool,
+}
+
+impl PropBudget {
+    /// `s` when the bytes are left for it (charged), else `None` and the cut noted.
+    fn text(&mut self, s: &str) -> Option<String> {
+        match self.bytes.checked_sub(s.len()) {
+            Some(left) => {
+                self.bytes = left;
+                Some(s.to_string())
+            }
+            None => {
+                self.cut = true;
+                None
+            }
+        }
+    }
+
+    /// The attributes of `n`, to [`MAX_PROP_ATTRS`] and while the bytes last.
+    fn attrs(&mut self, n: XmlNode) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for a in n.attributes() {
+            if out.len() >= MAX_PROP_ATTRS {
+                self.cut = true;
+                break;
+            }
+            let Some(name) = self.text(a.name()) else { break };
+            let Some(value) = self.text(a.value()) else { break };
+            out.push((name, value));
+        }
+        out
+    }
+}
+
+/// Most `<items>` of one object kept as lists ([`items_prop`]): a field has two at most, the
+/// shown list and the saved values (XFA 3.3 p. 726, `<items/> [0..2]`), the two the field's own
+/// lists are read from. Forms do carry more (one public form has a third, empty, saved list);
+/// any further one is kept as an ordinary property, every entry charged to the object's budget.
+const MAX_ITEM_LISTS: usize = 2;
+
+/// An `<items>` element (XFA 3.3 p. 758) as scripts read it: its attributes and its entries,
+/// each with its tag and text, as the choice list or check button shows them ([`parse_items`]:
+/// the same [`MAX_ITEMS`] and the same text), so a script reads what the list holds. The
+/// element and its attributes are charged to the object's budget like any property; its
+/// entries are not (a list of a few hundred countries would otherwise crowd out every other
+/// property), so they are bounded by the list's own limits instead: [`MAX_ITEMS`] entries of
+/// at most [`MAX_TEXT`] each, in at most [`MAX_ITEM_LISTS`] lists, no more than the field's
+/// own lists hold. An entry's attributes are not kept: scripts read an entry's value.
+fn items_prop(n: XmlNode, b: &mut PropBudget) -> Option<Prop> {
+    if b.elements == 0 {
+        b.cut = true;
+        return None;
+    }
+    b.elements -= 1;
+    let tag = b.text(n.tag_name().name())?;
+    let attrs = b.attrs(n);
+    let children = n
+        .children()
+        .filter(|c| c.is_element())
+        .take(MAX_ITEMS)
+        .map(|c| Prop { tag: c.tag_name().name().to_string(), attrs: Vec::new(), text: Some(std::sync::Arc::from(text_of(c))), children: Vec::new() })
+        .collect();
+    Some(Prop { tag, attrs, text: None, children })
+}
+
+/// The property elements of `n` scripts read: its own attributes and the [`PROP_TAGS`]
+/// elements with what they hold, within [`MAX_OBJECT_PROPS`] elements,
+/// [`MAX_OBJECT_PROP_BYTES`] of text, [`MAX_PROP_DEPTH`] levels and [`MAX_PROP_ATTRS`]
+/// attributes an element; past them the rest is left out and [`PROPS_CUT_WARNING`] is added
+/// once. Only elements in the object's namespace are properties (XFA 3.3 p. 598); a `script` is
+/// read only in a `validate` or a `calculate`, and only its first (forms read its text, which
+/// is not charged to the budget but kept within [`MAX_VALIDATE_SCRIPT_BYTES`]), the first
+/// [`MAX_ITEM_LISTS`] `items` as lists (see [`items_prop`]), `extras` only as the object's own, the XHTML
+/// of `exData` not at all, and of `value` only its content element's tag and attributes (the
+/// data is the object's value, read elsewhere).
+fn parse_props(n: XmlNode, warnings: &mut Vec<String>) -> Props {
+    /// The property elements under `n`, whose tag is `within` (empty for the object itself):
+    /// `extras` in the object and inside one (forms keep named values there), `script` in a
+    /// `validate` or a `calculate` (XFA 3.3 p. 880, p. 641, p. 827).
+    fn elements<'a, 'd>(n: XmlNode<'a, 'd>, within: &str) -> impl Iterator<Item = XmlNode<'a, 'd>> + use<'a, 'd> {
+        let (extras, script) = (within.is_empty() || within == "extras", matches!(within, "validate" | "calculate"));
+        let ns = n.tag_name().namespace();
+        n.children().filter(move |c| {
+            c.is_element()
+                && c.tag_name().namespace() == ns
+                && match c.tag_name().name() {
+                    "script" => script,
+                    "extras" => extras,
+                    _ => true,
+                }
+        })
+    }
+    /// `n` as a property, `depth` below the object; `bare`: its tag and attributes only.
+    fn prop(n: XmlNode, depth: usize, bare: bool, b: &mut PropBudget) -> Option<Prop> {
+        if depth > MAX_PROP_DEPTH || b.elements == 0 {
+            b.cut = true;
+            return None;
+        }
+        b.elements -= 1;
+        let tag = b.text(n.tag_name().name())?;
+        let mut p = Prop { attrs: b.attrs(n), tag, text: None, children: Vec::new() };
+        if bare {
+            return Some(p);
+        }
+        if p.tag == "exData" {
+            // Rich text: its words, as scripts read a caption's rich text (`exData.value`), not
+            // its XHTML elements.
+            let t = text_of(n);
+            let t = t.trim();
+            if !t.is_empty() {
+                p.text = b.text(t).map(std::sync::Arc::from);
+            }
+            return Some(p);
+        }
+        if p.tag == "script" {
+            // A validation's or calculation's script: its text is not charged to the budget, so a long script
+            // leaves the other properties their room, but it is kept only within the script
+            // engine's own limit on a script, past which it would not run anyway.
+            let t = text_of(n);
+            let t = t.trim();
+            if t.len() > MAX_VALIDATE_SCRIPT_BYTES {
+                b.cut = true;
+            } else if !t.is_empty() {
+                p.text = Some(std::sync::Arc::from(t));
+            }
+            return Some(p);
+        }
+        let mut kids = elements(n, p.tag.as_str()).peekable();
+        if kids.peek().is_none() {
+            // The element's own text only: not that of children left out (an `extras`, a
+            // `script`), and no more than the budget holds.
+            let mut own = String::new();
+            for t in n.children().filter(|c| c.is_text()).filter_map(|c| c.text()) {
+                if own.len().saturating_add(t.len()) > b.bytes {
+                    b.cut = true;
+                    own.clear();
+                    break;
+                }
+                own.push_str(t);
+            }
+            let t = own.trim();
+            if !t.is_empty() {
+                p.text = b.text(t).map(std::sync::Arc::from);
+            }
+            return Some(p);
+        }
+        // The object's own value holds its data, read elsewhere: of it only the content
+        // element's tag. A caption's value is its label, and is read whole.
+        let content_only = p.tag == "value" && depth == 1;
+        // A validation or a calculation has one script (XFA 3.3 p. 880, p. 641: [0..1]); any
+        // more are not read.
+        let mut scripts = 0usize;
+        for k in kids {
+            if k.tag_name().name() == "script" {
+                scripts = scripts.saturating_add(1);
+                if scripts > 1 {
+                    continue;
+                }
+            }
+            match prop(k, depth + 1, content_only, b) {
+                Some(c) => p.children.push(c),
+                None => break,
+            }
+        }
+        Some(p)
+    }
+    let mut b = PropBudget { elements: MAX_OBJECT_PROPS, bytes: MAX_OBJECT_PROP_BYTES, cut: false };
+    let attrs = b.attrs(n);
+    let mut out = Vec::new();
+    // `desc` and `extras` last: they can hold the most (forms keep data there), so a cut falls
+    // on them before the appearance and validation properties (their order means nothing,
+    // XFA 3.3 p. 78).
+    let bulky = |c: &XmlNode| matches!(c.tag_name().name(), "desc" | "extras");
+    let first = elements(n, "").filter(|c| PROP_TAGS.contains(&c.tag_name().name()) && !bulky(c));
+    let mut lists = 0usize;
+    for c in first.chain(elements(n, "").filter(bulky)) {
+        let p = if c.tag_name().name() == "items" && lists < MAX_ITEM_LISTS {
+            lists += 1;
+            items_prop(c, &mut b)
+        } else {
+            prop(c, 1, false, &mut b)
+        };
+        match p {
+            Some(p) => out.push(p),
+            None => break,
+        }
+    }
+    if b.cut && !warnings.iter().any(|w| w == PROPS_CUT_WARNING) {
+        warnings.push(PROPS_CUT_WARNING.into());
+    }
+    Props { attrs, elements: out }
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
@@ -416,7 +690,8 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                     warnings.push("an image is larger than 32 MB; it is left out".into());
                     return Value::Empty;
                 }
-                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data };
+                let href = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()).map(str::to_string);
+                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data, href };
             }
             "line" => {
                 return Value::Line { slope_up: c.attribute("slope") == Some("/"), edge: child(c, "edge").map(parse_edge).unwrap_or_default() };
@@ -535,7 +810,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
     Field {
-        common: parse_common(n),
+        common: parse_common(n, warnings),
         ui: kind,
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
@@ -558,14 +833,23 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         },
         picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         data_picture: child(n, "bind").and_then(|b| child(b, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        data_shared: child(n, "bind")
+            .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
         validate_message,
+        required: must_be_filled(validate_el),
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
+}
+
+/// Whether a `<validate>` element makes its object one that must be filled in: `nullTest="error"`
+/// (`warning` only recommends it, and `disabled`, the default, leaves it optional).
+fn must_be_filled(validate: Option<XmlNode>) -> bool {
+    validate.is_some_and(|v| v.attribute("nullTest").is_some_and(|t| t.trim() == "error"))
 }
 
 fn parse_script(s: XmlNode, activity: &str) -> Script {
@@ -579,6 +863,9 @@ fn parse_events(n: XmlNode) -> Vec<Script> {
     for ev in children(n, "event").take(64) {
         if let Some(s) = child(ev, "script") {
             let activity = ev.attribute("activity").unwrap_or("click");
+            // `ready` is two events, told apart by `ref`: layout:ready (`$layout`, once the form
+            // is laid out) and form:ready (`$form`).
+            let activity = if activity == "ready" && ev.attribute("ref").is_some_and(|r| r.trim() == "$layout") { "layoutReady" } else { activity };
             scripts.push(parse_script(s, activity));
         }
     }
@@ -630,7 +917,7 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
-        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1)).collect();
+        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1, Layout::Positioned)).collect();
         // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
@@ -646,15 +933,19 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
     PageSet { areas }
 }
 
-fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
-    let common = parse_common(n);
+/// A `subform` element: its own attributes, its page set if it has one, and the nodes it holds,
+/// `depth` levels down (for the nesting limit). `set_layout` is the layout a `subformSet` takes
+/// on from its container, in place of its own.
+fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layout: Option<Layout>) -> Subform {
+    let common = parse_common(n, warnings);
+    let layout = set_layout.unwrap_or_else(|| Layout::parse(n.attribute("layout")));
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1)),
             _ => {
-                if let Some(node) = parse_node(c, warnings, depth + 1) {
+                if let Some(node) = parse_node(c, warnings, depth + 1, layout) {
                     children_out.push(node);
                 }
             }
@@ -667,7 +958,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
     Subform {
         common,
-        layout: Layout::parse(n.attribute("layout")),
+        layout,
         children: children_out,
         scripts: parse_events(n),
         page_set,
@@ -675,63 +966,79 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         break_before_page: break_to_page("breakBefore")
             || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
         break_after_page: break_to_page("breakAfter"),
+        set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
     }
 }
 
-fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<Node> {
+/// The template object element `c` stands for (a subform, area, field, draw or exclusion group,
+/// with what it holds), or `None` for anything else and past [`MAX_DEPTH`] levels. What can't be
+/// read faithfully is noted in `warnings`. `parent`: the layout of the container `c` is in, which
+/// a `subformSet` takes on.
+fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layout) -> Option<Node> {
     if depth > MAX_DEPTH {
         return None;
     }
     Some(match c.tag_name().name() {
-        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth))),
+        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth, None))),
+        // A set of related subforms is transparent to layout (XFA 3.3 p. 357): its members are laid out
+        // as its container lays out its own children, at their own positions in a positioned one. In a
+        // table or a row they go one under another.
         "subformSet" => {
-            // A set of alternative subforms: lay out its members in order.
-            let mut sf = parse_subform(c, warnings, depth);
-            sf.layout = Layout::Tb;
-            Node::Subform(Box::new(sf))
+            let layout = if matches!(parent, Layout::Table | Layout::Row) { Layout::Tb } else { parent };
+            let mut set = parse_subform(c, warnings, depth, Some(layout));
+            set.set = true;
+            Node::Subform(Box::new(set))
         }
         "area" => Node::Area(Box::new(Area {
-            common: parse_common(c),
-            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
+            common: parse_common(c, warnings),
+            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1, Layout::Positioned)).collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
-        "draw" => Node::Draw(Box::new(Draw { common: parse_common(c), value: parse_value(child(c, "value"), warnings) })),
+        "draw" => Node::Draw(Box::new(Draw { common: parse_common(c, warnings), value: parse_value(child(c, "value"), warnings) })),
         "exclGroup" => Node::ExclGroup(Box::new(ExclGroup {
-            common: parse_common(c),
+            common: parse_common(c, warnings),
             layout: Layout::parse(c.attribute("layout")),
             fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
             tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             scripts: parse_events(c),
+            required: must_be_filled(child(c, "validate")),
         })),
         _ => return None,
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any. On screen every
-/// page is a sheet of its own, so the sheet count is the page count, and the sheet number a form
-/// shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
-fn page_role(f: &Field) -> Option<PageRole> {
-    // Any of its ready scripts: a field may have one that does something else first.
-    f.scripts.iter().filter(|s| s.activity == "ready" || s.activity == "layoutReady").find_map(|script| {
-        // FormCalc names methods case-insensitively; JavaScript does not.
-        let text: std::borrow::Cow<str> =
-            if script.formcalc { std::borrow::Cow::Owned(script.text.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(&script.text) };
-        let has = |name: &str| if script.formcalc { text.contains(&name.to_ascii_lowercase()) } else { text.contains(name) };
-        // `this` in JavaScript, `$` in FormCalc.
-        let sheet_number = || {
-            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-            compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
-        };
-        if has("pageCount") || has("sheetCount") {
-            Some(PageRole::Count)
-        } else if has("layout.page(") || has("layout.absPage(") || sheet_number() {
-            Some(PageRole::Number)
-        } else {
-            None
-        }
-    })
+/// Whether a `layout:ready` script numbers its own field: assigns it (`this.rawValue = …`, and in
+/// FormCalc `$ = …` or `$.rawValue = …`) an expression that calls `xfa.layout.page(…)`,
+/// `absPage(…)` or `pageCount()`. Such a field is one the layout numbers itself, page by page.
+/// Its code is read (JavaScript, or FormCalc when `formcalc`), not its comments and strings, and
+/// the calls are matched as whole names, with or without spaces before the parenthesis.
+pub fn numbers_pages(script: &str, formcalc: bool) -> bool {
+    own_page_role(script, formcalc).is_some()
+}
+
+/// The page-number role a `layout:ready` script gives its own field ([`numbers_pages`]): the page
+/// count when what it assigns calls `pageCount()`, else the page number.
+fn own_page_role(script: &str, formcalc: bool) -> Option<PageRole> {
+    let code = code_of(script, formcalc);
+    // FormCalc names methods case-insensitively; JavaScript does not.
+    let own: Vec<String> =
+        own_assignments(&code, formcalc).into_iter().map(|rhs| if formcalc { rhs.to_ascii_lowercase() } else { rhs.to_string() }).collect();
+    let name = |n: &str| if formcalc { n.to_ascii_lowercase() } else { n.to_string() };
+    // On screen every page is a sheet of its own, so the sheet count is the page count, and the
+    // sheet number a form shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
+    let sheet_number = |rhs: &str| {
+        let compact: String = rhs.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+    };
+    if own.iter().any(|rhs| calls_layout(rhs, &name("pageCount")) || calls_layout(rhs, &name("sheetCount"))) {
+        Some(PageRole::Count)
+    } else if own.iter().any(|rhs| calls_layout(rhs, &name("page")) || calls_layout(rhs, &name("absPage")) || sheet_number(rhs)) {
+        Some(PageRole::Number)
+    } else {
+        None
+    }
 }
 
 /// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
@@ -769,6 +1076,135 @@ fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>
     }
 }
 
+/// Most places a name is looked at as an assignment to the script's own field ([`own_assignments`]).
+const MAX_ASSIGNMENTS: usize = 256;
+/// Most bytes of an assignment's expression read ([`expression`]); a page-number expression is short.
+const MAX_EXPRESSION: usize = 4096;
+
+/// What the statements of `code` assign to the script's own field: the expression after `=` of
+/// each `this.rawValue = …` (in FormCalc also `$.rawValue = …` and `$ = …`) that starts a
+/// statement. The expression runs to a `;` (JavaScript) or to the end of a line that completes it:
+/// brackets closed and not ending in an operator, so `this.rawValue =` with its value on the next
+/// line, or a sum broken over lines, is read whole.
+fn own_assignments(code: &str, formcalc: bool) -> Vec<&str> {
+    let targets: &[&str] = if formcalc { &["this.rawValue", "$.rawValue", "$"] } else { &["this.rawValue"] };
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == '.';
+    let mut out = Vec::new();
+    for t in targets {
+        // At most MAX_ASSIGNMENTS places looked at per name, each expression read at most
+        // MAX_EXPRESSION bytes: a hostile script can't make this scan quadratic.
+        for (i, _) in code.match_indices(t).take(MAX_ASSIGNMENTS) {
+            // A statement's start: nothing before it on its line but spaces, or a `;`, `{` or `}`.
+            let before = code.get(..i).unwrap_or_default().trim_end_matches([' ', '\t']);
+            if !(before.is_empty() || before.ends_with(['\n', '\r', ';', '{', '}'])) {
+                continue;
+            }
+            let Some(rest) = code.get(i + t.len()..) else { continue };
+            // `$` is the whole name (not `$record`, not `$.rawValue`, a target of its own).
+            if rest.chars().next().is_some_and(ident) {
+                continue;
+            }
+            let Some(rhs) = rest.trim_start().strip_prefix('=').filter(|r| !r.starts_with('=')) else { continue };
+            out.push(expression(rhs, formcalc));
+        }
+    }
+    out
+}
+
+/// The expression at the start of `rhs` (what follows an `=`): to a `;` outside brackets in
+/// JavaScript, or to a line break once something is written, the brackets are closed and the
+/// line doesn't end in an operator that continues it.
+fn expression(rhs: &str, formcalc: bool) -> &str {
+    // Read no further than MAX_EXPRESSION bytes (cut at a character boundary).
+    let cap = (0..=MAX_EXPRESSION.min(rhs.len())).rev().find(|&n| rhs.is_char_boundary(n)).unwrap_or(0);
+    let rhs = rhs.get(..cap).unwrap_or_default();
+    let mut depth = 0i32;
+    let mut last: Option<char> = None;
+    for (j, c) in rhs.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth = depth.saturating_add(1),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ';' if !formcalc && depth <= 0 => return rhs.get(..j).unwrap_or(rhs),
+            '\n' if depth <= 0 && last.is_some_and(|l| !"+-*/%=,(&|?:.<>!".contains(l)) => return rhs.get(..j).unwrap_or(rhs),
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = Some(c);
+        }
+    }
+    rhs
+}
+
+/// Whether `code` calls `layout.<method>(…)`: the method's whole name after `layout.` (spaces
+/// allowed around the dot), then `(` after any spaces.
+fn calls_layout(code: &str, method: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    code.match_indices(method).any(|(i, _)| {
+        let before = code.get(..i).unwrap_or_default().trim_end();
+        let after = code.get(i + method.len()..).unwrap_or_default();
+        !after.chars().next().is_some_and(ident)
+            && after.trim_start().starts_with('(')
+            && before
+                .strip_suffix('.')
+                .map(str::trim_end)
+                .and_then(|b| b.strip_suffix("layout"))
+                .is_some_and(|rest| !rest.chars().next_back().is_some_and(ident))
+    })
+}
+
+/// `script` with its comments blanked out and each string literal left as a bare `"`: `//` and
+/// `/* */` comments and `'…'`, `"…"` and `` `…` `` strings (with `\` escapes) in JavaScript; `;`
+/// and `//` comments and `"…"` strings (a doubled `""` inside) in FormCalc. Line breaks stay. An
+/// unclosed comment or string runs to the end.
+fn code_of(script: &str, formcalc: bool) -> String {
+    let mut out = String::with_capacity(script.len());
+    let mut chars = script.chars().peekable();
+    while let Some(c) = chars.next() {
+        let line_comment = (c == '/' && chars.peek() == Some(&'/')) || (formcalc && c == ';');
+        if line_comment {
+            for n in chars.by_ref() {
+                if n == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if !formcalc && c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut star = false;
+            for n in chars.by_ref() {
+                if star && n == '/' {
+                    break;
+                }
+                star = n == '*';
+            }
+            out.push(' ');
+        } else if c == '"' || (!formcalc && (c == '\'' || c == '`')) {
+            while let Some(n) = chars.next() {
+                if !formcalc && n == '\\' {
+                    chars.next();
+                } else if n == c {
+                    if formcalc && chars.peek() == Some(&c) {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // A mark where the string was: the expression it ends is still seen to end there.
+            out.push('"');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Which page-number role a field with a layout:ready script plays, if any.
+fn page_role(f: &Field) -> Option<PageRole> {
+    // Any of its layout:ready scripts, past a form:ready one.
+    f.scripts.iter().filter(|s| s.activity == "layoutReady").find_map(|s| own_page_role(&s.text, s.formcalc))
+}
+
 fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: usize) {
     if depth > MAX_DEPTH {
         return;
@@ -796,6 +1232,13 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
 
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
+    // No bigger than a packet the reader accepts can come to as text ([`crate::read_packets`]), so
+    // what parsing keeps of it (item lists are held by the field and its properties) stays within
+    // a few times that, whoever calls it.
+    let limit = crate::packets::MAX_TEMPLATE_TEXT;
+    if xml.len() > limit {
+        return Err(XfaError::TooLarge(format!("the template is {} bytes, past the {limit} bytes the reader accepts", xml.len())));
+    }
     let depth = crate::xml_nesting_depth(xml);
     if depth > crate::MAX_XML_DEPTH {
         return Err(XfaError::Malformed(format!(
@@ -803,8 +1246,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(xml, opts()).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
     // xfa-template namespace, or at least has a subform in it.
@@ -820,9 +1263,23 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     } else {
         root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
-    let mut warnings = Vec::new();
+    // Prototype references (`use`, `usehref`) are resolved first: the parser reads the template
+    // written again with them merged in. The saved state below still comes from `doc`.
+    let (expanded, mut warnings) = crate::proto::expand(template);
+    let expanded_doc;
+    let template = match expanded.as_deref().map(|x| roxmltree::Document::parse_with_options(x, opts())) {
+        Some(Ok(d)) => {
+            expanded_doc = d;
+            expanded_doc.root_element()
+        }
+        Some(Err(e)) => {
+            warnings.push(format!("the template with its prototypes resolved could not be read again ({e}); it is read without them"));
+            template
+        }
+        None => template,
+    };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
-    let mut root_sf = parse_subform(sf, &mut warnings, 0);
+    let mut root_sf = parse_subform(sf, &mut warnings, 0, None);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
         root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
@@ -842,7 +1299,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default() };
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
     let paths = crate::data::fields_with_ids(&tpl)
         .into_iter()
         .filter(|(id, _, _)| tpl.embedded.contains(*id))
@@ -925,3 +1382,7 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "props_tests.rs"]
+mod props_tests;
