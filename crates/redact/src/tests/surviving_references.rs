@@ -220,6 +220,38 @@ fn an_image_a_type3_glyphs_form_with_parameters_by_reference_draws_is_kept() {
     assert!(full_save_holds(&doc, b"PUBLIC_IMAGE_B"), "the image the surviving glyph's form draws was lost");
 }
 
+/// The Form a kept glyph draws is walked, for the names its content uses, within the allowance of
+/// a page: two forms without resources of their own that it draws, each past half of it, refuse
+/// the redaction rather than being decoded in full. Two small ones are the control.
+#[test]
+fn the_form_a_kept_type3_glyph_draws_is_walked_within_the_allowance_of_a_page() {
+    for (size, refused) in [(pdfcraft_cos::MAX_PAGE_DECODED / 2 + 1, true), (1, false)] {
+        let packed = pdfcraft_filters::encode_flate(&vec![b' '; size]);
+        let blank = || stream("/Type /XObject /Subtype /Form /BBox [0 0 1000 1000] /Filter /FlateDecode", packed.as_slice());
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+            b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /ImA 9 0 R /Fm 10 0 R >> >> >>".to_vec(),
+            stream("", b"/ImA Do"),
+            stream("", b"/Fm Do"),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1000 1000] /Resources << /XObject << /Sub1 11 0 R /Sub2 12 0 R >> >>", b"/Sub1 Do /Sub2 Do"),
+            blank(),
+            blank(),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+        let out = apply(&mut doc, None);
+        if refused {
+            assert!(matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(_)))), "forms of {size} bytes each: {out:?}");
+        } else {
+            assert_eq!(out.unwrap().glyphs, 1, "forms of {size} bytes each");
+        }
+    }
+}
+
 /// When all glyphs of a Type 3 font are redacted, the entire font is removed from Resources (F-011).
 #[test]
 fn all_redacted_type3_glyphs_cause_font_removal_from_resources() {
