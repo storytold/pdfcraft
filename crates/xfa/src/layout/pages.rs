@@ -2,8 +2,8 @@
 use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
-    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
-    SomIndices, XfaError, data_path, text,
+    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_DRAW_CHARS, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para,
+    Rc, Rect, SomIndices, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -53,6 +53,14 @@ impl Layouter<'_> {
     pub(super) fn check_measures(&self) -> Result<(), XfaError> {
         if self.measures.get() > MAX_MEASURES {
             return Err(XfaError::TooLarge("the form is nested too deeply to lay out".into()));
+        }
+        Ok(())
+    }
+
+    /// `TooLarge` once the draw phase has laid out far more text than a real form does.
+    pub(super) fn check_drawn_chars(&self) -> Result<(), XfaError> {
+        if self.drawn_chars.get() > MAX_DRAW_CHARS {
+            return Err(XfaError::TooLarge("the form draws far more text than the reader lays out".into()));
         }
         Ok(())
     }

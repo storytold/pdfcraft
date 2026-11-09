@@ -2124,6 +2124,77 @@ trailer << /Root 1 0 R >>
     assert_eq!(listed, [("radio", Some(0), Some(120.0)), ("pair", Some(0), Some(90.0)), ("other", Some(0), Some(60.0))], "{:?}", info.fields);
 }
 
+/// A kid with `/T` that a field's `/Kids` lists but whose `/Parent` doesn't name that field is
+/// named up its own `/Parent` chain (ISO 32000-2 §12.7.4.2), as the form reader names it.
+#[test]
+fn a_named_kid_without_a_parent_keeps_its_own_name() {
+    let pdf = |parent: &str| {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 49152 /T (Group1) /Kids [6 0 R 5 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [10 100 30 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [40 100 60 120] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let names = |bytes: Vec<u8>| inspect(Arc::new(bytes), None).expect("opens").fields.iter().map(|f| (f.name.clone(), f.kind)).collect::<Vec<_>>();
+    assert_eq!(names(pdf("")), [("Group1".into(), FieldKind::Radio), ("Group1".into(), FieldKind::Radio)]);
+    assert_eq!(names(pdf(" /Parent 4 0 R")), [("Group1.Group1".into(), FieldKind::Radio), ("Group1.Group1".into(), FieldKind::Radio)]);
+}
+
+/// A kid named from its own `/Parent` chain (ISO 32000-2 §12.7.4.2) when that `/Parent` is a field
+/// other than the one listing it: an indirect one, and one listed as a direct dictionary in
+/// `/Fields` (which no `/Parent` can name).
+#[test]
+fn a_named_kid_whose_parent_is_another_field_is_named_under_it() {
+    let pdf = |listing: &str, fields: &str| {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >> endobj
+4 0 obj {listing} endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [10 100 30 120] >> endobj
+6 0 obj << /T (Other) /Kids [5 0 R] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let names = |bytes: Vec<u8>| inspect(Arc::new(bytes), None).expect("opens").fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    let listing = "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>";
+    assert_eq!(names(pdf(listing, "4 0 R")), ["Other.k"]);
+    assert_eq!(names(pdf("null", listing)), ["Other.k"], "listed as a direct dictionary");
+}
+
+/// "A field's children in the hierarchy may also include widget annotations" (ISO 32000-2
+/// §12.7.4): a nameless widget beside a named kid is listed as a field of the parent's name, at
+/// the widget's place, as the form reader lists it.
+#[test]
+fn a_widget_beside_a_named_kid_is_a_field_of_the_parents_name() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 49152 /T (2) /Kids [5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (2) /Rect [10 100 30 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [40 100 60 120] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let info = inspect(Arc::new(pdf), None).expect("opens");
+    let got: Vec<_> = info.fields.iter().map(|f| (f.name.clone(), f.kind, f.rect)).collect();
+    assert_eq!(
+        got,
+        [("2".into(), FieldKind::Radio, Some([10.0, 100.0, 30.0, 120.0])), ("2".into(), FieldKind::Radio, Some([40.0, 100.0, 60.0, 120.0]))]
+    );
+}
+
 /// The password values (`/O`, `/U`, `/OE`, `/UE`, `/Perms`) of an AES-256 (R6) protection with a
 /// user password, as a save writes them.
 fn r6_password_values() -> String {
