@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use super::fallback::{same_font, same_paint};
-use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
+use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
@@ -59,16 +61,37 @@ impl TextLine {
     }
 }
 
-/// The page's content streams as listed, each with its decoded data (empty when it doesn't
-/// decode), within one page's [`DecodeBudget`]. An error when the content runs past it: reading
-/// or rewriting a page from part of its content would lose the rest.
-pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+/// One entry of a page's `/Contents`, and what it decoded to.
+pub(crate) struct ContentStream {
+    /// The entry as listed.
+    pub(crate) entry: Object,
+    /// Its decoded data, empty when it doesn't decode.
+    pub(crate) data: Vec<u8>,
+    /// How much of it decoded.
+    pub(crate) read: Read,
+}
+
+/// How much of a content stream decoded ([`rewritten_contents`] says what each allows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    Whole,
+    /// Damaged partway: the data is what decoded before the damage. What follows it is unknown,
+    /// the graphics state and syntax the later streams start in too.
+    Damaged,
+    /// Not at all (a filter this reader lacks, say): the data is empty.
+    Unread,
+}
+
+/// The page's content streams as listed, each with its decoded data, within one page's
+/// [`DecodeBudget`]. An error when the content runs past it: reading or rewriting a page from
+/// part of its content would lose the rest.
+pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<ContentStream>, EditError> {
     content_streams_within(doc, page, &mut DecodeBudget::page())
 }
 
 /// [`content_streams`], decoded against `budget`, which a walk of the page's forms then goes on
 /// spending.
-pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<ContentStream>, EditError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -77,18 +100,24 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
         },
     };
     let mut out = Vec::with_capacity(list.len());
-    for o in list {
-        let data = match &*doc.resolve(&o) {
-            Object::Stream(s) => match budget.decode(s) {
-                Ok(data) => data,
+    for entry in list {
+        let (data, read) = match &*doc.resolve(&entry) {
+            Object::Stream(s) => match budget.decode_with_damage(doc, s, usize::MAX) {
+                Ok((data, damaged)) => (data, if damaged { Read::Damaged } else { Read::Whole }),
                 Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
-                Err(_) => Vec::new(),
+                Err(_) => (Vec::new(), Read::Unread),
             },
-            _ => Vec::new(),
+            // Nothing to lose: a null or missing entry draws nothing.
+            _ => (Vec::new(), Read::Whole),
         };
-        out.push((o, data));
+        out.push(ContentStream { entry, data, read });
     }
     Ok(out)
+}
+
+/// The page's streams joined into the one stream they are: an operator may span two of them.
+pub(crate) fn joined(streams: &[ContentStream]) -> Pieces {
+    Pieces::join(&streams.iter().map(|s| s.data.as_slice()).collect::<Vec<_>>())
 }
 
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
@@ -118,26 +147,108 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
     pieces.splice(edits)
 }
 
+/// An error when content at `/Contents` index `at` (a stream there, or one inserted there) is drawn
+/// after a stream not read whole, damaged partway or not decoding at all: what wasn't read can
+/// change how it reads, the graphics state it draws in among it.
+pub(crate) fn drawn_before_damage(streams: &[ContentStream], at: usize) -> Result<(), EditError> {
+    if at > first_damaged(streams) {
+        return Err(EditError::Invalid(
+            "this change comes after a content stream that is damaged or can't be decoded, and what wasn't read can change how the rest of the page reads"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The index of the first stream not read whole, or the number of streams.
+fn first_damaged(streams: &[ContentStream]) -> usize {
+    streams.iter().position(|s| s.read != Read::Whole).unwrap_or(streams.len())
+}
+
+/// The index of the first of `ops`, parsed from `pieces` (the [`joined`] `streams`), drawn after a
+/// stream not read whole, or `ops.len()`. A `q … Q` still open there may hold what wasn't read,
+/// painting in the state it sets. An operator counts by its keyword: one whose operands start
+/// before such a stream takes them from around what wasn't read.
+pub(crate) fn first_op_after_damage(streams: &[ContentStream], pieces: &Pieces, ops: &[Op]) -> usize {
+    let damaged = first_damaged(streams);
+    ops.iter().position(|op| pieces.pieces_of(op).1 > damaged).unwrap_or(ops.len())
+}
+
+/// Whether `new` changes a text object still open at the first stream not read whole. The text
+/// object goes on in it, and the text it shows there starts where this text ends: a change of this
+/// text moves it. A change before the text object doesn't.
+fn changes_text_open_into_damage(streams: &[ContentStream], new: &[Vec<u8>]) -> bool {
+    let upto = first_damaged(streams).saturating_add(1);
+    if upto > streams.len() {
+        return false;
+    }
+    let before = Pieces::join(&streams.iter().take(upto).map(|s| s.data.as_slice()).collect::<Vec<_>>());
+    let mut open = None;
+    for op in before.parse().ops {
+        match op.op.as_slice() {
+            b"BT" => open = Some(op.span.start),
+            b"ET" => open = None,
+            _ => {}
+        }
+    }
+    let Some(at) = open else { return false };
+    let after = Pieces::join(&new.iter().take(upto).map(Vec::as_slice).collect::<Vec<_>>());
+    // Unchanged from the text object's start to the stream not read whole: it ends the same.
+    !before.data().get(at..).is_some_and(|text| after.data().ends_with(text))
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
-/// (keeping their dictionaries), the others stay as they were.
-pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>)], new: Vec<Vec<u8>>) -> Object {
-    let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
-    for ((obj, old), data) in streams.iter().zip(new) {
-        if *old == data {
-            contents.push(obj.clone());
+/// (keeping their dictionaries), the others stay as they were. An error, before anything is
+/// added, when a piece that changed is a stream that didn't decode whole, or comes after one.
+/// Written from what decoded, a damaged stream would lose everything after the damage, and one
+/// that doesn't decode all of it. What follows the damage is unknown, so a later stream may not
+/// read as it seems: a string or comment the damage left open runs on into it, and operators the
+/// damage hides can change the graphics state it draws in. A stream that doesn't decode hides its
+/// operators all the same.
+pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[ContentStream], new: Vec<Vec<u8>>) -> Result<Object, EditError> {
+    // The last stream that changed: when it is drawn before the damage, so are the others.
+    if let Some(i) = streams.iter().zip(&new).rposition(|(s, data)| s.data != *data) {
+        drawn_before_damage(streams, i)?;
+    }
+    if changes_text_open_into_damage(streams, &new) {
+        return Err(EditError::Invalid(
+            "this change is in a text object that goes on in a content stream that is damaged or can't be decoded, whose text starts where this text ends"
+                .into(),
+        ));
+    }
+    for (s, data) in streams.iter().zip(&new) {
+        if s.data == *data {
             continue;
         }
-        let mut dict = match &*doc.resolve(obj) {
+        match s.read {
+            Read::Whole => {}
+            Read::Damaged => {
+                return Err(EditError::Invalid(
+                    "this change is in a content stream that is damaged partway, and rewriting it would lose what follows the damage".into(),
+                ));
+            }
+            Read::Unread => {
+                return Err(EditError::Invalid("this change is in a content stream that can't be decoded, and rewriting it would lose it".into()));
+            }
+        }
+    }
+    let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
+    for (s, data) in streams.iter().zip(new) {
+        if s.data == data {
+            contents.push(s.entry.clone());
+            continue;
+        }
+        let mut dict = match &*doc.resolve(&s.entry) {
             Object::Stream(s) => s.dict.clone(),
             _ => Dict::new(),
         };
         dict.remove(b"Length");
         contents.push(Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &data)))));
     }
-    match <[Object; 1]>::try_from(contents) {
+    Ok(match <[Object; 1]>::try_from(contents) {
         Ok([one]) => one,
         Err(many) => Object::Array(many),
-    }
+    })
 }
 
 pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -180,7 +291,13 @@ fn fill_color(fill: &[Op]) -> [f64; 3] {
 
 /// The lines of text on a page (0-based), in content order.
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true)
+    text_lines_in(doc, &page_dict(doc, page)?, true, false)
+}
+
+/// [`text_lines`] with every show of invisible text a line of its own, however alike its
+/// neighbours: an OCR layer's words, which an edit can keep or change one by one.
+pub(crate) fn word_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, &page_dict(doc, page)?, true, true)
 }
 
 /// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
@@ -188,18 +305,19 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
 /// through every page doesn't walk the page tree again for each.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, page, false)
+    text_lines_in(doc, page, false, false)
 }
 
-/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans.
-fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) -> Result<Vec<TextLine>, EditError> {
+/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans, and with
+/// `invisible_apart`, no show of invisible text joins the one before it.
+fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, invisible_apart: bool) -> Result<Vec<TextLine>, EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
-    let pieces = Pieces::join(&content_streams(doc, &p.dict)?.into_iter().map(|(_, d)| d).collect::<Vec<_>>());
+    let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
@@ -234,7 +352,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 && near
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
-                && (s.state.render_mode != 3 || gap < pen.size * 0.6)
+                && (s.state.render_mode != 3 || (gap < pen.size * 0.6 && !invisible_apart))
         });
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
@@ -280,6 +398,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
+                soft_break: s.soft_break,
+                hard_break: s.hard_break,
+                soft_gap: s.soft_gap,
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -394,6 +515,9 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
+            soft_break: s.soft_break,
+            hard_break: s.hard_break,
+            soft_gap: s.soft_gap,
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,
@@ -441,13 +565,46 @@ impl FormBudget {
     }
 }
 
-/// A form XObject a page draws: its object, content, resources and its matrix composed with the
-/// CTM at the `Do`.
+/// A form XObject a page draws: its object, content, resources, its matrix composed with the
+/// CTM at the `Do`, and the clip its `/BBox` makes (page space, under that same matrix, so a
+/// turned form keeps its turned box; a box of no area hides everything) if it has a valid one.
 pub(crate) struct FormCall {
     pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
     pub(crate) data: Vec<u8>,
-    pub(crate) resources: Dict,
+    /// The form, and its `/Resources` when they are an object of their own, which is what
+    /// [`FormCall::resources`] reads.
+    form: Arc<Object>,
+    own: Option<Arc<Object>>,
     pub(crate) ctm: Matrix,
+    bbox: Option<Clip>,
+}
+
+impl FormCall {
+    /// The resources its content is read with: its own, or if it has none, `drawn_with`, the ones
+    /// it was drawn with (PDF 1.1 files). Read in place, as a page can draw a form thousands of times:
+    /// a copy for each took time in the square of them.
+    pub(crate) fn resources<'a>(&'a self, drawn_with: &'a Dict) -> &'a Dict {
+        let direct = || match &*self.form {
+            Object::Stream(s) => s.dict.get(b"Resources").and_then(Object::as_dict),
+            _ => None,
+        };
+        self.own.as_deref().and_then(Object::as_dict).or_else(direct).unwrap_or(drawn_with)
+    }
+}
+
+/// `o` as a dictionary, read in place for the same reason as [`FormCall::resources`]. `held` keeps it
+/// when it is an object of its own. Nothing else is one, and [`Document::resolve`] would copy it.
+pub(crate) fn dict_in_place<'a>(doc: &Document, o: &'a Object, held: &'a mut Option<Arc<Object>>) -> Option<&'a Dict> {
+    match o {
+        Object::Dict(dict) => Some(dict),
+        Object::Ref(_) => held.insert(doc.resolve(o)).as_dict(),
+        _ => None,
+    }
+}
+
+/// The dictionary at `key` of `resources`, `/XObject` or `/Font`, say, as each form reads these.
+pub(crate) fn resource_dict<'a>(doc: &Document, resources: &'a Dict, key: &[u8], held: &'a mut Option<Arc<Object>>) -> Option<&'a Dict> {
+    dict_in_place(doc, resources.get(key)?, held)
 }
 
 /// The form XObject `name` in `resources`, drawn with `ctm`. `None` for images, missing names
@@ -466,13 +623,15 @@ pub(crate) fn form_call(
     if limited && budget.truncated {
         return None;
     }
-    let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())?;
-    let o = xobjects.get(name)?;
-    let obj = o.as_ref();
+    let mut held = None;
+    let o = resource_dict(doc, resources, b"XObject", &mut held)?.get(name)?;
+    // Only a reference can name a stream, so nothing else needs reading, or copying.
+    let obj = Some(o.as_ref()?);
     if obj.is_some_and(|r| path.contains(&r)) {
         return None;
     }
-    let Object::Stream(s) = &*doc.resolve(o) else { return None };
+    let form = doc.resolve(o);
+    let Object::Stream(s) = &*form else { return None };
     if s.dict.name(b"Subtype") != Some(b"Form") {
         return None;
     }
@@ -486,8 +645,13 @@ pub(crate) fn form_call(
         let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
         <[f64; 6]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
     });
-    // A form without its own resources uses the ones it was drawn with (PDF 1.1 files).
-    let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+    let own = s.dict.get(b"Resources").filter(|r| matches!(r, Object::Ref(_))).map(|r| doc.resolve(r));
+    // Four finite numbers, or no bound at all: a member that isn't one makes the box unknown, and
+    // reading the numbers around it would invent a clip.
+    let bbox = s.dict.get(b"BBox").map(|b| doc.resolve(b)).and_then(|b| {
+        let values: Vec<f64> = b.as_array()?.iter().map(|x| doc.resolve(x).as_f64().filter(|v| v.is_finite())).collect::<Option<_>>()?;
+        <[f64; 4]>::try_from(values).ok()
+    });
     let data = match budget.decode.decode(s) {
         Ok(data) => data,
         Err(_) if budget.decode.remaining() == 0 => {
@@ -497,7 +661,8 @@ pub(crate) fn form_call(
         Err(_) => Vec::new(),
     };
     budget.visits = budget.visits.saturating_add(1);
-    Some(FormCall { obj, data, resources: own.unwrap_or_else(|| resources.clone()), ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
+    let ctm = m.map_or(ctm, |m| Matrix(m).then(&ctm));
+    Some(FormCall { obj, data, form, own, ctm, bbox: bbox.and_then(|b| region(&ctm, b)).map(|r| if r.is_empty() { Vec::new() } else { vec![r] }) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -516,8 +681,9 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) -> Result<(), EditError> {
         let mut cache = HashMap::new();
         let mut invoked = Vec::new();
-        let properties = resources.get(b"Properties").and_then(|o| w.doc.dict(o)).unwrap_or_default();
-        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(&properties))?;
+        let (mut held, none) = (None, Dict::new());
+        let properties = resource_dict(w.doc, resources, b"Properties", &mut held).unwrap_or(&none);
+        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(properties))?;
         let mut last = None;
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
@@ -526,6 +692,12 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
                 enter(w, resources, &name, ts, &mut carry.text_left)?;
                 // Text after a form starts a new line.
                 last = None;
+            }
+            // A run that the clips in force (forms' `/BBox`es and content-stream `re`/`W`/`n`
+            // clips, intersected) hide is not drawn, so it is not read either (#3503).
+            if s.state.clip.as_ref().is_some_and(|clip| !clip_shows(s.rect, clip)) {
+                last = None;
+                continue;
             }
             let si = stream(s.op);
             // Text from another stream starts a new line, as when each stream was read alone.
@@ -544,13 +716,26 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
+        // Its content is clipped to its `/BBox` within whatever clips the page had in force at the
+        // `Do`. It starts with a stack of its own, so no `Q` of its own can lift that clip.
+        let clip = match (&ts.clip, &form.bbox) {
+            (Some(outer), Some(own)) => Some(clip_within(outer, own)),
+            (outer, own) => outer.clone().or_else(|| own.clone()),
+        };
+        let mut carry = Carry {
+            ts: Ts { ctm: form.ctm, clip, ..ts },
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: *text_left,
+            gap_space: false,
+        };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, &form.resources, &mut carry, &|_| stream)?;
+        walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
         *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();
@@ -567,7 +752,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
     // can run on from one stream into the next. Text still counts as the stream its operator
     // starts in, which keeps lines from different streams apart.
-    let pieces = Pieces::join(&streams.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
     walk(&mut w, &ops, &res, &mut carry, &stream_of)?;

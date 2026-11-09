@@ -18,18 +18,90 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   more than a fifth of its size (or a point) both ways; zero-size text goes when its origin is
   inside;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
-  (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx). Codecs PdfCraft can't
-  re-encode (DCT, JPX, JBIG2, CCITT) are removed whole (fail-closed); inline images under an
-  area are removed. Images with separate `/SMask` or `/Mask` data, and images whose data decodes
-  to more than twice their declared raster (plus a byte per row and 4 KiB), are removed whole;
+  (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
+  the last filter, decoded through `Document::decoded_image_within`, a JBIG2 image with its
+  `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
+  is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
+  when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
+  no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
+  those of marks under the area included, so every other image that uses the globals of a removed
+  or replaced image is decoded and stored again in place without them, as a copy is (Flate,
+  Group 4 or JBIG2, whichever is smallest; `Report::images_restored`), and they leave the file on the full rewrite; one that can't be
+  decoded for certain refuses the redaction (`RedactError::SharedJbig2Globals`). Codecs redaction doesn't decode (DCT, JPX) are
+  removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
+  draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
+  than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
+  renderer draws some of its layouts (the fill ending each end-of-line code on a byte) as other
+  rows than the decoder reads, so a mark over what is shown needn't cover what is cleared; inline images under an area are removed. Images with separate `/SMask`
+  or `/Mask` data, and images whose data decodes to more than three times their declared raster
+  and a byte per row, plus 4 KiB (ASCIIHex text broken into lines under Flate is a little over
+  twice; for a fax image's code, about a byte per pixel), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive;
+  A run that would decode more of its images than one redaction may (`pdfcraft_cos::ImageBudget`,
+  filters, decoders and pixels alike) is refused
+  and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
+  covers with it.
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
-  page as a `/PCMark /Redaction` stream.
+  page as a `/PCMark /Redaction` stream;
+- **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly
+  part of it as whole words (three letters or digits at least), and the catalog's and pages'
+  XMP streams whose text (element content, attribute values other than `xmlns` declarations,
+  comments and processing instructions, entities decoded) contains it or has a value wholly
+  part of it, removed whole. When the catalog's packet goes, its PDF/A (`pdfaid`) and PDF/UA
+  (`pdfuaid`) identification, read by namespace, is written back in a packet holding nothing
+  else: the part number, the PDF/A conformance letter, amendment and revision, and PDF/UA's
+  part and revision, each kept only if it is the short code it must be and doesn't itself hold
+  the removed text (a one-character code can't, so it is kept even when the text couldn't be
+  searched for), plus a fixed extension schema for `pdfuaid` under PDF/A-1 to -3, left out
+  with the PDF/UA claim if the redacted words are among its words. `Report::identification`
+  says, for each, whether the claim was kept or lost (a value that isn't a valid code or holds
+  the text, or a packet that can't be read); the notification and `redact_apply` say it too.
+  `/Info` entries that remain aren't mirrored into the new packet, so a PDF/A validator may
+  still report them. The removed
+  glyphs' text is collected in runs by position (character and word spacing included, so
+  letter-spaced text stays one word), and each run (two or more letters or digits) and each of
+  its words of three or more are matched without regard to case or spacing, and also by their
+  letters and digits alone when they have three or more: "Blue fin" and "BLUE-FIN" hold
+  "Bluefin", and so does a heading whose letters `TJ` numbers spread apart (collected as
+  "B L U E F I N", since a `TJ` gap can't be told from a word space). A value is wholly part of
+  a run when its letters and digits are, starting and ending where the run's words do, so
+  "True" isn't part of "untrue". This over-matches only towards removal: "is a" also holds
+  "Lisa". Both sides are compared in Unicode compatibility form (NFKC) and lower case, so a
+  decomposed "Müller" (u and U+0308), full-width letters and a "ﬁ" ligature from a
+  `ToUnicode` map match their plain forms. A string behind an `FF FE` mark, which ISO 32000-2
+  §7.9.2.2.1 doesn't define, is read as UTF-16LE, here and in the places reported below, rather
+  than through PDFDocEncoding, in which it could never match. A value that shares only words of one or two
+  letters with the removed text, and isn't wholly part of it, stays:
+  Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
+  - **Fail-closed.** When the check can't know what the removed text was, every `/Info`
+    string and every catalog and page XMP stream goes: more than 100,000 runs on a page, a run
+    over 64 KiB, or more than 16 MiB in the whole document removed (the collection limits); a removed glyph whose text isn't known (no
+    `/ToUnicode` or encoding gives it); a form XObject removed without being read, because it
+    is nested past the depth limit (`MAX_DEPTH`, 50) or its content can't be read; or more
+    than 20,000 terms, or a run longer than 4,096 characters, to search for. Once the
+    search's work limit (2^28 steps) runs out, every entry and packet not yet checked goes
+    too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded strictly (damaged or
+    cut-short filter data, or more than one filter), or decodes to more than
+    16 MiB goes without being read, and a value whose normalized form would be more than four
+    times as long (U+FDFA alone is 18 letters) counts as holding the text.
+  - **Not scrubbed, but reported** (Remove hidden information's categories remove them): bookmark
+    titles, attachments (names in the document's list of embedded files, file names and
+    descriptions, and the files of file attachment comments), the comments that remain (their
+    text, rich text, subject and author; not form fields or pop-ups), and XMP streams on anything
+    but the catalog and the pages (images, fonts, form XObjects, annotations and other objects).
+    `apply` changes none of them, but counts those that still hold the removed text, matched as
+    above, in `Report::still_holding` (`Elsewhere`), so the interface and the `redact_apply` tool
+    can say where it is; this search has a work limit of its own, past which every place counts.
+    When the removed text couldn't be searched for (the cases above in which every `/Info`
+    string goes), every one of them that holds any text is counted and `unsearched` is set; an XMP
+    stream or rich text stream that can't be read counts as holding it. The walks are bounded: at
+    most 100,000 bookmarks and 100,000 name-tree nodes (32 deep) are read, each once, and a walk
+    cut short counts one more place.
 
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. It checks every content stream the page had, whatever its
@@ -41,6 +113,15 @@ renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the p
 resume after it would be a guess. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
 skipping that mark. The count covers the marks on the pages being applied.
+
+Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
+surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
+`RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
+by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
+bounded check is conservative: an unrelated retained pattern on a selected page can also cause
+refusal when its content cannot be proven safe. If a selected page had a pattern resource, the
+check covers all pages after rewriting so another page cannot keep the same cell in the saved PDF.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text
@@ -98,5 +179,5 @@ Patterns are heuristic: dates, protocol identifiers and longer number runs are r
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
 Custom code sets aren't supported yet.
 
-Not yet: pattern locales, struct-tree/alt-text cleanup, metadata and hidden-information
-sanitising (M8.4), re-encoding of DCT images (they are removed instead).
+Not yet: pattern locales, struct-tree/alt-text cleanup, re-encoding of DCT images (they are removed
+instead).
