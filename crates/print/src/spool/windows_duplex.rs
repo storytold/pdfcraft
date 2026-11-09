@@ -80,7 +80,9 @@ pub(super) fn job(job: &Job) -> Cow<'_, Job> {
                 .ok_or_else(|| PrintError::Spool("there is no default printer; choose a printer".into()))?,
         };
         let value = craft_print::rgb::default_settings(&printer).map_err(failed).and_then(|settings| duplex(&settings));
-        let value = supported_default(driver_default(value), || super::printers().into_iter().find(|p| p.name == printer).and_then(|p| p.two_sided));
+        // Only this printer's driver is asked (craft-print `two_sided`), not every queue's, as
+        // `printers()` would; a networked printer in power save could hold the job (#2192).
+        let value = supported_default(driver_default(value), || craft_print::two_sided(&printer));
         Ok((printer, value))
     })
 }
