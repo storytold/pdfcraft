@@ -108,6 +108,16 @@ impl DocView {
         self.current = page;
     }
 
+    /// The end of the document (End): the last page, scrolled to its bottom as far as the view
+    /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
+    /// page's top.
+    pub fn go_to_end(&mut self) {
+        self.go_to_page(usize::MAX);
+        // A fraction past a page's top scrolls as far as the content allows (`goto`, clamped when
+        // applied), so the whole page down to its bottom edge.
+        self.goto = Some((self.current, 1.0));
+    }
+
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
@@ -230,7 +240,8 @@ impl DocView {
 
     /// Retain the current page when `typed` exactly matches its displayed label, even if
     /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
-    /// then a physical page number. `false` when it names no page.
+    /// then a position in parentheses ("(3)", as print ranges take it), then a physical page
+    /// number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
         // Compare the displayed value before trimming: a label may itself contain spaces.
         // Repeated labels occur in restarted sections and prefix-only ranges.
@@ -241,7 +252,7 @@ impl DocView {
         let page = labels
             .iter()
             .position(|l| !l.is_empty() && l.eq_ignore_ascii_case(t))
-            .or_else(|| t.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1));
+            .or_else(|| pdfcraft_engine::print::position(t).or_else(|| t.parse::<usize>().ok()).filter(|n| *n >= 1).map(|n| n - 1));
         match page {
             Some(p) if p < self.page_count => {
                 self.go_to_page(p);
@@ -352,6 +363,9 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
+/// The document view's keyboard shortcuts: find, rotation, zoom (or the page grid's size),
+/// history, Escape, and the paging and scrolling keys. An open form field keeps the paging
+/// and scrolling keys for itself.
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -396,8 +410,13 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.view_history(true);
     }
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+    // So does an open field, whose list closes.
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
@@ -407,11 +426,18 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // The open field's keys leave the page under it where it is.
+    if field_open {
+        return;
+    }
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434).
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if key(Key::Home) || pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp)) {
         view.go_to_page(0);
     }
-    if key(Key::End) {
-        view.go_to_page(usize::MAX);
+    if key(Key::End) || pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown)) {
+        view.go_to_end();
     }
     // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
     // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).

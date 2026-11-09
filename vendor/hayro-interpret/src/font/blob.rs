@@ -5,6 +5,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::metrics::GlyphMetrics;
 use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, Target};
 use skrifa::raw::TableProvider;
+use skrifa::raw::model::pen::NullPen;
 use skrifa::raw::ps::cff::{CffFontRef, Subfont, charset::Charset, v1::Cff};
 use skrifa::raw::ps::string::Sid;
 use skrifa::raw::ps::type1::Type1Font;
@@ -67,18 +68,23 @@ impl CffFontBlob {
         let font = CffFontRef::new(data.as_ref().as_ref(), 0, None).ok()?;
         let cff = Cff::read(ReadFontData::new(data.as_ref().as_ref())).ok()?;
         let charset = font.charset();
+        // PdfCraft patch (93): a font dict that cannot be read (a CID font's FDArray entry
+        // emptied by a subsetter, with no Private DICT) leaves only the glyphs it selects
+        // missing. The font is dropped only when no font dict is usable.
         let subfonts = (0..font.num_subfonts())
             .map(|index| font.subfont(index, &[]).ok())
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Vec<_>>();
+        if !subfonts.iter().any(Option::is_some) {
+            return None;
+        }
 
-        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), |data| {
+        // PdfCraft patch (93): the subfonts read above own their data, so they move into the
+        // yoke instead of being read again.
+        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), move |data| {
             let bytes = data.as_ref();
             let font = CffFontRef::new(bytes, 0, None).unwrap();
             let cff = Cff::read(ReadFontData::new(bytes)).unwrap();
             let charset = font.charset();
-            let subfonts = (0..font.num_subfonts())
-                .map(|index| font.subfont(index, &[]).unwrap())
-                .collect();
             CFFYoke {
                 font,
                 cff,
@@ -87,7 +93,7 @@ impl CffFontBlob {
             }
         });
 
-        let _ = (cff, charset, subfonts);
+        let _ = (cff, charset);
         Some(Self(Arc::new(yoke), Arc::new(OnceLock::new())))
     }
 
@@ -105,7 +111,7 @@ impl CffFontBlob {
 
     fn subfont(&self, glyph: GlyphId) -> Option<&Subfont> {
         let index = self.font().subfont_index(glyph)? as usize;
-        self.0.as_ref().get().subfonts.get(index)
+        self.0.as_ref().get().subfonts.get(index)?.as_ref()
     }
 
     pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -119,6 +125,18 @@ impl CffFontBlob {
             .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
 
         path.take()
+    }
+
+    /// PdfCraft patch (see vendor/README.md hayro-interpret (77)): the glyph's own advance from
+    /// its charstring, in thousandths of an em like [`Self::outline_glyph`], or `None` when the
+    /// charstring can't be read or gives no usable width.
+    pub(crate) fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
+        let subfont = self.subfont(glyph)?;
+        self.font()
+            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut NullPen)
+            .ok()
+            .flatten()
+            .filter(|width| width.is_finite() && *width > 0.0)
     }
 
     pub(crate) fn glyph_names(&self) -> Vec<(GlyphId, String)> {
@@ -195,8 +213,48 @@ impl Debug for OpenTypeFontBlob {
     }
 }
 
+/// PdfCraft patch (83): a copy of the font with its `head.indexToLocFormat` set to the format its
+/// `loca` table is in, when the field holds neither 0 (short offsets) nor 1 (long), or `None` when
+/// it needs no change. The glyph outline reader takes only 1 as long, so a font whose field reads
+/// 256 (the value's bytes swapped) had its long `loca` read as short offsets: every glyph came
+/// out wrong, and a line of text set in it drew boxes (pdf.js `issue2537r.pdf`). The `loca`
+/// table's length decides: room for `numGlyphs + 1` offsets of 4 bytes is long, room for only
+/// that many of 2 bytes short (a table may carry padding after its offsets), and a table too
+/// short for either is left as it is.
+fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
+    use skrifa::raw::types::Tag;
+    const HEAD: Tag = Tag::new(b"head");
+    const LOCA: Tag = Tag::new(b"loca");
+    // The `indexToLocFormat` field's offset in `head`.
+    const FORMAT_AT: usize = 50;
+    let f = FontRef::from_index(data, index).ok()?;
+    let format = f.head().ok()?.index_to_loc_format();
+    if format == 0 || format == 1 {
+        return None;
+    }
+    let offsets = usize::from(f.maxp().ok()?.num_glyphs()).checked_add(1)?;
+    let loca_len = f.table_data(LOCA)?.len();
+    let long = if loca_len >= offsets.checked_mul(4)? {
+        true
+    } else if loca_len >= offsets.checked_mul(2)? {
+        false
+    } else {
+        return None;
+    };
+    let head_at = f.table_directory.table_records().iter().find(|r| r.tag() == HEAD)?.offset() as usize;
+    let at = head_at.checked_add(FORMAT_AT)?;
+    let mut fixed = data.to_vec();
+    fixed.get_mut(at..at.checked_add(2)?)?.copy_from_slice(&i16::from(long).to_be_bytes());
+    Some(fixed)
+}
+
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
+        // PdfCraft patch (83): see `with_loca_format_fixed`.
+        let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
+            Some(fixed) => Arc::new(fixed) as FontData,
+            None => data,
+        };
         // Check first whether the font is valid so we can unwrap in the closure.
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
         // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
@@ -377,7 +435,8 @@ struct CFFYoke<'a> {
     font: CffFontRef<'a>,
     cff: Cff<'a>,
     charset: Option<Charset<'a>>,
-    subfonts: Vec<Subfont>,
+    /// PdfCraft patch (93): `None` for a font dict that could not be read.
+    subfonts: Vec<Option<Subfont>>,
 }
 
 #[cfg(test)]
