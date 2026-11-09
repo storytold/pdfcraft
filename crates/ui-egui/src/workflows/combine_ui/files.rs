@@ -274,6 +274,13 @@ pub(crate) struct Incoming {
     pub open_doc: Option<pdfcraft_engine::DocId>,
 }
 
+impl Incoming {
+    /// A file known only by its name and bytes.
+    pub(crate) fn new(name: String, bytes: Vec<u8>) -> Self {
+        Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }
+    }
+}
+
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.
 fn next_auth() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
