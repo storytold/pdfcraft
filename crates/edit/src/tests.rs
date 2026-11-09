@@ -1521,6 +1521,45 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// ISO 32000-2 §9.6.4: an Edit-text line set in a Type 3 bitmap font is as high as the boxes its
+/// glyphs declare with `d1`, whatever its `/FontBBox` says and whichever way its font matrix
+/// turns glyph space, so two lines 8 points apart are two lines with 7-point boxes, not slivers.
+#[test]
+fn edit_lines_in_a_type3_font_are_as_high_as_their_glyphs() {
+    // Glyph `a` is drawn 60 units wide, from 20 below the baseline to 50 above it, at 0.1 Tf:
+    // 7 points high, 2 below the baseline.
+    for (matrix, flip) in [("1 0 0 1 0 0", 1), ("1 0 0 -1 0 0", -1)] {
+        for bbox in ["[0 0 0 0]", "[0 0 1 1]"] {
+            let mut doc = text_page(&format!("BT /T3 0.1 Tf 1 0 0 {flip} 72 700 Tm (aa) Tj 1 0 0 {flip} 72 692 Tm (aa) Tj ET"));
+            let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"60 0 0 -20 60 50 d1 0 -20 60 70 re f".to_vec())));
+            let font = doc.add(
+                pdfcraft_cos::parse_indirect(
+                    format!(
+                        "1 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [{matrix}] /FontBBox {bbox} /FirstChar 97 /LastChar 97 /Widths [60] /Encoding << /Differences [97 /a] >> /CharProcs << /a {} 0 R >> >> endobj",
+                        glyph.num
+                    )
+                    .as_bytes(),
+                    0,
+                    &|_| None,
+                )
+                .unwrap()
+                .1,
+            );
+            let p = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(p, |d| {
+                d.set(
+                    b"Resources".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])))])),
+                )
+            })
+            .unwrap();
+            let lines = text::text_lines(&doc, 0).unwrap();
+            let rects: Vec<_> = lines.iter().map(|l| (l.text.as_str(), l.rect.map(|v| (v * 100.0).round() / 100.0))).collect();
+            assert_eq!(rects, [("aa", [72.0, 698.0, 84.0, 705.0]), ("aa", [72.0, 690.0, 84.0, 697.0])], "{matrix} {bbox}");
+        }
+    }
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";
@@ -13879,5 +13918,86 @@ fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_aft
         let Object::Stream(saved) = doc.get(raw).as_ref().clone() else { panic!("fixture font") };
         assert_eq!(saved.decoded().unwrap(), program);
         assert_eq!(page_font_programs(&doc), fonts, "no replacement font program may be added");
+    }
+}
+
+/// The Unicode row breaks are invisible moves, not glyphs. A draft carrying them (text pasted
+/// from a browser or Word) breaks the row on both rewrite paths, rather than being refused
+/// because no fallback face has an outline for U+2028 (#6272). The paragraph is one wide row, so
+/// a break that was dropped would leave the words on one row instead of two. A one-line edit has
+/// no next row, so there each break is written as a space.
+#[test]
+fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
+    let red = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    for separator in ['\u{2028}', '\u{2029}', '\u{0085}', '\u{000B}', '\u{000C}', '\u{001C}', '\u{001D}', '\u{001E}'] {
+        let draft = format!("one{separator}two");
+        for style in [
+            text::BlockStyle::default(),
+            text::BlockStyle { ranges: vec![red.clone()], ..Default::default() },
+            text::BlockStyle { ranges: vec![text::RangeStyle { range: 0..draft.len(), ..red.clone() }], ..Default::default() },
+            text::BlockStyle { bold: Some(true), ..Default::default() },
+        ] {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+            let doc = reopen(&doc);
+            let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+            assert_eq!(lines, ["one", "two"], "U+{:04X}", u32::from(separator));
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_line(&mut doc, 0, 0, &draft).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+        let doc = reopen(&doc);
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one two"], "a one-line edit keeps U+{:04X} on its line", u32::from(separator));
+    }
+}
+
+/// Thai text on the styled path has its own coverage checks and row splits. A Unicode row break
+/// in a Thai draft breaks the row there too, whether the paragraph keeps its legacy subset, takes
+/// the bundled Thai face by choice or is completed by the matching one, instead of being refused
+/// for a glyph no face has (#6272).
+#[test]
+fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
+    let rows = |doc: &Document| -> Vec<String> { text::text_lines(&reopen(doc), 0).unwrap().into_iter().map(|l| l.text).collect() };
+    let thai_face = pdfcraft_fonts::document_thai_font().is_some();
+    if !thai_face {
+        eprintln!("thai_paragraphs_break_the_row_on_unicode_row_breaks: built without craft-fonts, so only the legacy subset is checked");
+    }
+    for separator in ['\u{2028}', '\u{001C}'] {
+        let draft = format!("กข{separator}ค");
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("legacy U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "legacy U+{:04X}", u32::from(separator));
+        if !thai_face {
+            continue;
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let chosen = BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &chosen).unwrap_or_else(|e| panic!("chosen U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "chosen U+{:04X}", u32::from(separator));
+        let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+        let cmap = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar",
+        )));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+            f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai-Regular"));
+            f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        })
+        .unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
+            .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }

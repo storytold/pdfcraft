@@ -1,4 +1,4 @@
-use super::blocks::{BlockStyle, TextBlock, paragraph_separator, wrap};
+use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
     Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
@@ -42,7 +42,7 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
-    let text = text.replace(['\n', '\r'], " ");
+    let text = text.replace(row_break, " ");
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
@@ -240,7 +240,7 @@ fn choose_rewrite_path(
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
     let has_special_text = text.is_some_and(|draft| {
-        draft.contains(['\n', '\r'])
+        draft.contains(row_break)
             || pdfcraft_fonts::source_shaping::required(draft)
             || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
     });
@@ -259,14 +259,14 @@ fn choose_rewrite_path(
 }
 
 /// The paragraph's text for writing back: explicit line breaks stay (#1443), and so does each typed
-/// U+0020 space: a run of them is not folded into one (#4199, #3797). `\r\n` and a lone `\r` are
-/// breaks too; other white space is written as one space.
+/// U+0020 space: a run of them is not folded into one (#4199, #3797). Every [`row_break`] is a break
+/// too; other white space is written as one space.
 fn paragraph_text(text: &str) -> String {
     text.replace("\r\n", "\n")
         .chars()
         .map(|c| match c {
-            '\r' => '\n',
-            c if c != '\n' && paragraph_separator(c) => ' ',
+            c if row_break(c) => '\n',
+            c if paragraph_separator(c) => ' ',
             c => c,
         })
         .collect()

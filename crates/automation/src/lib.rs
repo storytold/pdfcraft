@@ -48,7 +48,6 @@ use serde_json::{Value, json};
 pub use pdfcraft_render::Pixels;
 pub use tools::{ToolDef, tools};
 
-use file_access::foreign_share;
 use text_cache::TextCache;
 
 mod assemble;
