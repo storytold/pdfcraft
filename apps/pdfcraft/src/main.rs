@@ -15,7 +15,8 @@
 //!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //! `--combine files…` adds the files to the Combine files tab (File Explorer's "Combine files in
-//! PdfCraft", #585), of the PdfCraft already running when there is one.
+//! PdfCraft", #585), of the PdfCraft already running when there is one (Windows and Linux; macOS has
+//! no single-instance socket, so there a second `--combine` opens a window of its own).
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
@@ -74,7 +75,7 @@ Options:
   --two-paged                 open command-line PDFs in noncontinuous two-page view
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
-  --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one
+  --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one (not on macOS)
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
