@@ -130,9 +130,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     app.updates.updater.dismiss_status();
                 }
                 CheckResultResponse::CheckAgain => app.updates.check_requested = true,
-                CheckResultResponse::RestartToUpdate => {
-                    app.updates.updater.restart_to_update();
-                }
+                CheckResultResponse::RestartToUpdate => restart_to_update(app, ctx, clean),
             }
         }
     }
@@ -140,10 +138,83 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let _ = (app, ctx);
 }
 
+/// Restart to Update. With unsaved changes the Updates dialog closes and the quit path asks about
+/// them; Cancel there leaves the update ready. An open startup prompt keeps its own Restart to
+/// Update and save-first note, so the app stays open.
+#[cfg(not(target_arch = "wasm32"))]
+fn restart_to_update(app: &mut PdfCraftApp, ctx: &egui::Context, clean: bool) {
+    if clean {
+        app.updates.updater.restart_to_update();
+        return;
+    }
+    app.updates.open = false;
+    app.updates.updater.dismiss_status();
+    if app.updates.updater.prompt_open() {
+        return;
+    }
+    // Without a prompt this only takes the close a finished installation queued, so a save after
+    // Cancel does not close the app.
+    let _ = app.updates.updater.show_if(ctx, true);
+    app.request_quit(ctx);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CloseRequest;
     use eframe::App as _;
+    use pdfcraft_engine::{Edit, FieldValue};
+
+    /// An app with one open document holding a form, and with `dirty` an unsaved change to it.
+    fn app(dirty: bool) -> PdfCraftApp {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("source.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        if dirty {
+            assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
+            assert!(app.first_dirty().is_some());
+        }
+        app.updates.open = true;
+        app
+    }
+
+    #[test]
+    fn restart_to_update_with_unsaved_changes_opens_the_save_prompt() {
+        let mut app = app(true);
+        let ctx = egui::Context::default();
+        restart_to_update(&mut app, &ctx, false);
+        assert!(!app.updates.open, "the modal Updates dialog closes");
+        assert_eq!(app.close_request, Some(CloseRequest::Quit), "the save prompt opens");
+        assert!(!app.allow_quit);
+        app.resolve_close(&ctx, None);
+        assert!(app.close_request.is_none(), "Cancel closes the prompt");
+        assert!(!app.allow_quit, "Cancel keeps the app open");
+    }
+
+    #[test]
+    fn restart_to_update_with_nothing_unsaved_leaves_the_close_to_the_updater() {
+        let mut app = app(false);
+        restart_to_update(&mut app, &egui::Context::default(), true);
+        assert!(app.updates.open, "the dialog stays until the updater closes the app");
+        assert!(app.close_request.is_none());
+        assert!(!app.allow_quit);
+    }
+
+    #[test]
+    fn restart_to_update_with_the_startup_prompt_open_leaves_the_app_open() {
+        let mut app = app(true);
+        app.updates.updater.offer(craft_update::Release {
+            tag: "v99.0.0".into(),
+            version: craft_update::parse_version("99.0.0"),
+            name: "PdfCraft 99.0.0".into(),
+            html_url: "https://github.com/storytold/pdfcraft/releases/tag/v99.0.0".into(),
+            ..Default::default()
+        });
+        assert!(app.updates.updater.prompt_open());
+        restart_to_update(&mut app, &egui::Context::default(), false);
+        assert!(!app.updates.open, "the result dialog closes");
+        assert!(app.updates.updater.prompt_open(), "the prompt stays");
+        assert!(app.close_request.is_none(), "the prompt carries the restart");
+    }
 
     #[test]
     fn on_exit_calls_the_update_exit_hook_once() {
