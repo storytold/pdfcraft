@@ -168,6 +168,15 @@ impl PdfCraftApp {
             }
             _ => Vec::new(),
         };
+        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+        // their places still name them (pages may move, come or go).
+        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -210,8 +219,7 @@ impl PdfCraftApp {
                         view.forms.unbaked.extend(unbaked);
                     }
                 } else if let Some(page) = one_page {
-                    // Comment and content edits change one page: keep every other raster.
-                    view.page_changed(page);
+                    one_page_changed(view, &edit, page);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
@@ -222,6 +230,10 @@ impl PdfCraftApp {
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
+                }
+                // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
+                if !matches!(edit, Edit::DeleteAnnotation { .. }) {
+                    view.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
@@ -796,7 +808,7 @@ impl PdfCraftApp {
                     .session
                     .get(view.id)
                     .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.select(newest.map(|index| (page, index)));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;
             }
@@ -1019,6 +1031,15 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
+/// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
+/// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
+    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+        view.page_changed(page);
+    }
+}
+
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
@@ -1028,6 +1049,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
+        | Edit::SetAnnotationPopup { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
