@@ -17,7 +17,7 @@
 //!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
 //!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
-//!   print settings.
+//!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one; store LZW-compressed streams with Flate instead.
@@ -29,6 +29,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod form_actions;
 pub mod fragments;
 mod images;
 mod links;
@@ -49,6 +50,8 @@ pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub enum OptimizeError {
     #[error("the document has no page tree")]
     NoPages,
+    #[error("object {0} nests or chains its form actions too deeply, or the document holds too many actions, to discard them")]
+    ActionLimit(ObjRef),
     #[error("the document's encryption requires PDF {required} or later (chosen: PDF {chosen})")]
     IncompatibleEncryption { required: &'static str, chosen: &'static str },
     #[error(transparent)]
@@ -197,6 +200,8 @@ pub struct Settings {
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
     pub discard_print_settings: bool,
+    /// Remove form submission, import and reset actions; the fields and links that ran them stay.
+    pub discard_form_actions: bool,
     /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
     /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
@@ -231,6 +236,7 @@ impl Settings {
             discard_alternate_images: false,
             discard_tags: false,
             discard_print_settings: false,
+            discard_form_actions: false,
             flate_unencoded: true,
             object_streams: true,
             // Re-encoding LZW streams would change encoded image data.
@@ -243,6 +249,13 @@ impl Settings {
 }
 
 impl Settings {
+    /// Whether every image setting keeps images as they are: no resampling, no recompression.
+    pub fn retains_images(&self) -> bool {
+        [self.color, self.gray].iter().all(|s| !s.downsample && s.compression == Compression::Retain)
+            && !self.mono.downsample
+            && self.mono.compression == MonoCompression::Retain
+    }
+
     /// Whether `write_full` should pack non-stream objects into compressed object streams:
     /// enabled when `object_streams` is set and the target version is not PDF 1.4 (§7.5.7).
     pub fn effective_object_streams(&self) -> bool {
@@ -264,6 +277,7 @@ impl Default for Settings {
             discard_alternate_images: true,
             discard_tags: false,
             discard_print_settings: false,
+            discard_form_actions: false,
             flate_unencoded: true,
             object_streams: true,
             lzw_to_flate: true,
@@ -329,6 +343,8 @@ pub struct Report {
     pub alternate_images: usize,
     pub tags_removed: bool,
     pub print_settings: usize,
+    /// Form submission, import and reset actions removed.
+    pub form_actions: usize,
     pub streams_compressed: usize,
     /// Streams whose LZW compression was replaced with Flate (Clean Up).
     pub lzw_streams: usize,
@@ -357,6 +373,17 @@ fn required_encryption_version(doc: &Document) -> Option<&'static str> {
 /// Optimize `doc` in place.
 pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, OptimizeError> {
     optimize_with_progress(doc, settings, &mut |_| true)
+}
+
+/// Whether the unencoded-stream pass may touch `s`.
+fn flate_candidate(s: &pdfcraft_cos::Stream, settings: &Settings) -> bool {
+    // Retaining images also keeps unencoded image streams byte-for-byte; otherwise this generic
+    // stream pass would encode images that the image pass left alone.
+    if s.dict.name(b"Subtype") == Some(b"Image") && settings.retains_images() {
+        return false;
+    }
+    // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
+    !(s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64)
 }
 
 /// [`optimize`], calling `progress` before each image and before the clean-up (and now and then
@@ -460,6 +487,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             _ => {}
         }
     }
+    if settings.discard_form_actions {
+        report.form_actions = form_actions::discard(doc)?;
+    }
     if settings.remove_invalid_links {
         let (l, b) = links::remove_invalid(doc, &pages)?;
         report.invalid_links = l;
@@ -490,17 +520,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            // Retaining images also keeps unencoded image streams byte-for-byte; otherwise
-            // this generic stream pass would encode images that the image pass left alone.
-            if s.dict.name(b"Subtype") == Some(b"Image")
-                && [settings.color, settings.gray].iter().all(|s| !s.downsample && s.compression == Compression::Retain)
-                && !settings.mono.downsample
-                && settings.mono.compression == MonoCompression::Retain
-            {
-                continue;
-            }
-            // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
-            if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
+            if !flate_candidate(s, settings) {
                 continue;
             }
             let replacement = if s.dict.contains(b"Filter") {

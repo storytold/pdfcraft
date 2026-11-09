@@ -589,9 +589,12 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     // The original image and form XObjects the rewrite drops or replaces, on any page.
     let mut doomed = Vec::new();
     let mut retired_properties = Vec::new();
-    let n = pdfcraft_model::pages(doc).len();
+    // The page tree is read once, and again only after a page's rewrite (pinning its inherited
+    // resources can change its ancestors), not once per page: a scan of many pages stays linear.
+    let mut pages = pdfcraft_model::pages(doc);
+    let n = pages.len();
     for pi in 0..n {
-        let page = pdfcraft_model::pages(doc).swap_remove(pi);
+        let Some(page) = pages.get(pi).cloned() else { break };
         let mut budget = pdfcraft_cos::DecodeBudget::page();
         let Ok((list, data)) = page_streams_within(doc, &page.dict, pi, &mut budget) else {
             if write {
@@ -674,6 +677,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 pdfcraft_content::Pieces::join(&page_content).data(),
             );
             crate::tags::clean(doc, page.obj, None, &changed_ids, &empty_ids)?;
+            pages = pdfcraft_model::pages(doc);
         }
         for (old, new, changed, empty) in out.tag_changes {
             crate::tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
