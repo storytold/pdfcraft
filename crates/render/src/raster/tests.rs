@@ -8948,9 +8948,9 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
         (cache.decoded_image_decodes() - masks, masks)
     };
     assert_eq!(decodes("A"), (1, 0), "a Flate image decodes the same at every size");
-    // The image and its JPX soft mask each decode once for each of the five sizes (the mask goes
-    // through the cache too since hayro-interpret patch 82).
-    assert_eq!(decodes("B"), (5, 5), "an image with a JPX soft mask, and the mask, decode for the size they are drawn at");
+    // The image decodes once for each of the five sizes, its JPX soft mask within it: only a mask
+    // averaged down (hayro-interpret patch 82) has a cache entry of its own.
+    assert_eq!(decodes("B"), (5, 0), "an image with a JPX soft mask decodes for the size it is drawn at");
 }
 
 /// A soft mask far larger than where its image is drawn is averaged down to that size and cached

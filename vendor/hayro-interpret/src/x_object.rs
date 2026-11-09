@@ -678,8 +678,11 @@ impl<'a> ImageXObject<'a> {
                 && (u64::from(self.width) > u64::from(tw) * SOFT_MASK_SHRINK_FACTOR
                     || u64::from(self.height) > u64::from(th) * SOFT_MASK_SHRINK_FACTOR)
         });
+        // Decoded within the image's own decode, as before: the image's cache entry holds it as
+        // its alpha, and patch (91) keeps that entry when the mask fails, so a second entry for
+        // the mask would only count it twice.
         let Some((tw, th)) = shrink_to else {
-            return self.decoded_mask(target_dimension);
+            return decode_mask(self, target_dimension);
         };
         // Averaged down to the drawn size rounded up to a power of two (`size_bucket`), so draws a
         // pixel apart share one mask and the renderer filters the rest, and only on the sides that
