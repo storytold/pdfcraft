@@ -16,6 +16,7 @@ pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
 pub(super) mod preferences;
+pub(super) mod printer_marks_ui;
 mod prompts;
 pub(super) mod protect;
 pub(super) mod standards_ui;
@@ -44,6 +45,7 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    printer_marks_now: bool,
     fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
@@ -446,6 +448,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.protect_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::PrinterMarks => {
+            let (go, cancel) = crate::printer_marks_ui::body(ui, app, &t);
+            req.printer_marks_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::FixHairlines => {
@@ -1984,6 +1992,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if req.printer_marks_now {
+        app.add_printer_marks();
     }
     if req.fix_hairlines_now {
         app.fix_hairlines();

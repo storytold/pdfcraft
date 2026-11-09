@@ -115,6 +115,7 @@ use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
+use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
@@ -718,6 +719,7 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,

@@ -364,6 +364,8 @@ update the numbers.
 ### 18. Print production tools absent
 
 - **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
+  colour conversion, fix hairlines, flattener preview, colour management settings;
+  print as image; PostScript output. Printer marks are in (Print production ▸ Add printer marks…).
   colour conversion, printer marks, flattener preview, colour management settings;
   print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
 - **Evidence:** 17 print-production features planned (L area).
