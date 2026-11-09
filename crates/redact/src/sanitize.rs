@@ -410,22 +410,153 @@ fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
-/// The layers that are off in the default configuration.
+/// The layers that are off in the default configuration: listed off (or not listed on, under
+/// `/BaseState /OFF`), or turned off on screen by one of its usage rules (`/AS`, ISO 32000-2,
+/// 8.11.4.4): a rule for the View event in the View category hides a layer whose
+/// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
+/// exporting, leave it as the lists say.
 fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
     let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
-    let all: Vec<ObjRef> =
-        oc.get(b"OCGs").and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default();
-    let list = |k: &[u8]| -> Vec<ObjRef> {
-        d.get(k).and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+    let refs = |o: Option<&Object>| -> Vec<ObjRef> {
+        o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
-    let (on, off) = (list(b"ON"), list(b"OFF"));
-    if d.name(b"BaseState") == Some(b"OFF") {
-        all.into_iter().filter(|g| !on.contains(g)).collect()
+    let all = refs(oc.get(b"OCGs"));
+    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
+    let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
+        all.iter().copied().filter(|g| !on.contains(g)).collect()
     } else {
         off.into_iter().filter(|g| all.contains(g)).collect()
+    };
+    // Each rule, layer list and layer is read once, however often the rules name them: many rules
+    // can share one long list.
+    let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
+    let mut looked: std::collections::HashSet<ObjRef> = hidden.iter().copied().collect();
+    let mut read = std::collections::HashSet::new();
+    let rules = d.get(b"AS").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
+    for rule in &rules {
+        if let Some(r) = rule.as_ref()
+            && !read.insert(r)
+        {
+            continue;
+        }
+        let Some(rule) = doc.resolve(rule).as_dict().cloned() else { continue };
+        let categories = rule.get(b"Category").and_then(|c| doc.resolve(c).as_array().cloned()).unwrap_or_default();
+        if rule.name(b"Event") != Some(b"View") || !categories.iter().any(|c| c.as_name() == Some(b"View")) {
+            continue;
+        }
+        if let Some(r) = rule.get(b"OCGs").and_then(Object::as_ref)
+            && !read.insert(r)
+        {
+            continue;
+        }
+        for g in refs(rule.get(b"OCGs")) {
+            if !known.contains(&g) || !looked.insert(g) {
+                continue;
+            }
+            let usage = doc.get(g).as_dict().and_then(|layer| sub(doc, layer, b"Usage"));
+            if usage.and_then(|u| sub(doc, &u, b"View")).is_some_and(|v| v.name(b"ViewState") == Some(b"OFF")) {
+                hidden.push(g);
+            }
+        }
     }
+    hidden
+}
+
+/// The objects a layer cleanup has reached by reference, and whether the lists naming each keep it.
+type Cleaned = std::collections::HashMap<ObjRef, bool>;
+
+/// `o` cleaned by `clean`: in its list when written there, and when written by reference, once and
+/// where it is, however many lists name it (they keep the reference, or drop it when `clean` gives
+/// `None`). A list that names one object many times costs one step per object, not one per path,
+/// and a cycle stops where it began.
+fn once(
+    doc: &mut Document,
+    o: &Object,
+    cleaned: &mut Cleaned,
+    clean: impl FnOnce(&mut Document, &Object, &mut Cleaned) -> Result<Option<Object>, RedactError>,
+) -> Result<Option<Object>, RedactError> {
+    let Object::Ref(r) = o else { return clean(doc, o, cleaned) };
+    if let Some(&kept) = cleaned.get(r) {
+        return Ok(kept.then(|| o.clone()));
+    }
+    cleaned.insert(*r, true);
+    let held: &Object = &doc.resolve(o);
+    let Some(new) = clean(doc, held, cleaned)? else {
+        cleaned.insert(*r, false);
+        return Ok(None);
+    };
+    if new != *held {
+        doc.set_existing(*r, new)?;
+    }
+    Ok(Some(o.clone()))
+}
+
+/// `o` without the entries `keep` refuses, through nested arrays (an `/Order` holds sub-lists, and
+/// `/RBGroups` holds groups), each array written by reference cleaned [`once`]. `None` when `keep`
+/// refuses `o` itself, or when `o` is a sub-list (`depth` above 0) that named a layer and names
+/// none now: it goes, with the heading that labelled it.
+fn filtered(
+    doc: &mut Document,
+    o: &Object,
+    keep: &impl Fn(&Object) -> bool,
+    depth: usize,
+    cleaned: &mut Cleaned,
+) -> Result<Option<Object>, RedactError> {
+    if depth > MAX_DIRECT_DEPTH {
+        return Err(RedactError::TooDeep);
+    }
+    if !keep(o) {
+        return Ok(None);
+    }
+    once(doc, o, cleaned, |doc, o, cleaned| {
+        let Object::Array(a) = o else { return Ok(Some(o.clone())) };
+        let mut out = Vec::new();
+        for x in a {
+            out.extend(filtered(doc, x, keep, depth + 1, cleaned)?);
+        }
+        // Anything but a text string (a heading) is a layer or a sub-list.
+        let names = |l: &[Object]| l.iter().any(|x| !matches!(x, Object::String(_)));
+        let emptied = depth > 0 && names(a.as_slice()) && !names(out.as_slice());
+        Ok((!emptied).then_some(Object::Array(out)))
+    })
+}
+
+/// An optional-content configuration without the layers `keep` refuses, in every list that names
+/// them: on, off, order, locked, radio-button groups and usage rules (a rule, group or sub-list left
+/// with no layer goes). A removed layer still named in any of them would stay in the file, its name
+/// included.
+fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bool, cleaned: &mut Cleaned) -> Result<Dict, RedactError> {
+    for k in [&b"ON"[..], b"OFF", b"Order", b"Locked", b"RBGroups"] {
+        if let Some(v) = d.get(k).cloned() {
+            let v = filtered(doc, &v, keep, 0, cleaned)?.unwrap_or_else(|| Object::Array(Vec::new()));
+            d.set(k.to_vec(), v);
+        }
+    }
+    let Some(rules) = d.get(b"AS").cloned() else { return Ok(d) };
+    let rules = once(doc, &rules, cleaned, |doc, rules, cleaned| {
+        let Object::Array(rules) = rules else { return Ok(Some(rules.clone())) };
+        let mut kept = Vec::new();
+        for rule in rules {
+            kept.extend(once(doc, rule, cleaned, |doc, rule, cleaned| {
+                let Some(mut rule) = rule.as_dict().cloned() else { return Ok(None) };
+                if let Some(layers) = rule.get(b"OCGs").cloned() {
+                    let Some(layers) = filtered(doc, &layers, keep, 0, cleaned)? else { return Ok(None) };
+                    if doc.resolve(&layers).as_array().is_some_and(Vec::is_empty) {
+                        return Ok(None);
+                    }
+                    rule.set(b"OCGs".to_vec(), layers);
+                }
+                Ok(Some(Object::Dict(rule)))
+            })?);
+        }
+        Ok(Some(Object::Array(kept)))
+    })?;
+    if let Some(rules) = rules {
+        d.set(b"AS".to_vec(), rules);
+    }
+    Ok(d)
 }
 
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
@@ -511,7 +642,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
-            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content)?;
+            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content, Some(&page.dict))?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -755,13 +886,19 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     if let Some(Object::Array(a)) = oc.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
                         oc.set(b"OCGs".to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
                     }
-                    if let Some(mut d) = sub(doc, &oc, b"D") {
-                        for k in [&b"ON"[..], b"OFF", b"Order", b"Locked"] {
-                            if let Some(Object::Array(a)) = d.get(k).map(|g| (*doc.resolve(g)).clone()) {
-                                d.set(k.to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
-                            }
+                    let mut cleaned = Cleaned::new();
+                    if let Some(d) = sub(doc, &oc, b"D") {
+                        oc.set(b"D".to_vec(), Object::Dict(config_without(doc, d, &keep, &mut cleaned)?));
+                    }
+                    if let Some(Object::Array(configs)) = oc.get(b"Configs").map(|c| (*doc.resolve(c)).clone()) {
+                        let mut kept = Vec::with_capacity(configs.len());
+                        for config in configs {
+                            kept.extend(once(doc, &config, &mut cleaned, |doc, config, cleaned| match config.as_dict() {
+                                Some(c) => Ok(Some(Object::Dict(config_without(doc, c.clone(), &keep, cleaned)?))),
+                                None => Ok(None),
+                            })?);
                         }
-                        oc.set(b"D".to_vec(), Object::Dict(d));
+                        oc.set(b"Configs".to_vec(), Object::Array(kept));
                     }
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
@@ -790,7 +927,10 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             doc.set(r, o);
         }
     }
-    if done.is_empty() {
+    // Images taken off their page (Delete Image, Replace Image) are still listed in its
+    // resources: the full rewrite would keep them. Unlinking them is a removal of its own.
+    let unlinked = crate::interp::unlink_undrawn(doc)?;
+    if done.is_empty() && unlinked == 0 {
         return Err(RedactError::NothingToApply);
     }
     // The rewrite drops the revisions that held the removed content, so it is a different file from
