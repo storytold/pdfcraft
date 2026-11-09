@@ -1373,6 +1373,145 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
 
+/// [`cmap_only_sfnt_named`] without a `post` table.
+fn cmap_only_sfnt(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)]) -> Vec<u8> {
+    cmap_only_sfnt_named(mac, windows, false)
+}
+
+/// An sfnt holding a `cmap` table with these subtables: (1, 0) format 0 mapping codes to glyphs,
+/// and (3, 0) format 4 mapping each code point to its glyph, one segment each; and, if `named`, a
+/// version 2.0 `post` table.
+fn cmap_only_sfnt_named(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)], named: bool) -> Vec<u8> {
+    let be16 = |out: &mut Vec<u8>, n: u16| out.extend_from_slice(&n.to_be_bytes());
+    let mut subtables: Vec<((u16, u16), Vec<u8>)> = Vec::new();
+    if let Some(map) = mac {
+        let mut t = Vec::new();
+        for n in [0u16, 262, 0] {
+            be16(&mut t, n);
+        }
+        let mut ids = [0u8; 256];
+        for &(code, glyph) in map {
+            ids[usize::from(code)] = glyph;
+        }
+        t.extend(ids);
+        subtables.push(((1, 0), t));
+    }
+    let segments: Vec<(u16, u16)> = windows.iter().copied().chain([(0xFFFF, 0)]).collect();
+    let count = segments.len() as u16;
+    let mut t = Vec::new();
+    for n in [4u16, 16 + 8 * count, 0, 2 * count, 2, 0, 0] {
+        be16(&mut t, n);
+    }
+    segments.iter().for_each(|&(c, _)| be16(&mut t, c));
+    be16(&mut t, 0);
+    segments.iter().for_each(|&(c, _)| be16(&mut t, c));
+    segments.iter().for_each(|&(c, g)| be16(&mut t, if c == 0xFFFF { 1 } else { g.wrapping_sub(c) }));
+    segments.iter().for_each(|_| be16(&mut t, 0));
+    subtables.push(((3, 0), t));
+
+    let mut cmap = Vec::new();
+    be16(&mut cmap, 0);
+    be16(&mut cmap, subtables.len() as u16);
+    let mut offset = 4 + 8 * subtables.len() as u32;
+    for ((platform, encoding), bytes) in &subtables {
+        be16(&mut cmap, *platform);
+        be16(&mut cmap, *encoding);
+        cmap.extend_from_slice(&offset.to_be_bytes());
+        offset += bytes.len() as u32;
+    }
+    subtables.iter().for_each(|(_, bytes)| cmap.extend(bytes));
+    let mut tables = vec![(*b"cmap", cmap)];
+    if named {
+        // Version 2.0 with no glyphs to name.
+        let mut post = vec![0, 2, 0, 0];
+        post.resize(34, 0);
+        tables.push((*b"post", post));
+    }
+    let mut out = vec![0, 1, 0, 0];
+    out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+    out.extend([0; 6]);
+    let mut offset = 12 + 16 * tables.len() as u32;
+    for (tag, table) in &tables {
+        out.extend(tag);
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&offset.to_be_bytes());
+        out.extend_from_slice(&(table.len() as u32).to_be_bytes());
+        offset += table.len() as u32;
+    }
+    tables.into_iter().for_each(|(_, table)| out.extend(table));
+    out
+}
+
+/// A symbolic TrueType font with no `/Encoding` reads a code as Mac OS Roman when its (1, 0) `cmap`
+/// subtable selects the glyph the code draws and the glyph sits where the standard Macintosh glyph
+/// order puts that character, as the renderer's text layer reads it (vendored hayro-interpret
+/// patch (101), ISO 32000-2 §9.6.5.4). Otherwise the codes read as before (Standard): WinAnsi codes
+/// in that order (0x92 drawn with `quoteright`), no (1, 0) subtable, one selecting other glyphs
+/// than the (3, 0) one, a font flagged non-symbolic, or one that names its glyphs.
+#[test]
+fn a_symbolic_truetype_font_in_the_macintosh_order_reads_its_codes_as_mac_roman() {
+    let read = |program: Vec<u8>, flags: i64, codes: [u32; 2]| {
+        let mut doc = Document::new_empty();
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Flags".to_vec(), Object::Int(flags));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+        let u = unicode_map(&doc, &f, false);
+        codes.map(|c| u.text(c).unwrap_or_default().into_owned())
+    };
+    // `agrave` and `eacute` are glyphs 106 and 112 of the standard Macintosh order, `endash` and
+    // `quoteright` 178 and 183.
+    let mac_order = cmap_only_sfnt(Some(&[(0x88, 106), (0x8E, 112)]), &[(0xF088, 106), (0xF08E, 112)]);
+    assert_eq!(read(mac_order.clone(), 4, [0x88, 0x8E]), ["à", "é"]);
+    assert_eq!(read(mac_order, 32, [0x88, 0x8E]), ["", ""], "flagged non-symbolic");
+    let winansi = cmap_only_sfnt(Some(&[(0x92, 183), (0x96, 178)]), &[(0xF092, 183), (0xF096, 178)]);
+    assert_eq!(read(winansi, 4, [0x92, 0x96]), ["", ""], "WinAnsi codes in the Macintosh order");
+    let windows_only = cmap_only_sfnt(None, &[(0xF088, 106), (0xF08E, 112)]);
+    assert_eq!(read(windows_only, 4, [0x88, 0x8E]), ["", ""], "no (1, 0) subtable");
+    let disagreeing = cmap_only_sfnt(Some(&[(0x88, 112), (0x8E, 106)]), &[(0xF088, 106), (0xF08E, 112)]);
+    assert_eq!(read(disagreeing, 4, [0x88, 0x8E]), ["", ""], "a (1, 0) subtable selecting other glyphs");
+    // A `post` table of version 2.0 names the glyphs; what it calls them doesn't matter here.
+    let named = cmap_only_sfnt_named(Some(&[(0x88, 106), (0x8E, 112)]), &[(0xF088, 106), (0xF08E, 112)], true);
+    assert_eq!(read(named, 4, [0x88, 0x8E]), ["", ""], "a font that names its glyphs");
+}
+
+/// The Mac OS Roman reading applies only to a font that names no base encoding and isn't Symbol or
+/// ZapfDingbats (ISO 32000-2 §9.6.5.4, §9.6.6.1): a named `/BaseEncoding` or `/Encoding` keeps its
+/// own reading, a `/Differences` without a base encoding still gets it, and a Symbol font keeps no
+/// implicit mapping.
+#[test]
+fn the_mac_roman_reading_needs_no_base_encoding_and_no_symbolic_builtin() {
+    let read = |entries: Vec<(&str, Object)>| {
+        let mut doc = Document::new_empty();
+        let program = cmap_only_sfnt(Some(&[(0x88, 106), (0x8E, 112)]), &[(0xF088, 106), (0xF08E, 112)]);
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Flags".to_vec(), Object::Int(4));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let mut all = vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))];
+        all.extend(entries);
+        let f = font(&mut doc, all);
+        let u = unicode_map(&doc, &f, false);
+        [0x88, 0x8E].map(|c| u.text(c).unwrap_or_default().into_owned())
+    };
+    assert_eq!(read(vec![]), ["à", "é"]);
+    assert_eq!(read(vec![("Encoding", Object::name("WinAnsiEncoding"))]), ["ˆ", "Ž"], "a named base encoding");
+    let mut based = Dict::new();
+    based.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    assert_eq!(read(vec![("Encoding", Object::Dict(based))]), ["ˆ", "Ž"], "a /BaseEncoding");
+    let mut diffs = Dict::new();
+    diffs.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x8E), Object::name("ecircumflex")]));
+    assert_eq!(read(vec![("Encoding", Object::Dict(diffs))]), ["à", "ê"], "/Differences without a base encoding");
+    assert_eq!(read(vec![("BaseFont", Object::name("Symbol"))]), ["", ""], "Symbol");
+    assert_eq!(read(vec![("BaseFont", Object::name("ZapfDingbats"))]), ["", ""], "ZapfDingbats");
+    // A name it can't read clears the Mac OS Roman reading for its code, as it clears a base
+    // encoding's.
+    let mut notdef = Dict::new();
+    notdef.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x8E), Object::name(".notdef")]));
+    assert_eq!(read(vec![("Encoding", Object::Dict(notdef))]), ["à", ""], "/Differences naming .notdef");
+}
+
 #[test]
 fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without_replacing_the_program() {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
