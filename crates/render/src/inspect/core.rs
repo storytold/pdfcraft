@@ -169,7 +169,8 @@ impl<'a> Inspector<'a> {
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
         {
-            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named);
+            let mut key_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named, &mut key_budget);
         }
         me.named = named;
         me
