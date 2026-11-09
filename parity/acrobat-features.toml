@@ -4794,8 +4794,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_script"]
-evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively."
+evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::a_calculate_script_setting_its_own_field_object_keeps_the_value", "crates/engine/src/tests.rs::a_calculate_script_assigning_event_value_wins_and_a_combo_keeps_its_selection", "crates/forms/src/tests.rs::a_calculated_combo_stores_the_export_value_of_the_option_it_names", "crates/forms/src/tests.rs::an_export_value_wins_over_an_earlier_options_display_text"]
+notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively. A calculate script may set its own field through the field object (getField(\"Total\").value = …) instead of event.value; that value is kept, text included, unless the script also assigns event.value (even the value it already had). A combo box a calculation moves to another option, named by export value (first) or display text, stores the export value in /V and selects it in /I."
 
 [[feature]]
 id = "form.calculation-order"
