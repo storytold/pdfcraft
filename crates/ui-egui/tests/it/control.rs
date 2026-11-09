@@ -953,6 +953,8 @@ fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// The control channel reports the open document, its page count and current page, and its
+/// view options can be set: the page, and a right-hand panel by name (an unknown one is refused).
 #[test]
 fn state_and_view_options() {
     let (mut h, c) = harness();
@@ -969,6 +971,9 @@ fn state_and_view_options() {
     assert!(call(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "nonsense" })).is_err());
 }
 
+/// In a Japanese interface, the mode tabs and Preferences show Japanese labels, the command
+/// palette finds commands by their Japanese or English names or their ids, and switching back to
+/// English keeps the tabs working.
 #[test]
 fn japanese_controls_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("japanese_controls_and_search_keep_command_ids") {
@@ -1004,6 +1009,9 @@ fn japanese_controls_and_search_keep_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
 }
 
+/// In a German interface, the mode tabs and Preferences show German labels, the language
+/// selector switches to English and back, and the command palette finds Split document by its
+/// German name, its English name or its command id.
 #[test]
 fn german_preferences_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("german_preferences_and_search_keep_command_ids") {
@@ -1039,6 +1047,9 @@ fn german_preferences_and_search_keep_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
 }
 
+/// In a Ukrainian interface, Preferences and dialogs show Ukrainian labels, the command palette
+/// finds Split document by its Ukrainian name, its English name or its command id, and a refused
+/// edit's notice names the command in Ukrainian.
 #[test]
 fn ukrainian_preferences_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("ukrainian_preferences_and_search_keep_command_ids") {
@@ -1075,6 +1086,10 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     assert_eq!(state["documents"][0]["name"], "doc.pdf");
 }
 
+/// In a Japanese interface, Preferences opened from the menu bar switches the language to English,
+/// Ukrainian and back, and opens again with Cmd+,; the shortcuts list then reads in Japanese and
+/// the document stays open. Preferences is in Edit on Windows and Linux, and in the app menu (as
+/// Settings…) on macOS.
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     if crate::support::skip_without_catalogs("preferences_menu_and_shortcut_allow_switching_interface_languages") {
@@ -1085,16 +1100,24 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
-    // The menu bar's Edit menu holds Preferences. Titles and rows carry their mnemonic
-    // ("編集(E)", "環境設定(P)…"), so match by the start of the label.
+    // The menu bar's Edit menu holds Preferences on Windows and Linux. On macOS the in-window bar
+    // takes the Mac layout (`Target::current()`), which moves it to the app menu as Settings….
+    // Titles and rows carry their mnemonic ("編集(E)", "環境設定(P)…"), so match by the start of
+    // the label.
+    let (menu, preferences) = if cfg!(target_os = "macos") {
+        let ja = pdfcraft_ui_egui::i18n::Lang::from_code("ja").unwrap();
+        ("PdfCraft", pdfcraft_ui_egui::i18n::tr(ja, "Settings…").trim_end_matches('…'))
+    } else {
+        ("編集", "環境設定")
+    };
     let menu_row = |text: &'static str| {
         move |n: &egui_kittest::kittest::AccessKitNode<'_>| {
             n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
         }
     };
-    h.get_by(menu_row("編集")).click();
+    h.get_by(menu_row(menu)).click();
     h.run_steps(2);
-    h.get_by(menu_row("環境設定")).click();
+    h.get_by(menu_row(preferences)).click();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {

@@ -347,7 +347,8 @@ update the numbers.
 ### 16. UI precision gaps
 
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
-  rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
+  rulers, grids and guides, loupe and dynamic zoom, multiple windows and spreadsheet split (split
+  view shipped), comment
   pop-ups that can be moved, connector lines, fully customisable quick tools (pinning tools on Home
   and the hotbar are partial, `view.customize-quick-tools`); shortcut display and tool-mode bugs (#746, #721), macOS window controls
   (#789).
@@ -363,9 +364,9 @@ update the numbers.
 ### 18. Print production tools absent
 
 - **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
-  colour conversion, printer marks, fix hairlines, flattener preview, colour management settings;
-  print as image; PostScript output.
-- **Evidence:** 18 print-production features planned (L area).
+  colour conversion, printer marks, flattener preview, colour management settings;
+  print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
+- **Evidence:** 17 print-production features planned (L area).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing

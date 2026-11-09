@@ -213,6 +213,122 @@ fn replies_and_status_thread_onto_the_parent() {
     assert_eq!(text(&all[2], b"Contents"), "Accepted set by Bob");
 }
 
+/// A state reply records a state, not a note (ISO 32000-2 §12.5.6.3: the state is kept "in a
+/// separate text annotation"), so it is written Hidden; a reviewer's next change replies to their
+/// previous state reply ("Additional state changes shall be made by adding text annotations in
+/// reply to the previous reply for a given user"). Another reviewer's state, and another state
+/// model, start their own chain on the comment.
+#[test]
+fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
+    let mut doc = fixture();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let carol = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Carol", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let mark = set_marked(&mut doc, 0, 0, true, "Bob", &meta("m1")).unwrap();
+    let unmark = set_marked(&mut doc, 0, 0, false, "Bob", &meta("m2")).unwrap();
+    let doc = reopen(&doc);
+    let p = page_refs(&doc).unwrap()[0];
+    let entries = annots(&doc, p);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    for i in [first, carol, second, mark, unmark] {
+        assert_eq!(all[i].int(b"F"), Some(30), "hidden, printable, no zoom, no rotate: {i}");
+    }
+    assert_eq!(all[first].reference(b"IRT"), Some(at(0)));
+    assert_eq!(all[carol].reference(b"IRT"), Some(at(0)), "another reviewer starts on the comment");
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "Bob's change replies to Bob's last status");
+    assert_eq!(all[mark].reference(b"IRT"), Some(at(0)), "a checkmark is its own chain");
+    assert_eq!(all[unmark].reference(b"IRT"), Some(at(mark)));
+    // A reply that isn't a state stays visible.
+    let mut doc = doc;
+    let r = add_reply(&mut doc, 0, 0, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_eq!(list(&doc, 0)[r].int(b"F"), Some(28));
+}
+
+/// Review on #4126: a history has no length limit. The 70th change still replies to the 69th,
+/// and a reviewer whose name was typed with spaces continues their own chain.
+#[test]
+fn a_long_status_history_keeps_chaining_to_the_latest() {
+    let mut doc = fixture();
+    let mut prev: Option<usize> = None;
+    for i in 0..70 {
+        let state = if i % 2 == 0 { ReviewState::Accepted } else { ReviewState::Rejected };
+        let at = set_review_state(&mut doc, 0, 0, state, "Bob", &meta(&format!("s{i}"))).unwrap();
+        if let Some(p) = prev {
+            let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+            assert_eq!(list(&doc, 0)[at].reference(b"IRT"), entries[p].as_ref(), "change {i}");
+        }
+        prev = Some(at);
+    }
+    let padded = set_review_state(&mut doc, 0, 0, ReviewState::Completed, " Bob ", &meta("pad")).unwrap();
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    assert_eq!(list(&doc, 0)[padded].reference(b"IRT"), prev.and_then(|p| entries[p].as_ref()));
+    // Listed newest first, the first reply read walks the whole chain at once.
+    let latest = entries[padded].as_ref();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut reversed = entries.clone();
+    reversed.reverse();
+    set_annots(&mut doc, p, reversed).unwrap();
+    let next = set_review_state(&mut doc, 0, 71, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), latest);
+}
+
+/// Review on #4126: a reply with `/StateModel` but no `/State` has the model's default state
+/// (ISO 32000-2 Table 175), for the reader as for the writer: it is Bob's latest status, None,
+/// and his next change replies to it.
+#[test]
+fn a_state_model_without_a_state_is_the_default_state() {
+    let mut doc = fixture();
+    let bare = add_reply(&mut doc, 0, 0, "", "Bob", &meta("bare")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, p)[bare].as_ref().unwrap();
+    doc.update_dict(r, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Review"));
+        d.set(b"F".to_vec(), Object::Int(30));
+    })
+    .unwrap();
+    let summary = summaries(&doc).into_iter().find(|s| s.index == bare).unwrap();
+    assert_eq!(summary.state.as_deref(), Some("None"));
+    let next = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), Some(r));
+
+    // A model PdfCraft doesn't know isn't a state: a status replying to such a reply is about
+    // that reply, not about the comment, so Bob's next change on the comment starts afresh.
+    let mut doc = fixture();
+    let other = add_reply(&mut doc, 0, 0, "", "Ann", &meta("other")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let o = annots(&doc, p)[other].as_ref().unwrap();
+    // Nor is a `/State` the readers can't read, such as a number (review on #4126).
+    doc.update_dict(o, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Other"));
+        d.set(b"State".to_vec(), Object::Int(5));
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == other).unwrap().state, None);
+    set_review_state(&mut doc, 0, other, ReviewState::Rejected, "Bob", &meta("on-other")).unwrap();
+    let fresh = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("fresh")).unwrap();
+    assert_eq!(list(&doc, 0)[fresh].reference(b"IRT"), annots(&doc, p)[0].as_ref());
+}
+
+/// A third change replies to the second, not the first; and Bob's status on another comment
+/// is never the one his next change on this comment replies to.
+#[test]
+fn a_reviewers_chain_continues_from_their_latest_status_on_that_comment() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let elsewhere = set_review_state(&mut doc, 0, note, ReviewState::Cancelled, "Bob", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let third = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("s4")).unwrap();
+    let doc = reopen(&doc);
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(all[elsewhere].reference(b"IRT"), Some(at(note)));
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "not Bob's status on the note");
+    assert_eq!(all[third].reference(b"IRT"), Some(at(second)), "the latest, not the first");
+}
+
 #[test]
 fn delete_takes_popup_and_reply_chain() {
     let mut doc = fixture();
@@ -1312,6 +1428,44 @@ fn urls_are_found_after_length_changing_lowercase() {
     let (range, uri) = found.into_iter().next().unwrap();
     assert_eq!(uri, "http://example.com");
     assert_eq!(range, 21..39, "range is in source-character indices");
+}
+
+/// Review on #4472: an address inside one written with another scheme isn't taken out of it
+/// (`ftp://www.example.com` opened as `http://www.example.com`), and brackets that pair up
+/// inside an address belong to it.
+#[test]
+fn urls_keep_their_written_scheme_and_paired_brackets() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    for s in
+        ["ftp://www.example.com/pub", "file://www.example.com/x", "javascript:www.example.com", "ftp://user@example.com/x", "smb://a@example.org/s"]
+    {
+        assert_eq!(found(s), Vec::<String>::new(), "{s}");
+    }
+    assert_eq!(found("mailto:someone@example.com and (www.example.com)"), ["mailto:someone@example.com", "http://www.example.com"]);
+    assert_eq!(found("See https://en.wikipedia.org/wiki/Mercury_(planet)."), ["https://en.wikipedia.org/wiki/Mercury_(planet)"]);
+    assert_eq!(found("(https://example.com/a_(b)_c)"), ["https://example.com/a_(b)_c"]);
+    assert_eq!(found("https://example.com/a(b c"), ["https://example.com/a"]);
+    // Deeply nested or unbalanced brackets end the address without trouble.
+    let deep = format!("https://example.com/{}x{}", "(".repeat(10_000), ")".repeat(9_999));
+    assert_eq!(found(&deep), ["https://example.com/"]);
+}
+
+/// Review on #4472: brackets that never close in text without spaces (`https://a/(` again and
+/// again) made each address in it read the rest of the text, then start again one character on,
+/// a pass over the page per address. Each is read 2,048 characters at most now, and the
+/// addresses around them are still found. A run of address characters longer than that is no
+/// address.
+#[test]
+fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
+    let started = std::time::Instant::now();
+    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
+    assert_eq!(found(&long), ["http://www.after.org"]);
+    let fits = format!("https://example.com/{}", "a".repeat(2000));
+    assert_eq!(found(&fits), std::slice::from_ref(&fits));
 }
 
 #[test]
