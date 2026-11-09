@@ -69,8 +69,9 @@ pub(crate) struct Style {
 /// A `materials` entry as far as colour.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Material {
-    /// `Material` (702): `diffuse + 1` (a colour index) and the diffuse alpha.
-    Plain { diffuse: u32, alpha: f64 },
+    /// `Material` (702): `diffuse + 1` and `emissive + 1` (colour indices) and the
+    /// diffuse alpha.
+    Plain { diffuse: u32, emissive: u32, alpha: f64 },
     /// `TextureApplication` (711) [WD 7.5.6]: `material_generic_index + 1`, the material
     /// under the texture.
     Textured { base: u32 },
@@ -93,6 +94,16 @@ pub(crate) fn biased<T>(list: &[T], biased: u32) -> Option<&T> {
 }
 
 impl Globals {
+    /// Each material's emissive colour; `None` for a texture application or no emission.
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by unit tests"))]
+    pub(crate) fn emissives(&self) -> Vec<Option<Rgba>> {
+        let of = |m: &Material| match *m {
+            Material::Plain { emissive, .. } => self.colour(emissive),
+            Material::Textured { .. } => None,
+        };
+        self.materials.iter().map(of).collect()
+    }
+
     /// The colour a style or material names by `biased` (`index + 1`). Stored indices count
     /// the colour array's doubles, so `colours[i]` is stored as `3i + 1`; an index that is
     /// not of that form names nothing.
@@ -114,7 +125,7 @@ impl Globals {
                 m = biased(&self.materials, base)?;
             }
             match *m {
-                Material::Plain { diffuse, alpha } => (self.colour(diffuse)?, alpha),
+                Material::Plain { diffuse, alpha, .. } => (self.colour(diffuse)?, alpha),
                 Material::Textured { .. } => return None,
             }
         } else {
@@ -234,14 +245,14 @@ impl Ctx<'_, '_> {
             MATERIAL => {
                 self.r.unsigned_integer()?; // ambient + 1
                 let diffuse = self.r.unsigned_integer()?;
-                self.r.unsigned_integer()?; // emissive + 1
+                let emissive = self.r.unsigned_integer()?;
                 self.r.unsigned_integer()?; // specular + 1
                 self.r.double()?; // shininess
                 self.r.double()?; // ambient alpha
                 let alpha = self.r.double()?;
                 self.r.double()?; // emissive alpha
                 self.r.double()?; // specular alpha
-                Material::Plain { diffuse, alpha }
+                Material::Plain { diffuse, emissive, alpha }
             }
             TEXTURE_APPLICATION => {
                 let base = self.r.unsigned_integer()?;

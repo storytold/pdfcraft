@@ -27,6 +27,9 @@ pub(super) struct Plan {
     /// The textured materials, in material order; the `j`th has material
     /// style `materials.len() + j`.
     pub(super) textured: Vec<usize>,
+    /// The untextured materials that glow, in material order; the `g`th
+    /// has material style `materials.len() + textured.len() + g`.
+    pub(super) glowing: Vec<usize>,
 }
 
 impl Plan {
@@ -41,18 +44,28 @@ impl Plan {
     pub(super) fn style_of(&self, scene: &MeshScene, p: &ScenePrimitive) -> Option<u32> {
         let m = p.material?;
         if self.is_textured(scene, p) {
-            // `textured` is in material order.
+            // `textured` and `glowing` are in material order.
             let j = self.textured.binary_search(&m).ok()?;
             return Some((scene.materials.len() + j) as u32);
+        }
+        if let Ok(g) = self.glowing.binary_search(&m) {
+            return Some((scene.materials.len() + self.textured.len() + g) as u32);
         }
         Some(m as u32)
     }
 
     /// The last unique id the globals take: the line pattern, the styles,
-    /// the texture definitions and two materials per textured material.
+    /// the texture definitions, two materials per textured material and
+    /// one per glowing one.
     pub(super) fn global_ids(&self, scene: &MeshScene) -> u32 {
-        let styles = scene.materials.len() + self.textured.len();
-        (1 + styles + scene.textures.len() + 2 * self.textured.len()) as u32
+        let materials = 2 * self.textured.len() + self.glowing.len();
+        (1 + self.styles(scene) + scene.textures.len() + materials) as u32
+    }
+
+    /// How many styles the globals write: one RGB style per material, then
+    /// the textured and the glowing materials' material styles.
+    pub(super) fn styles(&self, scene: &MeshScene) -> usize {
+        scene.materials.len() + self.textured.len() + self.glowing.len()
     }
 }
 
@@ -68,8 +81,9 @@ fn count(n: usize) -> Result<u32, PrcWriteError> {
 pub(super) fn plan(scene: &MeshScene) -> Result<Plan, PrcWriteError> {
     check_numbers(scene)?;
     check_forest(scene)?;
-    // Style ids and double-scaled colour indices are u32s.
-    count(scene.materials.len().saturating_mul(3).saturating_add(2))?;
+    // Style ids and double-scaled colour indices (a base and an emissive
+    // colour per material) are u32s.
+    count(scene.materials.len().saturating_mul(6).saturating_add(2))?;
     count(scene.textures.len().saturating_mul(3))?;
     // Every global id sum (`global_ids`, the first texture id) is under
     // four per material, three per texture and a constant.
@@ -83,6 +97,7 @@ pub(super) fn plan(scene: &MeshScene) -> Result<Plan, PrcWriteError> {
         empty_primitives: 0,
         pictures: pictures(scene)?,
         textured: textured(scene)?,
+        glowing: scene.materials.iter().enumerate().filter(|(_, m)| m.texture.is_none() && super::textures::glows(m)).map(|(i, _)| i).collect(),
     };
     for o in &plan.occurrences {
         let Some(m) = o.node.and_then(|n| scene.nodes.get(n)?.mesh) else {

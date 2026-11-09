@@ -36,8 +36,8 @@ fn scene() -> MeshScene {
             SceneMesh { name: Some("bolt".into()), primitives: vec![tri(Some(1), 5.0), tri(None, 7.0)] },
         ],
         materials: vec![
-            SceneMaterial { name: Some("glass".into()), rgba: [0.2, 0.4, 0.6, 0.4], texture: None },
-            SceneMaterial { name: Some("steel".into()), rgba: [1.0, 0.0, 0.0, 1.0], texture: None },
+            SceneMaterial { name: Some("glass".into()), rgba: [0.2, 0.4, 0.6, 0.4], texture: None, emissive: [0.0; 3] },
+            SceneMaterial { name: Some("steel".into()), rgba: [1.0, 0.0, 0.0, 1.0], texture: None, emissive: [0.0; 3] },
         ],
         textures: vec![],
         units_in_mm: 1000.0,
@@ -224,4 +224,38 @@ fn bounds_follow_each_node_through_its_parents() {
     assert_eq!(s.bounds(), Some([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]]), "a cycle ends");
     s.roots = vec![99];
     assert_eq!(s.bounds(), None, "nothing drawn");
+}
+
+/// `prc`'s materials' emissive colours as `[r, g, b]`, the unlit ones dropped.
+fn emissives(prc: &[u8]) -> Vec<[f64; 3]> {
+    let all = PrcFile::parse(prc).unwrap().material_emissives().unwrap();
+    all.into_iter().flatten().flatten().map(|c| [c.r, c.g, c.b]).collect()
+}
+
+#[test]
+fn an_emissive_colour_reads_back_on_its_material_only() {
+    let mut s = scene();
+    s.materials[0].emissive = [0.0, 0.5, 1.0];
+    let prc = write_prc(&s).unwrap().prc;
+    assert_eq!(emissives(&prc), [[0.0, 0.5, 1.0]]);
+    // The glass keeps its colour and alpha through the material style.
+    let colours: Vec<_> = assemble(&prc).colours.into_iter().flatten().collect();
+    assert!(colours.contains(&[51, 102, 153, 102]), "{colours:?}");
+    assert!(emissives(&write_prc(&scene()).unwrap().prc).is_empty());
+    // A wholly transparent material does not glow.
+    s.materials[0].rgba[3] = 0.0;
+    assert!(emissives(&write_prc(&s).unwrap().prc).is_empty());
+}
+
+#[test]
+fn a_textured_material_carries_its_glow() {
+    let mut s = scene();
+    let image = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x01\0\0\0\x02".to_vec();
+    s.textures = vec![SceneTexture { image, wrap: [TextureWrap::Clamp, TextureWrap::Clamp], alpha: false }];
+    s.materials[1].texture = Some(0);
+    s.materials[1].emissive = [1.0, 0.0, 0.0];
+    s.meshes[1].primitives[0].uvs = vec![[0.5, 0.1], [0.5, 0.1], [0.5, 0.9]];
+    let r = write_prc(&s).unwrap();
+    assert_eq!(r.textured, 1);
+    assert_eq!(emissives(&r.prc), [[1.0, 0.0, 0.0]]);
 }

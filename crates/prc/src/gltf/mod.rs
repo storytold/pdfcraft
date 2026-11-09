@@ -3,7 +3,7 @@
 //! [`crate::write_prc`].
 //!
 //! Triangles, normals, the node tree with its names and placements, each
-//! material's base colour and opacity, and its PNG or JPEG base-colour
+//! material's base colour, emissive colour and opacity, and its PNG or JPEG base-colour
 //! texture over its coordinates (`KHR_texture_transform` applied) carry
 //! over. Other texture kinds, lines, points, skins and morph targets do
 //! not; each loss is a note, and each guess (an alpha mask drawn as a

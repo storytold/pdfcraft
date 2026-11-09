@@ -626,7 +626,7 @@ fn a_colour_index_counts_doubles() {
 fn style_alpha_rules_combine_transparency_with_material_alpha() {
     let g = |alpha, transparency| Globals {
         colours: vec![BLUE],
-        materials: vec![Material::Plain { diffuse: 1, alpha }],
+        materials: vec![Material::Plain { diffuse: 1, emissive: 0, alpha }],
         styles: vec![Style { is_material: true, index: 1, transparency }],
         ..Globals::default()
     };

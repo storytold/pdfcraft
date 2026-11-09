@@ -94,9 +94,19 @@ fn materials(doc: &Json, images: &Images, options: GltfOptions, out: &mut GltfIm
             out.inferred.push(format!("{label}: texture alpha not cut out; the texture drawn opaque"));
         }
         uses.push(texture.map(|(_, u)| u));
-        out.scene.materials.push(SceneMaterial { name: name(m), rgba, texture: texture.map(|(k, _)| k) });
+        out.scene.materials.push(SceneMaterial { name: name(m), rgba, texture: texture.map(|(k, _)| k), emissive: emissive(m, options.colours) });
     }
     uses
+}
+
+/// The material's `emissiveFactor` [glTF 2.0 §3.9.2] as a 0–1 display
+/// colour; its texture is not carried.
+fn emissive(m: &Json, colours: GltfColours) -> [f64; 3] {
+    let e = numbers::<3>(m.get("emissiveFactor")).unwrap_or([0.0; 3]);
+    e.map(|c| {
+        let c = c.clamp(0.0, 1.0);
+        if colours == GltfColours::Linear { srgb(c) } else { c }
+    })
 }
 
 fn meshes(doc: &Json, buffers: &accessor::Buffers, uses: &[Option<TextureUse>], out: &mut GltfImport) {
@@ -129,7 +139,7 @@ fn meshes(doc: &Json, buffers: &accessor::Buffers, uses: &[Option<TextureUse>], 
     }
     if used_default {
         // The glTF default material: opaque white [§3.9.6].
-        out.scene.materials.push(SceneMaterial { name: None, rgba: [1.0; 4], texture: None });
+        out.scene.materials.push(SceneMaterial { name: None, rgba: [1.0; 4], texture: None, emissive: [0.0; 3] });
     }
 }
 

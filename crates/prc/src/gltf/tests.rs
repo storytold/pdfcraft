@@ -286,3 +286,18 @@ fn a_file_needing_a_later_reader_is_refused() {
     assert!(matches!(later, Err(GltfError::NotGltf("a minVersion other than 2.0"))));
     assert!(read_gltf(file("2.0").as_bytes(), &mut |_| None, GltfOptions::default()).is_ok());
 }
+
+#[test]
+fn an_emissive_factor_is_carried_into_the_prc() {
+    let bin = payload(&QUAD, &QUAD_INDICES);
+    let json = doc("").replace(r#""alphaMode":"BLEND","#, r#""alphaMode":"BLEND","emissiveFactor":[0.214041,0,2],"#);
+    let import = read(&glb(&json, &bin), GltfOptions::default());
+    // Linear 0.214 encodes to sRGB 0.5; 2 clamps to 1.
+    let e = import.scene.materials[0].emissive;
+    assert!((e[0] - 0.5).abs() < 1e-5 && e[1] == 0.0 && (e[2] - 1.0).abs() < 1e-9, "{e:?}");
+    assert_eq!(import.scene.materials[1].emissive, [0.0; 3]);
+    let prc = write_prc(&import.scene).unwrap().prc;
+    let lit: Vec<_> = crate::PrcFile::parse(&prc).unwrap().material_emissives().unwrap().into_iter().flatten().flatten().collect();
+    assert_eq!(lit.len(), 1, "{lit:?}");
+    assert!((lit[0].r - 0.5).abs() < 1e-5 && lit[0].g == 0.0 && (lit[0].b - 1.0).abs() < 1e-9, "{:?}", lit[0]);
+}

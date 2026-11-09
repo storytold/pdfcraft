@@ -324,6 +324,19 @@ fn places_by_system(tree: &Tree) -> bool {
 }
 
 #[cfg(test)]
+impl PrcFile {
+    /// Each file structure's materials' emissive colours, in material order.
+    pub(crate) fn material_emissives(&self) -> Result<Vec<Vec<Option<Rgba>>>, PrcError> {
+        let of = |fs: &crate::FileStructure| {
+            let mut r = BitReader::new(fs.section(SectionKind::Globals));
+            let schema = Schema::read(&mut r)?;
+            Ok(Ctx::new(r, &schema, fs.authoring_version).globals()?.emissives())
+        };
+        self.file_structures.iter().map(of).collect()
+    }
+}
+
+#[cfg(test)]
 mod markup_tests;
 #[cfg(test)]
 mod tests;
