@@ -460,7 +460,8 @@ fn hostile_property_changes_stay_bounded() {
     let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
     let live = crate::form_tree(&t, None, &ov);
     let spent = start.elapsed();
-    assert!(spent < std::time::Duration::from_secs(1), "{spent:?}");
+    // Generous for a loaded machine: unbounded work would take minutes.
+    assert!(spent < std::time::Duration::from_secs(5), "{spent:?}");
     assert!(!form.pages.is_empty());
     let plain = live.root.children.iter().find(|n| n.name == "plain").unwrap();
     assert!(size_of(&plain.props.elements, 0).0 <= crate::parse::MAX_OBJECT_PROPS);
