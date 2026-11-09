@@ -38,6 +38,10 @@ pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption
 /// Opens the selected printer's native settings, returning only after that window closes.
 pub type PreferencesSource = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// What takes a print job in place of the system spooler: a test's stand-in, which gets the
+/// print-ready PDF and the job and answers as the spooler would. Called off the GUI thread.
+pub type Spooler = std::sync::Arc<dyn Fn(&[u8], &spool::Job) -> Result<String, String> + Send + Sync>;
+
 /// The system spooler's printers, as the desktop app's [`PrinterSource`].
 /// On Windows the executable must handle `spool::query_worker()` before normal startup.
 pub fn system_printers() -> PrinterSource {
@@ -529,7 +533,16 @@ impl PdfCraftApp {
                     }
                 }
             }
-            Some(printer) => self.send_to_printer(printer, bytes, self.print_draft.job(&name)),
+            Some(printer) => {
+                let mut job = self.print_draft.job(&name);
+                // CUPS is told which way the sheets run (#2713), unless a driver choice already
+                // says; Windows' print ticket already is.
+                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                if let Ok(sheets) = print::layout(&sizes, &settings) {
+                    print::add_cups_orientation(&mut job.options, &sheets);
+                }
+                self.send_to_printer(printer, bytes, job)
+            }
             None => self.save_print_pdf(&name, bytes),
         }
     }
@@ -542,6 +555,7 @@ impl PdfCraftApp {
     fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
+        let spooler = self.spooler.clone();
         std::thread::spawn(move || {
             let repaint = || {
                 if let Some(ctx) = &ctx {
@@ -549,11 +563,15 @@ impl PdfCraftApp {
                 }
             };
             // The receiver may be gone (the app quit): nothing to report to then.
-            let result = spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
-                let _ = tx.send(JobNews::Sent(sent, sheets));
-                repaint();
-            });
-            let _ = tx.send(JobNews::Done(result.map_err(|e| e.to_string())));
+            let result = match &spooler {
+                Some(submit) => submit(&bytes, &job),
+                None => spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                    let _ = tx.send(JobNews::Sent(sent, sheets));
+                    repaint();
+                })
+                .map_err(|e| e.to_string()),
+            };
+            let _ = tx.send(JobNews::Done(result));
             repaint();
         });
         self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });

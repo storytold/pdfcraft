@@ -49,9 +49,11 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`; on macOS they also carry the job
-name and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog
-sends them, which some vendors' filters need (#5743). Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`, and with `orientation-requested=4` when
+every sheet is landscape (`cups_orientation`), since CUPS would otherwise shrink a landscape
+sheet into portrait paper. On macOS they also carry the job name and owner
+(`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog sends them, which
+some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
@@ -60,14 +62,14 @@ are removed on success and failure. Other targets offer the print-ready PDF inst
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
 The desktop UI discovers printers and submits jobs on workers, so neither operation blocks
-the dialog; the Windows backend starts without a console window. Physical printer output
-still needs hardware validation.
+the dialog; the Windows backend starts without a console window.
 
-Windows discovery returns queue names without waiting for driver capabilities.
-The dialog reads two-sided support only for the selected printer;
-the headless `printers` tool retains the spooler's capability data. Reopening Print refreshes
-all capability answers. Closing native Properties refreshes only that printer's answer,
-without changing job settings.
+The Windows Print dialog lists queue names without waiting for driver capabilities.
+It reads two-sided support only for the selected printer. Reopening Print refreshes all
+capability answers. Closing native Properties refreshes only that printer's answer,
+while preserving job settings.
+
+The headless `printers` tool includes capability data and can wait for an unavailable driver.
 
 In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) draws the print-ready
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
