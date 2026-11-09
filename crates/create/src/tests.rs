@@ -2159,11 +2159,12 @@ fn jbig2_images_export_as_their_picture() {
     large[11..15].copy_from_slice(&20_000u32.to_be_bytes());
     large[15..19].copy_from_slice(&10_000u32.to_be_bytes());
     assert!(skipped(&page(20_000, 4, &large, None, false)), "a page far taller than the image");
-    // Refused the same ways as a stencil /Mask, it is left out: the image exports opaque.
+    // A stencil /Mask that can't be decoded takes its image with it: left out, the image would
+    // export opaque, showing what the mask hides.
     for (width, height, mask) in [(w + 8, h, &jbig2), (20_000, 4, &large)] {
-        let rgba = exported_rgba(&page(width, height, mask, None, true)).1;
-        assert_eq!(rgba.len() as i64, width * height * 4, "a {width}-wide mask");
-        assert!(alphas(&rgba).iter().all(|a| *a == 255), "a refused {width}-wide mask is left out");
+        let out = extract_images(&page(width, height, mask, None, true), &[0], 0);
+        assert!(out.images.is_empty(), "a {width}-wide mask is left out");
+        assert!(out.skipped.iter().any(|(_, _, why)| why.contains("mask")), "a {width}-wide mask's image is skipped: {:?}", out.skipped);
     }
     // Damaged data never panics.
     for end in [0, 1, 10, 20, 30, jbig2.len() / 2] {
@@ -2425,7 +2426,8 @@ fn a_jpeg_mask_pays_for_its_samples() {
 
 /// What decoding a JPEG takes goes by its header, so that is what has to agree with the
 /// dictionary before it is decoded: one image of a pixel can hold a page of 500 megapixels. The
-/// file comes out as it is either way, so what shows is whether it was decoded.
+/// file comes out as it is either way, so what shows is whether it was decoded; read as a mask
+/// that can't be decoded, it takes the image with it.
 #[test]
 fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -2452,7 +2454,8 @@ fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     let (honest, lying) = (doc.add(Object::Stream(keyed(4))), doc.add(Object::Stream(keyed(1))));
     assert_eq!(decodes(&doc, honest), 1);
     assert_eq!(decodes(&doc, lying), 0);
-    // The same as a mask: read as none, without being decoded.
+    // The same as a mask: its header disagreeing with its dictionary, it isn't decoded, and the
+    // image goes with it rather than being written out opaque.
     let mut mask = keyed(1);
     mask.dict.remove(b"Mask");
     let mask = doc.add(Object::Stream(mask));
@@ -2464,19 +2467,23 @@ fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     image.set(b"SMask".to_vec(), Object::Ref(mask));
     let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
-    assert_eq!(decodes(&doc, image), 0);
+    let unmasked = || {
+        crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+        let why = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(u64::MAX)).unwrap_err();
+        (crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), why)
+    };
+    let (decoded, why) = unmasked();
+    assert_eq!(decoded, 0, "read as none, without being decoded");
+    assert!(why.contains("mask"), "{why}");
     // Reading the header to find that out is paid for: a mask can be mostly tables, shared by
     // every image of a file, and with nothing left it isn't read.
-    let mut budget = ImageBudget::with_work(u64::MAX);
-    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
-    assert_eq!(u64::MAX - budget.work_left(), 2 + 4 * jpeg.len() as u64 + 2, "its one declared sample twice, its bytes, the image's byte and pixel");
     let mut budget = ImageBudget::with_work(0);
     assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
     assert_eq!(budget.refused(), 1, "the image goes, with its mask unread");
 }
 
-/// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
-/// opaque, showing what the mask hides: the image goes, with the reason.
+/// A mask past the allowance, like one that can't be decoded, can't be left out either: the image
+/// would come out opaque, showing what the mask hides. The image goes, with the reason.
 #[test]
 fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};

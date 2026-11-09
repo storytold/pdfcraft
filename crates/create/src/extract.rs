@@ -179,13 +179,16 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         };
     };
     let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
-    // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
-    let refused = budget.refused();
-    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
-    // Without its mask the image would come out opaque, showing what the mask hides.
-    if budget.refused() > refused {
-        return Err(FilterError::Spent.to_string());
-    }
+    // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2). A mask that
+    // can't be decoded takes the image with it: without it the image would come out opaque,
+    // showing what the mask hides.
+    let mut alpha = if mask {
+        None
+    } else if let Some(a) = soft_mask(doc, s, w, h, budget)? {
+        Some(a)
+    } else {
+        stencil_mask(doc, s, w, h, budget)?
+    };
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
     let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
@@ -542,40 +545,46 @@ fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
     [f(c), f(m), f(y)]
 }
 
+/// Why a mask that is there can't be used: exported without it the image is opaque, showing what
+/// the mask hides, so the image goes with it.
+fn unreadable_mask() -> String {
+    "the image's mask can't be decoded, and without it the image would show what it hides".into()
+}
+
 /// The soft mask (`/SMask`) as 8-bit alpha, scaled to the image's size when it has another.
-fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"SMask")?.as_ref()?;
+fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Result<Option<Vec<u8>>, String> {
+    let Some(r) = s.dict.get(b"SMask").and_then(Object::as_ref) else { return Ok(None) };
     let obj = doc.get(r);
-    let Object::Stream(m) = &*obj else { return None };
-    // A soft mask that cannot be decoded leaves the image showing what the mask hides, so the
-    // image is refused rather than written out opaque.
-    gray_plane(doc, m, w, h, budget, true)
+    let Object::Stream(m) = &*obj else { return Ok(None) };
+    gray_plane(doc, m, w, h, budget).map(Some)
 }
 
 /// A stencil `/Mask` (an image mask stream, 8.9.6.3) as 8-bit alpha: its 1 samples (0 with
 /// `/Decode [1 0]`) hide the image.
-fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"Mask")?.as_ref()?;
+fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Result<Option<Vec<u8>>, String> {
+    let Some(r) = s.dict.get(b"Mask").and_then(Object::as_ref) else { return Ok(None) };
     let obj = doc.get(r);
-    let Object::Stream(m) = &*obj else { return None };
-    Some(gray_plane(doc, m, w, h, budget, false)?.into_iter().map(|v| 255 - v).collect())
+    let Object::Stream(m) = &*obj else { return Ok(None) };
+    gray_plane(doc, m, w, h, budget).map(|px| Some(px.into_iter().map(|v| 255 - v).collect()))
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
-fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget, soft: bool) -> Option<Vec<u8>> {
-    let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
+fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
+    let (Some(mw), Some(mh)) = (m.dict.int(b"Width"), m.dict.int(b"Height")) else { return Err(unreadable_mask()) };
+    let (mw, mh) = size(mw, mh).ok_or_else(unreadable_mask)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);
+    let refused = budget.refused();
     let mut px = match f.last().map(Vec::as_slice) {
         Some(b"DCTDecode" | b"DCT") if f.len() == 1 => {
-            // Past the allowance the image goes too: `image` sees this one refused.
+            // Past the allowance the image goes too: `refused` has this one counted.
             if !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64), &m.raw) {
-                return None;
+                return Err(FilterError::Spent.to_string());
             }
-            jpeg_of_size(&m.raw, mw, mh)?.into_luma8().into_raw()
+            jpeg_of_size(&m.raw, mw, mh).ok_or_else(unreadable_mask)?.into_luma8().into_raw()
         }
-        Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
+        Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return Err(unreadable_mask()),
         _ => {
             let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
@@ -584,21 +593,16 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
                 4 => 4,
                 8 => 8,
                 16 => 16,
-                _ => return None,
+                _ => return Err(unreadable_mask()),
             };
             let max = (1u32 << bpc.min(8)) - 1;
             let data = match decoded(doc, m, (mw, mh, 1, bpc), budget) {
                 Ok(data) => data,
-                Err(_) => {
-                    // A stage limit stops the mask being decoded: a soft mask leaves the image
-                    // refusing it rather than showing what the mask hides.
-                    if soft {
-                        budget.refuse();
-                    }
-                    return None;
-                }
+                // A stage limit stops the mask being decoded, and has it counted already.
+                Err(_) if budget.refused() > refused => return Err(FilterError::Spent.to_string()),
+                Err(_) => return Err(unreadable_mask()),
             };
-            unpack(&data, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&data, mw, mh, 1, bpc).ok_or_else(unreadable_mask)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
@@ -608,10 +612,10 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
         }
     }
     if (mw, mh) == (w, h) {
-        return Some(px);
+        return Ok(px);
     }
-    let img = image::GrayImage::from_raw(mw as u32, mh as u32, px)?;
-    Some(scaled(&img, w as u32, h as u32).into_raw())
+    let img = image::GrayImage::from_raw(mw as u32, mh as u32, px).ok_or_else(unreadable_mask)?;
+    Ok(scaled(&img, w as u32, h as u32).into_raw())
 }
 
 /// `img` scaled to `w` × `h`. Scaling goes down first, through a buffer of `img`'s width by `h` at
