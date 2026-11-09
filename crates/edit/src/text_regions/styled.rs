@@ -3,7 +3,7 @@ use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
-    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program,
+    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
     source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
@@ -181,8 +181,8 @@ impl CharacterPreparation<'_> {
                         "the bundled Thai font ({thai_choice}) is not in this build, which has no craft-fonts Thai face; load a complete Thai font or choose one the page lists"
                     ))
                 })?;
-                if !pdfcraft_fonts::embedding::covers(face.bytes, span) {
-                    let missing = span.chars().find(|c| !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
+                if !covers_rows(face.bytes, span) {
+                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
                     return Err(EditError::Invalid(match missing {
                         Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
                         None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
@@ -251,12 +251,13 @@ impl CharacterPreparation<'_> {
             };
             let start = range.start;
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
-                if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
-                    continue;
-                }
-                if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                // A row break moves to the next row instead of asking a font for a glyph. The CR
+                // of a CRLF stays a `\r` the rows skip, so the pair is one break; every other break
+                // is written as `\n`. Either way it keeps its place among the draft's characters,
+                // which rows are counted in.
+                if row_break(ch) {
+                    let crlf = ch == '\r'
+                        && start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
                     chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                     continue;
                 }
@@ -685,18 +686,41 @@ fn row_step(style: &BlockStyle, size: f64, source_leading: f64) -> f64 {
 
 type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
 
+/// For each of `chars`, whether a row may end just before it inside a run of non-space characters
+/// (Chinese, Japanese and Thai), worked out once per run: Thai words need the whole run, not just
+/// two neighbours.
+fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
+    let mut break_before = vec![false; chars.len()];
+    let mut run_start = 0;
+    while run_start < chars.len() {
+        let mut run_end = run_start;
+        while chars.get(run_end).is_some_and(|c| !c.0.is_whitespace()) {
+            run_end += 1;
+        }
+        let run: String = chars.get(run_start..run_end).unwrap_or_default().iter().map(|c| c.0).collect();
+        for (i, cut) in crate::linebreak::breaks_before_chars(&run).into_iter().enumerate() {
+            if let Some(slot) = break_before.get_mut(run_start.saturating_add(i)) {
+                *slot = cut;
+            }
+        }
+        run_start = run_end.max(run_start.saturating_add(1));
+    }
+    break_before
+}
+
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
+    let break_before = styled_break_before(chars);
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
     // True when this row starts because the previous word did not fit, not because of a newline.
     let mut row_soft = Vec::new();
     let mut next_soft = false;
     // How many separator characters a wrap trimmed off the row that just ended, for the row
-    // about to start (0 for a Chinese/Japanese word split, which trims none; meaningless unless
+    // about to start (0 for a Chinese, Japanese or Thai word split, which trims none; meaningless unless
     // the row it belongs to is soft). Mirrors `next_soft`.
     let mut row_gap = Vec::new();
     let mut next_gap = 0usize;
@@ -729,11 +753,8 @@ fn wrap_styled_rows(
         }
         let mut end = at + 1;
         if !item.0.is_whitespace() {
-            // A word ends at a space, or where Chinese or Japanese text may break between characters.
-            while let (Some(before), Some(current)) = (chars.get(end - 1), chars.get(end))
-                && !current.0.is_whitespace()
-                && !crate::linebreak::between(before.0, current.0)
-            {
+            // A word ends at a space, or where Chinese, Japanese or Thai text may break inside it.
+            while chars.get(end).is_some_and(|c| !c.0.is_whitespace()) && !break_before.get(end).copied().unwrap_or(false) {
                 end += 1;
             }
         }
@@ -903,7 +924,7 @@ fn legacy_thai_font(
     if !has_thai_source_face(cache, &family) {
         return Ok(None);
     }
-    let rows = || span.split(['\n', '\r']).filter(|row| !row.is_empty());
+    let rows = || span.split(row_break).filter(|row| !row.is_empty());
     for row in rows() {
         if let Err(error) = shape_existing_thai(cache, &source.font, row) {
             // Not in the face's existing codes. A complete program of the face that shapes every
@@ -1077,7 +1098,7 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     }
     if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
         || !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face))
-        || !pdfcraft_fonts::embedding::covers(face.bytes, span)
+        || !covers_rows(face.bytes, span)
     {
         return false;
     }
@@ -1092,16 +1113,22 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
             && pdfcraft_fonts::pdf::embedded_sfnt(doc, &font).is_some_and(|bytes| {
                 pdfcraft_fonts::embedding::validate(&bytes).is_ok()
                     && pdfcraft_fonts::source_shaping::has_thai_layout(&bytes)
-                    && pdfcraft_fonts::embedding::covers(&bytes, span)
-                    && span.split(['\n', '\r']).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
+                    && covers_rows(&bytes, span)
+                    && span.split(row_break).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
             })
     })
+}
+
+/// Whether a complete program draws every row of `span`. [`row_break`] characters move to the next
+/// row and are never drawn, so they need no glyph (#6272); `embedding::covers` exempts only CR and LF.
+fn covers_rows(bytes: &[u8], span: &str) -> bool {
+    span.split(row_break).all(|row| pdfcraft_fonts::embedding::covers(bytes, row))
 }
 
 /// Use the same Thai script selection and mark/cluster positioning as Add Text, including
 /// rows beginning with Latin or digits (guessing from their first character would select Latin).
 fn shape_thai_row(text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRun, EditError> {
-    if text.len() > 262_144 || text.contains(['\n', '\r']) {
+    if text.len() > 262_144 || text.contains(row_break) {
         return Err(EditError::Invalid("shape one bounded text row at a time".into()));
     }
     let clusters =
@@ -1411,7 +1438,7 @@ fn push_whole_paragraph_marker(block_ops: &mut Vec<Op>, marked: bool, op: &str) 
 
 /// An empty marker between two rows of one rewrite. `/PCHard` is a newline that was already in
 /// the text. `/PCSoft` is a wrap and rejoins when the box widens, with `/N` the exact number of
-/// separator characters it consumed (0 for a Chinese/Japanese word split), so a rejoin restores
+/// separator characters it consumed (0 for a Chinese, Japanese or Thai word split), so a rejoin restores
 /// what was actually there instead of guessing a single space (#2529). Neither is a paragraph
 /// region, so the lines stay in one scope.
 fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[usize], row_index: usize) {
