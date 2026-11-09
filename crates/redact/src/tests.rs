@@ -2793,6 +2793,17 @@ fn clearing_marks_leaves_the_annotation_list_as_it_was() {
 }
 
 #[test]
+fn redacted_copies_are_named_with_redacted_before_the_extension() {
+    assert_eq!(redacted_file_name("contract.pdf"), "contract_Redacted.pdf");
+    assert_eq!(redacted_file_name("SCAN.PDF"), "SCAN_Redacted.pdf");
+    assert_eq!(redacted_file_name("Report.Pdf"), "Report_Redacted.pdf");
+    // A document without the extension (opened from bytes) gets it.
+    assert_eq!(redacted_file_name("Untitled"), "Untitled_Redacted.pdf");
+    // Redacting a redacted copy again does not add a second suffix.
+    assert_eq!(redacted_file_name("contract_Redacted.pdf"), "contract_Redacted.pdf");
+}
+
+#[test]
 fn unreadable_content_fails_closed() {
     let mut doc = one_page(b"", "", vec![]);
     let page = pdfcraft_model::pages(&doc)[0].obj;
@@ -4586,6 +4597,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod descriptions;
+mod hidden_scope;
 mod inline_images;
 mod limits;
 mod property_retirement;

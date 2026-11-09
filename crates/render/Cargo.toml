@@ -25,6 +25,9 @@ log = { workspace = true }
 serde = { workspace = true }
 # Reads rendered pixel words as bytes; already in the tree through hayro.
 bytemuck = { version = "1" }
+# Resolves relative URI actions against the catalog's /URI /Base, by the rules the browser uses;
+# already in the tree (pdfcraft-engine checks document links with it).
+url = "2.5"
 # Tells combining marks (bidi class NSM: general categories Mn and Me) in extracted text; the
 # version pdfcraft-fonts already uses.
 unicode-bidi = "0.3"
@@ -34,6 +37,9 @@ unicode-bidi = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# The content crate's parser, compared operator by operator against hayro's in
+# `tests/content_differential.rs` (L3 may depend on L2).
+pdfcraft-content = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }

@@ -105,6 +105,10 @@ pub fn compare(a: Gray<'_>, b: Gray<'_>, tolerance: u8) -> Result<Diff, SizeMism
 
 /// Pixels of `a` with no pixel within `tolerance` anywhere in `b`'s surrounding 3x3.
 fn unmatched(a: Gray<'_>, b: Gray<'_>, tolerance: u8) -> usize {
+    // No pixels, nothing to match: a zero-width image of enormous height is not walked row by row.
+    if a.pixels.is_empty() {
+        return 0;
+    }
     let mut count = 0usize;
     for y in 0..a.height {
         for x in 0..a.width {
@@ -210,6 +214,14 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// A zero-width image of enormous height has no pixels to walk.
+    #[test]
+    fn an_image_without_pixels_compares_at_once() {
+        let a = Gray { width: 0, height: usize::MAX, pixels: &[] };
+        let d = compare(a, a, 0).unwrap();
+        assert_eq!((d.differing, d.total), (0, 0));
+    }
+
     use super::*;
 
     fn gray(w: usize, h: usize, fill: u8) -> Vec<u8> {

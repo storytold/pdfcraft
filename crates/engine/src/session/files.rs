@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_layer_states, print_raster,
-    set_default_layer_state, source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print,
+    print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -25,15 +25,17 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
     }
 
-    /// A new document from plain text (US Letter, 11 pt Helvetica). Text Helvetica can't draw is
+    /// A new document from plain text (US Letter, 11 pt Helvetica, or the bundled Inter face for
+    /// text with Latin, Greek or Cyrillic letters Helvetica can't draw). Text neither can draw is
     /// refused, naming the line and the character (never set as `?`).
     pub fn create_from_text(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
     /// [`Self::create_from_text`] for a report PdfCraft writes from documents (comment summaries,
-    /// compare reports), which can quote any language: characters Helvetica can't draw are written
-    /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
+    /// compare reports), which can quote any language: when the bundled Inter face can't draw it
+    /// all, characters Helvetica can't draw are written as `[U+XXXX]`, and the report's first line
+    /// says so, rather than the report being refused.
     pub(crate) fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
         self.write_new(&doc)
@@ -112,6 +114,15 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map_err(EditError::Write)
+    }
+
+    /// How many hairlines [`Edit::FixHairlines`] would change on `pages` of `id`, and on how many
+    /// pages, without changing the document (the edit itself refuses when there is nothing to fix).
+    pub fn count_hairlines(&self, id: DocId, pages: &[usize], settings: &Hairlines) -> HairlinesFixed {
+        let Some(doc) = self.get(id) else { return HairlinesFixed::default() };
+        let Some(editor) = doc.editor.as_ref() else { return HairlinesFixed::default() };
+        let mut cos = editor.cos.clone();
+        pdfcraft_edit::fix_hairlines(&mut cos, pages, settings).unwrap_or_default()
     }
 
     /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
@@ -200,7 +211,13 @@ impl Session {
                 Err(_) => return Vec::new(),
             },
         };
-        (0..doc.info.pages.len()).map(|i| pages.contains(&i) && pdfcraft_print::text_reads_up(&cos, i)).collect()
+        // The page tree is read once, and each page is looked up, not searched for, in `pages`.
+        let mut out = vec![false; doc.info.pages.len()];
+        let wanted: Vec<usize> = pages.iter().copied().filter(|&p| p < out.len()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        for (p, up) in wanted.iter().zip(pdfcraft_print::texts_read_up(&cos, &wanted)) {
+            out[*p] = up;
+        }
+        out
     }
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
