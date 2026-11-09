@@ -28,7 +28,7 @@ const MAX_DEPTH: u8 = 128;
 /// The rendering intents of ISO 32000-1 Table 70.
 const INTENTS: [&[u8]; 4] = [b"AbsoluteColorimetric", b"RelativeColorimetric", b"Saturation", b"Perceptual"];
 /// The entries of a type 5 halftone that aren't colorant halftones.
-const HALFTONE_KEYS: [&[u8]; 3] = [b"Type", b"HalftoneType", b"HalftoneName"];
+const HALFTONE_KEYS: [&[u8]; 4] = [b"Type", b"HalftoneType", b"HalftoneName", b"TransferFunction"];
 /// The primary colour components of DeviceGray, DeviceRGB and DeviceCMYK, whose halftones take
 /// the graphics state's transfer function.
 const PRIMARY: [&[u8]; 8] = [b"Gray", b"Red", b"Green", b"Blue", b"Cyan", b"Magenta", b"Yellow", b"Black"];
@@ -222,14 +222,76 @@ impl Scan<'_> {
             _ => self.findings.halftone_transfer |= transfer,
         }
         if colorant.is_none() && kind == Some(5) {
-            for (k, v) in ht.iter() {
+            for (k, _) in ht.iter() {
                 if HALFTONE_KEYS.contains(&k.as_slice()) {
                     continue;
                 }
-                if let Some(component) = self.doc.resolve(v).as_dict() {
-                    self.halftone(component, Some(k));
+                let Some(entry) = self.present(ht, k) else { continue };
+                match entry.as_dict() {
+                    Some(component) => self.halftone(component, Some(k)),
+                    None => {
+                        self.findings.untyped = true;
+                        if k != b"Default" && !PRIMARY.contains(&k.as_slice()) {
+                            self.findings.missing_transfer.insert(String::from_utf8_lossy(k).into_owned());
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    use pdfcraft_cos::Document;
+
+    use super::{Findings, check};
+    use crate::{Level, verify};
+
+    fn build(objs: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        let id = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {id} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).unwrap()
+    }
+
+    #[test]
+    fn type5_halftone_transfer_function_is_not_treated_as_colorant() {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /G << /HT << /HalftoneType 5 /Default 5 0 R /Cyan 5 0 R /TransferFunction 4 0 R >> >> >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>",
+            "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>",
+        ]);
+        let found = check(&doc);
+        assert_eq!(found, Findings { halftone_transfer: true, ..Findings::default() });
+        let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5").map(|i| i.message).collect();
+        assert_eq!(messages, ["A halftone has a transfer function, which only a non-primary colorant's halftone may have"]);
+    }
+
+    #[test]
+    fn type5_halftone_non_dict_colorant_reports_untyped_and_missing_transfer() {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /G << /HT << /HalftoneType 5 /Default 4 0 R /Spot /Default /NullColorant null >> >> >> >> >>",
+            "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>",
+        ]);
+        let found = check(&doc);
+        assert_eq!(found, Findings { untyped: true, missing_transfer: BTreeSet::from(["Spot".to_string()]), ..Findings::default() });
     }
 }

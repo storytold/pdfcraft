@@ -77,7 +77,8 @@ impl Automation {
 
     pub(crate) fn link_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        let targets: std::collections::HashMap<(usize, usize), &LinkTarget> = doc.info.links.iter().map(|t| ((t.page, t.index), &t.target)).collect();
+        let viewed: std::collections::HashMap<(usize, usize), &pdfcraft_render::Link> =
+            doc.info.links.iter().map(|t| ((t.page, t.index), t)).collect();
         let items: Vec<Value> = doc
             .links()
             .iter()
@@ -85,14 +86,49 @@ impl Automation {
                 // The link's page may be one the viewer could not read (#2660): rect unchanged then.
                 let rect = crate::view_rect(&doc.info, l.page, l.rect.map(|x| x as f32));
                 let mut v = json!({ "page": l.page + 1, "index": l.index + 1, "rect": rect, "visible": l.style.visible });
+                let link = viewed.get(&(l.page, l.index));
+                // Where the link is active when that isn't its whole rect: its /QuadPoints
+                // (ISO 32000-2 Table 176), as the bounding box of each quadrilateral.
+                if let Some(link) = link.filter(|k| !k.quads.is_empty()) {
+                    let areas: Vec<Value> = link
+                        .quads
+                        .iter()
+                        .map(|q| {
+                            let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+                            let fold = |v: [f32; 4], f: fn(f32, f32) -> f32, start: f32| v.into_iter().fold(start, f);
+                            let box_ = [
+                                fold(xs, f32::min, f32::MAX),
+                                fold(ys, f32::min, f32::MAX),
+                                fold(xs, f32::max, f32::MIN),
+                                fold(ys, f32::max, f32::MIN),
+                            ];
+                            json!(crate::view_rect(&doc.info, l.page, box_))
+                        })
+                        .collect();
+                    v["active_areas"] = json!(areas);
+                }
                 // Where an in-document link goes, as the viewer resolves it: named destinations
                 // included, with the position on the page.
-                let target = targets.get(&(l.page, l.index)).and_then(|t| match t {
+                let target = link.and_then(|t| match &t.target {
                     LinkTarget::Page(page, view) => Some((*page, view)),
                     _ => None,
                 });
                 match (&l.action, target) {
-                    (LinkAction::Uri(u), _) => v["url"] = json!(u),
+                    (LinkAction::Uri(u), _) => {
+                        v["url"] = json!(u);
+                        // A relative address, resolved against the catalog's /URI /Base
+                        // (ISO 32000-2 Table 211): what the viewer offers to open. That is the
+                        // address inspection kept, which stays raw once its text budget is spent;
+                        // resolve afresh only for a link inspection did not list.
+                        let opened = match link.map(|t| &t.target) {
+                            Some(LinkTarget::Uri(kept)) => Some(kept.clone()),
+                            Some(_) => None,
+                            None => pdfcraft_render::resolve_uri(doc.info.uri_base.as_deref(), u),
+                        };
+                        if let Some(opened) = opened.filter(|o| o != u) {
+                            v["resolved_url"] = json!(opened);
+                        }
+                    }
                     (action, Some((page, view))) => {
                         v["to_page"] = json!(page + 1);
                         if let Some(d) = doc.info.pages.get(page).and_then(|p| crate::destination(view, p)) {
@@ -113,7 +149,41 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "count": items.len(), "links": items }))
+        let mut out = json!({ "count": items.len(), "links": items });
+        // Addresses written as plain page text, which the viewer makes clickable (#4207). Reading
+        // the pages' text costs more than the list above, so only on request.
+        if a.opt_bool("text_links")?.unwrap_or(false) {
+            let id = doc.id;
+            // One share of the pages at a time (`MAX_TEXT_LINK_PAGES_PER_SCAN`), from the 1-based
+            // `text_links_from`; `text_links_next_page` says where the next share starts.
+            let pages = doc.info.pages.len().max(1);
+            let from = match a.opt_int("text_links_from")? {
+                None => 0,
+                Some(p) => usize::try_from(p)
+                    .ok()
+                    .filter(|p| (1..=pages).contains(p))
+                    .map(|p| p - 1)
+                    .ok_or_else(|| bad(format!("text_links_from must be a page from 1 to {pages}")))?,
+            };
+            let scan = self.session.text_links(id, from);
+            if let Some(next) = scan.next_page {
+                out["text_links_next_page"] = json!(next.saturating_add(1));
+            }
+            let found: Vec<Value> = scan
+                .links
+                .into_iter()
+                .map(|(page, l)| {
+                    let mut v = json!({ "page": page + 1, "rects": l.rects, "url": l.uri });
+                    // What the viewer does on a click: the same check every document link gets.
+                    if let Err(e) = pdfcraft_engine::links::document_url(&l.uri) {
+                        v["blocked"] = json!(e.to_string());
+                    }
+                    v
+                })
+                .collect();
+            out["text_links"] = json!(found);
+        }
+        Ok(out)
     }
 
     pub(crate) fn link_open(&mut self, a: &Args) -> Result<Value> {

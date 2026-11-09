@@ -141,6 +141,22 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn form_tab_numbers_can_be_shown_and_captured_through_the_control_channel() {
+    let (mut h, c) = harness();
+    h.state_mut().open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(3);
+    ok(&mut h, &c, "ui.command", json!({"id": "form.prepare"}));
+    let control = ok(&mut h, &c, "ui.inspect", json!({"query": "Show tab numbers"}));
+    assert!(control["widgets"].as_array().unwrap().iter().any(|widget| widget["label"] == "Show tab numbers"));
+    ok(&mut h, &c, "ui.click", json!({"label": "Show tab numbers"}));
+    h.run_steps(2);
+    assert!(h.state().views[h.state().active.unwrap()].prepare.show_tab_numbers);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][1]["dirty"], false);
+    let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
+    assert!(shot["png_base64"].as_str().is_some_and(|png| !png.is_empty()), "the control channel returns a nonempty screenshot");
+}
+
+#[test]
 fn page_shadows_are_an_observable_app_wide_preference() {
     let (mut h, c) = harness();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
@@ -953,6 +969,8 @@ fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// The control channel reports the open document, its page count and current page, and its
+/// view options can be set: the page, and a right-hand panel by name (an unknown one is refused).
 #[test]
 fn state_and_view_options() {
     let (mut h, c) = harness();
@@ -969,6 +987,9 @@ fn state_and_view_options() {
     assert!(call(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "nonsense" })).is_err());
 }
 
+/// In a Japanese interface, the mode tabs and Preferences show Japanese labels, the command
+/// palette finds commands by their Japanese or English names or their ids, and switching back to
+/// English keeps the tabs working.
 #[test]
 fn japanese_controls_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("japanese_controls_and_search_keep_command_ids") {
@@ -1004,6 +1025,9 @@ fn japanese_controls_and_search_keep_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
 }
 
+/// In a German interface, the mode tabs and Preferences show German labels, the language
+/// selector switches to English and back, and the command palette finds Split document by its
+/// German name, its English name or its command id.
 #[test]
 fn german_preferences_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("german_preferences_and_search_keep_command_ids") {
@@ -1039,6 +1063,9 @@ fn german_preferences_and_search_keep_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
 }
 
+/// In a Ukrainian interface, Preferences and dialogs show Ukrainian labels, the command palette
+/// finds Split document by its Ukrainian name, its English name or its command id, and a refused
+/// edit's notice names the command in Ukrainian.
 #[test]
 fn ukrainian_preferences_and_search_keep_command_ids() {
     if crate::support::skip_without_catalogs("ukrainian_preferences_and_search_keep_command_ids") {
@@ -1075,6 +1102,10 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     assert_eq!(state["documents"][0]["name"], "doc.pdf");
 }
 
+/// In a Japanese interface, Preferences opened from the menu bar switches the language to English,
+/// Ukrainian and back, and opens again with Cmd+,; the shortcuts list then reads in Japanese and
+/// the document stays open. Preferences is in Edit on Windows and Linux, and in the app menu (as
+/// Settings…) on macOS.
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     if crate::support::skip_without_catalogs("preferences_menu_and_shortcut_allow_switching_interface_languages") {
@@ -1085,16 +1116,24 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
-    // The menu bar's Edit menu holds Preferences. Titles and rows carry their mnemonic
-    // ("編集(E)", "環境設定(P)…"), so match by the start of the label.
+    // The menu bar's Edit menu holds Preferences on Windows and Linux. On macOS the in-window bar
+    // takes the Mac layout (`Target::current()`), which moves it to the app menu as Settings….
+    // Titles and rows carry their mnemonic ("編集(E)", "環境設定(P)…"), so match by the start of
+    // the label.
+    let (menu, preferences) = if cfg!(target_os = "macos") {
+        let ja = pdfcraft_ui_egui::i18n::Lang::from_code("ja").unwrap();
+        ("PdfCraft", pdfcraft_ui_egui::i18n::tr(ja, "Settings…").trim_end_matches('…'))
+    } else {
+        ("編集", "環境設定")
+    };
     let menu_row = |text: &'static str| {
         move |n: &egui_kittest::kittest::AccessKitNode<'_>| {
             n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
         }
     };
-    h.get_by(menu_row("編集")).click();
+    h.get_by(menu_row(menu)).click();
     h.run_steps(2);
-    h.get_by(menu_row("環境設定")).click();
+    h.get_by(menu_row(preferences)).click();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {
@@ -2151,6 +2190,47 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
+}
+
+/// CodeRabbit on #5341: the control channel folds a pinned folder on Home down to its heading
+/// and opens it again, as its chevron does, and `ui.state` says which are folded. Folders that
+/// aren't pinned, and states other than on and off, are refused with the reason.
+#[test]
+fn control_collapses_and_expands_a_pinned_folder() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-fold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inside.pdf"), fixture(1)).unwrap();
+    let folder = dir.to_string_lossy().into_owned();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let (s, pin) = (slot.clone(), folder.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.pin_folder(&pin);
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+    let folded = |h: &mut Harness<'static, PdfCraftApp>| ok(h, &c, "ui.state", json!({}))["pinned_folders"].clone();
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=on") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]));
+    assert!(h.query_by_label("inside.pdf").is_none(), "a collapsed folder lists nothing");
+    let unpinned = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": "/not/pinned=on" })).unwrap_err();
+    assert!(unpinned.contains("not a pinned folder"), "{unpinned}");
+    let bad = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=yes") })).unwrap_err();
+    assert!(bad.contains("=on or"), "{bad}");
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]), "refusals change nothing");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=off") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

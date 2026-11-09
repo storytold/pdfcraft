@@ -484,6 +484,7 @@ fn history_search_view() -> DocView {
             }],
             line_of: vec![0],
             space_before: vec![false],
+            truncated: false,
         }
         .into(),
     );
@@ -503,13 +504,14 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
             v.go_to_match(0);
         }
         assert_eq!(v.back, vec![0], "explicit search jump must remember its origin");
-        assert_eq!(v.goto, Some((3, 0.5)), "keep the match offset instead of the page top");
+        assert_eq!(v.goto, None, "the match's point alone: a zoom that frame cannot put a page-top offset off to the next");
         assert_eq!(v.current, 3);
         assert_eq!(v.current_page_label(None), "4");
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -524,13 +526,75 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
 }
 
 #[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
+    }
+}
+
+#[test]
+fn a_zoom_just_after_a_find_step_keeps_the_match_in_the_middle() {
+    let mut v = history_search_view();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+    // A zoom anchored at the pointer was pending when the step came: the step drops it.
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    assert!(v.zoom_anchor.is_some());
+    v.find_step(true);
+    assert_eq!((v.goto, v.zoom_anchor), (None, None), "the step alone decides where the view goes");
+    let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+    let target = Some((3, Some(40.0 / 300.0), Some(0.675), middle));
+    assert_eq!(v.goto_point, target);
+    // The rest of an eased wheel zoom, or a zoom in the same frame, anchors on the match
+    // at the window's centre, not on the pointer.
+    v.zoom_at(3.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor, Some((3, 40.0 / 300.0, 0.675, middle)));
+    // Another jump lets go of the match: the next zoom is at the pointer again.
+    v.go_to_page(1);
+    v.zoom_at(4.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+}
+
+#[test]
+fn previous_view_after_a_find_step_lets_go_of_the_match() {
+    let mut v = history_search_view();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+    v.find_step(true);
+    // Previous view while a wheel zoom is still easing: the zoom must not hold the old match
+    // and put the history jump off until it stops.
+    assert!(v.view_history(false));
+    assert_eq!(v.goto, Some((0, 0.0)));
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+}
+
+#[test]
+fn a_match_with_unbounded_glyphs_falls_back_to_its_page() {
+    let mut v = history_search_view();
+    // A hostile page: a glyph from -inf to inf, whose centre is NaN.
+    if let Some(text) = v.texts.get_mut(&3).and_then(Arc::get_mut) {
+        text.glyphs[0].rect = [f32::NEG_INFINITY, 260.0, f32::INFINITY, 280.0];
+    }
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    v.find_step(true);
+    assert!(v.goto_point.is_none(), "no NaN scroll target");
+    assert_eq!(v.goto.map(|g| g.0), Some(3), "the match's page instead");
+    v.zoom_at(3.0, pos2(150.0, 50.0));
+    assert!(v.zoom_anchor.is_none_or(|a| a.1.is_finite() && a.2.is_finite()), "no NaN zoom anchor");
+}
+
+#[test]
 fn automatic_search_updates_do_not_record_history_or_discard_forward() {
     let mut v = history_search_view();
     v.forward = vec![4];
     v.find = Some(Find { query: "match".into(), ..Default::default() });
     v.rerun_find();
     assert_eq!(v.current, 3);
-    assert_eq!(v.goto, Some((3, 0.5)));
+    assert_eq!((v.goto, v.goto_point.map(|g| g.0)), (None, Some(3)), "the match's point on its page");
     assert!(v.back.is_empty());
     assert_eq!(v.forward, vec![4]);
     v.find.as_mut().unwrap().current = None;
@@ -550,6 +614,7 @@ fn find_test_text(s: &str) -> PageText {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     }
 }
 
@@ -1178,6 +1243,7 @@ fn select_all_of_the_document_only_while_scrolling_through_several_pages() {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     };
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     for p in 0..3 {
@@ -1208,6 +1274,7 @@ fn text_layers_keep_the_selection_page() {
         glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
         line_of: vec![0],
         space_before: vec![false],
+        truncated: false,
     };
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
@@ -2064,6 +2131,93 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
 }
 
+/// A cut page (#623) is named in a bar of its own: a static XFA form's notice, which comes
+/// first among the form notices, still shows beside it instead of replacing it (review on #2113).
+#[test]
+fn a_cut_page_is_named_beside_an_xfa_form_notice() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
+        app.open_bytes("form.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("XFA data are kept in step");
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label_contains("XFA data are kept in step");
+}
+
+/// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
+/// cut-page notice lasts until another page is found cut (review on #2113).
+#[test]
+fn a_page_found_cut_after_a_dismissal_is_still_named() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    // The reader dismissed the document's notice before the render found the cut page.
+    h.state_mut().views[0].notice_dismissed = true;
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the cut-page notice can be dismissed");
+    // Re-reading the same page (an undo, a layer toggle) doesn't bring it back.
+    h.state_mut().views[0].invalidate_content();
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the dismissed page stays dismissed");
+    h.state_mut().views[0].cut_pages.insert(1);
+    h.run_steps(2);
+    h.get_by_label_contains("2 pages hold more content than PdfCraft can read, page 1 first");
+}
+
+/// Ctrl+wheel zooms a visible window that another application has focus over, as plain
+/// wheel scrolling does; the palette still blocks it.
+#[test]
+fn ctrl_wheel_zooms_an_unfocused_window() {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    let center = h.state().views[0].viewport_rect().center();
+    h.hover_at(center);
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    let ctrl_wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    h.state_mut().palette_open = true;
+    let before = h.state().views[0].zoom;
+    h.event(ctrl_wheel.clone());
+    h.run_steps(10);
+    assert_eq!(h.state().views[0].zoom, before, "the palette still blocks zoom");
+    h.state_mut().palette_open = false;
+    h.run_steps(2);
+    h.event(ctrl_wheel);
+    h.run_steps(10);
+    assert!(h.state().views[0].zoom > before, "Ctrl+wheel zooms without window focus");
+}
+
 #[test]
 fn virtualized_organizer_keeps_insert_gaps_at_document_positions() {
     use egui_kittest::kittest::Queryable;
@@ -2539,6 +2693,392 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
+}
+
+/// Review on #4378: `FitWindow` measures the spread the view shows, its pages side by side
+/// and as tall as the taller one, with one page in a spread that has only one.
+#[test]
+fn first_page_now_measures_the_pages_in_the_spread() {
+    let page =
+        |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+    let info = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 800.0), page(200.0, 500.0)], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let one = v.first_page_now(&info).expect("a page");
+    assert_eq!((one.size, one.margins.x), (vec2(300.0 * PT, 400.0 * PT), 2.0 * SIDE));
+    v.set_display(PageLayout::TwoUp, false);
+    let gap = v.page_gap();
+    // [0, 1]: 300 + 600 wide, 800 high, one gap between them.
+    let spread = v.first_page_now(&info).expect("a spread");
+    assert_eq!((spread.size, spread.margins.x), (vec2(900.0 * PT, 800.0 * PT), 2.0 * SIDE + gap));
+    // [2] on its own at the end: one page, no gap.
+    v.current = 2;
+    let last = v.first_page_now(&info).expect("the last page");
+    assert_eq!((last.size, last.margins.x), (vec2(200.0 * PT, 500.0 * PT), 2.0 * SIDE));
+    // With a cover page: [0] alone, then [1, 2].
+    v.set_cover(true);
+    assert_eq!(v.first_page_now(&info).expect("a spread").size, vec2(800.0 * PT, 800.0 * PT));
+    v.current = 0;
+    let cover = v.first_page_now(&info).expect("the cover");
+    assert_eq!((cover.size, cover.margins.x), (vec2(300.0 * PT, 400.0 * PT), 2.0 * SIDE));
+    v.current = 9;
+    assert!(v.first_page_now(&info).is_none());
+}
+
+/// Full screen's presenter for one frame of `ctx`, at time `now`: whether the frame asked to be
+/// drawn again at once.
+fn presenter_frame(ctx: &egui::Context, v: &mut DocView, info: &DocInfo, now: f64) -> bool {
+    presenter_frame_animating(ctx, v, info, now, true)
+}
+
+/// [`presenter_frame`] with the Animation effects preference as given (`false` also when the
+/// system asks for no animations).
+fn presenter_frame_animating(ctx: &egui::Context, v: &mut DocView, info: &DocInfo, now: f64, animates: bool) -> bool {
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let painter = ui.ctx().layer_painter(egui::LayerId::background());
+        presenter::frame(v, info, &painter, ui.ctx(), now, animates, None);
+    });
+    // No renderer here to upload textures: drop the frame's texture changes.
+    out.textures_delta.clear();
+    out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|o| o.repaint_delay.is_zero())
+}
+
+/// A transition into a page the renderer could not draw ends at once: the page before is not held
+/// on screen waiting for it, and the page's own time can start.
+#[test]
+fn a_transition_into_a_page_that_failed_to_render_ends_at_once() {
+    use pdfcraft_render::{PageTransition, TransitionStyle};
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let wipe = PageTransition {
+        page: 1,
+        style: Some(TransitionStyle::Wipe),
+        duration: 1.0,
+        horizontal: false,
+        inward: false,
+        direction: Some(0),
+        scale: 1.0,
+        opaque: false,
+        display: None,
+    };
+    let info = DocInfo { pages: vec![page.clone(), page], transitions: vec![wipe], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(0, super::cache::PageTex { tag: 0, tex });
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    v.current = 1;
+    v.screen_rects = vec![(1, Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 400.0)))];
+    v.errors.insert(1, "the renderer failed".into());
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert!(!v.presenting_a_transition(), "no wait for a page that won't render");
+}
+
+/// While the incoming page is still rendering, the presenter holds the page before without asking
+/// for a frame after frame: the render cache wakes the window while pages are queued.
+#[test]
+fn a_transition_waiting_for_its_page_does_not_redraw_every_frame() {
+    use pdfcraft_render::{PageTransition, TransitionStyle};
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let wipe = PageTransition {
+        page: 1,
+        style: Some(TransitionStyle::Wipe),
+        duration: 1.0,
+        horizontal: false,
+        inward: false,
+        direction: Some(0),
+        scale: 1.0,
+        opaque: false,
+        display: None,
+    };
+    let info = DocInfo { pages: vec![page.clone(), page], transitions: vec![wipe], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(0, super::cache::PageTex { tag: 0, tex });
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    v.current = 1;
+    v.screen_rects = vec![(1, Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 400.0)))];
+    // egui asks for its first frames itself: past them, only the presenter asks.
+    for now in [0.1, 0.2, 0.3] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    let again = presenter_frame(&ctx, &mut v, &info, 0.4);
+    assert!(v.presenting_a_transition(), "still waiting for page 2");
+    assert!(!again, "without asking for a frame after frame");
+}
+
+/// A display time on the first page of the last two-page spread can't advance (there is no spread
+/// after it): the presenter then stays on it without asking for a frame after frame.
+#[test]
+fn a_display_time_on_the_last_spread_does_not_redraw_every_frame() {
+    use pdfcraft_render::PageTransition;
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let timed = PageTransition {
+        page: 2,
+        style: None,
+        duration: 1.0,
+        horizontal: false,
+        inward: false,
+        direction: Some(0),
+        scale: 1.0,
+        opaque: false,
+        display: Some(1.0),
+    };
+    let info = DocInfo { pages: vec![page.clone(), page.clone(), page.clone(), page], transitions: vec![timed], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::TwoUp, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    v.current = 2;
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(2, super::cache::PageTex { tag: 0, tex });
+    // egui asks for its first frames itself: past them, only the presenter asks.
+    for now in [0.0, 0.5, 0.6] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    let again = presenter_frame(&ctx, &mut v, &info, 5.0);
+    assert_eq!(v.current, 2, "the last spread stays");
+    assert!(!again, "and asks for no frame after frame");
+}
+
+/// A page's display time (ISO 32000-2 §12.4.4.1, `/Dur`) counts from when the page is on screen:
+/// a slow render that still shows Rendering… does not use it up.
+#[test]
+fn a_display_time_starts_once_the_page_has_rendered() {
+    use pdfcraft_render::PageTransition;
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let timed = PageTransition {
+        page: 0,
+        style: None,
+        duration: 1.0,
+        horizontal: false,
+        inward: false,
+        direction: Some(0),
+        scale: 1.0,
+        opaque: false,
+        display: Some(1.0),
+    };
+    let info = DocInfo { pages: vec![page.clone(), page], transitions: vec![timed], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    let ctx = egui::Context::default();
+    for now in [0.0, 1.0, 2.0, 5.0] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    assert_eq!(v.current, 0, "page 1 is still rendering: its second has not started");
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(0, super::cache::PageTex { tag: 0, tex });
+    presenter_frame(&ctx, &mut v, &info, 5.5);
+    presenter_frame(&ctx, &mut v, &info, 6.0);
+    assert_eq!(v.current, 0, "half of its second on screen");
+    presenter_frame(&ctx, &mut v, &info, 6.6);
+    assert_eq!(v.current, 1, "its second on screen is up");
+}
+
+/// In two-page view a display time counts from when the whole spread is on screen: one page of
+/// it still showing Rendering… holds the spread (#5316 review).
+#[test]
+fn a_display_time_in_two_page_view_waits_for_the_whole_spread() {
+    use pdfcraft_render::PageTransition;
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let timed = PageTransition {
+        page: 0,
+        style: None,
+        duration: 1.0,
+        horizontal: false,
+        inward: false,
+        direction: Some(0),
+        scale: 1.0,
+        opaque: false,
+        display: Some(1.0),
+    };
+    let info = DocInfo { pages: vec![page.clone(), page.clone(), page.clone(), page], transitions: vec![timed], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::TwoUp, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    let ctx = egui::Context::default();
+    let tex = |ctx: &egui::Context| ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    let r = Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 400.0));
+    v.screen_rects = vec![(0, r), (1, r.translate(egui::vec2(300.0, 0.0)))];
+    v.pages.insert(0, super::cache::PageTex { tag: 0, tex: tex(&ctx) });
+    for now in [0.0, 1.0, 2.0, 5.0] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    assert_eq!(v.current, 0, "page 2 of the spread is still rendering: the spread's second has not started");
+    v.pages.insert(1, super::cache::PageTex { tag: 0, tex: tex(&ctx) });
+    presenter_frame(&ctx, &mut v, &info, 5.5);
+    presenter_frame(&ctx, &mut v, &info, 6.0);
+    assert_eq!(v.current, 0, "half of its second on screen");
+    presenter_frame(&ctx, &mut v, &info, 6.6);
+    assert_eq!(v.current, 2, "its second on screen is up: the next spread");
+}
+
+/// Page 1 of `pages` 300×400 pt pages, with `transitions`, in full screen (single page), its
+/// raster in. The other pages get theirs with [`give_raster`].
+fn presenting_view(pages: usize, transitions: Vec<pdfcraft_render::PageTransition>, ctx: &egui::Context) -> (DocView, DocInfo) {
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page; pages], transitions, ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    give_raster(ctx, &mut v, 0);
+    (v, info)
+}
+
+/// Page `page`'s raster has arrived (a blank one).
+fn give_raster(ctx: &egui::Context, v: &mut DocView, page: usize) {
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(page, super::cache::PageTex { tag: 0, tex });
+}
+
+/// Turn to `page` as a key would, with its raster in and its place on screen.
+fn turn_to(ctx: &egui::Context, v: &mut DocView, page: usize) {
+    give_raster(ctx, v, page);
+    v.current = page;
+    v.screen_rects = vec![(page, Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 400.0)))];
+}
+
+/// A page's `/Trans` (style and `/D`) and `/Dur`, the rest as the spec's defaults.
+fn trans(page: usize, style: Option<pdfcraft_render::TransitionStyle>, duration: f32, display: Option<f32>) -> pdfcraft_render::PageTransition {
+    pdfcraft_render::PageTransition { page, style, duration, horizontal: true, inward: true, direction: Some(0), scale: 1.0, opaque: false, display }
+}
+
+/// A page with a transition but no display time (ISO 32000-2 Table 31, `Dur`: "By default, the
+/// viewer shall not advance automatically") stays until the user turns it, however long it shows.
+#[test]
+fn a_page_without_a_display_time_never_advances_by_itself() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(0, Some(TransitionStyle::Wipe), 1.0, None)], &ctx);
+    for now in [0.0, 1.0, 60.0, 86_400.0, 1.0e7] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    assert_eq!(v.current, 0, "no /Dur: the page waits for the presenter");
+}
+
+/// A display time of 0 seconds advances as soon as the page is on screen: zero is a number the
+/// spec allows, the time a page "shall be displayed" at most.
+#[test]
+fn a_display_time_of_zero_advances_once_the_page_is_on_screen() {
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(0.0))], &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    assert_eq!(v.current, 1, "page 1's zero seconds are up at once");
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert_eq!(v.current, 1, "page 2 has no display time");
+}
+
+/// A display time from the file that is negative, not a number or endless is no display time, or
+/// at most a day: it neither turns the page at once nor reaches a timer that can't hold it.
+#[test]
+fn a_negative_or_endless_display_time_is_no_display_time() {
+    for display in [-1.0, -0.001, f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(display))], &ctx);
+        for now in [0.0, 0.1, 5.0, 3600.0] {
+            presenter_frame(&ctx, &mut v, &info, now);
+        }
+        assert_eq!(v.current, 0, "/Dur {display}");
+    }
+}
+
+/// A display time longer than a day is cut to a day; the largest number the file can hold would
+/// otherwise be past what a timer can wait for.
+#[test]
+fn a_display_time_longer_than_a_day_is_cut_to_a_day() {
+    for display in [1.0e9, f32::MAX] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(display))], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        presenter_frame(&ctx, &mut v, &info, 86_399.0);
+        assert_eq!(v.current, 0, "/Dur {display}: not yet a day");
+        presenter_frame(&ctx, &mut v, &info, 86_400.5);
+        assert_eq!(v.current, 1, "/Dur {display}: a day is up");
+    }
+}
+
+/// A transition the file says lasts a day (or longer) ends within ten seconds: it can't hold the
+/// screen.
+#[test]
+fn a_transition_of_a_day_ends_within_ten_seconds() {
+    use pdfcraft_render::TransitionStyle;
+    for duration in [86_400.0, f32::MAX] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), duration, None)], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        turn_to(&ctx, &mut v, 1);
+        presenter_frame(&ctx, &mut v, &info, 0.1);
+        presenter_frame(&ctx, &mut v, &info, 5.0);
+        assert!(v.presenting_a_transition(), "/D {duration}: playing");
+        presenter_frame(&ctx, &mut v, &info, 10.2);
+        assert!(!v.presenting_a_transition(), "/D {duration}: over after ten seconds");
+    }
+}
+
+/// A transition of no length, a negative one or one that is not a number changes the page at once
+/// (a negative one would otherwise never end).
+#[test]
+fn a_transition_of_zero_or_negative_length_cuts() {
+    use pdfcraft_render::TransitionStyle;
+    for duration in [0.0, -1.0, f32::NAN, f32::NEG_INFINITY] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), duration, None)], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        turn_to(&ctx, &mut v, 1);
+        presenter_frame(&ctx, &mut v, &info, 0.1);
+        assert!(!v.presenting_a_transition(), "/D {duration}: cut");
+        assert_eq!(v.current, 1);
+    }
+}
+
+/// A style the spec doesn't name is read as its default R, Replace (ISO 32000-2 Table 164: "The
+/// new page simply replaces the old one with no special transition effect"): the page changes at
+/// once, and its display time still counts.
+#[test]
+fn an_unknown_transition_style_cuts_and_keeps_the_display_time() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let unknown = TransitionStyle::from_name("Spiral");
+    let (mut v, info) = presenting_view(3, vec![trans(1, Some(unknown), 5.0, Some(1.0))], &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert!(!v.presenting_a_transition(), "no effect for an unknown style");
+    presenter_frame(&ctx, &mut v, &info, 0.9);
+    assert_eq!(v.current, 1, "its display time is not up");
+    presenter_frame(&ctx, &mut v, &info, 1.2);
+    assert_eq!(v.current, 2, "its display time is up");
+}
+
+/// With animations off (the preference, or the system asking for none), a transition is a cut and
+/// the page's display time still counts from when it is on screen.
+#[test]
+fn without_animations_a_transition_cuts_and_the_display_time_counts() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), 5.0, Some(1.0))], &ctx);
+    presenter_frame_animating(&ctx, &mut v, &info, 0.0, false);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame_animating(&ctx, &mut v, &info, 0.1, false);
+    assert!(!v.presenting_a_transition(), "cut");
+    presenter_frame_animating(&ctx, &mut v, &info, 1.2, false);
+    assert_eq!(v.current, 2, "page 2's second is up");
+}
+
+/// A page turned by hand while a display time counts starts its own time afresh (ISO 32000-2
+/// §12.4.4.1, NOTE 1: "The user can advance the page manually before the specified time has
+/// expired"); the time left on the page before is not carried over.
+#[test]
+fn a_page_turned_by_hand_starts_its_own_display_time() {
+    let ctx = egui::Context::default();
+    let timed = (0..4).map(|p| trans(p, None, 1.0, Some(2.0))).collect();
+    let (mut v, info) = presenting_view(4, timed, &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    presenter_frame(&ctx, &mut v, &info, 1.5);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame(&ctx, &mut v, &info, 1.5);
+    presenter_frame(&ctx, &mut v, &info, 3.0);
+    assert_eq!(v.current, 1, "page 2 has shown 1.5 of its 2 seconds");
+    presenter_frame(&ctx, &mut v, &info, 3.6);
+    assert_eq!(v.current, 2, "page 2's own 2 seconds are up");
 }
 
 #[test]

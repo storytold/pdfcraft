@@ -4,8 +4,19 @@ use super::options::{
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
+/// Largest input file read into memory (512 MiB, as automation's `doc_open` reads).
+pub(crate) const MAX_INPUT: u64 = 512 * 1024 * 1024;
+
+/// The file at `path`, read no further than [`MAX_INPUT`]: a name that leads to something
+/// endless (a device, a pipe nobody closes) fails at the cap instead of filling memory.
 pub(crate) fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
-    std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(MAX_INPUT + 1).read_to_end(&mut bytes)).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > MAX_INPUT {
+        return Err(format!("{path}: the file is larger than 512 MiB"));
+    }
+    Ok(Arc::new(bytes))
 }
 
 /// `info FILE`: a JSON summary of the document as the app opens it (pages, fields, metadata, the
@@ -387,6 +398,14 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
     // copy take either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    // A page image is an image taken out of the document, as a snapshot or Export is in the app:
+    // like `text`, it needs the document to allow copying (or the permissions password).
+    let mut session = pdfcraft_engine::Session::new();
+    if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
+        doc.check_copying().map_err(
+            |_| "render: the document's permissions don't allow copying its pages as images; pass the owner password with --password to render it",
+        )?;
+    }
     let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
         let mut session = pdfcraft_engine::Session::new();
         let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
@@ -420,6 +439,12 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
             pdfcraft_render::RenderWarning::ColourFallback => {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
+            }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: an image with a malformed Indexed colour table may be drawn wrongly or not at all"
+                );
             }
             pdfcraft_render::RenderWarning::Type3WidthsMissing => {
                 let _ = writeln!(

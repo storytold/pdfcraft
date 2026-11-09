@@ -102,8 +102,10 @@ impl DocView {
             }
             self.forward.clear();
         }
-        // Partial wheel motion belongs to the old place.
+        // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
+        self.find_hold = None;
+        self.goto_point = None;
         self.goto = Some((page, 0.0));
         self.current = page;
     }
@@ -240,7 +242,8 @@ impl DocView {
 
     /// Retain the current page when `typed` exactly matches its displayed label, even if
     /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
-    /// then a physical page number. `false` when it names no page.
+    /// then a position in parentheses ("(3)", as print ranges take it), then a physical page
+    /// number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
         // Compare the displayed value before trimming: a label may itself contain spaces.
         // Repeated labels occur in restarted sections and prefix-only ranges.
@@ -251,7 +254,7 @@ impl DocView {
         let page = labels
             .iter()
             .position(|l| !l.is_empty() && l.eq_ignore_ascii_case(t))
-            .or_else(|| t.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1));
+            .or_else(|| pdfcraft_engine::print::position(t).or_else(|| t.parse::<usize>().ok()).filter(|n| *n >= 1).map(|n| n - 1));
         match page {
             Some(p) if p < self.page_count => {
                 self.go_to_page(p);
@@ -275,6 +278,8 @@ impl DocView {
         self.goto = Some((page, 0.0));
         self.current = page;
         self.reset_coarse_state();
+        // A find step's match belongs to the place left, as for any other jump.
+        self.find_hold = None;
         true
     }
 
@@ -325,6 +330,18 @@ impl DocView {
     }
 }
 
+/// ⇧⌘+ / ⇧⌘−: rotate the view clockwise / counterclockwise.
+fn rotation_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if pressed(shift_cmd(Key::Plus)) || pressed(shift_cmd(Key::Equals)) {
+        view.rotate_view(true);
+    }
+    if pressed(shift_cmd(Key::Minus)) {
+        view.rotate_view(false);
+    }
+}
+
 /// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page, or size the pages in the page grid.
 fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
     use egui::{Key, KeyboardShortcut, Modifiers};
@@ -362,6 +379,9 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
+/// The document view's keyboard shortcuts: find, rotation, zoom (or the page grid's size),
+/// history, Escape, and the paging and scrolling keys. An open form field keeps the paging
+/// and scrolling keys for itself.
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -386,14 +406,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus))
-        || pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Equals))
-    {
-        view.rotate_view(true);
-    }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
-        view.rotate_view(false);
-    }
+    rotation_shortcuts(view, &pressed);
     zoom_shortcuts(view, &pressed);
     // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
     // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
@@ -406,8 +419,13 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.view_history(true);
     }
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+    // So does an open field, whose list closes.
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
@@ -417,22 +435,36 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
+    // The open field's keys leave the page under it where it is.
+    if field_open {
+        return;
+    }
     // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
-    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434).
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434; *Adobe Acrobat Help*, 2019,
+    // "Keys for navigating a PDF", p. 83). These take the key from the page turning and
+    // scrolling below.
     let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
-    if key(Key::Home) || pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp)) {
+    let to_start = pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp));
+    let to_end = pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown));
+    if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
-    if key(Key::End) || pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown)) {
+    if key(Key::End) || to_end {
         view.go_to_end();
     }
-    // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
-    // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
+    if to_end || to_start {
+        return;
+    }
+    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
+    // Full screen: Space and Enter go forward a page, and Shift+Enter and Backspace back
+    // (*Adobe Acrobat Help*, 2019, "Read a document in Full Screen mode", p. 66: "To go to the
+    // previous page, press Shift+Enter"). The arrows and Page Up / Page Down already turn pages
+    // where nothing scrolls, below.
     if view.presentation.is_some() {
-        if key(Key::Space) || key(Key::Enter) {
+        if key(Key::Space) || (key(Key::Enter) && !shift) {
             view.step_page(true);
         }
-        if key(Key::Backspace) {
+        if key(Key::Backspace) || (key(Key::Enter) && shift) {
             view.step_page(false);
         }
     }
@@ -441,7 +473,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // than the window (a plan zoomed in) → / ← scroll sideways a line first, and turn the page
     // once there is nothing left to scroll that way, as ↓ / ↑ do in single-page view; ⌘→ / ⌘←
     // turn it at once.
-    let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
     let line = KEY_SCROLL_LINE * speed.factor();
     // Only an up-to-date view counts: no jump pending.

@@ -304,6 +304,8 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     let rect = note.rect.map(f64::from);
     for rotation in [0u16, 90, 180, 270, 45] {
@@ -769,6 +771,103 @@ trailer << /Root 1 0 R >>
     assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
 }
 
+/// ISO 32000-2 Table 99 `/Order`: the Layers panel presents the groups it lists, as a tree,
+/// with nested arrays one level deeper and a leading text string as a label. Groups it
+/// doesn't list are not presented (they stay in `layers` and keep their state), and without
+/// `/Order` none are. Malformed entries are skipped; cycles and depth are bounded.
+#[test]
+fn the_layers_panel_presents_the_order_tree() {
+    let rows = |order: &str, extra: &str| {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /OFF [8 0 R] {order} >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (A) >> endobj
+6 0 obj << /Type /OCG /Name (B) >> endobj
+7 0 obj << /Type /OCG /Name (C) >> endobj
+8 0 obj << /Type /OCG /Name (D) >> endobj
+9 0 obj << /Type /OCG /Name (Unlisted) >> endobj
+{extra}
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        assert_eq!(info.layers.len(), 4, "every group in /OCGs keeps its state: {order}");
+        info.layer_order
+            .iter()
+            .map(|r| match &r.item {
+                LayerItem::Layer(i) => format!("{}{}", " ".repeat(r.depth), info.layers.get(*i).map_or("?", |l| l.name.as_str())),
+                LayerItem::Label(s) => format!("{}[{s}]", " ".repeat(r.depth)),
+            })
+            .collect::<Vec<_>>()
+    };
+    // A layer with sublayers, and a group not listed (D) that isn't presented.
+    assert_eq!(rows("/Order [5 0 R 6 0 R [7 0 R]]", ""), ["A", "B", " C"]);
+    // A labelled collection heads its own level, with a nested array under B.
+    assert_eq!(rows("/Order [5 0 R [(Set) 6 0 R [7 0 R]] 8 0 R]", ""), ["A", "[Set]", " B", "  C", "D"]);
+    // Without /Order, or with an empty one, nothing is presented.
+    assert!(rows("", "").is_empty());
+    assert!(rows("/Order []", "").is_empty());
+    // An indirect /Order and nested array; a group outside /OCGs, a missing object and junk
+    // are skipped.
+    assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 11 0 R 9 0 R 12 0 R 1 (x) /N] endobj\n11 0 obj [6 0 R] endobj"), ["A", " B"]);
+    // Cycles: an array holding itself, and an /Order holding itself.
+    assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 10 0 R 11 0 R] endobj\n11 0 obj [6 0 R 11 0 R 10 0 R] endobj"), ["A", " B"]);
+    // Nesting past the limit is cut off; a long label is cut short.
+    let deep = format!("/Order [5 0 R {}6 0 R{}]", "[".repeat(40), "]".repeat(40));
+    assert_eq!(rows(&deep, ""), ["A"]);
+    let long = format!("/Order [[({}) 5 0 R]]", "x".repeat(1000));
+    let got = rows(&long, "");
+    assert_eq!(got.first().map(|s| s.len()), Some(MAX_LAYER_LABEL_CHARS + 2));
+    // Many rows stop at the cap.
+    let many = format!("/Order [{}]", "5 0 R ".repeat(MAX_LAYER_ORDER_ROWS + 10));
+    assert_eq!(rows(&many, "").len(), MAX_LAYER_ORDER_ROWS);
+    // One long indirect label heading many direct arrays is decoded once, and cut short in
+    // every row.
+    let shared = format!("/Order [{}]", "[13 0 R 5 0 R] ".repeat(100));
+    let label = format!("13 0 obj ({}) endobj", "y".repeat(10_000));
+    let before = LABEL_DECODES.with(std::cell::Cell::get);
+    let got = rows(&shared, &label);
+    assert_eq!(LABEL_DECODES.with(std::cell::Cell::get) - before, 1);
+    assert_eq!(got.len(), 200);
+    assert!(got.iter().step_by(2).all(|s| s.len() == MAX_LAYER_LABEL_CHARS + 2), "{:?}", got.first());
+}
+
+/// ISO 32000-2 §8.11.4.4: the View auto state (`/AS`) decides the initial state of the groups
+/// it manages, over `/ON` and `/OFF`; the others keep the configuration's. Malformed entries
+/// are ignored.
+#[test]
+fn initial_layer_visibility_applies_the_view_auto_state() {
+    let initial = |config: &str| {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (ViewOff) /Usage << /View << /ViewState /OFF >> >> >> endobj
+6 0 obj << /Type /OCG /Name (ViewOn) /Usage 8 0 R >> endobj
+7 0 obj << /Type /OCG /Name (Plain) >> endobj
+8 0 obj << /View << /ViewState /ON >> >> endobj
+9 0 obj 9 0 R endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        // Opened, so each is shown as it starts.
+        info.layers.iter().inspect(|l| assert_eq!(l.initial, l.visible, "{}", l.name)).map(|l| l.initial).collect::<Vec<_>>()
+    };
+    let managed = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R 6 0 R 7 0 R] >>]";
+    assert_eq!(initial(&format!("<< /OFF [6 0 R 7 0 R] {managed} >>")), [false, true, false]);
+    assert_eq!(initial("<< /OFF [6 0 R 7 0 R] >>"), [true, false, false], "without /AS");
+    assert_eq!(initial("<< /OFF [6 0 R] /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R 6 0 R] >>] >>"), [true, false, true], "Print event");
+    assert_eq!(initial("<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), [true, true, true], "Zoom only");
+    for bad in ["/AS 9 0 R", "/AS [9 0 R 1 null]", "/AS [<< /Event /View /OCGs [5 0 R] >>]", "/AS [<< /Event /View /Category [/View] /OCGs 9 0 R >>]"]
+    {
+        assert_eq!(initial(&format!("<< {bad} >>")), [true, true, true], "{bad}");
+    }
+}
+
 const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
@@ -1042,6 +1141,152 @@ fn a_named_attachment_leaves_its_contents_unspent() {
     assert!(info.attachments.iter().all(|a| a.name == "a.txt"));
     assert_eq!(info.links.len(), 1);
     assert!(matches!(&info.links[0].target, LinkTarget::Uri(u) if *u == uri));
+}
+
+#[test]
+fn link_hit_test_rejects_points_outside_the_rect_before_scanning_quads() {
+    // A quadrilateral reaching past `/Rect` (hand-built: `link_quads` keeps none beyond the
+    // slack) shows whether the bounds gate runs before the quadrilateral scan.
+    let link = Link {
+        page: 0,
+        index: 0,
+        rect: [0.0, 0.0, 10.0, 10.0],
+        quads: vec![[0.0, 0.0, 50.0, 0.0, 50.0, 10.0, 0.0, 10.0]],
+        target: LinkTarget::Other("URI".into()),
+    };
+    assert!(link.contains(5.0, 5.0), "inside the rect and the quadrilateral");
+    assert!(link.contains(10.005, 5.0), "within the slack `link_quads` accepts");
+    assert!(!link.contains(30.0, 5.0), "outside the rect: no quadrilateral is scanned");
+    assert!(!link.contains(f32::NAN, 5.0));
+}
+
+#[test]
+fn a_link_whose_quads_have_no_area_is_active_over_its_rect() {
+    let rect = [10.0, 10.0, 200.0, 30.0];
+    let link = |values: &[f32]| Link {
+        page: 0,
+        index: 0,
+        rect,
+        quads: crate::link_quads(&values.iter().map(|v| Some(*v)).collect::<Vec<_>>(), rect),
+        target: LinkTarget::Other("URI".into()),
+    };
+    let flat = [10.0, 20.0, 60.0, 20.0, 60.0, 20.0, 10.0, 20.0];
+    assert!(link(&flat).contains(100.0, 25.0), "no usable quad: the whole /Rect");
+    let good = [10.0, 10.0, 60.0, 10.0, 60.0, 30.0, 10.0, 30.0];
+    let mixed: Vec<f32> = flat.iter().chain(good.iter()).copied().collect();
+    assert!(link(&mixed).contains(30.0, 25.0), "inside the usable quad");
+    assert!(!link(&mixed).contains(100.0, 25.0), "the usable quad still gates the /Rect");
+}
+
+fn links_of(catalog_extra: &str, annots: &str) -> DocInfo {
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [{annots}] >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF"
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 300.0, height: 300.0, crop: [0.0, 0.0, 300.0, 300.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    info
+}
+
+fn uris(info: &DocInfo) -> Vec<String> {
+    info.links.iter().map(|l| if let LinkTarget::Uri(u) = &l.target { u.clone() } else { format!("{:?}", l.target) }).collect()
+}
+
+/// ISO 32000-2 §12.6.4.8, Table 211: a relative URI action is resolved against the catalog's
+/// `/URI /Base`; absolute addresses, and a base that isn't a web address, change nothing.
+#[test]
+fn relative_uri_actions_resolve_against_the_catalog_base() {
+    let annots = "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (page.html) >> >> \
+                  << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (javascript:alert(1)) >> >> \
+                  << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.org/abs) >> >>";
+    let info = links_of("/URI << /Base (https://example.com/base/) >>", annots);
+    assert_eq!(info.uri_base.as_deref(), Some("https://example.com/base/"));
+    assert_eq!(uris(&info), ["https://example.com/base/page.html", "javascript:alert(1)", "https://example.org/abs"]);
+    // An indirect URI dictionary is followed too.
+    let pdf_indirect = links_of("/URI 4 0 R >> endobj\n4 0 obj << /Base (https://example.com/b/) >> endobj\n5 0 obj <<", annots);
+    assert_eq!(uris(&pdf_indirect).first().map(String::as_str), Some("https://example.com/b/page.html"));
+    // Without a base, or with one that isn't a web address, the address stays as written.
+    assert_eq!(uris(&links_of("", annots)).first().map(String::as_str), Some("page.html"));
+    for base in ["/URI << /Base (file:///C:/docs/) >>", "/URI << /Base /NotAString >>", "/URI 7", "/URI << /Base (javascript:x//) >>"] {
+        assert_eq!(uris(&links_of(base, annots)).first().map(String::as_str), Some("page.html"), "{base}");
+    }
+}
+
+/// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its
+/// `/Rect` when they are missing, malformed or reach outside it.
+#[test]
+fn links_are_active_in_their_quad_points() {
+    let link = |quads: &str| format!("<< /Subtype /Link /Rect [10 10 200 30] {quads} /A << /S /URI /URI (https://example.org/) >> >>");
+    let info = links_of("", &link("/QuadPoints [10 10 60 10 60 30 10 30]"));
+    let l = &info.links[0];
+    assert_eq!(l.quads, vec![[10.0, 10.0, 60.0, 10.0, 60.0, 30.0, 10.0, 30.0]]);
+    assert!(l.contains(30.0, 20.0), "the first word");
+    assert!(!l.contains(150.0, 20.0), "inside /Rect but outside the quad");
+    for fallback in [
+        "",
+        "/QuadPoints [10 10 60 10 60 30 10]",
+        "/QuadPoints [10 10 60 10 60 30 10 (x)]",
+        "/QuadPoints [10 10 260 10 260 30 10 30]",
+        "/QuadPoints 5",
+    ] {
+        let info = links_of("", &link(fallback));
+        let l = &info.links[0];
+        assert!(l.quads.is_empty(), "{fallback}");
+        assert!(l.contains(150.0, 20.0) && !l.contains(250.0, 20.0), "{fallback}: active over /Rect");
+    }
+    let many = "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS + 1);
+    assert!(links_of("", &link(&format!("/QuadPoints [{many}]"))).links[0].quads.is_empty(), "too many quads");
+}
+
+/// Links sharing one long `/QuadPoints` array, or a relative address resolved against a long
+/// `/URI /Base`, keep their copies only within `MAX_LINK_ATTACHMENT_TEXT_BYTES`, and every
+/// link is still listed.
+#[test]
+fn links_sharing_quad_points_or_a_long_base_keep_them_within_a_budget() {
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let fill = |catalog_extra: &str, links: &str, object5: &str| {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{links}] >> endobj\n\
+             5 0 obj {object5} endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut info = DocInfo { pages: vec![page.clone()], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        info
+    };
+
+    let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / (crate::MAX_LINK_QUADS * std::mem::size_of::<[f32; 8]>()) + 20;
+    let quads = format!("[{}]", "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS));
+    let links = "<< /Subtype /Link /Rect [0 0 100 100] /QuadPoints 5 0 R /A << /S /URI /URI (https://example.org/) >> >> ".repeat(count);
+    super::annotations::QUAD_ARRAYS_READ.with(|n| n.set(0));
+    let info = fill("", &links, &quads);
+    assert_eq!(info.links.len(), count);
+    let kept: usize = info.links.iter().map(|l| std::mem::size_of_val(l.quads.as_slice())).sum();
+    assert!(kept > 0 && kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} quad bytes kept");
+    assert!(info.links.iter().any(|l| l.quads.is_empty()), "past the budget a link is active over its /Rect");
+    // Review on #4474: the shared array is read once for each link it fits, and once more to find
+    // that it no longer does; not again for every link after that.
+    let fitted = info.links.iter().filter(|l| !l.quads.is_empty()).count();
+    let read = super::annotations::QUAD_ARRAYS_READ.with(std::cell::Cell::get);
+    assert_eq!(read, fitted + 1, "{read} reads for {fitted} links within the budget, of {count}");
+
+    let base = format!("https://example.com/{}/", "b".repeat(crate::MAX_URI_BASE_BYTES - 32));
+    let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / base.len() + 20;
+    let links = "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >> ".repeat(count);
+    let info = fill(&format!("/URI << /Base ({base}) >>"), &links, "<< /S /URI /URI (p.html) >>");
+    assert_eq!(info.links.len(), count);
+    let addresses = uris(&info);
+    let kept: usize = addresses.iter().map(String::len).sum();
+    assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} address bytes kept");
+    assert_eq!(addresses.first(), Some(&format!("{base}p.html")));
+    assert!(addresses.iter().any(|u| u == "p.html"), "past the budget a link keeps its raw address");
 }
 
 /// Embedded files whose name-tree keys share one long string keep it, as key and as name, only
@@ -1999,6 +2244,39 @@ fn carriage_returns_in_comment_text_become_line_breaks() {
     assert_eq!(info.annotations[0].contents.as_deref(), Some("one\n\ntwo\nthree"));
 }
 
+/// A comment's pop-up (`/Popup`) is read with its place and state; one without reads none.
+#[test]
+fn a_comments_pop_up_is_read_with_its_place_and_state() {
+    let bytes = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R 6 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R /Open true >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect [190 160 50 280] /Parent 4 0 R /Open true >> endobj\n6 0 obj << /Type /Annot /Subtype /Square /Rect [10 10 60 60] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let info = inspect(Arc::new(bytes.to_vec()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "normalised, and open");
+    let square = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+    assert_eq!(square.popup, None);
+    assert!(info.annotations.iter().all(|a| a.subtype != "Popup"), "the pop-up is not a comment of its own");
+
+    // #2137 review: a /Popup naming another annotation, a pop-up of another comment, or one
+    // whose /Parent isn't a reference isn't this comment's pop-up; one without /Parent is.
+    for (target, extra, own) in [
+        ("6 0 R", "", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent 6 0 R >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent << >> >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] >> endobj\n", true),
+    ] {
+        let text = String::from_utf8_lossy(bytes).replace("/Popup 5 0 R", &format!("/Popup {target}")).replace("trailer", &format!("{extra}trailer"));
+        let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), own, "/Popup {target} {extra}");
+    }
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to
+    // it; its pop-up's /Parent names the note itself, and is still its own.
+    let text = String::from_utf8_lossy(bytes).replace("/Annots [4 0 R", "/Annots [8 0 R").replace("trailer", "8 0 obj 4 0 R endobj\ntrailer");
+    let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "listed through 8 0 R");
+}
+
 #[test]
 fn dates_are_prettified() {
     assert_eq!(pretty_date("D:20260930104512-04'00'"), "2026-09-30 10:45");
@@ -2018,6 +2296,186 @@ trailer << /Root 1 0 R >>
     let p = &info.pages[0];
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
+}
+
+mod group_tests {
+    use crate::inspect::{Annotation, MAX_GROUP_DEPTH, group_primaries, link_replies};
+
+    /// The annotation at `/Annots` position `index` of page 0, whose `/IRT` points at position
+    /// `parent`, with `/RT /Group` when `grouped`.
+    fn annot(index: usize, parent: Option<usize>, grouped: bool) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: "Circle".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: Some(index.to_string()),
+            in_reply_to: parent.map(|p| p.to_string()),
+            parent: parent.map(|p| (0, p)),
+            grouped,
+            rect: [0.0; 4],
+            color: None,
+            index,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
+    }
+
+    /// `all` with its reply links settled, as both comment readers list it.
+    fn listed(mut all: Vec<Annotation>) -> Vec<Annotation> {
+        link_replies(&mut all);
+        all
+    }
+
+    /// ISO 32000-2 §12.5.6.2: a subordinate's primary is the annotation its `/IRT` points at,
+    /// past any other subordinate; a reply is no subordinate. A loop, or an `/IRT` to nothing
+    /// listed, leaves a comment of its own (as `link_replies` leaves such a reply), and an
+    /// over-long chain ends.
+    #[test]
+    fn group_primaries_follow_irt_to_the_first_non_subordinate() {
+        let all = listed(vec![
+            annot(0, None, false),    // top
+            annot(1, Some(0), true),  // mid
+            annot(2, Some(1), true),  // low
+            annot(3, Some(0), false), // a reply
+            annot(4, Some(5), true),  // a loop
+            annot(5, Some(4), true),  // of two
+            annot(6, Some(6), true),  // itself
+            annot(7, Some(99), true), // nothing listed
+            annot(8, Some(3), true),  // grouped with the reply
+        ]);
+        assert_eq!(group_primaries(&all), [None, Some(0), Some(0), None, None, None, None, None, Some(3)]);
+        assert!(all.iter().skip(4).take(4).all(Annotation::is_comment), "{all:?}");
+        // A chain longer than the cap has no primary; one within it does, whether the reply links
+        // are settled first or not.
+        for (len, found) in [(MAX_GROUP_DEPTH - 1, true), (MAX_GROUP_DEPTH + 1, false)] {
+            let mut chain = vec![annot(0, None, false)];
+            chain.extend((1..=len).map(|i| annot(i, Some(i - 1), true)));
+            assert_eq!(group_primaries(&chain).last().copied().flatten().is_some(), found, "{len}");
+            assert_eq!(group_primaries(&listed(chain)).last().copied().flatten().is_some(), found, "{len}, listed");
+        }
+    }
+
+    /// `group_primaries` is public and may be handed links `link_replies` has not settled: a loop
+    /// of subordinates (each other's `/IRT`, or its own) still ends, within `MAX_GROUP_DEPTH`
+    /// steps, with no primary.
+    #[test]
+    fn group_primaries_end_on_an_unsettled_loop() {
+        let all = vec![annot(0, Some(1), true), annot(1, Some(0), true), annot(2, Some(2), true), annot(3, None, false)];
+        assert_eq!(group_primaries(&all), [None, None, None, None]);
+    }
+
+    fn with(mut a: Annotation, subtype: &str, t: Option<&str>) -> Annotation {
+        a.subtype = subtype.into();
+        a.contents = t.map(Into::into);
+        a
+    }
+
+    /// A StrikeOut primary with no text lists its first Caret subordinate's (earlier Replace
+    /// Text groups kept the replacement on the caret only); a primary's own text always wins, a
+    /// subordinate of another type lends nothing, and a primary of another type borrows nothing
+    /// (ISO 32000-2 §12.5.6.2: the group's text is the primary's).
+    #[test]
+    fn a_primary_without_text_lists_its_carets() {
+        let mut all = listed(vec![
+            with(annot(0, None, false), "StrikeOut", None),
+            with(annot(1, Some(0), true), "Caret", Some("red")),
+            with(annot(2, Some(0), true), "Caret", Some("second")),
+            with(annot(3, None, false), "Caret", Some("kept")),
+            with(annot(4, Some(3), true), "Caret", Some("ignored")),
+            with(annot(5, Some(0), false), "Text", Some("a reply")),
+            with(annot(6, None, false), "StrikeOut", None),
+            with(annot(7, Some(6), true), "Circle", Some("not lent")),
+            with(annot(8, None, false), "Square", None),
+            with(annot(9, Some(8), true), "Caret", Some("not borrowed")),
+        ]);
+        super::fill_group_text(&mut all);
+        let shown: Vec<Option<&str>> = all.iter().map(|a| a.contents.as_deref()).collect();
+        assert_eq!(
+            shown,
+            [
+                Some("red"),
+                Some("red"),
+                Some("second"),
+                Some("kept"),
+                Some("ignored"),
+                Some("a reply"),
+                None,
+                Some("not lent"),
+                None,
+                Some("not borrowed"),
+            ]
+        );
+    }
+
+    /// Review on #4358: an empty caret ahead of one with text lends nothing, so the primary lists
+    /// the replacement rather than nothing.
+    #[test]
+    fn an_empty_caret_does_not_hide_the_next_carets_text() {
+        let mut all = listed(vec![
+            with(annot(0, None, false), "StrikeOut", None),
+            with(annot(1, Some(0), true), "Caret", Some("")),
+            with(annot(2, Some(0), true), "Caret", Some("new words")),
+        ]);
+        super::fill_group_text(&mut all);
+        assert_eq!(all[0].contents.as_deref(), Some("new words"));
+    }
+
+    /// Many groups each get their own caret's text (one map lookup per caret, not a scan of the
+    /// groups seen so far).
+    #[test]
+    fn many_groups_each_list_their_own_caret() {
+        const N: usize = 20_000;
+        let mut all = Vec::with_capacity(2 * N);
+        for i in 0..N {
+            all.push(with(annot(i, None, false), "StrikeOut", None));
+        }
+        // Carets in reverse order, so a primary's caret is far from it in the list.
+        for (k, i) in (0..N).rev().enumerate() {
+            all.push(with(annot(N + k, Some(i), true), "Caret", Some(&format!("t{i}"))));
+        }
+        let mut all = listed(all);
+        super::fill_group_text(&mut all);
+        for (i, a) in all.iter().take(N).enumerate() {
+            assert_eq!(a.contents.as_deref(), Some(format!("t{i}").as_str()), "{i}");
+        }
+    }
+}
+
+/// #2137 review: a pop-up without a `/Rect` of four numbers reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads it, so the two lists of comments agree.
+#[test]
+fn a_pop_up_without_a_four_number_rect_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    for (rect, read) in [("", false), ("/Rect [0 0 50]", false), ("/Rect (box)", false), ("/Rect [0 0 50 /x]", false), ("/Rect [0 0 50 60]", true)] {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), read, "{rect:?}");
+    }
+}
+
+/// #2137 review: a pop-up `/Rect` with its corners reversed reads with them in order (ISO
+/// 32000-2 §7.9.5), and one with a number too large for `f32` reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads both.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let popup = |rect: &str| {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        info.annotations.iter().find(|a| a.subtype == "Text").expect("the note").popup.map(|p| p.rect)
+    };
+    assert_eq!(popup("[150 200 50 100]"), Some([50.0, 100.0, 150.0, 200.0]), "reversed");
+    let huge = format!("1{}", "0".repeat(40));
+    assert_eq!(popup(&format!("[0 0 {huge} 100]")), None, "a number past f32");
+    assert_eq!(popup(&format!("[0 0 {huge}.0 100]")), None, "a real past f32");
 }
 
 /// Inspection keeps every object it reads, converted, for as long as it runs, and nothing it
