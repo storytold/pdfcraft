@@ -86,7 +86,13 @@ pub fn shape_hebrew(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
 }
 
 pub fn thai_has(c: char) -> bool {
-    face(ShapedScript::Thai).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+    thai_has_styled(c, false)
+}
+
+/// Whether the Thai face that shapes this weight ([`shape_thai_styled`]) has a glyph for `c`:
+/// the Bold face for bold text when the build has one.
+pub fn thai_has_styled(c: char, bold: bool) -> bool {
+    face(if bold { ShapedScript::ThaiBold } else { ShapedScript::Thai }).is_some_and(|(font, _)| font.charmap().map(c).is_some())
 }
 
 /// Shape Thai with grapheme clusters so Sara Am decomposition and stacked marks keep their

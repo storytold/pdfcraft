@@ -1732,6 +1732,41 @@ fn added_thai_text_draws_following_spaces_digits_and_punctuation_with_the_thai_f
     assert!(fonts.iter().all(|f| f.starts_with("PCAr")), "one shaped face for the whole line: {fonts:?}");
 }
 
+/// Bold Add Text Thai is drawn with the Thai document manifest's Bold face: the same text's glyph
+/// outlines differ between bold and regular. Skipped when the build has no distinct Bold face, where
+/// bold falls back to the Regular face and the outlines match.
+#[test]
+fn bold_added_thai_text_draws_the_bold_faces_outlines() {
+    let (Some(regular), Some(bold)) = (pdfcraft_fonts::document_thai_font_for(false), pdfcraft_fonts::document_thai_font_for(true)) else {
+        return;
+    };
+    if regular.bytes == bold.bytes {
+        return;
+    }
+    let outlines = |bold: bool| {
+        let mut doc = fixture();
+        let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "ทดสอบ".into(), size: 14.0, bold, ..AddedText::default() };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+        let p = &pdfcraft_model::pages(&doc)[0];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+        let fonts = fonts.as_dict().unwrap();
+        let mut procs: Vec<Vec<u8>> = arabic_font_names(&doc, 0)
+            .iter()
+            .flat_map(|name| {
+                let font = doc.resolve(fonts.get(name.as_bytes()).unwrap());
+                let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+                procs.as_dict().unwrap().iter().map(|(_, s)| stream_bytes(&doc, s).unwrap()).collect::<Vec<_>>()
+            })
+            .collect();
+        procs.sort();
+        procs
+    };
+    let (thin, heavy) = (outlines(false), outlines(true));
+    assert!(!thin.is_empty() && !heavy.is_empty());
+    assert_ne!(thin, heavy, "bold must change the outlines, not only the descriptor");
+}
+
 #[test]
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();

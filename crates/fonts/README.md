@@ -65,8 +65,10 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   outlines, so reopening does not depend on installed fonts: Add text, text boxes, Fill & Sign
   text, form fields, headers, footers and watermarks all write with it
   (`shaped_text::appearance_lines` for appearances, whose glyph streams `store_streams` moves into
-  the document). `wrap_with` never breaks a line before a Thai mark. Only the Regular face is used
-  so far. The faces of that document manifest (native builds only) live in an internal
+  the document). `wrap_with` never breaks a line before a Thai mark. Regular Thai text uses the
+  Regular face; bold Add Text Thai uses the manifest's Bold face when it has one
+  (`document_thai_font_for`, `shape_thai_styled`), else the Regular face.
+  The faces of that document manifest (native builds only) live in an internal
   `CRAFT_DOCUMENT_FONTS`. They are never interface fallbacks, so they are kept out of
   `CRAFT_FONTS` and every `ui_*` list.
 - `craft_glyph(face, ch)` and `face_has(bytes, ch)`: bounded outlines and glyph coverage for any bundled face.

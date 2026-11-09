@@ -196,7 +196,7 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
     if t.text.chars().any(is_thai) {
-        if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
+        if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has_styled(*c, t.bold)) {
             return Some(c);
         }
         let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
@@ -278,7 +278,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
             let in_thai = segments.last().is_some_and(|(kind, _)| matches!(kind, Some(ShapedScript::Thai | ShapedScript::ThaiBold)));
-            let script = if is_thai(c) || (in_thai && !c.is_alphabetic() && pdfcraft_fonts::thai_has(c)) {
+            // Joined only when the face that shapes the run (bold or regular) has the glyph.
+            let script = if is_thai(c) || (in_thai && !c.is_alphabetic() && pdfcraft_fonts::thai_has_styled(c, t.bold)) {
                 Some(if t.bold { ShapedScript::ThaiBold } else { ShapedScript::Thai })
             } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
                 Some(ShapedScript::Hebrew)
