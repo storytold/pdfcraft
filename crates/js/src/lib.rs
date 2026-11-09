@@ -39,6 +39,7 @@ mod format;
 mod globals;
 mod host;
 mod model;
+mod nesting;
 mod run;
 
 #[cfg(test)]
