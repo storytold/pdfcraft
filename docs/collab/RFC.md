@@ -577,7 +577,13 @@ cargo run -p pdfcraft-collab-daemon --release -- \
    лежат на диске (§8.1); восстановление с базой и replay хвоста проверено
    тестами `a_room_replays_its_journal_after_a_restart` и
    `a_restart_recovers_the_last_commit`.
-2. Web-клиент к серверу не подключён (нужен host-мост `pdfcraft:session`).
+2. ~~Web-клиент к серверу не подключён~~ — в `collab-session` один драйвер
+   протокола за трейтом `Transport` с двумя реализациями (нативный воркер и
+   браузерный `web-sys` WebSocket), UI держит `Box<dyn Sink>` вместо нативного
+   `Handle`, host-мост `pdfcraft:session`/`session-state`/`presence`/`commit`/
+   `committed` реализован (STATUS §4, §6.3). Не проверено: прогон в браузере
+   против страницы кабинета (нужны `craft-web-host` из craft-libs и страница,
+   которая говорит этот контракт).
 3. ~~Presence: панель участников и страница/зум; курсоры и выделения не
    рисуются~~ — курсор над страницей отправляется (≤10 Гц, коалесцирование,
    TTL 30 с) и рисуется у остальных цветом участника; выделения (`selection`)

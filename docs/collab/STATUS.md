@@ -12,9 +12,12 @@
   `mergeStateStatus` is `UNSTABLE` with that single green check and no required
   review. The PR body is the text of `pdfcraft/PR-DRAFT.md` from `## What` on
   (§6.6). This STATUS update is local only, not pushed.
+  **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
+  the browser transport and the five host messages (§4, §6.3) — and is not
+  pushed either: the fork, PR #6622 and its body still describe `81035bf2`.
   Limitation 1 (crash recovery against the real process) is closed in
   `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
-  limitation 12 (commit publication outside the hub lock) in `a47641fb`. After
+  limitation 11 (commit publication outside the hub lock) in `a47641fb`. After
   the rebase those commits are `2dfae0fe` and `e043c132`.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
@@ -33,15 +36,17 @@
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
-| `crates/collab-session` | Background worker: socket, reconnect with backoff, heartbeat ping, resend of unconfirmed merges after a snapshot |
+| `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` |
-| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`: start from env, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo |
+| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
+| `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
-The feature is native-only for now. `collab-ws` and `collab-session` compile to
-an empty crate on wasm; `collab-client`, `collab-client-pdf` and `collab-annot`
-are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
-`collab-client-pdf` after adding the typed payload).
+Both platforms run the same protocol: `collab-session` compiles on wasm32 with a
+`web-sys` `WebSocket` transport, and `ui-egui --features collab` compiles for
+wasm32 (§4, §6.3). `collab-ws` stays native-only (it is the server's transport);
+`collab-client`, `collab-client-pdf` and `collab-annot` are wasm-safe. The web
+build enables the feature with `trunk build --release --features collab`.
 
 ## 2. Decisions that are easy to undo wrongly
 
@@ -206,6 +211,80 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
+### Web host bridge — §6.3 (2026-11-09, local; not pushed)
+
+Code: `81a92f32f` (the slice) on top of `018c9840`. The branch is local-only
+after that commit: nothing was pushed, so PR #6622 still describes `81035bf2`.
+
+What changed:
+
+- `crates/collab-session` is split into `driver` (the protocol half: hello and
+  welcome, version/epoch, resync and retry, the 30 s lease heartbeat, the
+  re-address of a retry under a snapshot), `transport` (the `Transport` trait and
+  `ReadOutcome`), `native` (the blocking `tungstenite` socket on its worker
+  thread) and `web` (the browser's `WebSocket`, callbacks into a queue, redial
+  with a doubling backoff capped at 10 s, no timers and no cycle).
+- `Sink` is the object-safe facade (`enqueue`, `presence`, `commit`, `resync`,
+  `try_event`, `close`); `open(config)` returns the platform's one. `ui-egui`
+  holds `Box<dyn Sink>`, so the participants window and the edit path compile on
+  wasm.
+- The desktop keeps its behaviour: the worker thread, the 20 ms read timeout,
+  reconnect delay, merge-only resend. A command made while the socket is down
+  waits in the driver (`retry`); a frame the socket has not taken yet (still
+  dialing) waits in the driver's outbox instead of being dropped.
+- `apps/pdfcraft-web` carries the messages of INTEGRATION.md §6:
+  `pdfcraft:session` (queued for the frame that has the document open),
+  `pdfcraft:session-state` on a change of status/participants,
+  `pdfcraft:presence` coalesced at ≤10 Hz, `pdfcraft:commit` when the cabinet
+  owns the commit (no bytes), `pdfcraft:committed` back. The document a session
+  joins is the token's `fileId` claim (what the server checks against
+  `hello.doc`), falling back to the host's session id.
+- `craft-web-host` is pinned to `copoka/craft-libs` `7666e2b1` (the branch with
+  the collaboration messages) for that crate only — ADR-0016 §3; `craft-web-api`
+  stays on `storytold/craft-libs` `fd5e2fe`. Feature `collab` in
+  `pdfcraft-web` is off by default: `trunk build --release --features collab`.
+- §5 loses the "no web client" item and the rest is renumbered: old 3–13 are
+  now 2–12. Every cross-reference moved with it — the publication-queue note in
+  item 1 and §6.1 (old 7 → 6), the journal-growth note in §6.1 (old 11 → 10),
+  the TLS note in §6.4 (old 7–8 → 6–7), and the header and §6.6 (old 12 → 11).
+  RFC §16 item 2 says the same as this slice.
+
+Gates at `81a92f32f` (toolchain 1.99.1, host `agents`, `-j 8`/`-j 10`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Clippy, wasm session | `cargo clippy --target wasm32-unknown-unknown -p pdfcraft-collab-session --all-targets -- -D warnings` | pass (the `web` transport is only compiled there) |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — 128 (134 with the e2e suite): proto 12, server 18, hub 4, client 12, client-pdf 13, **session 5**, ws 6 (unit), pdf 20, annot 10, daemon 27 + 1 (`tests/crash_recovery.rs`) |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, 6/6 |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass (50 crates) |
+| wasm, every crate below L8 | `cargo xtask wasm` | pass, 42 crates |
+| wasm, session + typed client | `cargo check --target wasm32-unknown-unknown -p pdfcraft-collab-session -p pdfcraft-collab-client-pdf` | pass |
+| wasm, UI with the feature | `cargo check --target wasm32-unknown-unknown -p pdfcraft-ui-egui --features collab` | pass (11 pre-existing dead-code warnings from the wasm build of `ui-egui`, none from `collab.rs`) |
+| wasm, web shell with the bridge | `cargo check --target wasm32-unknown-unknown -p pdfcraft-web --features collab` | pass — the pinned `craft-web-host` and the five messages resolve |
+
+New tests in this slice: `collab-session` `the_driver_waits_for_the_socket_to_open_and_greets_once`
+(a socket that is still dialing gets nothing and loses nothing; exactly one
+hello per connection), `an_unreadable_frame_is_a_notice_not_a_disconnect`,
+`an_operation_queued_offline_goes_out_after_the_welcome` (the offline queue and
+the welcome path), plus the two worker tests moved unchanged; `ui-egui`
+`the_document_comes_from_the_tokens_file_claim`,
+`an_unreadable_token_falls_back_to_the_session_id`, `a_role_name_round_trips`.
+The full `ui-egui` suite was not re-run for this slice: the only UI change is
+the transport type and the host reports, and clippy plus the three new tests are
+green on it; the last full run is §6.6 below.
+
+What this does **not** cover: nothing here was run in a browser. The host bridge
+is compile-checked against the pinned `craft-lib` and exercised only in the
+native driver tests; a two-iframe run (the cabinet sends `session`, both panes
+edit, `commit` out and `committed` back) needs the cabinet's page and the
+`craft-web-host` API from `craft-libs`, and stays open. The live desktop smoke
+test (daemon + `xvfb-run pdfcraft --features collab`) was not repeated either:
+the worker path is unchanged and its unit tests cover the driver it now uses.
+
 ### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
 
 The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
@@ -303,7 +382,7 @@ pdfcraft-collab-pdf -p pdfcraft-collab-daemon --all-targets -- -D warnings` and
 What this does *not* cover: a kill between the base write and the `CURRENT`
 rename, and a torn journal line, stay `Store`-level tests; a kill during the
 cabinet publication itself is still only reasoned about (the room restarts
-dirty and the next commit retries — limitation 7).
+dirty and the next commit retries — limitation 6).
 
 ### Gate run at `5eb6bea8` — the §6.6 acceptance pass (2026-11-08; pre-rebase hashes, see the 2026-11-09 section above)
 
@@ -491,12 +570,8 @@ Ordered by the risk they pose to production.
    The layout and the other two windows (base written but `CURRENT` not yet
    renamed, torn last line) stay covered at the `Store` level. A kill during
    the cabinet publication itself is still not crash-tested: it only leaves the
-   room dirty and is retried by the next commit (limitation 7).
-2. **No web client.** The cabinet embeds the web build, but the server transport
-   and the app wiring are native-only. The host bridge
-   (`pdfcraft:session`, `session-state`, `presence`, `commit`, `committed`) is
-   not implemented.
-3. **Annotation coverage beyond the typed set.** `annotation.add` shares
+   room dirty and is retried by the next commit (limitation 6).
+2. **Annotation coverage beyond the typed set.** `annotation.add` shares
    `TextMarkup` (kind/quads/colour), `Rectangle`, `Oval`, `Line`, `Ink`,
    `FreehandHighlight`, `TextBox`, `Typewriter`, palette `Stamp`, `Mark` and
    `Note` with their style (colour, opacity, width, fill, border). Drawn and
@@ -504,18 +579,18 @@ Ordered by the risk they pose to production.
    with `unsupported` (RFC §3.1.1). Comment replies that carry a status
    (`/State`) and edits that only change an annotation's style are not shared
    yet.
-4. **Structural coverage.** Only page rotate, move and delete. Insert,
+3. **Structural coverage.** Only page rotate, move and delete. Insert,
    duplicate, replace, split/combine, bookmarks, layers, attachments, form
    structure and content edits are not shared.
-5. **Presence has cursors, not selections.** The pointer over a page is sent and
+4. **Presence has cursors, not selections.** The pointer over a page is sent and
    drawn (ADR-0006); a text selection, `/NM` or rect selection is not sent yet.
-6. **Undo of a deletion is best effort.** A comment the room added comes back
+5. **Undo of a deletion is best effort.** A comment the room added comes back
    exactly; a comment that came from the file has no wire body, so its delete
    carries no copy and cannot be undone. A page comes back while its one-page
    copy fits `MAX_RESTORE_PAGE_BYTES` (160 KiB); a larger page is deleted without
    a copy. Copies are memory-bounded (64 / 64 MiB) and are rebuilt by replay, not
    persisted on their own.
-7. **The cabinet contract is implemented, the production loop is not closed.**
+6. **The cabinet contract is implemented, the production loop is not closed.**
    `POST /v1/sessions`, the commit callback and `409` exist (RFC §8.2). What is
    still missing: an idempotent retry/queue for a failed publication (today the
    next commit or the last-client-leave commit retries it), an endpoint to
@@ -525,21 +600,21 @@ Ordered by the risk they pose to production.
    its own `{version, etag}` from the callback; v1 ignores that body and uses
    the room's numbering, so a cabinet with its own numbering needs an adapter
    (RFC §8.2 says so explicitly).
-8. **No TLS in the daemon.** WSS, the control plane and the callback are
+7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
    TTL/eviction besides the lease TTL.
-9. **Large-document budget.** 500 pages are tested functionally; the 100k-page
+8. **Large-document budget.** 500 pages are tested functionally; the 100k-page
    inspection cost and batching remote applies are not measured. The control
    plane caps a file at `--max-source-bytes` (256 MiB) but nothing else.
-10. **No automation tool/parity entry yet.** The feature is behind a flag; when
-    it becomes user-facing, `crates/automation` and `parity/` need an entry.
-11. **Journal growth is bounded only by commits.** A room that never commits
+9. **No automation tool/parity entry yet.** The feature is behind a flag; when
+   it becomes user-facing, `crates/automation` and `parity/` need an entry.
+10. **Journal growth is bounded only by commits.** A room that never commits
     keeps every accepted operation on disk; the last-client-leave commit and the
     manual button are the only compaction. A size-based forced commit is not
     implemented. Bases are pruned to the one `CURRENT` names, so disk is one
     PDF plus the journal, not one PDF per commit.
-12. ~~The callback is synchronous inside the hub lock~~ — the base is written
+11. ~~The callback is synchronous inside the hub lock~~ — the base is written
     under the lock and the cabinet POST runs after it is released (§8.2): a
     cabinet that does not answer delays the committer's connection, not the
     other documents. A second commit of the same document while one is
@@ -547,7 +622,7 @@ Ordered by the risk they pose to production.
     cabinet out of order. What is still missing is a publication *queue*: a
     failed POST is retried by the next commit or the last-client-leave commit,
     not in the background.
-13. **The legacy annotation payload lives until the flag ships.** A payload
+12. **The legacy annotation payload lives until the flag ships.** A payload
     without `shape` is read as a sticky note; RFC §16 p. 10 sets the deadline —
     the first release with `collab` on by default makes `shape` mandatory.
 
@@ -576,7 +651,7 @@ replay rebuilds head/epoch/dedup, gap/foreign document), `collab-daemon`
 *after* the commit; `tests/crash_recovery.rs` SIGKILLs the real process between
 the journal record and the base write and replays it, §4).
 
-Still open here: a size-based forced commit (limitation 11). The fault
+Still open here: a size-based forced commit (limitation 10). The fault
 injection limitation 1 asked for is done for the real process in the
 journal→base window (`apps/pdfcraft-collab-server/tests/crash_recovery.rs`,
 `999da5ec`, §4); a kill between the base write and the `CURRENT` rename is still
@@ -615,15 +690,52 @@ comment), status replies (`/State`), and the same typed envelope for
 `AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
 would need the blob channel).
 
-### 6.3 Web host bridge
+### 6.3 Web host bridge — done in this branch (local, not pushed)
 
-- Add a transport trait in `collab-client`-adjacent code with two
-  implementations: the existing native worker and a wasm `web-sys` WebSocket (or
-  the host `postMessage` bridge).
-- `pdfcraft:session` (url, token, doc, role), `session-state`, `presence`,
-  `commit`, `committed`; keep `open/save/dirty/failed` unchanged.
-- The UI wiring currently assumes a native `Handle`; split it from the
-  transport so the participants window compiles on wasm.
+The transport is a trait with two implementations and one protocol driver in
+front of both (commit `81a92f32f`, §4):
+
+- `collab-session::transport::Transport` — `write(ClientMessage)` and
+  `read() -> ReadOutcome` (`Opened` / `Message` / `Unreadable` / `Nothing` /
+  `Closed`). `driver::Session` owns everything the protocol does: hello, the
+  welcome, version and epoch, resync and the re-addressed retry, the 30 s lease
+  heartbeat, presence, the outbox. It is the code that used to live inside the
+  socket loop.
+- `native::Handle` — the worker thread and blocking socket, unchanged in
+  behaviour (20 ms read timeout, 1 s redial, merge-only resend).
+- `web::WebHandle` — the browser's `WebSocket`: callbacks push into a queue,
+  `try_event` steps the driver once per call, a close redials with a backoff
+  that doubles to 10 s; no timers, no callback cycle, no threads.
+- `Sink` — the object-safe face the UI holds (`Box<dyn Sink>`). `Handle` is no
+  longer named outside the crate, and `ui-egui --features collab` compiles for
+  wasm32 with the participants window, remote cursors and the commit button.
+- Messages (INTEGRATION.md §6): `pdfcraft:session` in (the app connects; the
+  host's role is advisory, the token decides — ADR-0008 §7);
+  `pdfcraft:session-state` on a change of status/error/participants;
+  `pdfcraft:presence` with the same participant list, coalesced at ≤10 Hz;
+  `pdfcraft:commit` when the cabinet owns the commit (no bytes; the cabinet
+  assembles the file) and `pdfcraft:committed {version, etag}` back. The basic
+  `open/save/dirty/failed` messages are unchanged.
+- The document key comes from the token's `fileId` (the server refuses a `hello`
+  whose `doc` is not the token's file), with the host's `sessionId` as the
+  fallback for a token that cannot be read.
+- A session handed over before the file is open waits for the next frame instead
+  of being refused: the host sends `open` and `session` together, and the file
+  opens after `poll_collab` in the same frame.
+- `craft-web-host` (the crate that owns the message contract and both
+  transports) does not carry the collaboration messages in `storytold/main` yet,
+  so `apps/pdfcraft-web` pins `copoka/craft-libs` `7666e2b1` for that crate only
+  (ADR-0016 §3), the same pin the other Craft apps use. `Cargo.lock` records it;
+  after the craft-libs PR merges, the URL goes back and the merge commit is
+  pinned.
+- The web feature is off by default:
+  `cd apps/pdfcraft-web && trunk build --release --features collab`.
+
+Tests and gaps: §4. What is still open: a browser run against the cabinet's page
+(two iframes, `session` in, edits, `commit` out, `committed` back) — the code is
+compile-checked and driver-tested, not exercised in a browser here; the cabinet's
+own commit path is the one WordCraft documented, and the same page-side wiring
+has to be repeated for PdfCraft's origin/CSP.
 
 ### 6.4 Cabinet contract and 409 — done in this branch
 
@@ -661,7 +773,7 @@ would need the blob channel).
   call held open on a gate, presence in the other room still arrives; fails on
   the 5 s read timeout when the call is put back under the lock).
 - Still open here: publication retry/queue, an endpoint to resolve a conflict
-  room, `https` without a proxy (limitations 7–8).
+  room, `https` without a proxy (limitations 6–7).
 
 ### 6.5 Presence cursors and undo — done in this branch
 
@@ -779,14 +891,15 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   copies, the control plane, the commit callback running outside the hub lock,
   and the SIGKILL crash-recovery test.
 - Remaining limitations stated in that body: no web client/host bridge
-  (§6.3), no publication queue (a failed cabinet POST is retried only by the
-  next commit or the last-client-leave commit), no endpoint to resolve a
+  (§6.3) — **since closed locally in `81a92f32f`, not yet in the pushed head or
+  that body** — no publication queue (a failed cabinet POST is retried only by
+  the next commit or the last-client-leave commit), no endpoint to resolve a
   `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
   160 KiB, text selections not shared, and signatures / custom stamps /
   redaction / attachments / page insert-duplicate-split refused as
   `unsupported`.
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
-  limitation 12 (§8.2, §9, §16 p. 9).
+  limitation 11 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
 - No CI changes in the feature PR. The body is not in this tree: the
   cabinet-office checkout keeps the draft at `pdfcraft/PR-DRAFT.md` and the
@@ -800,7 +913,7 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   (ADR-0015). **Quorum is 5 of 5** (`AGENDA.md` §4).
 - Chair's four conditions to close before the PR: epoch wording (`RFC §8.1`),
   lease wording (`RFC §7`), undo CAS (§6.5), commit callback outside the hub
-  lock (limitation 12) — all four are closed in this branch; the last one in
+  lock (limitation 11) — all four are closed in this branch; the last one in
   §6.4. Nothing blocks the PR from this list.
 - PdfCraft voted on deckcraft's RFC (`20261108T135623Z-pdfcraft-2aad`, A with
   the unified lease wording).
