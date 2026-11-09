@@ -38,6 +38,12 @@ fn combinable(ext: &str) -> bool {
     std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).any(|c| ext.eq_ignore_ascii_case(c))
 }
 
+/// Whether Combine takes a file by what it is: a PDF (by its header or its name) or an image or
+/// text file it converts, as `Session::as_pdf` tells them apart.
+pub(super) fn takes(name: &str, bytes: &[u8]) -> bool {
+    pdfcraft_engine::source_kind(name, bytes).is_some() || name.to_ascii_lowercase().ends_with(".pdf")
+}
+
 /// A file's bookmark in the combined PDF: its name without ".pdf", or without the extension of
 /// the image or text file it was made from.
 pub(super) fn title_of(name: &str) -> &str {
@@ -268,23 +274,10 @@ pub(super) fn utc_stamp(time: SystemTime) -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rem / 3600, rem % 3600 / 60)
 }
 
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
-///
-/// A pre-1970 time already clamps to the epoch (`unwrap_or(0)`), so `days` is an unsigned count
-/// that can run past `NaiveDate`'s ±262143-year range, where the old hand-rolled converter still
-/// produced a date. The Gregorian calendar repeats every 400 years (146_097 days), so chrono
-/// converts the day within one cycle and whole cycles go back into the year (an `i128`, then
-/// saturated into `i64`), keeping chrono as the only calendar logic and reproducing the old
-/// result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day): `pdfcraft_cos::civil_from_days`,
+/// which keeps the date past chrono's range by whole 400-year cycles. `days` is a `u64` second
+/// count over 86_400, at most about 2.1e14, so it always fits an `i64`.
 fn civil_from_days(days: u64) -> (i64, u32, u32) {
-    use chrono::Datelike;
-    let (cycles, rest) = (days / 146_097, days % 146_097);
-    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
-    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
-        Some(d) => {
-            let y = i128::from(d.year()) + i128::from(cycles) * 400;
-            (i64::try_from(y).unwrap_or(i64::MAX), d.month(), d.day())
-        }
-        None => (1970, 1, 1), // unreachable
-    }
+    // The fallback is unreachable: `days` is at most `u64::MAX / 86_400`, far below `i64::MAX`.
+    pdfcraft_cos::civil_from_days(i64::try_from(days).unwrap_or(i64::MAX))
 }

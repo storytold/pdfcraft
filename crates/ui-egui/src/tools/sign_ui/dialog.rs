@@ -1,6 +1,6 @@
 use super::{
     Align, Appearance, AppearanceLabels, Color32, CornerRadius, KEY_ALGORITHMS, Layout, NewIdDraft, PdfCraftApp, Rect, SavedSig, SignGraphic,
-    SignStep, Stroke, Tokens, icons, sign, theme, vec2, widgets,
+    SignStep, StatusCaptions, Stroke, Tokens, icons, sign, theme, vec2, widgets,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::file_filter::AddFilterAnyCase as _;
@@ -287,6 +287,19 @@ pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, b
         Some(labels) => (labels, false),
         None => (english, true),
     }
+}
+
+/// The words a named-layer signature appearance's status caption is drawn with: all three in
+/// `lang`, or all three in English when `lang` misses one of them. The sign crate picks the
+/// face and shapes right-to-left words itself, so they go in the catalogue's logical order.
+pub(crate) fn status_captions(lang: crate::i18n::Lang) -> StatusCaptions {
+    let english = StatusCaptions::default();
+    if lang == crate::i18n::Lang::EN {
+        return english;
+    }
+    let said = |s: &str| crate::i18n::has(lang, s).then(|| crate::i18n::tr(lang, s).to_owned());
+    (|| Some(StatusCaptions { valid: said(&english.valid)?, unknown: said(&english.unknown)?, invalid: said(&english.invalid)? }))()
+        .unwrap_or(english)
 }
 
 /// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
