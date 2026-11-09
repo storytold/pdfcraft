@@ -5,6 +5,7 @@ use super::xref::{
     MAX_COMPACT_XREF_BYTES, MAX_COMPACT_XREF_ROWS, Revision, XrefEntry, XrefIndex, XrefRange, XrefRevisionSection, XrefSection, XrefSectionData,
 };
 use super::{Arc, BTreeMap, CosError, Dict, Document, HashMap, HashSet, Lexer, ObjRef, Object, is_whitespace, parse_indirect, parse_indirect_shared};
+use crate::writer::collect_refs;
 
 impl Document {
     #[allow(clippy::type_complexity)]
@@ -648,15 +649,17 @@ impl Document {
         // `N 0 obj` keeps N, whatever headers of other generations come after it; with none, the
         // last header stands in. Every slot is generation 0, so `N 0 R` reaches the stand-in as
         // the renderer's does, and the header's own generation still resolves through
-        // `indexed_header_reference`. A body of yet another generation has no slot left (one per
-        // number): `N G R` to it reads as null here though the renderer draws it, so it is noted.
+        // `indexed_header_reference`. One slot holds one body, though, and the renderer also
+        // keeps every other generation under its exact key: where the file reaches only that
+        // one, it takes the slot instead (`keep_the_generation_reached`, below).
         // The choice goes by the generation as the renderer reads it (`as_drawn`), not the `u16`
         // a cos reference can carry: `N 65536 obj` is no real `N 0 obj` to the renderer.
-        // Per number: the generation of the header it keeps, and every generation seen.
-        let mut kept: BTreeMap<u32, (i32, std::collections::BTreeSet<i32>)> = BTreeMap::new();
+        // Per number: the generation of the header it keeps, and the offset of the last header
+        // of each generation seen.
+        let mut kept: BTreeMap<u32, (i32, BTreeMap<i32, u64>)> = BTreeMap::new();
         for &(num, offset, _, body, as_drawn) in &headers {
-            let (held, seen) = kept.entry(num).or_insert_with(|| (as_drawn, std::collections::BTreeSet::new()));
-            seen.insert(as_drawn);
+            let (held, seen) = kept.entry(num).or_insert_with(|| (as_drawn, BTreeMap::new()));
+            seen.insert(as_drawn, offset);
             if as_drawn == 0 || *held != 0 {
                 *held = as_drawn;
                 entries.insert(num, XrefEntry::InFile { offset, generation: 0 });
@@ -672,17 +675,6 @@ impl Document {
         }
         if entries.is_empty() {
             return Err(CosError::Syntax { offset: 0, detail: "no objects found".into() });
-        }
-        let left_out: Vec<(u32, i32)> =
-            kept.iter().flat_map(|(&num, (held, seen))| seen.iter().filter(move |&&g| g != 0 && g != *held).map(move |&g| (num, g))).collect();
-        if !left_out.is_empty() {
-            let named: Vec<String> = left_out.iter().take(8).map(|(num, generation)| format!("{num} {generation}")).collect();
-            let more = if left_out.len() > 8 { format!(" and {} more", left_out.len() - 8) } else { String::new() };
-            log.push(format!(
-                "rebuilding the cross-reference index left out {} objects that share a number with the object kept for it ({}{more}); references to them read as null",
-                left_out.len(),
-                named.join(", "),
-            ));
         }
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
@@ -702,7 +694,8 @@ impl Document {
             }
         }
         let object_count = entries.len();
-        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries), Arc::default()));
+        let entries = Arc::new(entries);
+        self.entries = Arc::new(XrefIndex::Materialized(entries.clone(), Arc::default()));
         // Failures from the scan stand: the members added change no scanned entry, and a
         // `/Length` found only now cannot make a stream unreadable.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
@@ -765,7 +758,120 @@ impl Document {
         self.trailer = trailer;
         self.revisions = Arc::new(Vec::new());
         log.push(format!("rebuilt cross-reference index from {object_count} object headers"));
+        kept.retain(|_, (_, seen)| seen.len() > 1);
+        self.keep_the_generation_reached(&entries, &mut kept)?;
+        let left_out: Vec<(u32, i32)> =
+            kept.iter().flat_map(|(&num, (held, seen))| seen.keys().filter(move |&&g| g != *held).map(move |&g| (num, g))).collect();
+        if !left_out.is_empty() {
+            let named: Vec<String> = left_out.iter().take(8).map(|(num, generation)| format!("{num} {generation}")).collect();
+            let more = if left_out.len() > 8 { format!(" and {} more", left_out.len() - 8) } else { String::new() };
+            log.push(format!(
+                "rebuilding the cross-reference index left out {} objects that share a number with the object kept for it ({}{more}); references to them read as null",
+                left_out.len(),
+                named.join(", "),
+            ));
+        }
         Ok(())
+    }
+
+    /// For the numbers whose headers carry more than one generation (`shared`: per number, the
+    /// generation [`Self::reconstruct`] kept and the offset of each generation's last header),
+    /// give the slot to the one generation the document reaches, when it reaches one only.
+    ///
+    /// The renderer keeps each generation under its exact key, so a file whose newer revision
+    /// reuses a number as `69 1 obj` and refers to it as `69 1 R`, with an unrelated `69 0 obj`
+    /// left from an older one, draws `69 1 obj`. Kept at generation 0, the slot would read
+    /// `69 1 R` as null, and a save would lose that page (`202097.pdf` of PDFBOX-3785). The walk
+    /// resolves these numbers as the renderer does: by exact generation, and `N 0 R` with no
+    /// real `N 0 obj` to the stand-in. A slot given to another generation takes that
+    /// generation, so `N 0 R`, which no reached object names, reads as null. When more than one
+    /// generation is reached, the generation-0 rule stands (the #6759 case), and the caller
+    /// notes what it leaves out.
+    ///
+    /// A stream's `/Length` does not count as reaching an object: it only says where the data
+    /// ends, both readers look for `endstream` when it is wrong, and an older revision's length
+    /// object is the usual stale `N 0 obj`.
+    fn keep_the_generation_reached(
+        &mut self,
+        entries: &Arc<BTreeMap<u32, XrefEntry>>,
+        shared: &mut BTreeMap<u32, (i32, BTreeMap<i32, u64>)>,
+    ) -> Result<(), CosError> {
+        // References followed before the walk gives up and the generation-0 rule stands.
+        const MAX_WALK: usize = 1 << 21;
+        if shared.is_empty() {
+            return Ok(());
+        }
+        let mut reader = self.object_reader();
+        let mut queue = Vec::new();
+        for (_, value) in self.trailer.iter() {
+            refs_reached(value, &mut queue);
+        }
+        let mut visited = HashSet::new();
+        let mut reached: BTreeMap<u32, std::collections::BTreeSet<i32>> = BTreeMap::new();
+        while let Some(r) = queue.pop() {
+            if !visited.insert(r) {
+                continue;
+            }
+            if visited.len() > MAX_WALK {
+                return Ok(());
+            }
+            let Some((held, bodies)) = shared.get(&r.num) else {
+                if let Ok(o) = reader.try_get(r) {
+                    refs_reached(&o, &mut queue);
+                }
+                continue;
+            };
+            let asked = i32::from(r.generation);
+            let generation = if bodies.contains_key(&asked) {
+                asked
+            } else if asked == 0 {
+                *held
+            } else {
+                continue;
+            };
+            reached.entry(r.num).or_default().insert(generation);
+            if let Some(at) = bodies.get(&generation).and_then(|&o| usize::try_from(o).ok())
+                && let Ok((_, o)) = parse_indirect_shared(&self.data, at, &|_| None, &self.endstreams)
+            {
+                refs_reached(&o, &mut queue);
+            }
+        }
+        let mut moved = Vec::new();
+        for (num, generations) in reached {
+            let (Some(&only), 1) = (generations.first(), generations.len()) else { continue };
+            let Some((held, bodies)) = shared.get_mut(&num) else { continue };
+            if only == *held {
+                continue;
+            }
+            let (Ok(generation), Some(&offset)) = (u16::try_from(only), bodies.get(&only)) else { continue };
+            *held = only;
+            moved.push((num, XrefEntry::InFile { offset, generation }));
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        let mut index = (**entries).clone();
+        {
+            let mut unreadable = self.unreadable.lock().map_err(|_| CosError::Poisoned)?;
+            for (num, entry) in moved {
+                index.insert(num, entry);
+                unreadable.objects.remove(&num);
+            }
+        }
+        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(index), Arc::default()));
+        self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
+        Ok(())
+    }
+}
+
+/// The references in `o` that reach another object, for [`Document::keep_the_generation_reached`]:
+/// all of them but a stream's `/Length`.
+fn refs_reached(o: &Object, queue: &mut Vec<ObjRef>) {
+    match o {
+        Object::Stream(s) => {
+            s.dict.iter().filter(|(k, _)| k.as_slice() != b"Length".as_slice()).for_each(|(_, v)| collect_refs(v, &mut |r| queue.push(r)))
+        }
+        other => collect_refs(other, &mut |r| queue.push(r)),
     }
 }
 

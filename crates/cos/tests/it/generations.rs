@@ -594,3 +594,52 @@ fn a_rebuilt_index_records_a_body_it_leaves_out() {
     let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (0, OTHER)])).unwrap();
     assert!(doc.repair_log().iter().all(|line| !line.contains("left out")), "{:?}", doc.repair_log());
 }
+
+/// No usable cross-reference data, objects in file order as (number, generation, body).
+fn rebuilt_objects(objects: &[(u32, u16, &str)]) -> Arc<Vec<u8>> {
+    let mut pdf = String::from("%PDF-1.7\n");
+    for (num, generation, body) in objects {
+        pdf.push_str(&format!("{num} {generation} obj\n{body}\nendobj\n"));
+    }
+    pdf.push_str("trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    Arc::new(pdf.into_bytes())
+}
+
+/// Each page's content as the renderer draws it.
+fn pages_drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Vec<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).unwrap();
+    oracle.pages().iter().map(|p| String::from_utf8_lossy(p.page_stream().unwrap_or_default()).trim().to_string()).collect()
+}
+
+#[test]
+fn a_rebuilt_index_keeps_a_reused_number_the_document_reaches() {
+    // A newer revision reused number 5 as `5 1 obj`, a page its page tree lists as `5 1 R`; the
+    // older `5 0 obj` is only a stream length. Kept at generation 0, `5 1 R` read as null, the
+    // page fell out of a save, and the save was refused (PDFBOX-3785's `202097.pdf`, on #6767).
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (5, 0, "27"),
+        (6, 0, &format!("<< /Length 5 0 R >>\nstream\n{OTHER}\nendstream")),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R 5 1 R] /Count 2 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+        (5, 1, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+        (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+    ]);
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [OTHER, COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(doc.get(ObjRef::new(5, 1)).as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [OTHER, COVER]);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(5 0)")), "{:?}", doc.repair_log());
+}
+
+#[test]
+fn a_rebuilt_index_keeps_generation_0_when_the_document_reaches_both() {
+    // `4 0 R` and `4 1 R` both drawn: one slot cannot hold both, so the renderer's generation-0
+    // rule stands and the other body is noted as left out.
+    let doc = Document::open(rebuilt_page("[4 0 R 4 1 R]", &[(0, COVER), (1, OTHER)])).unwrap();
+    assert!(matches!(&*doc.get(ObjRef::new(4, 0)), Object::Stream(s) if &*s.raw == COVER.as_bytes()));
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(4 1)")), "{:?}", doc.repair_log());
+}
