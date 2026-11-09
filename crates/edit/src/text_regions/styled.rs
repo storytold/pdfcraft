@@ -2116,7 +2116,20 @@ fn rewrite_styled_block_inner(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, &contexts, width, &measure)?;
+    // A row the edit leaves as it was can lay out a little wider than the source drew it: a
+    // browser's own shaping or `TJ` kerning set it tighter. It still fits, by at most 5%, so it is
+    // kept as it was instead of wrapping and being drawn again with the rows below it moved.
+    let source_rows: std::collections::HashSet<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    let mut wrap_width = width;
+    for (range, text) in &paragraphs {
+        if source_rows.contains(text.trim_end())
+            && let Ok(laid) = measure(range.clone())
+            && laid.is_finite()
+        {
+            wrap_width = wrap_width.max(laid.min(width * 1.05));
+        }
+    }
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, &contexts, wrap_width, &measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row

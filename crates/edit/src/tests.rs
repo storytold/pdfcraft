@@ -15766,6 +15766,41 @@ fn rows_an_arabic_fallback_edit_leaves_alone_keep_their_own_font() {
     assert!(shown_faces(&doc, 0).contains("NotoSansArabic"), "the edited row takes the fallback");
 }
 
+/// An Arabic row shaped in its complete face that the source set tighter than shaping it again
+/// here does (a browser's own shaping, or `TJ` moving the pen back) is left as it was when only
+/// the row below it is edited: it wrapped, was drawn again and moved the rows below.
+#[test]
+fn a_tightened_full_face_arabic_row_is_kept_when_another_row_is_edited() {
+    let Some((mut doc, _)) = arabic_full_face_probe("عنوان التقرير الربعي للإدارة العامة\nنص", 400.0) else {
+        return;
+    };
+    // Pull the first row's glyphs 10/1000 em closer together (about 3%): every glyph of its text object.
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let start = content.find("BT").expect("the first row");
+    let end = start + content[start..].find("ET").expect("its end");
+    // Moved right as far, so the row still ends at the paragraph's right edge.
+    let glyphs = content[start..end].matches('>').count() as f64;
+    let tm = content[start..end].find(" Tm").expect("its position");
+    let x_end = content[start..start + tm].rfind(' ').expect("its y");
+    let x_start = content[start..start + x_end].rfind(' ').expect("its x") + 1;
+    let x: f64 = content[start + x_start..start + x_end].parse().unwrap();
+    let moved = format!("{}{}{}", &content[start..start + x_start], x + glyphs * 0.12, &content[start + x_end..end]);
+    let row = moved.replace('>', "> 10");
+    let tightened = format!("{}{row}{}", &content[..start], &content[end..]);
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), tightened.into_bytes()))));
+    set_page_contents(&mut doc, stream, None);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let index = blocks.iter().position(|b| b.editor_text.starts_with("عنوان")).expect("the paragraph");
+    assert_eq!(blocks[index].rows.len(), 2, "{blocks:?}");
+    let draft = blocks[index].editor_text.replace("نص", "نص جديد");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let first = row.find("] TJ").map(|at| &row[..at]).expect("a TJ");
+    let first = &first[first.rfind('[').expect("its array")..];
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains(first), "the tightened row keeps its own show {first}: {content}");
+}
+
 /// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
 /// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
 /// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
