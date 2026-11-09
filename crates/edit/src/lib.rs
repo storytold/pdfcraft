@@ -47,14 +47,18 @@ mod rules;
 pub use rules::page_rules;
 pub mod objects;
 pub use objects::{
-    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
+    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, editable_objects_with_layers,
+    move_objects, move_objects_with_layers, paste_objects,
 };
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
 mod ungroup;
-pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use images::{
+    ArrangeOrder, ImageChange, PageImage, change_image, change_image_with_layers, page_images, page_images_with_layers, reading_images, rect_to_rect,
+    turn_about_centre, turn_by_degrees,
+};
 pub mod bidi;
 pub mod indic;
 mod linebreak;

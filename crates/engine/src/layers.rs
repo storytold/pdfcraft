@@ -133,6 +133,10 @@ pub(crate) fn use_layer_choices(doc: &mut Document) {
     doc.config.layers = Arc::new(overrides);
     doc.config.print_layers = print_preview_layers(doc.editor.as_ref().map(|e| &e.cos), &doc.info.layers);
     doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+    if doc.snapshot_generation == doc.generation {
+        doc.snapshot_generation += 1;
+    }
+    doc.generation += 1;
 }
 
 /// The layer overrides a print preview draws with (`RenderConfig::print_layers`): the layers as

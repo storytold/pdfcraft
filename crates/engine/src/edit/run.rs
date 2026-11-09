@@ -239,6 +239,8 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// Live optional-content layer overrides `(num, gen, visible)` active in the session.
+    pub(crate) layers: Arc<Vec<(i32, i32, bool)>>,
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
@@ -271,6 +273,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            layers: Arc::new(Vec::new()),
             prepared: None,
         }
     }
@@ -308,7 +311,13 @@ impl EditCtx {
     }
 }
 
-fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
+fn run_edit_page_image(
+    doc: &mut pdfcraft_cos::Document,
+    page: usize,
+    index: usize,
+    change: &ImageEdit,
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
     match change {
         ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
             return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
@@ -325,7 +334,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         }
         _ => {}
     }
-    let img = pdfcraft_edit::page_images(doc, page)?
+    let img = pdfcraft_edit::page_images_with_layers(doc, page, layers)?
         .into_iter()
         .nth(index)
         .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
@@ -463,11 +472,11 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
             ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete | ImageEdit::Ungroup => {
-                pdfcraft_edit::change_image(doc, page, index, &c)?;
+                pdfcraft_edit::change_image_with_layers(doc, page, index, &c, layers)?;
             }
         }
     } else {
-        pdfcraft_edit::change_image(doc, page, index, &c)?;
+        pdfcraft_edit::change_image_with_layers(doc, page, index, &c, layers)?;
     }
     Ok(())
 }
@@ -774,8 +783,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
-        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
-        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change, &cx.layers)?,
+        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects_with_layers(doc, *page, objects, *offset, &cx.layers)?,
         Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
