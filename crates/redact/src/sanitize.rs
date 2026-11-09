@@ -428,6 +428,101 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     }
 }
 
+/// The objects a layer cleanup has reached by reference, and whether the lists naming each keep it.
+type Cleaned = std::collections::HashMap<ObjRef, bool>;
+
+/// `o` cleaned by `clean`: in its list when written there, and when written by reference, once and
+/// where it is, however many lists name it (they keep the reference, or drop it when `clean` gives
+/// `None`). A list that names one object many times costs one step per object, not one per path,
+/// and a cycle stops where it began.
+fn once(
+    doc: &mut Document,
+    o: &Object,
+    cleaned: &mut Cleaned,
+    clean: impl FnOnce(&mut Document, &Object, &mut Cleaned) -> Result<Option<Object>, RedactError>,
+) -> Result<Option<Object>, RedactError> {
+    let Object::Ref(r) = o else { return clean(doc, o, cleaned) };
+    if let Some(&kept) = cleaned.get(r) {
+        return Ok(kept.then(|| o.clone()));
+    }
+    cleaned.insert(*r, true);
+    let held: &Object = &doc.resolve(o);
+    let Some(new) = clean(doc, held, cleaned)? else {
+        cleaned.insert(*r, false);
+        return Ok(None);
+    };
+    if new != *held {
+        doc.set_existing(*r, new)?;
+    }
+    Ok(Some(o.clone()))
+}
+
+/// `o` without the entries `keep` refuses, through nested arrays (an `/Order` holds sub-lists, and
+/// `/RBGroups` holds groups), each array written by reference cleaned [`once`]. `None` when `keep`
+/// refuses `o` itself, or when `o` is a sub-list (`depth` above 0) that named a layer and names
+/// none now: it goes, with the heading that labelled it.
+fn filtered(
+    doc: &mut Document,
+    o: &Object,
+    keep: &impl Fn(&Object) -> bool,
+    depth: usize,
+    cleaned: &mut Cleaned,
+) -> Result<Option<Object>, RedactError> {
+    if depth > MAX_DIRECT_DEPTH {
+        return Err(RedactError::TooDeep);
+    }
+    if !keep(o) {
+        return Ok(None);
+    }
+    once(doc, o, cleaned, |doc, o, cleaned| {
+        let Object::Array(a) = o else { return Ok(Some(o.clone())) };
+        let mut out = Vec::new();
+        for x in a {
+            out.extend(filtered(doc, x, keep, depth + 1, cleaned)?);
+        }
+        // Anything but a text string (a heading) is a layer or a sub-list.
+        let names = |l: &[Object]| l.iter().any(|x| !matches!(x, Object::String(_)));
+        let emptied = depth > 0 && names(a.as_slice()) && !names(out.as_slice());
+        Ok((!emptied).then_some(Object::Array(out)))
+    })
+}
+
+/// An optional-content configuration without the layers `keep` refuses, in every list that names
+/// them: on, off, order, locked, radio-button groups and usage rules (a rule, group or sub-list left
+/// with no layer goes). A removed layer still named in any of them would stay in the file, its name
+/// included.
+fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bool, cleaned: &mut Cleaned) -> Result<Dict, RedactError> {
+    for k in [&b"ON"[..], b"OFF", b"Order", b"Locked", b"RBGroups"] {
+        if let Some(v) = d.get(k).cloned() {
+            let v = filtered(doc, &v, keep, 0, cleaned)?.unwrap_or_else(|| Object::Array(Vec::new()));
+            d.set(k.to_vec(), v);
+        }
+    }
+    let Some(rules) = d.get(b"AS").cloned() else { return Ok(d) };
+    let rules = once(doc, &rules, cleaned, |doc, rules, cleaned| {
+        let Object::Array(rules) = rules else { return Ok(Some(rules.clone())) };
+        let mut kept = Vec::new();
+        for rule in rules {
+            kept.extend(once(doc, rule, cleaned, |doc, rule, cleaned| {
+                let Some(mut rule) = rule.as_dict().cloned() else { return Ok(None) };
+                if let Some(layers) = rule.get(b"OCGs").cloned() {
+                    let Some(layers) = filtered(doc, &layers, keep, 0, cleaned)? else { return Ok(None) };
+                    if doc.resolve(&layers).as_array().is_some_and(Vec::is_empty) {
+                        return Ok(None);
+                    }
+                    rule.set(b"OCGs".to_vec(), layers);
+                }
+                Ok(Some(Object::Dict(rule)))
+            })?);
+        }
+        Ok(Some(Object::Array(kept)))
+    })?;
+    if let Some(rules) = rules {
+        d.set(b"AS".to_vec(), rules);
+    }
+    Ok(d)
+}
+
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
 fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     let off = if layers { hidden_layers(doc) } else { Vec::new() };
@@ -755,13 +850,19 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     if let Some(Object::Array(a)) = oc.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
                         oc.set(b"OCGs".to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
                     }
-                    if let Some(mut d) = sub(doc, &oc, b"D") {
-                        for k in [&b"ON"[..], b"OFF", b"Order", b"Locked"] {
-                            if let Some(Object::Array(a)) = d.get(k).map(|g| (*doc.resolve(g)).clone()) {
-                                d.set(k.to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
-                            }
+                    let mut cleaned = Cleaned::new();
+                    if let Some(d) = sub(doc, &oc, b"D") {
+                        oc.set(b"D".to_vec(), Object::Dict(config_without(doc, d, &keep, &mut cleaned)?));
+                    }
+                    if let Some(Object::Array(configs)) = oc.get(b"Configs").map(|c| (*doc.resolve(c)).clone()) {
+                        let mut kept = Vec::with_capacity(configs.len());
+                        for config in configs {
+                            kept.extend(once(doc, &config, &mut cleaned, |doc, config, cleaned| match config.as_dict() {
+                                Some(c) => Ok(Some(Object::Dict(config_without(doc, c.clone(), &keep, cleaned)?))),
+                                None => Ok(None),
+                            })?);
                         }
-                        oc.set(b"D".to_vec(), Object::Dict(d));
+                        oc.set(b"Configs".to_vec(), Object::Array(kept));
                     }
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
