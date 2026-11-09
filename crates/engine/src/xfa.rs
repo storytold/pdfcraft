@@ -451,6 +451,7 @@ struct Runner<'a, 'b> {
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
     by_som: Option<HashMap<String, String>>,
     objects_by_som: HashMap<String, pdfcraft_cos::ObjRef>,
+    focus_requests: Vec<(usize, String)>,
     /// Widget names by the data node they bind to (built with `by_som`).
     by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
@@ -499,6 +500,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             field_changes: Default::default(),
             by_som: None,
             objects_by_som: HashMap::new(),
+            focus_requests: Vec::new(),
             by_path: None,
             fields: None,
             cached: None,
@@ -919,13 +921,8 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
                 XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
-                    if let Some(name) = self.by_som().get(som).cloned() {
-                        let object = self.objects_by_som.get(som).copied();
-                        self.run.out.requests.push(match object {
-                            Some(object) => Request::FocusField { name, object_id: crate::js::field_object_id(object) },
-                            None => Request::Focus(name),
-                        });
-                    }
+                    self.focus_requests.push((self.run.out.requests.len(), som.clone()));
+                    self.run.out.requests.push(Request::Focus(String::new()));
                 }
                 XfaEffect::Beep => self.run.out.requests.push(Request::Beep),
                 XfaEffect::Highlight(on) => {
@@ -1035,6 +1032,16 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.relayout()?;
         }
         self.flush()?;
+        if !self.focus_requests.is_empty() {
+            self.by_som();
+            for (index, som) in self.focus_requests.into_iter().rev() {
+                if let Some((name, object)) = self.by_som.as_ref().and_then(|names| names.get(&som)).zip(self.objects_by_som.get(&som)) {
+                    self.run.out.requests[index] = Request::FocusField { name: name.clone(), object_id: crate::js::field_object_id(*object) };
+                } else {
+                    self.run.out.requests.remove(index);
+                }
+            }
+        }
         self.session = None;
         if self.skipped > 0 {
             let why = if self.run.ran_away {

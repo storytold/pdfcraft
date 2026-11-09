@@ -211,6 +211,9 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     let order: Vec<ObjRef> = calc_order::run_order(doc, &all).0.into_iter().filter_map(|(i, _)| all.get(i)).map(|f| f.obj).collect();
     let mut changed = 0;
     for obj in order {
+        if scripts.stopped() {
+            break;
+        }
         let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
@@ -295,6 +298,10 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
 }
 
 pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    write_value_impl(doc, f, value, scripts, false)
+}
+
+fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
             if let Some(max) = f.max_len
@@ -310,7 +317,8 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = &scripting::accept(doc, f, t, scripts)?;
+            let t = if resetting { t.clone() } else { scripting::accept(doc, f, t, scripts)? };
+            let t = &t;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
@@ -843,6 +851,16 @@ pub fn reset_with_counts(doc: &mut Document, names: Option<&[String]>) -> Result
 
 /// Restore defaults and then run the active calculation callbacks once.
 pub fn reset_with_scripts(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts) -> Result<(usize, usize), FormError> {
+    reset_with_formatting(doc, names, scripts, true)
+}
+
+/// Restore defaults with their script formatting, optionally deferring custom calculations.
+pub fn reset_with_formatting(
+    doc: &mut Document,
+    names: Option<&[String]>,
+    scripts: &mut dyn Scripts,
+    calculate_with_scripts: bool,
+) -> Result<(usize, usize), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -874,10 +892,13 @@ pub fn reset_with_scripts(doc: &mut Document, names: Option<&[String]>, scripts:
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        write_value(doc, &tmp, &v, &mut NoScripts)?;
+        write_value_impl(doc, &tmp, &v, scripts, true)?;
         changed += 1;
+        if scripts.stopped() {
+            return Ok((changed, 0));
+        }
     }
-    let recalculated = recalculate_with(doc, scripts)?;
+    let recalculated = if calculate_with_scripts { recalculate_with(doc, scripts)? } else { recalculate_with(doc, &mut NoScripts)? };
     Ok((changed, recalculated))
 }
 

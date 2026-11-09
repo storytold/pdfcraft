@@ -9330,8 +9330,9 @@ fn javascript_through_tools() {
     ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop", "margins":[10,20,30,40] }));
     let cropped = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify(getPageBox('Crop',0))" }));
     assert_eq!(cropped["result"], "[0,240,160,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[2], "box":"media", "margins":[0,0,40,50] }));
     let other_boxes = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify([getPageBox('Media',0),getPageBox('Crop',1)])" }));
-    assert_eq!(other_boxes["result"], "[[-10,280,190,-20],[0,300,200,0]]");
+    assert_eq!(other_boxes["result"], "[[-10,280,190,-20],[0,250,160,0]]");
     ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop" }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();

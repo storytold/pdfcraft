@@ -32,13 +32,57 @@ fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut Edi
     result
 }
 
+/// Compare the icon and all of its indirect resources. Conservatively retire on budget exhaustion.
+fn icon_changed(previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Document, root: pdfcraft_cos::ObjRef, budget: &mut usize) -> bool {
+    use pdfcraft_cos::Object;
+
+    fn visit(object: &Object, refs: &mut Vec<pdfcraft_cos::ObjRef>, budget: &mut usize, depth: usize) -> Option<()> {
+        *budget = budget.checked_sub(1)?;
+        if depth == 128 {
+            return None;
+        }
+        match object {
+            Object::Ref(reference) => refs.push(*reference),
+            Object::Array(values) => {
+                for value in values {
+                    visit(value, refs, budget, depth + 1)?;
+                }
+            }
+            _ => {
+                if let Some(dict) = object.as_dict() {
+                    for (_, value) in dict.iter() {
+                        visit(value, refs, budget, depth + 1)?;
+                    }
+                }
+            }
+        }
+        Some(())
+    }
+
+    let mut pending = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(reference) = pending.pop() {
+        if !seen.insert(reference) {
+            continue;
+        }
+        if *budget == 0 {
+            return true;
+        }
+        let before = previous.get(reference);
+        let after = restored.get(reference);
+        if (!Arc::ptr_eq(&before, &after) && before != after) || visit(&before, &mut pending, budget, 0).is_none() {
+            return true;
+        }
+    }
+    false
+}
+
 fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Document) {
     if let Ok(mut runtime) = doc.js_runtime.lock() {
+        let mut budget = 250_000;
         runtime.retire_changed_icons(|id| {
             let object = pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16);
-            let before = previous.get(object);
-            let after = restored.get(object);
-            !Arc::ptr_eq(&before, &after) && before != after
+            icon_changed(previous, restored, object, &mut budget)
         });
         runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
     }

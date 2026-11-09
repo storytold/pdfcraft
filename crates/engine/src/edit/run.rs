@@ -796,10 +796,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ResetForm { names } => {
-            if !cx.defer_reset_callbacks
-                && let Some(js) = cx.js.as_mut()
-            {
-                pdfcraft_forms::reset_with_scripts(doc, names.as_deref(), js)?;
+            if let Some(js) = cx.js.as_mut() {
+                pdfcraft_forms::reset_with_formatting(doc, names.as_deref(), js, !cx.defer_reset_callbacks)?;
             } else {
                 pdfcraft_forms::reset(doc, names.as_deref())?;
             }
@@ -1100,20 +1098,27 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
                 return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
             }
-            // A later value write or reset recalculates from the final values. Run the
-            // intermediate built-in resets for ordering, but don't replay custom callbacks.
-            let last_calculation = edits.iter().rposition(|edit| match edit {
-                Edit::ResetForm { .. } | Edit::SetFieldValue { .. } => true,
-                Edit::ApplyScriptChanges { changes } => changes.iter().any(|change| change.value.is_some()),
-                _ => false,
-            });
+            // Only contiguous resets immediately preceding script value writeback can
+            // defer callbacks. Other edits may read calculated values during validation.
+            let mut script_writeback = vec![false; edits.len()];
+            let mut writes_values = false;
+            for (index, edit) in edits.iter().enumerate().rev() {
+                match edit {
+                    Edit::ResetForm { .. } => script_writeback[index] = writes_values,
+                    Edit::ApplyScriptChanges { changes } => writes_values = changes.iter().any(|change| change.value.is_some()),
+                    _ => writes_values = false,
+                }
+            }
             let deferred = cx.defer_reset_callbacks;
             for (index, e) in edits.iter().enumerate() {
-                cx.defer_reset_callbacks = deferred || last_calculation.is_some_and(|last| index < last);
+                cx.defer_reset_callbacks = script_writeback[index];
                 let result = run_edit(doc, e, cx);
                 cx.defer_reset_callbacks = deferred;
                 result?;
                 if let Some(js) = cx.js.as_mut() {
+                    if js.refused.is_some() {
+                        break;
+                    }
                     js.refresh_after_batch_edit(doc, e);
                 }
             }

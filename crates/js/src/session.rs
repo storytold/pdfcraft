@@ -76,8 +76,8 @@ impl ScriptSession {
                 continue;
             }
             if self.icon_versions.len() == MAX_TRACKED_ICONS {
-                self.retire_icon_handles();
                 self.icon_tracking_overflowed = true;
+                break;
             }
             Arc::make_mut(&mut self.icon_versions).insert(id, 0);
         }
@@ -338,8 +338,8 @@ impl ScriptSession {
     pub fn run(&mut self, job: Job, answers: &[Option<String>]) -> Outcome {
         self.run_with_limit(job, answers, std::time::Duration::from_secs(10))
     }
-    /// A separate limit permits deterministic timeout regressions without ten-second test delays.
-    fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
+    /// Run a callback within the remaining time of a larger operation.
+    pub fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
         let started = std::time::Instant::now();
         let rx = match self.start(job) {
             Ok(rx) => rx,
@@ -689,6 +689,19 @@ mod tests {
         assert!(session.sender.is_none());
         drop(worker);
         assert_eq!(session.run(job("1+1"), &[]).result.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn icon_tracking_overflow_preserves_handles_until_history_changes() {
+        let mut session = ScriptSession::default();
+        Arc::make_mut(&mut session.icon_versions).extend((1..=16_384).map(|id| (id, 0)));
+        let mut capture = job("var oldIcon = getField('go').buttonGetIcon();");
+        Arc::make_mut(&mut capture.fields)[0].icon = Some(16_385);
+        assert_eq!(session.run(capture.clone(), &[]).error, None);
+        capture.script = "getField('go').buttonSetIcon(oldIcon);".into();
+        assert_eq!(session.run(capture.clone(), &[]).error, None);
+        session.retire_changed_icons(|_| false);
+        assert!(session.run(capture, &[]).error.is_some());
     }
 
     #[test]

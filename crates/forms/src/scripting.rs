@@ -73,6 +73,11 @@ pub struct ScriptResult {
 
 /// Runs field scripts (JavaScript).
 pub trait Scripts {
+    /// Whether the host stopped this edit's callbacks.
+    fn stopped(&self) -> bool {
+        false
+    }
+
     /// Run `script` for `event` on `target`, whose value is `value`; `fields` is the whole form.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &Document) -> ScriptResult;
 

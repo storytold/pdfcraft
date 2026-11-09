@@ -421,6 +421,8 @@ pub struct JsRunner {
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
     pub(crate) refused: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    callback_started: Option<std::time::Instant>,
     /// Source/order cache for this edit only; each callback still snapshots current field values.
     calculations: Option<Vec<(usize, String)>>,
 }
@@ -475,7 +477,21 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), refused: None, runtime: Default::default(), calculations: None }
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            refused: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            callback_started: None,
+            runtime: Default::default(),
+            calculations: None,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn callback_time_left(&mut self) -> std::time::Duration {
+        std::time::Duration::from_secs(10).saturating_sub(self.callback_started.get_or_insert_with(std::time::Instant::now).elapsed())
     }
 }
 
@@ -524,26 +540,48 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 }
 
 impl Scripts for JsRunner {
+    fn stopped(&self) -> bool {
+        self.refused.is_some()
+    }
+
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
+        let unchanged = || ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
+        if self.stopped() {
+            return unchanged();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.callback_time_left().is_zero() {
+            self.refused = Some("form script callbacks exceeded their shared execution budget".into());
+            return unchanged();
+        }
         let states: Vec<_> = fields.iter().map(|f| field_state(doc, f, &self.doc)).collect();
         let states = std::sync::Arc::new(states);
         let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         ev.target_id = Some((u64::from(target.obj.num) << 16) | u64::from(target.obj.generation));
         let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields)).clone();
+        let job = pdfcraft_js::session::Job {
+            script: script.into(),
+            event: ev,
+            doc: self.doc.clone(),
+            fields: states.clone(),
+            doc_scripts: self.doc_scripts.clone(),
+            calculations,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let remaining = self.callback_time_left();
         let o = match self.runtime.lock() {
-            Ok(mut runtime) => runtime.run(
-                pdfcraft_js::session::Job {
-                    script: script.into(),
-                    event: ev,
-                    doc: self.doc.clone(),
-                    fields: states.clone(),
-                    doc_scripts: self.doc_scripts.clone(),
-                    calculations,
-                },
-                &[],
-            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(mut runtime) if !remaining.is_zero() => runtime.run_with_limit(job, &[], remaining),
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(_) => Outcome {
+                execution_refused: true,
+                error: Some("form script callbacks exceeded their shared execution budget".into()),
+                ..Default::default()
+            },
+            #[cfg(target_arch = "wasm32")]
+            Ok(mut runtime) => runtime.run(job, &[]),
             Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
         self.output.absorb(&o);
@@ -552,7 +590,7 @@ impl Scripts for JsRunner {
         }
         if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
+            return unchanged();
         }
         // The edit's later scripts read the field highlight this one set.
         if let Some(on) = last_highlight(&o.requests) {
@@ -577,6 +615,14 @@ impl Scripts for JsRunner {
         fields: &[Field],
         doc: &pdfcraft_cos::Document,
     ) -> Option<ScriptResult> {
+        if self.stopped() {
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.callback_time_left().is_zero() {
+            self.refused = Some("form script callbacks exceeded their shared execution budget".into());
+            return None;
+        }
         let states = std::sync::Arc::new(fields.iter().map(|f| field_state(doc, f, &self.doc)).collect());
         let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         ev.target_id = Some(field_object_id(target.obj));

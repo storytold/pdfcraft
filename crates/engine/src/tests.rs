@@ -11794,6 +11794,36 @@ fn a_reset_clears_a_floating_field_in_every_row() {
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]
+fn xfa_focus_targets_the_widget_after_relayout() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="go" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">
+   xfa.host.setFocus(note); extra.presence = "hidden";
+  </script></event>
+ </field>
+ <field name="extra" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("focus.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).unwrap();
+    let note = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "note").unwrap().obj;
+    let before = note(&s);
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].go[0]".into(), activity: "click".into() }).unwrap();
+    let after = note(&s);
+    assert_ne!(before, after);
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::FocusField { name: "note".into(), object_id: crate::js::field_object_id(after) }], "{out:?}");
+}
+
+#[test]
 fn an_xfa_button_may_show_a_side_panel_and_other_events_may_not() {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
@@ -13517,6 +13547,53 @@ fn opening_reset_recalculates_custom_dependents() {
     let id = s.open("opening-calculation.pdf", None, bytes, None).unwrap();
     let doc = s.get(id).unwrap();
     assert_eq!(doc.form.iter().find(|f| f.name == "total").unwrap().value, ["14"]);
+}
+
+#[test]
+fn batch_reset_recalculates_before_later_validation() {
+    let (mut s, id) = reset_order_session("");
+    for (name, event, script) in [
+        ("total", "calculate", "event.value = Number(getField('price').value);"),
+        ("qty", "validate", "event.rc = Number(getField('total').value) === 7;"),
+    ] {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: event.into(), script: Some(script.into()) }).unwrap();
+    }
+    s.set_javascript(true);
+    s.run_javascript(id, "calculateNow();", None).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(value(&s, "total"), ["99"]);
+    s.apply(
+        id,
+        Edit::Batch {
+            label: "Reset and edit".into(),
+            edits: vec![
+                Edit::ResetForm { names: Some(vec!["price".into()]) },
+                Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) },
+            ],
+        },
+    )
+    .unwrap();
+    assert_eq!(value(&s, "qty"), ["10"]);
+    assert_eq!(value(&s, "total"), ["7"]);
+}
+
+#[test]
+fn reset_draws_the_formatted_default() {
+    let (mut s, id) = reset_order_session("");
+    s.apply(
+        id,
+        Edit::SetFieldScript {
+            name: "price".into(),
+            event: "format".into(),
+            script: Some("event.value = 'USD ' + Number(event.value).toFixed(2);".into()),
+        },
+    )
+    .unwrap();
+    s.apply(id, Edit::SetFieldScript { name: "price".into(), event: "validate".into(), script: Some("event.rc = false;".into()) }).unwrap();
+    s.set_javascript(true);
+    s.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["7"]);
+    assert!(page_texts(&s, id)[0].contains("USD 7.00"), "{:?}", page_texts(&s, id));
 }
 
 #[test]
