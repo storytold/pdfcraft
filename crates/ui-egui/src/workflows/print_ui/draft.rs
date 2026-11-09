@@ -222,13 +222,21 @@ impl PrintDraft {
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
+        // A printer whose driver reports it cannot take two-sided settings (only Windows
+        // reports this) gets no duplex setting at all, so the driver keeps its own.
+        let rejects_two_sided = match &self.printer {
+            Some(name) => self.printers.iter().any(|p| &p.name == name && p.two_sided == Some(false)),
+            None => false,
+        };
         spool::Job {
             printer: self.printer.clone(),
             copies: self.copies.max(1),
             collate: self.collate,
             // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
             // decides two-sided itself (#2707), leaving the Two-sided choice as it was.
-            duplex: if self.cut_and_stack() {
+            duplex: if rejects_two_sided {
+                None
+            } else if self.cut_and_stack() {
                 Some(spool::Duplex::Off)
             } else if self.handling == Handling::Booklet {
                 Some(print::booklet_duplex(self.booklet_subset))

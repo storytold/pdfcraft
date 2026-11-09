@@ -689,6 +689,31 @@ mod tests {
         assert!(cut.settings(4, &[]).is_err());
     }
 
+    /// A printer whose driver reports it cannot take two-sided settings (only Windows reports
+    /// this) gets no duplex setting at all, so the driver keeps its own; a printer that can,
+    /// or whose support is unknown, still gets the dialog's choice.
+    #[test]
+    fn duplex_is_not_sent_to_a_printer_without_two_sided() {
+        for duplex in [spool::Duplex::LongEdge, spool::Duplex::ShortEdge, spool::Duplex::Off] {
+            let draft = PrintDraft {
+                printers: vec![spool::Printer { name: "Office".into(), default: true, two_sided: Some(false), description: String::new() }],
+                printer: Some("Office".into()),
+                duplex: Some(duplex),
+                ..PrintDraft::default()
+            };
+            assert_eq!(draft.job("report.pdf").duplex, None, "{duplex:?} to a printer without two-sided");
+        }
+        for two_sided in [Some(true), None] {
+            let draft = PrintDraft {
+                printers: vec![spool::Printer { name: "Office".into(), default: true, two_sided, description: String::new() }],
+                printer: Some("Office".into()),
+                duplex: Some(spool::Duplex::LongEdge),
+                ..PrintDraft::default()
+            };
+            assert_eq!(draft.job("report.pdf").duplex, Some(spool::Duplex::LongEdge), "two_sided={two_sided:?}");
+        }
+    }
+
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
     /// them; the card goes when the job ends and its answer arrives as a notice. A card another
     /// long job is showing is left alone.
