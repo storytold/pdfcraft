@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::core::inspect;
 use super::core::spend;
-use super::model::{DestView, OutlineItem, PageInfo};
+use super::model::{DestView, LinkTarget, OutlineItem, PageInfo};
 use super::{
     BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
     MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
@@ -79,6 +79,7 @@ impl<'a> Inspector<'a> {
         seen: &mut HashSet<*const Dictionary>,
         depth: u32,
         out: &mut HashMap<Vec<u8>, &'a Object>,
+        key_budget: &mut usize,
     ) {
         if depth > 32 || !seen.insert(node as *const _) {
             return;
@@ -87,18 +88,25 @@ impl<'a> Inspector<'a> {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
-                        Object::String(s, _) => s.clone(),
-                        Object::Name(n) => n.clone(),
+                        Object::String(s, _) => s,
+                        Object::Name(n) => n,
                         _ => continue,
                     };
-                    out.entry(key).or_insert(v);
+                    // Every key is hashed, so its bytes are spent from one allowance for the whole
+                    // tree (a key repeated by reference is charged each time); one past it is
+                    // not indexed. Only a first occurrence is copied.
+                    let Some(left) = key_budget.checked_sub(key.len()) else { continue };
+                    *key_budget = left;
+                    if !out.contains_key(key.as_slice()) {
+                        out.insert(key.clone(), v);
+                    }
                 }
             }
         }
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k) {
-                    self.name_tree_raw(d, seen, depth + 1, out);
+                    self.name_tree_raw(d, seen, depth + 1, out, key_budget);
                 }
             }
         }
@@ -185,8 +193,9 @@ impl<'a> Inspector<'a> {
 
     /// The window `DocInfo::outline` keeps: the first `OUTLINE_WINDOW` bookmarks in outline order,
     /// nested no deeper than `OUTLINE_DEPTH`, and whether any bookmark was left out. Iterative, and
-    /// each bookmark is read once, so the work and memory stay within the window.
-    pub(super) fn outline_window(&self, first: &'a Object) -> (Vec<OutlineItem>, bool) {
+    /// each bookmark is read once, so the work and memory stay within the window. Web addresses are
+    /// spent from `text_budget`, as links' are.
+    pub(super) fn outline_window(&self, first: &'a Object, text_budget: &mut usize) -> (Vec<OutlineItem>, bool) {
         let mut seen = HashSet::new();
         // The listed bookmarks in outline order, with their depth.
         let mut listed: Vec<(usize, OutlineItem)> = Vec::new();
@@ -210,12 +219,20 @@ impl<'a> Inspector<'a> {
                 break;
             }
             *slot = d.get(b"Next").ok();
-            let dest = d
-                .get(b"Dest")
-                .ok()
-                .and_then(|dest| self.dest(dest, 0))
-                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest(dest, 0)));
-            let (page, view) = dest.map_or((None, DestView::Top), |(p, v)| (Some(p), v));
+            // A bookmark goes to its `/Dest`, else does what its action `/A` does, as a link would.
+            // Only a go-to's `/D` is a page here: a remote go-to's names a page of the other file.
+            // An action without a type is still read as the go-to its `/D` suggests.
+            let action = match d.get(b"Dest").ok().and_then(|dest| self.dest(dest, 0)) {
+                Some((page, view)) => Some(LinkTarget::Page(page, view)),
+                None => d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| match a.get(b"S") {
+                    Ok(_) => self.action_target(a, text_budget),
+                    Err(_) => a.get(b"D").ok().and_then(|dest| self.dest(dest, 0)).map(|(page, view)| LinkTarget::Page(page, view)),
+                }),
+            };
+            let ((page, view), action) = match action {
+                Some(LinkTarget::Page(page, view)) => ((Some(page), view), None),
+                other => ((None, DestView::Top), other),
+            };
             match d.get(b"First").ok() {
                 Some(child) if depth < OUTLINE_DEPTH => levels.push(Some(child)),
                 Some(_) => more = true,
@@ -229,7 +246,7 @@ impl<'a> Inspector<'a> {
             };
             let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
             let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
-            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open, color, italic, bold }));
+            listed.push((depth, OutlineItem { title, page, view, action, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }
@@ -549,5 +566,18 @@ mod open_dest_tests {
         // A shallow one is read.
         let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
         assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
+    }
+
+    #[test]
+    fn a_key_repeated_by_reference_is_charged_each_time_against_the_name_tree_allowance() {
+        let big = format!("<{}>", "41".repeat(1 << 20));
+        let tree = |repeats: usize| {
+            let names = format!("{}(x) [4 0 R /Fit]", "7 0 R [4 0 R /Fit] ".repeat(repeats));
+            [format!("<< /Names [{names}] >>"), big.clone()]
+        };
+        let catalog = "/OpenAction (x) /Names << /Dests 6 0 R >>";
+        assert_eq!(open_dest(catalog, &tree(2)), Some((1, DestView::Fit)));
+        // 17 MiB of repeats of one reference spend the 16 MiB allowance before the real key.
+        assert_eq!(open_dest(catalog, &tree(17)), None);
     }
 }

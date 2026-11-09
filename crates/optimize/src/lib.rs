@@ -17,7 +17,7 @@
 //!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
 //!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
-//!   print settings.
+//!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one; store LZW-compressed streams with Flate instead.
@@ -29,9 +29,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod form_actions;
 pub mod fragments;
 mod images;
 mod links;
+mod pool;
 mod samples;
 mod unused;
 
@@ -41,12 +43,15 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::effective_resolutions;
+pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
     #[error("the document has no page tree")]
     NoPages,
+    #[error("object {0} nests or chains its form actions too deeply, or the document holds too many actions, to discard them")]
+    ActionLimit(ObjRef),
     #[error("the document's encryption requires PDF {required} or later (chosen: PDF {chosen})")]
     IncompatibleEncryption { required: &'static str, chosen: &'static str },
     #[error(transparent)]
@@ -106,6 +111,8 @@ impl Compatibility {
 /// Where an optimization is, reported to [`optimize_with_progress`]'s callback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
+    /// Reading what pages draw: `done` of `total` read, none yet while looking for fragments.
+    Reading { done: usize, total: usize },
     /// About to process image `done` (0-based) of `total`; `done == total` once all are done.
     Images { done: usize, total: usize },
     /// Merging the fragments of a page picture into one image (only when a page has some).
@@ -181,6 +188,8 @@ impl ImageSettings {
 pub struct Settings {
     /// Target PDF version (`Retain` by default).
     pub compatibility: Compatibility,
+    /// Threads for pictures: `None` picks from the machine. The result is the same with any number.
+    pub workers: Option<usize>,
     /// Put page pictures drawn as many stacked fragments back together first ([`fragments`]).
     pub merge_fragments: bool,
     pub color: ImageSettings,
@@ -191,6 +200,8 @@ pub struct Settings {
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
     pub discard_print_settings: bool,
+    /// Remove form submission, import and reset actions; the fields and links that ran them stay.
+    pub discard_form_actions: bool,
     /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
     /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
@@ -217,6 +228,7 @@ impl Default for Settings {
     /// Acrobat's Reduce File Size choices.
     fn default() -> Self {
         Self {
+            workers: None,
             compatibility: Compatibility::Retain,
             merge_fragments: true,
             color: ImageSettings::REDUCE,
@@ -226,6 +238,7 @@ impl Default for Settings {
             discard_alternate_images: true,
             discard_tags: false,
             discard_print_settings: false,
+            discard_form_actions: false,
             flate_unencoded: true,
             object_streams: true,
             lzw_to_flate: true,
@@ -290,6 +303,8 @@ pub struct Report {
     pub alternate_images: usize,
     pub tags_removed: bool,
     pub print_settings: usize,
+    /// Form submission, import and reset actions removed.
+    pub form_actions: usize,
     pub streams_compressed: usize,
     /// Streams whose LZW compression was replaced with Flate (Clean Up).
     pub lzw_streams: usize,
@@ -418,6 +433,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
             _ => {}
         }
+    }
+    if settings.discard_form_actions {
+        report.form_actions = form_actions::discard(doc)?;
     }
     if settings.remove_invalid_links {
         let (l, b) = links::remove_invalid(doc, &pages)?;

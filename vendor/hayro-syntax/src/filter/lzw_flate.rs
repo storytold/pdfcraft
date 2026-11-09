@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 pub(crate) mod flate {
     use super::*;
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, untagged_png_rows};
 
     pub(crate) use fallback::FlateState;
 
@@ -17,9 +17,15 @@ pub(crate) mod flate {
     }
     use crate::object::Dict;
 
-    /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`).
+    /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`), and `rows`
+    /// the `/Height` of the image the data is the samples of, if it is (see [`untagged_png_rows`]).
     #[cfg(feature = "unsafe")]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        limit: usize,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
@@ -51,19 +57,39 @@ pub(crate) mod flate {
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
-        apply_predictor(decoded, &params)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
     }
 
     #[cfg(not(feature = "unsafe"))]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        limit: usize,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
         let decoded = fallback::decode(data, limit)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
-        apply_predictor(decoded, &params)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
+    }
+
+    /// PdfCraft patch: the predictor undone, unless the image's rows carry none
+    /// ([`untagged_png_rows`]): the data is then its samples as they are, which is reported.
+    fn undo_predictor(
+        decoded: Vec<u8>,
+        params: &PredictorParams,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
+        if untagged_png_rows(params, decoded.len(), rows) {
+            warn!(
+                "flate image rows carry no PNG predictor tags, read as stored ({} rows)",
+                rows.unwrap_or(0)
+            );
+            return Some(decoded);
+        }
+        apply_predictor(decoded, params)
     }
 
     /// Ported from <https://github.com/mozilla/pdf.js/blob/master/src/core/flate_stream.js>
@@ -975,6 +1001,21 @@ impl PredictorParams {
     }
 }
 
+/// PdfCraft patch: whether `len` bytes of an image `rows` high (`None` for data that isn't an
+/// image's samples) are its rows without the filter-type byte each row starts with under a PNG
+/// predictor (ISO 32000-2 §7.4.4.4): exactly `rows` × the row's bytes, where the predicted data
+/// would be `rows` × (the row's bytes + 1). Some writers declare `/Predictor 15` without applying
+/// it; read with the predictor, every row's first byte was taken for a filter type, the image
+/// shifted a byte a row and came out short, drawn in fragments. PDFium, MuPDF and Poppler read
+/// such data as the samples it is. Any other length is decoded with the predictor, as before.
+fn untagged_png_rows(params: &PredictorParams, len: usize, rows: Option<usize>) -> bool {
+    let row_len = params.row_length_in_bytes();
+    params.predictor >= 10
+        && matches!(params.bits_per_component, 1 | 2 | 4 | 8 | 16)
+        && row_len > 0
+        && rows.filter(|&r| r > 0).and_then(|r| r.checked_mul(row_len)) == Some(len)
+}
+
 fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
     match params.predictor {
         1 => Some(data),
@@ -1017,6 +1058,17 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                 return Some(unfilter_png(&data, row_len, bpp));
             }
 
+            if i == 2 && matches!(params.bits_per_component, 8 | 16) && !bit_level_only() {
+                // PdfCraft patch: whole-byte samples are undone a row at a time on byte slices
+                // instead of through the bit-level readers, which packed samples need.
+                let sample_len = usize::from(params.bits_per_component / 8);
+                let pixel_len = usize::from(params.colors).saturating_mul(sample_len);
+                return Some(undo_tiff_bytes(data, row_len, pixel_len, sample_len));
+            }
+
+            #[cfg(all(test, feature = "std"))]
+            BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
+
             let (bit_size, chunk_len) = (params.bits_per_component, params.colors as usize);
             let zero_row = vec![0; row_len];
             let mut prev_row = BitChunks::new(&zero_row, bit_size, chunk_len)?;
@@ -1052,6 +1104,69 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             Some(out)
         }
     }
+}
+
+/// PdfCraft patch: undoes TIFF predictor 2 (ISO 32000-2 §7.4.4.4, Table 10; TIFF 6.0 §14)
+/// for 8- and 16-bit samples, in rows of `row_len` bytes holding pixels of `pixel_len` bytes,
+/// each sample `sample_len` bytes (1 or 2, big-endian): every sample is added to the same
+/// component of the pixel to its left, wrapping at the sample's width. Bytes after the last
+/// complete row are dropped, as the bit-level path drops them.
+fn undo_tiff_bytes(
+    mut data: Vec<u8>,
+    row_len: usize,
+    pixel_len: usize,
+    sample_len: usize,
+) -> Vec<u8> {
+    let num_rows = data.len() / row_len.max(1);
+    data.truncate(num_rows.saturating_mul(row_len));
+    if pixel_len == 0 {
+        return data;
+    }
+
+    for row in data.chunks_exact_mut(row_len) {
+        let mut pixels = row.chunks_exact_mut(pixel_len);
+        let Some(mut left) = pixels.next() else {
+            continue;
+        };
+        for px in pixels {
+            if sample_len == 2 {
+                for (c, l) in px.chunks_exact_mut(2).zip(left.chunks_exact(2)) {
+                    if let ([c0, c1], [l0, l1]) = (c, l) {
+                        let sum = u16::from_be_bytes([*c0, *c1])
+                            .wrapping_add(u16::from_be_bytes([*l0, *l1]));
+                        [*c0, *c1] = sum.to_be_bytes();
+                    }
+                }
+            } else {
+                for (c, l) in px.iter_mut().zip(left.iter()) {
+                    *c = c.wrapping_add(*l);
+                }
+            }
+            left = px;
+        }
+    }
+
+    data
+}
+
+#[cfg(all(test, feature = "std"))]
+std::thread_local! {
+    /// PdfCraft patch tests: rows the bit-level TIFF predictor path has undone on this thread.
+    static BIT_LEVEL_TIFF_ROWS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    /// PdfCraft patch tests: send whole-byte TIFF samples through the bit-level path too.
+    static BIT_LEVEL_ONLY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch: whether whole-byte TIFF samples must take the bit-level path (only when a
+/// test compares the two paths).
+#[cfg(all(test, feature = "std"))]
+fn bit_level_only() -> bool {
+    BIT_LEVEL_ONLY.with(core::cell::Cell::get)
+}
+
+#[cfg(not(all(test, feature = "std")))]
+fn bit_level_only() -> bool {
+    false
 }
 
 /// PdfCraft patch: undoes PNG row filters (ISO 32000-2 §7.4.4.4, PNG specification §9) in
@@ -1215,7 +1330,7 @@ mod tests {
             0x78, 0x9c, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0, 0x5, 0x8c, 0x1, 0xf5,
         ];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 
@@ -1223,7 +1338,7 @@ mod tests {
     fn decode_flate() {
         let input = [0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
     
@@ -1363,7 +1478,134 @@ mod tests {
 /// PdfCraft patch tests: PNG predictors are undone byte by byte (`unfilter_png`).
 #[cfg(test)]
 mod pdfcraft_png_predictor_tests {
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, flate, untagged_png_rows};
+    use crate::object::{Dict, FromBytes};
+
+    /// `data` as one stored (uncompressed) deflate block, at most 65,535 bytes.
+    fn stored(data: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(data.len()).unwrap();
+        let mut out = vec![1];
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend(data);
+        out
+    }
+
+    /// `data` inflated and its PNG predictor undone, as the last filter of an image `rows` high.
+    fn inflate(parms: &[u8], data: &[u8], rows: Option<usize>) -> Option<Vec<u8>> {
+        let parms = Dict::from_bytes(parms).unwrap();
+        flate::decode(&stored(data), &parms, usize::MAX, rows)
+    }
+
+    const RGB3: &[u8] = b"<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 3 >>";
+
+    #[test]
+    fn an_image_whose_rows_carry_no_png_tags_is_read_as_its_samples() {
+        // Three RGB pixels a row, four rows: 36 bytes, where the predictor would need 40. Every
+        // row starts with a byte above 4, which the predictor took for a filter type, so the
+        // image came out three rows of shifted samples.
+        let samples: Vec<u8> = (0..36).map(|i| 200 - i as u8).collect();
+        assert_eq!(inflate(RGB3, &samples, Some(4)).unwrap(), samples);
+        let params = PredictorParams {
+            predictor: 15,
+            colors: 3,
+            bits_per_component: 8,
+            columns: 3,
+            early_change: false,
+        };
+        assert!(
+            untagged_png_rows(&params, 36, Some(4)),
+            "the repair is reported"
+        );
+        // Not an image's samples (no height known): the predictor is undone, as before.
+        assert_eq!(
+            inflate(RGB3, &samples, None).unwrap(),
+            apply_predictor(samples.clone(), &params).unwrap()
+        );
+        assert!(!untagged_png_rows(&params, 36, None));
+    }
+
+    #[test]
+    fn an_image_whose_rows_carry_png_tags_still_has_its_predictor_undone() {
+        // The same four rows, each filtered None, then Sub: 40 bytes.
+        let samples: Vec<u8> = (0..36).map(|i| 200 - i as u8).collect();
+        let mut tagged = Vec::new();
+        for row in samples.chunks(9) {
+            tagged.push(1);
+            let mut left = [0u8; 3];
+            for px in row.chunks(3) {
+                tagged.extend(px.iter().zip(left).map(|(s, l)| s.wrapping_sub(l)));
+                left.copy_from_slice(px);
+            }
+        }
+        assert_eq!(tagged.len(), 40);
+        assert_eq!(inflate(RGB3, &tagged, Some(4)).unwrap(), samples);
+    }
+
+    #[test]
+    fn data_of_neither_length_decodes_as_it_did() {
+        let params = PredictorParams {
+            predictor: 15,
+            colors: 3,
+            bits_per_component: 8,
+            columns: 3,
+            early_change: false,
+        };
+        // Short of the untagged length, past it, or between it and the tagged one.
+        for len in [0, 1, 9, 27, 35, 37, 39, 41, 72] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7) as u8 % 5).collect();
+            assert!(!untagged_png_rows(&params, len, Some(4)), "{len} bytes");
+            assert_eq!(
+                inflate(RGB3, &data, Some(4)),
+                apply_predictor(data.clone(), &params),
+                "{len} bytes"
+            );
+        }
+        // Rows of the untagged length for another height.
+        assert!(!untagged_png_rows(&params, 36, Some(3)));
+        assert!(!untagged_png_rows(&params, 36, Some(0)));
+        // No PNG predictor, or one with an invalid depth.
+        for (predictor, bits_per_component) in [(1, 8), (2, 8), (15, 3), (15, 0)] {
+            let params = PredictorParams {
+                predictor,
+                bits_per_component,
+                ..params
+            };
+            assert!(!untagged_png_rows(&params, 36, Some(4)));
+        }
+    }
+
+    #[test]
+    fn rows_of_no_bytes_or_of_more_than_memory_holds_do_not_panic() {
+        for (colors, bits_per_component, columns) in [
+            (0, 8, 3),
+            (3, 8, 0),
+            (255, 16, usize::MAX),
+            (1, 1, usize::MAX),
+            (3, 8, usize::MAX / 24 + 1),
+        ] {
+            let params = PredictorParams {
+                predictor: 15,
+                colors,
+                bits_per_component,
+                columns,
+                early_change: false,
+            };
+            for rows in [None, Some(0), Some(1), Some(4), Some(usize::MAX)] {
+                for len in [0, 1, 36, usize::MAX] {
+                    let _ = untagged_png_rows(&params, len, rows);
+                }
+            }
+        }
+        let zero = b"<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 0 >>";
+        let huge =
+            b"<< /Predictor 15 /Colors 255 /BitsPerComponent 16 /Columns 9223372036854775807 >>";
+        for parms in [&zero[..], &huge[..]] {
+            for rows in [None, Some(0), Some(4), Some(usize::MAX)] {
+                let _ = inflate(parms, &[7; 36], rows);
+            }
+        }
+    }
 
     /// PNG unfiltering written out from the PNG specification (§9.2–9.4), one byte at a time.
     fn reference(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
@@ -1489,5 +1731,118 @@ mod pdfcraft_png_predictor_tests {
             apply_predictor(data.clone(), &params).unwrap(),
             reference(&data, row_len, 6)
         );
+    }
+}
+
+/// PdfCraft patch tests: TIFF predictor 2 on 8- and 16-bit samples is undone on byte rows
+/// (`undo_tiff_bytes`), with the same output as the bit-level path.
+#[cfg(all(test, feature = "std"))]
+mod pdfcraft_tiff_predictor_tests {
+    use super::{BIT_LEVEL_ONLY, BIT_LEVEL_TIFF_ROWS};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+
+    fn tiff(colors: u8, bits_per_component: u8, columns: usize) -> PredictorParams {
+        PredictorParams {
+            predictor: 2,
+            colors,
+            bits_per_component,
+            columns,
+            early_change: false,
+        }
+    }
+
+    /// Both paths' output, the byte path's first; `None` from either is kept.
+    fn both(data: &[u8], params: &PredictorParams) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let fast = apply_predictor(data.to_vec(), params);
+        BIT_LEVEL_ONLY.with(|only| only.set(true));
+        let bits = apply_predictor(data.to_vec(), params);
+        BIT_LEVEL_ONLY.with(|only| only.set(false));
+        (fast, bits)
+    }
+
+    #[test]
+    fn whole_byte_samples_match_the_bit_level_path_on_random_rows() {
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for case in 0..600 {
+            let colors = [1u8, 2, 3, 4, 5, 7][(next() % 6) as usize];
+            let bits_per_component = [8u8, 16][(next() % 2) as usize];
+            let columns = 1 + (next() % 50) as usize;
+            let row_len = columns * usize::from(colors) * usize::from(bits_per_component) / 8;
+            let rows = (next() % 7) as usize;
+            // A partial row at the end, or none.
+            let tail = (next() % 4) as usize % row_len;
+            let data: Vec<u8> = (0..rows * row_len + tail).map(|_| next() as u8).collect();
+            let params = tiff(colors, bits_per_component, columns);
+            let (fast, bits) = both(&data, &params);
+            assert_eq!(
+                fast, bits,
+                "case {case}: {colors} colours at {bits_per_component} bits, {columns} columns,                  {rows} rows and {tail} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn whole_byte_samples_add_to_the_same_component_of_the_pixel_to_their_left() {
+        // Two 8-bit colours, three columns, two rows; sums wrap at 256.
+        let data = [10, 20, 1, 2, 3, 4, /* row 2 */ 5, 5, 250, 10, 1, 1];
+        assert_eq!(
+            apply_predictor(data.to_vec(), &tiff(2, 8, 3)).unwrap(),
+            [10, 20, 11, 22, 14, 26, 5, 5, 255, 15, 0, 16]
+        );
+        // One 16-bit colour: a carry crosses the byte boundary and the sum wraps at 65,536.
+        let data = [
+            0x01, 0x00, 0xff, 0xff, 0x00, 0x02, /* row 2 */ 0x00, 0xff, 0x00, 0x01, 0, 0,
+        ];
+        assert_eq!(
+            apply_predictor(data.to_vec(), &tiff(1, 16, 3)).unwrap(),
+            [
+                0x01, 0x00, 0x00, 0xff, 0x01, 0x01, 0x00, 0xff, 0x01, 0x00, 0x01, 0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn whole_byte_samples_do_not_take_the_bit_level_path() {
+        let start = BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get);
+        for bits_per_component in [8, 16] {
+            let data = vec![7; 3 * 4 * usize::from(bits_per_component) / 8 * 5];
+            apply_predictor(data, &tiff(3, bits_per_component, 4)).unwrap();
+        }
+        assert_eq!(BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get), start);
+
+        // Packed samples still do.
+        apply_predictor(vec![0x5f; 4], &tiff(1, 4, 2)).unwrap();
+        assert_eq!(BIT_LEVEL_TIFF_ROWS.with(core::cell::Cell::get), start + 4);
+    }
+
+    #[test]
+    fn rows_without_a_complete_row_of_data_are_dropped_on_both_paths() {
+        for (data, params, want) in [
+            // Shorter than one row: nothing.
+            (vec![1, 2, 3], tiff(1, 8, 4), Some(vec![])),
+            (vec![1, 2, 3], tiff(1, 16, 2), Some(vec![])),
+            // A zero-width row is refused.
+            (vec![1, 2, 3], tiff(1, 8, 0), None),
+            (vec![], tiff(1, 16, 0), None),
+            // No data at all.
+            (vec![], tiff(3, 8, 2), Some(vec![])),
+            // The trailing partial row is dropped.
+            (
+                vec![1, 1, 1, 1, 2, 2],
+                tiff(1, 8, 4),
+                Some(vec![1, 2, 3, 4]),
+            ),
+            (vec![0, 1, 0, 1, 9], tiff(1, 16, 2), Some(vec![0, 1, 0, 2])),
+        ] {
+            let (fast, bits) = both(&data, &params);
+            assert_eq!(fast, want, "{data:?}");
+            assert_eq!(bits, want, "{data:?}");
+        }
     }
 }
