@@ -154,7 +154,13 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 grouped: d.name(b"RT") == Some(b"Group"),
                 rect,
                 color,
-                state: text_value(doc, d, b"State"),
+                // A reply that gives only `/StateModel` has the model's default state (ISO 32000-2
+                // Table 175), as `last_state_reply` and the inspector read it.
+                state: text_value(doc, d, b"State").or_else(|| match text_value(doc, d, b"StateModel").as_deref() {
+                    Some("Marked") => Some("Unmarked".into()),
+                    Some("Review") => Some("None".into()),
+                    _ => None,
+                }),
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
@@ -245,7 +251,10 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let p = page_ref(doc, page).ok()?;
     let entry = annots(doc, p).get(index).cloned()?;
     let obj = doc.resolve(&entry);
-    let d = obj.as_dict()?;
+    // Values given by reference (`/C 7 0 R`, `/BS 5 0 R`, ISO 32000-2 §7.3.10) read as the display draws them.
+    let raw = obj.as_dict()?;
+    let direct = crate::draw::with_direct_values(doc, raw);
+    let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
@@ -263,7 +272,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(doc, d).is_some(),
+        restylable: crate::draw::can_draw(doc, raw),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),

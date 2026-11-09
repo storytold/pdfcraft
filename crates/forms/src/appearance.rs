@@ -782,10 +782,10 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        let shown = crate::af::format_value(&f.actions.format, &values[0]);
+        let shown = f.actions.format_value(&values[0]);
         // Month and weekday names in the date language that no font here can draw ("окт." in
         // Helvetica) are drawn in English rather than as `?` (#5303).
-        let english = || crate::af::format_value_in(&f.actions.format, &values[0], &crate::af::ENGLISH_DATE_NAMES);
+        let english = || f.actions.format_value_in(&values[0], &crate::af::ENGLISH_DATE_NAMES);
         let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
         formatted = vec![if !dated || draws(doc, f, &wd, &shown) { shown } else { english() }];
         &formatted[..]
