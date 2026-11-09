@@ -745,9 +745,10 @@ pub(crate) fn shown_under_redactions(
     let mut shown = after.clone();
     let model = pdfcraft_model::pages(&shown);
     // A batch can move pages after the marks were collected: a mark is found by the page object it
-    // was placed on, not by the index that page had when it was drawn.
-    let page_of = |obj: pdfcraft_cos::ObjRef, then: usize| model.iter().position(|p| p.obj == obj).unwrap_or(then);
-    let mut marked: Vec<usize> = marks.iter().map(|(obj, m)| page_of(*obj, m.page)).collect();
+    // was placed on, not by the index that page had when it was drawn. A page the batch deleted
+    // takes its marks with it, so they are not checked against whatever page now holds the index.
+    let page_of = |obj: pdfcraft_cos::ObjRef| model.iter().position(|p| p.obj == obj);
+    let mut marked: Vec<usize> = marks.iter().filter_map(|(obj, _)| page_of(*obj)).collect();
     marked.sort_unstable();
     marked.dedup();
     if marked.is_empty() {
@@ -772,7 +773,7 @@ pub(crate) fn shown_under_redactions(
         let (Some(info), Some(text)) = (pages.get(pi), renderer.render(request).text) else { return Err(RedactError::Unreadable(pi + 1).into()) };
         let rects: Vec<[f64; 4]> = marks
             .iter()
-            .filter(|(obj, m)| page_of(*obj, m.page) == pi)
+            .filter(|(obj, _)| page_of(*obj) == Some(pi))
             .flat_map(|(_, m)| m.rects.iter())
             .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])])
             .collect();
