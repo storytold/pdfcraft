@@ -1963,8 +1963,8 @@ fn outline_items_carry_their_colour_and_style() {
 /// A bookmark's action (`/A`, ISO 32000-2 §12.3.3 Table 151) is read as a link's is. Only a
 /// go-to's `/D` is a page of this document: a remote go-to's names a page or destination of the
 /// other file (§12.6.4.3), so `[0 /FitH 200]` there is not this file's first page. A web address,
-/// another PDF and actions PdfCraft doesn't run are kept for the bookmark to run or report. An
-/// action without a type is still read as the go-to its `/D` suggests.
+/// another PDF, a PDF attached to this one (GoToE, §12.6.4.4) and actions PdfCraft doesn't run
+/// are kept for the bookmark to run or report. An action without a type is still read as the go-to its `/D` suggests.
 #[test]
 fn bookmark_actions_are_read_as_links_read_them() {
     use DestView::*;
@@ -1974,6 +1974,7 @@ fn bookmark_actions_are_read_as_links_read_them() {
         ("Other file", "/A << /S /GoToR /F (other.pdf) /D [0 /FitH 200] /NewWindow true >>"),
         ("Other file, named", "/A << /S /GoToR /F (other.pdf) /D (sec) >>"),
         ("Launch", "/A << /S /Launch /F (other.pdf) >>"),
+        ("Attached", "/A << /S /GoToE /T << /R /C /N (inner.pdf) >> /D [1 /Fit] >>"),
         ("Menu item", "/A << /S /Named /N /NextPage >>"),
         ("Script", "/A << /S /JavaScript /JS (app.alert\\(1\\)) >>"),
         ("No type", "/A << /D [3 0 R /Fit] >>"),
@@ -2003,6 +2004,16 @@ fn bookmark_actions_are_read_as_links_read_them() {
                 None,
                 Top,
                 Some(LinkTarget::RemoteGoTo { launch: true, file: "other.pdf".into(), destination: RemoteDestination::Default, new_window: None })
+            ),
+            (
+                "Attached",
+                None,
+                Top,
+                Some(LinkTarget::EmbeddedGoTo {
+                    source: AttachmentSource::Document { key: "inner.pdf".into() },
+                    destination: RemoteDestination::Page { page: 1, view: Fit },
+                    new_window: None
+                })
             ),
             ("Menu item", None, Top, Some(LinkTarget::Other("Named".into()))),
             ("Script", None, Top, Some(LinkTarget::Other("JavaScript".into()))),
