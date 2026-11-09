@@ -204,6 +204,8 @@ etag файла с маркером перед коммитом: подмена 
 | `annotation.delete` | merge | `/NM` | `conflict` (аннотации нет) |
 | `field.set_value` | merge | имя поля | `conflict` (undo), `invalid` |
 | `page.*` | structural | страница (`page` + `epoch`) | `stale` (чужая эпоха — retryable), `lease` (retryable), `limit` (копия страницы больше 160 КиБ), `invalid` |
+| `page.replace` | structural | страница (`page` + `epoch`) | `stale`, `lease`, `limit` (страница сверх 160 КиБ), `invalid` (битая base64, не ровно одна страница, страницы нет), `conflict` (undo, у которого нет копии) |
+| `page.insert_blank` | structural | позиция вставки (`page` + `epoch`, `index` ≤ числа страниц) | `stale`, `lease`, `invalid` (размер не положительный/не конечный/больше 14400 pt) |
 
 Отказ не двигает `version`, не пишет строку журнала и не рассылается другим
 клиентам: ответ `rejected` получает только отправитель, принятая операция

@@ -66,6 +66,14 @@
   each with a compare-and-set undo and a refusal that changes neither the
   document nor the version. Nothing was pushed: the fork, PR #6622 and its body
   still describe `81035bf2`.
+- **§5 p.3 / limitation 3 (page replacement and blank insert) is done locally in
+  `e9756d138`** (§4, RFC §3.1.4): `page.replace` addresses the page, carries the
+  new one-page PDF (base64, ≤ `MAX_RESTORE_PAGE_BYTES`), keeps the page it
+  replaced for an exact undo (a page over the budget has no copy and its undo is
+  a `conflict`), and `page.insert_blank` carries the size of the page it adds.
+  Both bump the epoch, so a passed epoch is `stale`; a bad payload is refused
+  before the document changes. The pushed head, the fork, PR #6622 and its body
+  are unchanged.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -79,7 +87,7 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert, restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`) and their before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
@@ -257,6 +265,19 @@ build enables the feature with `trunk build --release --features collab`.
     string is `invalid`, and `Props` reads "no author" as `""` for the
     compare-and-set. Without this the undo of a name on a file-originated
     comment would silently leave the new name in place.
+22. **A replacement keeps what it replaced, and no copy means a refused undo —
+    not a lost page.** `page.replace` is the only structural operation whose
+    payload *has* to be checked as a whole before the edit (base64, one page,
+    the size budget), because the page it carries is the document's new
+    content. The old page is copied first, and the accepted operation carries
+    the copy token next to `bytes`: a replica and the journal re-apply `bytes`,
+    while the undo names the token. A page over the budget is still
+    replaceable; it just has no copy, and the undo (`"copy": null`) is a
+    `conflict` from the room rather than a silent "cannot undo" on one machine,
+    so every client tells the same story and nothing is changed by the refusal.
+    Do not "fix" this into a client-side copy made from the replica: a replica
+    can be behind the head in a way the room's serialisation hides, and the
+    copy the server made is the page the room actually had.
 
 ## 3. Running it
 
@@ -774,10 +795,10 @@ New tests:
   addressed to epoch 0 after the epoch moved is `stale` and retryable with
   nothing changed.
 
-What this does **not** cover: `page.insert_blank` (a blank page needs no copy
-but has no operation yet), replace, split/combine, and duplicating a page larger
-than the budget (refused, not shared). Nothing was pushed: the fork and PR #6622
-still describe `81035bf2`.
+What this does **not** cover: split/combine, and duplicating a page larger than
+the budget (refused, not shared). Replace and blank insert were closed later by
+`e9756d138` (§4, RFC §3.1.4). Nothing was pushed: the fork and PR #6622 still
+describe `81035bf2`.
 
 ### Forced journal commit — §6.1 limitation 10 (2026-11-09, local; not pushed)
 
@@ -1275,10 +1296,80 @@ ws 6 unit + 6 e2e, pdf 20, annot 10, daemon 27.
   `No glyph for "�" (U+FFFD)`. It fails **without** the `collab` feature too and
   is an environment/font issue, not a regression.
 
+### Replacing a page and inserting a blank one — §5 p.3 / limitation 3 (2026-11-09, local; not pushed)
+
+`e9756d138` on `617178084`. Limitation 3 said structural coverage stopped after
+rotate/move/delete/restore/insert/duplicate: Replace Pages and Insert Blank Page
+were `unsupported` in a session, so two of the page menu's own commands failed
+there. Both are addressable structural operations now (RFC §3.1.4):
+
+- **`page.replace`** addresses the page it replaces (`Target::Page`, current
+  epoch) and carries the new page as a one-page PDF (`payload.bytes`, base64).
+  The payload is checked as a whole before the document changes: base64 decodes,
+  exactly one page (a two-page file is `invalid`, not a page inserted by
+  surprise), and the copy is within `MAX_RESTORE_PAGE_BYTES` (160 KiB, `limit`).
+  A missing page is `invalid`, a foreign epoch `stale` (retryable). None of the
+  refusals moves `version`/`epoch`, writes a journal line or is applied locally.
+  The page count and every other page's index stay as they were.
+- **The undo is the copy the server kept.** The adapter copies the page before
+  the edit (`page.copy`) and answers its token in `applied.result.copy`; the
+  accepted operation carries `bytes` (so a replica and the journal need no copy)
+  and the token. The undo is `page.replace` with `payload.copy` and the same page
+  addressed in the new epoch: the old page comes back exactly, and that undo
+  keeps its own copy (so it is itself undoable). A page over the budget is still
+  replaceable; no copy is kept, and an undo that names none (`"copy": null`) is
+  `conflict` without a change. The redo repeats the original operation, which
+  carries `bytes`, so it never depends on a copy. Replay rebuilds the copies in
+  journal order, so the token is deterministic after a restart.
+- **`page.insert_blank`** names the size of the page it adds (`width`/`height`
+  in points, `> 0`, finite, ≤ 14400 — Annex C's page-size limit) and the insert
+  position as the target (`index` may equal the page count). Replicas build the
+  same page with `Edit::InsertBlankPage`; anything else is `invalid` before the
+  edit. Its undo is `page.delete` at `at`.
+- Both are `structural`: the room serialises them under the lease and requires
+  the head version, and each bumps the epoch, so an operation built on a passed
+  epoch is `stale` and retryable.
+- **Client projection.** `Edit::ReplacePages` becomes one `page.replace` per
+  page (each page travels whole; a source/target count mismatch is refused as a
+  whole), `Edit::InsertBlankPage` one `page.insert_blank`. `inverse_for` returns
+  no inverse for a replacement (the replica no longer has the page); the app
+  patches the group from `applied` through `inverse_after`, which builds the
+  copy-named undo — or the `copy: null` one when the server kept none.
+  `collab_apply_edit` now counts `Edit::ReplacePages` as structural, so a
+  commenter is refused before an operation is built.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-pdf` | `a_replaced_page_comes_back_from_the_copy` (content replaced, count unchanged, the accepted op carries the page and its token, the undo restores the exact page on a commit), `a_replacement_that_is_not_one_page_is_refused_before_the_document_changes` (bad base64, two pages, empty, no page at all), `a_replacement_over_the_limit_is_refused_before_the_document_changes`, `the_undo_of_a_replacement_without_a_copy_is_a_conflict` (a page padded over the budget: no token, the undo moves nothing), `a_replacement_addressed_to_another_epoch_is_retryable`, `a_blank_page_is_inserted_with_the_size_it_names` (crop 300×400, undo restores the count, zero/negative/huge/non-numeric sizes refused), `a_replacement_replays_from_its_operation` |
+| `collab-client-pdf` | `a_page_replacement_becomes_one_addressed_operation_and_its_undo`, `a_multi_page_replacement_is_one_operation_per_page` (count mismatch refused), `the_accepted_replacement_answers_with_the_operation_that_undoes_it` (with a copy and without), `a_blank_page_becomes_an_addressed_operation_with_its_size`, `a_replacement_over_the_limit_is_refused_on_this_side_too` |
+| `collab-ws` e2e | `two_clients_replace_a_page_and_insert_a_blank_one` (both replicas converge on the replaced content and the blank page's crop, an over-limit and a missing-page replacement are refused without a change), `a_page_replacement_undoes_from_the_copy_and_redoes` (undo restores the old page on both replicas, redo replaces it again, a passed epoch is `stale`) |
+
+Gates at `e9756d138` (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **209**: proto 12, server 27, hub 5, client 13, client-pdf 28, session 5, ws 8 unit, pdf 41, annot 18, daemon 31 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1, e2e 18/18 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **18/18** (inside the run above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| UI, the collab module | `cargo test -p pdfcraft-ui-egui --features collab --lib collab::` | pass — 6 |
+
+What this does **not** cover: the replacement carries only the page's content
+and the boxes `Edit::ReplacePages` copies (MediaBox/CropBox/…), while the target
+page's links, comments, bookmarks and form fields stay the page's own — an undo
+therefore returns the content exactly but not annotations someone added to the
+page in between (those are their own merge operations and stay). Split/combine,
+bookmarks, layers, attachments, form structure and content edits are still not
+shared. The full `ui-egui` suite was not re-run: clippy with the feature
+compiles it and the collab module's tests pass.
+
 ## 5. Known limitations (the prod gap)
 
 Ordered by the risk they pose to production.
-
 1. ~~**Crash recovery is not crash-tested against the real process.**~~ Closed
    by `apps/pdfcraft-collab-server/tests/crash_recovery.rs` at `999da5ec`
    (§4): the daemon accepts a merge and a structural operation over a socket,
@@ -1305,14 +1396,17 @@ Ordered by the risk they pose to production.
    refused with `unsupported` (RFC §3.1.1). What is still not shared inside a
    comment: part opacity, moving/resizing a comment and reshaping a line or
    polygon — a Comment Properties batch that carries them is refused whole.
-3. **Structural coverage.** Page rotate, move, delete and restore, and now
-   insert and duplicate (§4, `b13933e9b`). An insert or a duplicate carries the
-   page as a one-page PDF inside the operation (base64, ≤
+3. **Structural coverage.** Page rotate, move, delete and restore, insert and
+   duplicate (§4, `b13933e9b`), and now replace and blank insert
+   (`e9756d138`, §4, RFC §3.1.4). An insert, a duplicate or a replacement
+   carries the page as a one-page PDF inside the operation (base64, ≤
    `MAX_RESTORE_PAGE_BYTES` = 160 KiB); a page over that is refused with
-   `limit` before the document changes and is not applied locally. Both bump the
+   `limit` before the document changes and is not applied locally — a
+   replacement over the budget still happens, but its undo is a `conflict`
+   (no copy). A blank insert names its size in points. All of them bump the
    epoch, so an operation addressed to a passed epoch is `stale` (retryable).
-   Replace, split/combine, blank insert, bookmarks, layers, attachments, form
-   structure and content edits are still not shared.
+   Split/combine, bookmarks, layers, attachments, form structure and content
+   edits are still not shared.
 4. ~~**Presence has cursors, not selections.**~~ Closed on the client in
    `b4e9179d8` (§4): presence now carries the selected comment's `/NM` or a
    rectangle in user space (a text range's bounding box, a column select), under
