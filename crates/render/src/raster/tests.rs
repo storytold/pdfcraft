@@ -5855,7 +5855,15 @@ fn cut_content_marks_the_pages_text_incomplete() {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Text,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         rx.recv_timeout(std::time::Duration::from_secs(60)).expect("text extraction must not stall")
     };
@@ -11192,6 +11200,7 @@ fn a_content_stream_without_endstream_is_not_read_into_a_later_stream() {
         scale: 1.0,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     let start = (100 * page.width as usize + 100) * 4;
     assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]));

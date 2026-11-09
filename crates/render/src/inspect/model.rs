@@ -728,6 +728,7 @@ mod review_state_tests {
                 fill_sign: false,
                 no_rotate: false,
                 points: Vec::new(),
+                no_zoom: false,
             })
             .collect();
         link_replies(&mut all);
