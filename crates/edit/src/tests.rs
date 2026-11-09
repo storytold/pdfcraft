@@ -5930,6 +5930,20 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
 }
 
 #[test]
+fn text_blocks_split_at_headings_and_blank_lines() {
+    let page = |size: u32, gap: u32, words: &[&str], top: u32| -> String {
+        words.iter().enumerate().map(|(i, w)| format!("BT /F1 {size} Tf 40 {} Td ({w}) Tj ET\n", top - i as u32 * gap)).collect()
+    };
+    let count = |content: String| text::text_blocks(&text_page(&content), 0).unwrap().len();
+    let heading = page(12, 14, &["First line of text", "second line here", "third line ends"], 340)
+        + &page(12, 14, &["HEADING"], 340 - 28 - 24)
+        + &page(12, 14, &["Next paragraph one", "next two", "next three"], 340 - 28 - 24 - 24);
+    assert_eq!(count(heading), 3);
+    assert_eq!(count(page(12, 14, &["Para one a", "para one b"], 340) + &page(12, 14, &["Para two a", "para two b"], 340 - 42)), 2);
+    assert_eq!(count(page(24, 29, &["VISIBLE", "HIDDEN"], 340)), 1);
+}
+
+#[test]
 fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
     let listed = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
     // #1756: a rotated watermark's bounding box covers the middle of the page, and a body line
