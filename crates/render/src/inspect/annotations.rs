@@ -22,6 +22,31 @@ pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
+/// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
+/// and `drawn_color`): one entry is grey, three RGB, four CMYK; among four entries a non-number is
+/// 0 but a reference is unreadable, otherwise every entry must be a number. `None` for anything
+/// else, an empty array or a value out of range; each component is clamped to 0..=1.
+fn drawn_color(c: &[Object]) -> Option<[f32; 3]> {
+    let v: Vec<f32> = if c.len() == 4 {
+        c.iter()
+            .map(|o| match o {
+                Object::Reference(_) => None,
+                o => Some(o.as_float().unwrap_or(0.0)),
+            })
+            .collect::<Option<_>>()?
+    } else {
+        c.iter().map(|o| o.as_float().ok()).collect::<Option<_>>()?
+    };
+    let rgb = match v.as_slice() {
+        [g] => [*g; 3],
+        [r, g, b] => [*r, *g, *b],
+        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
+        _ => return None,
+    };
+    // pdfcraft-annot's `finite`: finite and below 1e7 in magnitude.
+    rgb.iter().all(|x| x.is_finite() && x.abs() < 1e7).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
+}
+
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
     let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
@@ -119,13 +144,18 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
-            let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
-                Ok(Object::Array(c)) if c.len() == 3 => {
-                    let f = |i: usize| c[i].as_float().unwrap_or(0.0);
-                    Some([f(0), f(1), f(2)])
-                }
+            let c = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) => Some(c),
                 _ => None,
             };
+            // Three numbers, some given by reference, with a non-number read as 0.
+            let rgb = c.filter(|c| c.len() == 3).map(|c| {
+                let f = |i: usize| c.get(i).map_or(0.0, |o| self.resolve(o).as_float().unwrap_or(0.0));
+                [f(0), f(1), f(2)]
+            });
+            // Other comments list the stroke colour as pdfcraft-annot draws it and lists it
+            // (`summaries`): grey, CMYK, a non-number among four entries read as 0.
+            let mut color = if subtype == "FreeText" { rgb } else { c.and_then(|c| drawn_color(c)).or(rgb) };
             // A text box's /C is its background; its text colour is in /DA.
             if subtype == "FreeText"
                 && let Some(da) = self.text(d, b"DA")
@@ -138,10 +168,12 @@ impl<'a> Inspector<'a> {
                     color = Some([f(i - 3), f(i - 2), f(i - 1)]);
                 }
             }
+            // Only usable quads, by the rule redaction apply reads them with (keep in step with
+            // `pdfcraft_annot::summaries`): a malformed one is not drawn as zeros.
             let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
                 Ok(Object::Array(q)) => {
-                    let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                    v.as_chunks::<8>().0.to_vec()
+                    let entries = q.iter().map(|o| self.resolve(o).as_float().ok().map(f64::from));
+                    pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|quad| quad.map(|v| v as f32)).collect()
                 }
                 _ => Vec::new(),
             };
