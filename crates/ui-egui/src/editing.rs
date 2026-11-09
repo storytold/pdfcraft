@@ -187,6 +187,15 @@ impl PdfCraftApp {
             }
             _ => Vec::new(),
         };
+        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+        // their places still name them (pages may move, come or go).
+        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -216,31 +225,9 @@ impl PdfCraftApp {
                     .map(|before| form_edit_pages(&before, &doc.form));
                 let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
-                    // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws. An edit that
-                    // moves no page (a form edit, or one to a page's comments or content) keeps the
-                    // values typed, in it and before it, showing until their pages redraw.
-                    let waiting = (form_edit.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
-                    if let Edit::DeleteAnnotation { page, index } = &edit {
-                        // Remap surviving comments before generic slot pruning loses their state.
-                        view.comments.annotation_deleted(&annots_before, info, (*page, *index));
-                    }
-                    view.document_changed(info);
-                    if let Some(waiting) = waiting {
-                        view.forms.unbaked = waiting;
-                    }
-                    if let Some((_, unbaked)) = form_edit {
-                        view.forms.unbaked.extend(unbaked);
-                    }
+                    signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);
                 } else if let Some(page) = one_page {
-                    // Comment and content edits change one page: keep every other raster.
-                    view.page_changed(page);
-                    if let Edit::DeleteAnnotation { page, index } = &edit {
-                        // Remap surviving comments before generic slot pruning loses their state.
-                        view.comments.annotation_deleted(&annots_before, info, (*page, *index));
-                    } else {
-                        view.comments.document_changed(info);
-                    }
+                    one_page_changed(view, &edit, page, &annots_before, info);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
@@ -252,6 +239,10 @@ impl PdfCraftApp {
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
+                }
+                // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
+                if !matches!(edit, Edit::DeleteAnnotation { .. }) {
+                    view.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
@@ -826,7 +817,7 @@ impl PdfCraftApp {
                     .session
                     .get(view.id)
                     .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.select(newest.map(|index| (page, index)));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;
             }
@@ -1049,6 +1040,53 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// A signature shows its state on its own page, which an edit elsewhere can change (a
+/// certification forbidding it, say): every page redraws. An edit that moves no page (a form edit,
+/// or one to a page's comments or content) keeps the values typed, in it and before it, showing
+/// until their pages redraw.
+fn signatures_changed_after_edit(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    info: &pdfcraft_render::DocInfo,
+    annots_before: &[pdfcraft_render::Annotation],
+    form_unbaked: Option<Vec<(String, usize)>>,
+    one_page: Option<usize>,
+) {
+    let waiting = (form_unbaked.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    }
+    view.document_changed(info);
+    if let Some(waiting) = waiting {
+        view.forms.unbaked = waiting;
+    }
+    if let Some(unbaked) = form_unbaked {
+        view.forms.unbaked.extend(unbaked);
+    }
+}
+
+/// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
+/// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
+/// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+fn one_page_changed(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    page: usize,
+    annots_before: &[pdfcraft_render::Annotation],
+    info: &pdfcraft_render::DocInfo,
+) {
+    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+        view.page_changed(page);
+    }
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    } else {
+        view.comments.document_changed(info);
+    }
+}
+
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
@@ -1058,6 +1096,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
+        | Edit::SetAnnotationPopup { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
