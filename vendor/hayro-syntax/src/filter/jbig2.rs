@@ -19,7 +19,43 @@ pub const MAX_PAGE_JBIG2_WORK: u64 = 1 << 30;
 std::thread_local! {
     // Unbounded until a page says otherwise: what isn't drawing a page has no page to run out on.
     static PAGE_WORK_LEFT: core::cell::Cell<u64> = const { core::cell::Cell::new(u64::MAX) };
+    // PdfCraft patch (31): whether the image decoded last on this thread was refused by one of the
+    // decoder's limits (`hayro_jbig2::DecodeError::is_limit`).
+    static LIMITED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
+
+/// PdfCraft patch (31): whether the JBIG2 image decoded last on this thread was refused by one of
+/// the decoder's limits, rather than failing on its data, which it then stops saying. A soft mask
+/// a limit refused hides what its image would show without it: hayro-interpret leaves such an
+/// image out, where a mask the file damaged leaves its image whole (#6722).
+#[cfg(feature = "std")]
+pub fn take_jbig2_limited() -> bool {
+    LIMITED.with(|limited| limited.replace(false))
+}
+
+#[cfg(not(feature = "std"))]
+pub fn take_jbig2_limited() -> bool {
+    false
+}
+
+/// PdfCraft patch (31): [`take_jbig2_limited`] without its stopping.
+#[cfg(feature = "std")]
+pub fn jbig2_limited() -> bool {
+    LIMITED.with(core::cell::Cell::get)
+}
+
+#[cfg(not(feature = "std"))]
+pub fn jbig2_limited() -> bool {
+    false
+}
+
+#[cfg(feature = "std")]
+fn note_limited(error: Option<&hayro_jbig2::DecodeError>) {
+    LIMITED.with(|limited| limited.set(error.is_some_and(hayro_jbig2::DecodeError::is_limit)));
+}
+
+#[cfg(not(feature = "std"))]
+fn note_limited(_: Option<&hayro_jbig2::DecodeError>) {}
 
 /// PdfCraft patch (31): what the JBIG2 images decoded next on this thread may take, for a new page.
 #[cfg(feature = "std")]
@@ -50,6 +86,7 @@ fn decode_for_page<D: hayro_jbig2::Decoder>(image: &hayro_jbig2::Image<'_>, deco
     let mut left = PAGE_WORK_LEFT.with(core::cell::Cell::get);
     let decoded = image.decode_within(decoder, &mut left);
     PAGE_WORK_LEFT.with(|cell| cell.set(left));
+    note_limited(decoded.as_ref().err());
     decoded.ok()
 }
 
@@ -93,7 +130,9 @@ pub(crate) fn decode(
 
     charge_page_reading(data.len().saturating_add(globals.as_deref().map_or(0, <[u8]>::len)))?;
 
-    let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
+    let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref())
+        .inspect_err(|e| note_limited(Some(e)))
+        .ok()?;
 
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted

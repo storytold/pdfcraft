@@ -70,10 +70,10 @@ pub(crate) const BITMAP_WORDS: usize = size_of::<Bitmap>() / size_of::<Word>();
 /// output from the page header in between, and a 743-byte PDF's Indexed image asked for 137 GB.
 pub(crate) fn check_page_size(width: u32, height: u32) -> Result<()> {
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(OverflowError::BitmapDimension.into());
+        return Err(OverflowError::BitmapLimit.into());
     }
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err(OverflowError::BitmapDimension.into());
+        return Err(OverflowError::BitmapLimit.into());
     }
     Ok(())
 }
@@ -129,11 +129,11 @@ impl Bitmap {
         default_pixel: bool,
     ) -> Result<Self> {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
-            bail!(OverflowError::BitmapDimension);
+            bail!(OverflowError::BitmapLimit);
         }
         // PdfCraft patch: see `MAX_PIXELS`.
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
-            bail!(OverflowError::BitmapDimension);
+            bail!(OverflowError::BitmapLimit);
         }
 
         let stride = width.div_ceil(WORD_BITS);

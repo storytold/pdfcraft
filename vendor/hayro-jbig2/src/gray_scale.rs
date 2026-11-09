@@ -81,11 +81,11 @@ fn decode_arithmetic(
     let height = params.height;
 
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        bail!(OverflowError::BitmapDimension);
+        bail!(OverflowError::BitmapLimit);
     }
     // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
     if u64::from(width) * u64::from(height) > crate::bitmap::MAX_GRID_CELLS {
-        bail!(OverflowError::BitmapDimension);
+        bail!(OverflowError::BitmapLimit);
     }
 
     // `GSBPP` - The number of bits per gray-scale value.

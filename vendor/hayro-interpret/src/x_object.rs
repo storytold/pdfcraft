@@ -963,8 +963,12 @@ fn decode_context<'a>(
         .decoded_image(&decode_params)
         .map_err(|_| {
             // PdfCraft patch (73): left out for the page's allowance, it is content the page's
-            // budget skipped, which is reported, and no failure of this image.
-            (obj.warning_sink)(if hayro_syntax::page_jbig2_work_spent() && uses_jbig2(&obj.stream) {
+            // budget skipped, which is reported, and no failure of this image. So is a mask one of
+            // the decoder's limits refused, which takes its image with it (below): reported so, its
+            // failure isn't kept by the decoded-image cache (patch 91), so a later draw decodes it
+            // again and leaves the image out again.
+            let limited = obj.is_mask && hayro_syntax::jbig2_limited();
+            (obj.warning_sink)(if (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream) {
                 InterpreterWarning::ContentTruncated
             } else {
                 InterpreterWarning::ImageDecodeFailure
@@ -1197,6 +1201,8 @@ fn decode_raster(
 
     let mut image = image_data?;
 
+    // PdfCraft patch (73): what decodes the mask, below, says whether a limit refused it.
+    hayro_syntax::take_jbig2_limited();
     let alpha = if let Some((alpha, matte_rgb)) =
         resolve_matte(obj, &ctx.color_space, target_dimension)
         && alpha.width == ctx.width
@@ -1223,11 +1229,13 @@ fn decode_raster(
     };
 
     // PdfCraft patch (73): a bad mask leaves the image as it is, but one left out for the page's
-    // allowance takes the image with it. Both are reported, and only here is the file not to blame
-    // for what the mask would have hidden being shown.
+    // allowance, or refused by one of the decoder's limits, takes the image with it. Both are
+    // reported, and only there is the file not to blame for what the mask would have hidden being
+    // shown: a scan's colour layer drawn without its JBIG2 mask covers the page in noise (#6722).
+    let limited = hayro_syntax::take_jbig2_limited();
     let dict = obj.stream.dict();
     let mask = dict.get::<Stream<'_>>(SMASK).or_else(|| dict.get::<Stream<'_>>(MASK));
-    if alpha.is_none() && hayro_syntax::page_jbig2_work_spent() && mask.is_some_and(|m| uses_jbig2(&m)) {
+    if alpha.is_none() && (hayro_syntax::page_jbig2_work_spent() || limited) && mask.is_some_and(|m| uses_jbig2(&m)) {
         return None;
     }
 

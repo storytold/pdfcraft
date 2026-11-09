@@ -139,7 +139,7 @@ pub(crate) fn decode(
                 .pixels
                 .saturating_add(u64::from(symbol_width) * u64::from(ctx.height_class_height));
             if ctx.pixels > MAX_DICTIONARY_PIXELS {
-                bail!(OverflowError::BitmapDimension);
+                bail!(OverflowError::BitmapLimit);
             }
             // PdfCraft patch: see `bitmap::INTEGER_WORK`. Its width, and a stream can hold thousands
             // of dictionaries of symbols of no pixels. An aggregated one reads its count, a symbol

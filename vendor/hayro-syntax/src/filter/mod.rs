@@ -9,7 +9,7 @@ mod dct;
 #[cfg(feature = "images")]
 mod jbig2;
 #[cfg(feature = "images")]
-pub use jbig2::{MAX_PAGE_JBIG2_WORK, page_jbig2_work_spent};
+pub use jbig2::{MAX_PAGE_JBIG2_WORK, jbig2_limited, page_jbig2_work_spent, take_jbig2_limited};
 #[cfg(all(feature = "images", feature = "std"))]
 pub use jbig2::set_page_jbig2_work;
 #[cfg(feature = "images")]
