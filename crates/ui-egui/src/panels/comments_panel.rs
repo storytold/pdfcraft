@@ -40,7 +40,7 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
-        Some("StrikeOutTextEdit") => "Replace text",
+        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -616,7 +616,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 view.comments.props_request = Some((a.page, a.index));
                 ui.close();
             }
-            if ui.add_enabled(crate::comments::tool_for(a).is_some(), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
+            if ui.add_enabled(crate::comments::defaultable(a), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
                 view.comments.default_request = Some((a.page, a.index));
                 ui.close();
             }

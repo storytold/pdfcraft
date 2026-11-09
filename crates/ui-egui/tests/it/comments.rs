@@ -1373,6 +1373,80 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
 }
 
+/// Comment Properties ▸ Border shape puts an oval or a circle around a text box's text; a
+/// callout has none to choose. Make Properties Default carries it into the Text box tool.
+#[test]
+fn text_box_properties_choose_the_border_shape() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Border shape");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Rectangle));
+        d.edited.border_shape = Some(BorderShape::Oval);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().border_shape, Some(BorderShape::Oval));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Oval, "the default for new text boxes");
+}
+
+/// Thickness 0 in Comment Properties takes a circle away with the line, as Border ▸ None does on
+/// the toolbar, and a default made from it draws no circle either.
+#[test]
+fn no_thickness_in_text_box_properties_takes_the_circle_away() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page: 0, index: 0, shape: BorderShape::Circle }));
+    h.state_mut().comment_prefs.set_border_shape(CommentTool::TextBox, BorderShape::Circle);
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Circle));
+        d.edited.width = Some(0.0);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let p = doc.comment_props(0, 0).unwrap();
+    assert_eq!((p.width, p.border_shape), (Some(0.0), Some(BorderShape::Rectangle)));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Rectangle, "the default for new text boxes");
+}
+
 /// A filled rectangle's line and fill, and a text box's text, border and fill, each take an
 /// opacity of their own in Properties; Make Properties Default carries them into the tool, so
 /// the next rectangle is drawn with a see-through fill and an opaque line.
@@ -2382,6 +2456,77 @@ fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
     assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
 }
 
+/// Make Properties Default on a text box with a border colour of its own gives the Text box tool
+/// that colour.
+#[test]
+fn a_text_box_made_default_gives_the_tool_its_border_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    let red = Some([0.89, 0.13, 0.13]);
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: red }));
+    assert_ne!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+}
+
+/// The Text box tool's Border colour button shows the selected text box's own border colour
+/// (Comment Properties may have given it one), and the tool's again with none selected.
+#[test]
+fn the_border_colour_button_shows_the_selected_text_boxs_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    // A border colour of its own, which the tool doesn't have.
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: Some([0.0, 0.47, 0.84]) }));
+    h.run_steps(2);
+    // The colour the button's square is drawn in.
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let button = h.get_by_label("Border colour").rect();
+        h.output().shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.stroke.width == 3.0 && button.contains_rect(r.rect) => Some(r.stroke.color),
+            _ => None,
+        })
+    };
+    // A new text box comes selected.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    let tool = shown(&h).expect("the button's square");
+    h.state_mut().views[0].comments.selected = Some((0, index));
+    h.run_steps(3);
+    let own = shown(&h).expect("the button's square");
+    assert!(own != tool && own.b() > 200 && own.r() < 30, "the selected text box's blue: {own:?}, the tool's {tool:?}");
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    assert_eq!(shown(&h), Some(tool), "the tool's colour again");
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -2450,9 +2595,45 @@ fn highlighting_an_area_off_the_text() {
     assert_eq!(comments(&h).len(), 2);
 }
 
+/// A Replace Text proposal is picked by its strikeout too, not only by its small caret: the
+/// strikeout is grouped under the caret (`/RT /Group`), and a click on it selects the caret, the
+/// proposal, so it can be deleted or restyled from either part.
+#[test]
+fn clicking_a_replace_text_strikeout_selects_the_proposal() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /IT /Replace /Contents (slow red) >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [40 100 130 120] /QuadPoints [40 120 130 120 40 100 130 100] /C [1 0 0] /T (Bob) /IT /StrikeOutTextEdit /IRT 4 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+    let p = at(&h, 70.0, 110.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((caret.page, caret.index)), "the strikeout picks the proposal");
+    // Review on #5689 (CodeRabbit): a drag from the strikeout, or from the caret, moves neither:
+    // the proposal lies on the text it replaces, and the caret alone would leave the strikeout.
+    let caret_at = at(&h, 140.0, 100.0);
+    for from in [p, caret_at] {
+        drag(&mut h, from, from + egui::vec2(60.0, 40.0));
+        h.run_steps(3);
+        let now = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+        assert_eq!(now.rect, caret.rect, "the caret stays on the text");
+    }
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), None, "nothing was moved");
+}
+
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
     let mut h = harness(|app| app.set_option("quick", "replace").unwrap());
+    // Review on #5689 (CodeRabbit): both parts take the Replace text tool's style.
+    h.state_mut().comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::ReplaceText, [0.1, 0.6, 0.2]);
     drag_pt(&mut h, (20.0, 155.0), (120.0, 155.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer asks for the replacement");
     field(&h, "Replacement text").type_text("slow red");
@@ -2463,15 +2644,19 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    assert_eq!((strike.color, caret.color), (Some([0.1, 0.6, 0.2]), Some([0.1, 0.6, 0.2])), "one style for the proposal");
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped under the caret, which holds the text");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
-    // so, and Make Current Properties Default updates the Replace text tool.
+    // Both members are the Replace text tool's, not Strikethrough's or Insert text's (#3947), so
+    // Make Current Properties Default updates the Replace text tool.
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    // The panel's card is the caret's, the group's primary: it shows the replacement, and
+    // nothing is named Strikethrough.
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "slow red").is_some(), "the panel shows the replacement");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -3130,6 +3315,8 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
             fill: Some([1.0, 0.0, 0.0]),
             fill_opacity: None,
             text_opacity: None,
+            border_color: None,
+            border_shape: pdfcraft_engine::BorderShape::Rectangle,
         };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
@@ -4167,4 +4354,68 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
+/// one (also after a restart) takes it, along with the colour.
+#[test]
+fn properties_dialog_makes_the_text_box_font_size_default() {
+    let blue = [0.0, 0.47, 0.84];
+    let mut h = harness(|_| {});
+    let font_size_of_last = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let last = doc.info.annotations.len() - 1;
+        doc.comment_props(0, last).unwrap()
+    };
+    for (quick, size, first, second, third) in
+        [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
+    {
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
+        } else {
+            click_pt(&mut h, first);
+        }
+        post_text(&mut h, "First");
+        let index = comments(&h).len() - 1;
+        h.state_mut().open_comment_props(0, index);
+        h.run_steps(2);
+        {
+            let d = h.state_mut().comment_props.as_mut().expect("open");
+            d.edited.font_size = Some(size);
+            d.edited.color = Some(blue);
+        }
+        h.get_by_label("Make Properties Default").click();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(font_size_of_last(&h).font_size, Some(size));
+
+        // The next one takes the font size and the colour.
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
+        } else {
+            click_pt(&mut h, second);
+        }
+        post_text(&mut h, "Second");
+        let p = font_size_of_last(&h);
+        assert_eq!(p.font_size, Some(size), "{quick}: the next one takes the default font size");
+        assert_eq!(p.color, Some(blue), "{quick}: and the default colour");
+
+        // The default survives a restart.
+        let json = h.state().persist();
+        let mut fresh = harness(move |app| {
+            app.restore(&json);
+            app.set_option("quick", quick).unwrap();
+        });
+        if quick == "callout" {
+            drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
+        } else {
+            click_pt(&mut fresh, third);
+        }
+        post_text(&mut fresh, "Third");
+        assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
+    }
 }

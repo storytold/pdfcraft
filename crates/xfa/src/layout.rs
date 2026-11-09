@@ -13,7 +13,7 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern, pattern_to_iso};
+use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern, pattern_to_iso};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
     Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
@@ -137,7 +137,7 @@ struct Layouter<'t> {
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
     /// Field values by `id`, for embedded fields in rich text.
-    values: HashMap<String, String>,
+    values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
     warned: HashSet<String>,
     fields: usize,
@@ -179,10 +179,9 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             occur_min: 0,
         }],
     };
-    let mut values = HashMap::new();
+    let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
-    collect_values(std::slice::from_ref(&root_node), &mut values, 0);
     let mut l = Layouter {
         tpl,
         data,

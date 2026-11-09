@@ -111,6 +111,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Delete document JavaScript",
     "Edit document JavaScript",
     "Edit text",
+    "Prepare grouped text",
     "Load document font",
     "Move object",
     "Move objects",
@@ -236,6 +237,8 @@ impl Edit {
             | Edit::FillAnnotation { .. }
             | Edit::PartOpacity { .. }
             | Edit::FontSizeAnnotation { .. }
+            | Edit::BorderColorAnnotation { .. }
+            | Edit::BorderShapeAnnotation { .. }
             | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
@@ -267,6 +270,7 @@ impl Edit {
             Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),
             Edit::SetDocumentScript { .. } => Label::of("Edit document JavaScript"),
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
+            Edit::PrepareText { .. } => Label::of("Prepare grouped text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
@@ -284,6 +288,7 @@ impl Edit {
                     pdfcraft_edit::ArrangeOrder::SendToBack => "Send to back",
                 },
                 ImageEdit::RemoveCrop => "Remove crop",
+                ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
@@ -297,9 +302,9 @@ impl Edit {
             Edit::AddText { .. } => Label::of("Add text"),
             Edit::AddImage { .. } => Label::of("Add image"),
             Edit::UpdateContent { .. } => Label::of("Edit content"),
-            Edit::DeleteContent { .. } => Label::of("Delete content"),
+            Edit::DeleteContent { .. } | Edit::DeleteObjects { .. } => Label::of("Delete content"),
             Edit::ReplaceImage { .. } => Label::of("Replace image"),
-            Edit::PasteContent { .. } => Label::of("Paste"),
+            Edit::PasteContent { .. } | Edit::PasteObjects { .. } => Label::of("Paste"),
             Edit::ApplyRedactions { .. } => Label::of("Apply redactions"),
             Edit::ClearRedactions => Label::of("Remove redaction marks"),
             Edit::RemoveHidden { .. } => Label::of("Remove hidden information"),
