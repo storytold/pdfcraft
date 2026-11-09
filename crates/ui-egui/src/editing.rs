@@ -174,6 +174,15 @@ impl PdfCraftApp {
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
+                if matches!(edit, Edit::ApplyRedactions { .. }) {
+                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+                    view.redactions_applied = view.redactions_applied.saturating_add(1);
+                    // A new step clears the redo history, so the undone saved steps can't come back.
+                    if view.redactions_undone_after_save > 0 || delivered_undone {
+                        view.redactions_undone_after_save = 0;
+                        view.saved_redactions_cut_off = true;
+                    }
+                }
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;

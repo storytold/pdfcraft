@@ -123,9 +123,7 @@ impl PdfCraftApp {
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
-                        // `redactions_applied` stays set: the document keeps its name here, so
-                        // later downloads are named after the redacted copy too.
-                        view.redactions_downloaded = view.redactions_applied;
+                        view.redactions_delivered();
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
