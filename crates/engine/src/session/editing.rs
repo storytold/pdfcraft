@@ -515,6 +515,8 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        #[cfg(test)]
+        crate::record_full_refresh();
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
