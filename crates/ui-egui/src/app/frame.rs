@@ -98,39 +98,38 @@ impl PdfCraftApp {
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible documents' textures, so the
-        // cache limits apply to the application, regardless of how many tabs are open.
-        // Side by side: the comparison's old file renders alongside the active one.
-        // Multiple windows: detached tabs are drawn in their own viewports and treated as visible.
-        let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
-        let detached: Vec<usize> = self.views.iter().enumerate().filter_map(|(i, v)| if v.detached { Some(i) } else { None }).collect();
-
+        // three cache limits apply to the application, regardless of how many tabs are open.
+        // On screen: the active tab, the comparison's old file side by side with it, what
+        // split view's other pane shows, and a tab torn out into its own window.
+        let shown = self.views_on_screen();
+        let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
         for (i, view) in self.views.iter_mut().enumerate() {
-            let is_visible = Some(i) == self.active || Some(i) == partner || detached.contains(&i);
-            if !is_visible && let Some(doc) = self.session.get(view.id) {
+            if shown.contains(&i) {
+                continue;
+            }
+            if shown_docs.contains(&view.id) {
+                // Another tab of this document is on screen, and renders through its pool.
+                view.release_rasters();
+            } else if let Some(doc) = self.session.get(view.id) {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-
-        let mut visible_indices = Vec::with_capacity(2 + detached.len());
-        if let Some(i) = self.active {
-            visible_indices.push(i);
-        }
-        if let Some(p) = partner
-            && !visible_indices.contains(&p)
-        {
-            visible_indices.push(p);
-        }
-        for d in detached {
-            if !visible_indices.contains(&d) {
-                visible_indices.push(d);
+        // Each document on screen once: two views of it (split view) share its render pool.
+        let mut done = std::collections::HashSet::new();
+        for &i in &shown {
+            let Some(id) = self.views.get(i).map(|v| v.id) else { continue };
+            if !done.insert(id) {
+                continue;
             }
-        }
-
-        for i in visible_indices {
-            if let Some(view) = self.views.get_mut(i)
-                && let Some(doc) = self.session.get(view.id)
-            {
-                view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+            let Some(doc) = self.session.get(id) else { continue };
+            let group: Vec<usize> = shown.iter().copied().filter(|&k| self.views.get(k).is_some_and(|v| v.id == id)).collect();
+            match group.as_slice() {
+                [only] => {
+                    if let Some(view) = self.views.get_mut(*only) {
+                        view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+                    }
+                }
+                _ => DocView::finish_shared_render_frame(ctx, &doc.info, &doc.renderer, &mut self.views, &group),
             }
         }
     }

@@ -31,7 +31,7 @@ mod prune;
 
 use layers::strip_hidden_layers;
 use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
+pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -361,7 +361,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         processed.push((done.ops, done.changed));
     }
     if scope.mode == Mode::Apply {
-        clean_replacements(doc, resources, &original, &mut processed, scope.report);
+        clean_replacements(doc, resources, &original, &walk.clipped, &mut processed, scope.report);
     }
     walk.out.streams = processed.into_iter().zip(comment_edges).map(|((ops, changed), edges)| changed.then(|| piece_bytes(&ops, edges))).collect();
     walk.out
@@ -424,6 +424,9 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// Painting operators written again under a clip that cuts the regions out: unchanged as
+    /// operators, but what they paint is no longer all there.
+    clipped: HashSet<usize>,
     out: Output,
 }
 
@@ -442,6 +445,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            clipped: HashSet::new(),
             out: Output::default(),
         }
     }
@@ -474,7 +478,7 @@ impl Walk {
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
-            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, op, piece),
+            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
             // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
             // and clear it. `cs` with a space other than /Pattern clears it too.
@@ -587,8 +591,10 @@ impl Walk {
     }
 
     fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
-        self.gs.size = op.num(1).unwrap_or(self.gs.size);
-        let Some(name) = op.name(0) else { return };
+        // `/F1 12 Tf` takes its last two operands, as the renderer does: a surplus before them
+        // is ignored, not read in their place.
+        self.gs.size = op.nums::<1>().map_or(self.gs.size, |[size]| size);
+        let Some(name) = op.operands.len().checked_sub(2).and_then(|i| op.name(i)) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
         self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
@@ -605,17 +611,20 @@ impl Walk {
     /// Text state and text-positioning operators.
     fn text_state(&mut self, op: &Op) {
         let gs = &mut self.gs;
+        // The operand immediately before the operator, as the renderer reads it: surplus operands
+        // before it must not move where glyphs are placed (`1 50 Ts` raises text by 50, not 1).
+        let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"BT" => {
                 self.tm = Matrix::IDENTITY;
                 self.tlm = Matrix::IDENTITY;
             }
-            b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
-            b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
-            b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
-            b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
-            b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
-            b"Tr" => gs.render_mode = op.num(0).unwrap_or(0.0) as i64,
+            b"Tc" => gs.char_spacing = last.unwrap_or(0.0),
+            b"Tw" => gs.word_spacing = last.unwrap_or(0.0),
+            b"Tz" => gs.scale = last.unwrap_or(100.0) / 100.0,
+            b"TL" => gs.leading = last.unwrap_or(0.0),
+            b"Ts" => gs.rise = last.unwrap_or(0.0),
+            b"Tr" => gs.render_mode = last.unwrap_or(0.0) as i64,
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.is("TD") {
@@ -652,8 +661,10 @@ impl Walk {
         }
         let o = op.op.as_slice();
         if o == b"\"" {
-            self.gs.word_spacing = op.num(0).unwrap_or(self.gs.word_spacing);
-            self.gs.char_spacing = op.num(1).unwrap_or(self.gs.char_spacing);
+            // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
+            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
+            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
+            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
         }
         if matches!(o, b"'" | b"\"") {
             self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
@@ -717,10 +728,12 @@ impl Walk {
         None
     }
 
-    /// A shading fills the current clip: the regions are clipped out.
-    fn shading(gs: &Gs, scope: &Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
-        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]) else { return Some(op) };
+    /// A shading fills the current clip: the regions are clipped out. Removing hidden content has
+    /// no regions, so the shading and its name stay as they are.
+    fn shading(gs: &Gs, scope: &Scope<'_>, clipped: &mut HashSet<usize>, op: Op, piece: &mut Piece) -> Option<Op> {
+        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]).filter(|c| !c.is_empty()) else { return Some(op) };
         piece.changed = true;
+        clipped.insert(op.span.start);
         piece.ops.push(Op::new("q", vec![]));
         piece.ops.extend(c);
         piece.ops.push(op);
@@ -739,7 +752,16 @@ impl Walk {
     }
 }
 
-fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], processed: &mut [(Vec<Op>, bool)], report: &mut Report) {
+/// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
+/// removed, changed or `clipped`: the words they name may be among what is gone.
+fn clean_replacements(
+    doc: &Document,
+    resources: &Dict,
+    original: &[Op],
+    clipped: &HashSet<usize>,
+    processed: &mut [(Vec<Op>, bool)],
+    report: &mut Report,
+) {
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
@@ -751,7 +773,13 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
             b"EMC" => {
                 stack.pop();
             }
-            _ if !unchanged.contains(&op.span.start) => affected.extend(stack.iter().copied()),
+            // A scope joins `affected` only with every scope around it, so once the innermost one
+            // is in, the rest are too: deep nesting over many changed ops stays linear.
+            _ if (!unchanged.contains(&op.span.start) || clipped.contains(&op.span.start))
+                && stack.last().is_some_and(|top| !affected.contains(top)) =>
+            {
+                affected.extend(stack.iter().copied())
+            }
             _ => {}
         }
     }
@@ -979,7 +1007,7 @@ fn xobject(
             }
             // Strict, like page content: a Form read only in part counts as undecodable.
             let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
+                scope.budget.decode_strict(doc, s)
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
             };
@@ -1076,7 +1104,9 @@ fn xobject(
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                // No page: annotation appearances draw through a page's resources, never through a
+                // form's. The form's own soft masks are still counted.
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content, None) {
                     out.error = Some(error);
                     return None;
                 }
