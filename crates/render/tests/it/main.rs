@@ -1,6 +1,10 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod cid_cff_unusable_font_dict;
 mod cid_fallback_query;
+mod euro_width;
+mod fill_stroke_knockout;
+mod indexed_lookup;
 mod inline_image_ei;
 mod jbig2_invariants;
 mod knockout_backdrop;
@@ -13,6 +17,12 @@ mod search;
 mod separation_all;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
+mod stroke_geometry;
+mod stroke_zero_end_tangent;
 mod substitute_widths;
+mod symbol_dingbats_width;
+mod symbol_mt_builtin_encoding;
 mod tiling_cell_placement;
 mod type3_text_clip;
+mod widgets_above_annotations;
+mod zero_area_fill_clip;
