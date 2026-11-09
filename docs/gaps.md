@@ -363,11 +363,11 @@ update the numbers.
 
 ### 18. Print production tools absent
 
-- **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
-  colour conversion, printer marks, flattener preview, colour management settings;
+- **Missing at v0.20.0:** Output Preview, separations, total area coverage, overprint preview, ink
+  manager, colour conversion, printer marks, flattener preview, colour management settings;
   print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
-  Since v0.20.0, `main` also has printer marks (Print production ▸ Add printer marks…) and
-  colour conversion (Print production ▸ Convert colours).
+  After v0.20.0, printer marks (Print production ▸ Add printer marks…) and colour conversion
+  (Print production ▸ Convert colours) shipped on `main`; they reach users with the next release.
 - **Evidence:** 17 print-production features planned at v0.20.0 (L area).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
@@ -447,7 +447,6 @@ update the numbers.
 | 2026-10-11 | minor | Contributor fork: mixed-style visual regions, source-font space reuse and a read-only textless background. Embedded sfnt source faces and Mac subset Unicode mappings keep edit baselines stable; live frames follow Apply/Save geometry as text grows or shrinks. Engine/tool/UI regressions and private all-page checks cover the changes; full matching font import, CFF, range styles, shaping and private Chinese typing checks added; legacy programs and general fidelity remain open; estimates unchanged |
 | 2026-10-11 | patch | Gap 2: 23 hayro-interpret and 10 hayro patches after axial and radial shadings became native gradients (backport of hayro 0.8) |
 | 2026-10-11 | minor | Closed gap 1 (#774, fixed by #836; numbers kept, its interop suite moved to gap 12); gap 6 lists the fixed #799–#821 batch; gap 3 and 16 updated for #844 (same-page move), #740 (column select) and #759 (1:1 touchpad scrolling) |
-| 2026-10-11 | minor | gap 1 closed by #836; fixed issues removed from gaps 3, 6 and 16. |
 | 2026-10-11 | minor | document-font subset completion and curved/shared image clips in the contributor fork; gap 2: hayro patch counts after the native-gradient backport. |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |

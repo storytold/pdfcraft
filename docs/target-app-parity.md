@@ -18,7 +18,7 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | | Value | Kind |
 |---|---|---|
 | **Feature breadth**, tier-weighted | **≈ 72%** | measured (checklist; weights below) |
-| Feature breadth, unweighted | 62.8% (464 shipped + 119 partial of 834) | measured (`cargo xtask parity`) |
+| Feature breadth, unweighted | 62.8% (464 shipped + 119 partial of 834) | measured (recounted with `cargo xtask parity`'s rules) |
 | Must-have (P0) features | 94.6% (228 + 21 partial of 252) | measured |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted: 292 + 45 partial of 497; P0 95.3%) | measured 2026-10-26, not recomputed ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (range 45–53%) | estimated (weighted sum over dimensions, [below](#by-dimension)) |
@@ -66,13 +66,14 @@ releases up to v0.20.0, 1,774 issues are open, 74 of them marked `priority: crit
 - **Feature breadth from the checklist.** `parity/acrobat-features.toml` tracks 857 Acrobat Pro
   features (834 in scope). `cargo xtask parity` (in `xtask ci`) rejects any `shipped` claim whose
   command, automation tool or cited test does not exist. The numbers here are counted as `cargo xtask parity`
-  counts them, at v0.20.0 (`main` at 9ee213ef, 2026-11-09; partial counts half). They were first computed at 5d590604
+  counts them, at v0.20.0 (`main` at 9ee213ef, 2026-11-09; partial counts half): a recount with its rules,
+  which reproduces its output where it was run (`main` at 25025fa2); `xtask parity` itself was not run at v0.20.0. They were first computed at 5d590604
   (2026-10-10). The checklist itself was written from Acrobat's public documentation, not diffed
   against a menu dump, so it can miss features; that risk is one of the gaps.
-- **Ready for real work by judgement, from evidence:** the code (152k lines of Rust in `crates/`,
-  `apps/` and `xtask`, 1,765 tests, 184 registered commands, 141 automation tools); the vendored
-  renderer's patch list (`vendor/README.md`); user reports on GitHub (245 open, 107 closed issues on
-  2026-10-10); release packaging (`.github/workflows/release.yml`); and knowledge of Acrobat Pro's
+- **Ready for real work by judgement, from evidence:** last judged on 2026-10-10, from the code as it
+  was then (152k lines of Rust in `crates/`, `apps/` and `xtask`, 1,765 tests, 184 registered commands,
+  141 automation tools); the vendored renderer's patch list (`vendor/README.md`); user reports on
+  GitHub (245 open, 107 closed issues); release packaging (`.github/workflows/release.yml`); and knowledge of Acrobat Pro's
   feature set from Adobe's public documentation. At v0.20.0 (2026-11-09) the same counts give ≈ 518k lines of
   Rust (all `.rs` files outside `fuzz/` and `vendor/`; ≈ 157k at 5d590604, 2026-10-10), ≈ 8.7k `#[test]`
   functions (≈ 1.9k for 2026-10-10), 218 command ids and 200 automation tools as `xtask parity`
@@ -222,7 +223,7 @@ full parity in that area.
 | I Scan and OCR | 26 | 6 | 11 | 44.2% | 15% | 40–75 | Searchable image on pages, ranges and many files, read by ocrs (the default; Latin script without accents) or, when installed with its language data and chosen, Tesseract (12 allow-listed languages, #977); opt-in rotate, deskew, denoise and binarize before reading; editable text through the OCR Verify screen (partial); OCR in the browser. Missing: other languages in the built-in engine (#744 Dutch; accents, CJK, Cyrillic, Arabic), end-to-end tests of deskew and rotation, camera images beyond straightening (found or placed corners): orientation, clean-up, MRC compression, scanners. Background removal, edge shadow removal and despeckle work on scanned pages (Enhance scanned file) but not yet as options of Recognize text, nor on CMYK, indexed, JBIG2 or CCITT scans |
 | J Create and export | 35 | 12 | 5 | 41.4% | 25% | 55–100 | Create from images, multipage TIFF, text, clipboard, blank, many files at once; export PNG/JPEG/TIFF, text, RTF; Word, PowerPoint, HTML and Markdown partial. Missing: Office/HTML/web/PostScript to PDF, Excel export, PowerPoint beyond text, images and tables, Word layout fidelity (#773), SVG/XML/EPS/PS/JPEG 2000 export, accessible text |
 | K Optimize and standards | 58 | 18 | 12 | 41.4% | 20% | 65–115 | Reduce File Size and the Optimizer (images, CCITT and lossless JBIG2 monochrome compression, discards, clean-up, space audit); PDF/A-2b/3b verify and convert (partial). Missing: Preflight (profiles, fixups, reports), PDF/A-1/4 and a/u levels, PDF/X, PDF/UA, PDF/E, PDF/VT, transparency flattening, font unembedding, lossy/refinement JBIG2 |
-| L Print | 39 | 18 | 0 | 46.2% | 35% | 30–55 | Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, print-ready PDF, CUPS on macOS/Linux, the Windows spooler (#756) and the browser's print dialog on the web, Fix hairlines. Missing: print as image, PostScript, the other print-production tools (output preview, separations, ink manager, printer marks, colour conversion) |
+| L Print | 39 | 18 | 0 | 46.2% | 35% | 30–55 | Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, print-ready PDF, CUPS on macOS/Linux, the Windows spooler (#756) and the browser's print dialog on the web, Fix hairlines. Missing: print as image, PostScript, the other print-production tools (output preview, separations, ink manager, printer marks, colour conversion; the last two shipped on `main` after v0.20.0) |
 | M Accessibility | 61 | 39 | 10 | 72.1% | 30% | 40–70 | Accessibility Checker (all 32 rules, report, fixes), alternate text, title and language. Partial: text-only autotag, field tagging for simple structure trees, a Tags panel with order and content views, a headless reading-order move. Missing: autotag of mixed content, the visual Reading Order tool, artifact marking, table editor, Read Out Loud, full keyboard operation of the app, screen-reader audit |
 | N Automation, preferences, misc | 76 | 20 | 12 | 34.2% | 35% | 25–45 | CLI, MCP, UI control channel, 200 automation tools, Action Wizard (run, create), compare (text, visual, report, side by side, Text/Visual filter). Missing: most Preferences pages, Acrobat's finer compare filters, Action Wizard management, custom commands, AI providers, rich media/3D, hosted web app |
 | **All** | **834** | **464** | **119** | **62.8%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
