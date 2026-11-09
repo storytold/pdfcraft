@@ -765,6 +765,14 @@ fn custom_properties_add_nothing_to_pdfa_packets_or_another_schemas_pdfx() {
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Project").as_deref(), Some("Apollo"));
     assert_eq!(xmp_text(&doc).unwrap(), pdfa, "no undescribed schema in a PDF/A packet");
+    // The declaration counts however its value is written (here CDATA, which isn't read as text).
+    let cdata = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part><![CDATA[2]]></pdfaid:part></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(cdata.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), cdata);
     // One the packet already has (described, as an Acrobat PDF/A file would) is changed and removed.
     let described = pdfa.replace(
         " </rdf:RDF>",
@@ -1483,6 +1491,13 @@ fn removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims() {
     let mut copy_only = doc_print("CGATS TR 001", "icc", "/Title (Flyer)", Some(xmp));
     assert!(matches!(remove_standard_id(&mut copy_only, Standard::PdfX), Err(OrganizeError::Invalid(_))));
     assert!(!copy_only.is_modified(), "a refused removal changes nothing");
+
+    // `pdfx` bound to another namespace: the declaration in /Info goes, that namespace's property stays.
+    let foreign = xmp.replace("http://ns.adobe.com/pdfx/1.3/", "http://example.com/other/");
+    let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001)", Some(foreign.as_str()));
+    remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
+    assert_eq!(info(&x1a, "GTS_PDFXVersion"), None);
+    assert_eq!(pdfx_of(&full_roundtrip(&x1a)).xmp.as_deref(), Some(foreign.as_str()));
 }
 
 #[test]

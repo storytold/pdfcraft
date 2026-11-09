@@ -76,13 +76,25 @@ pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<()
         if binds_prefix_elsewhere(xmp, "pdfx", PDFX) {
             return None;
         }
-        let present = element_span(xmp, &name).is_some() || attribute_span(xmp, &name).is_some();
-        if !present && get_property(xmp, "pdfaid:part", Shape::Text).is_some() {
+        // A declaration counts whatever its value says (CDATA, markup): it is the claim that matters.
+        if !has_property(xmp, &name) && has_property(xmp, "pdfaid:part") {
             return None;
         }
         set_property(xmp, &name, PDFX, Shape::Text, value)
     })
     .map(|_| ())
+}
+
+/// Remove the `pdfx:` copies of the custom properties `keys` (see [`sync_info`]), unless the packet
+/// binds `pdfx` to another namespace, whose properties are its own; whether any was there.
+pub(crate) fn remove_custom_properties(doc: &mut Document, keys: &[&str]) -> Result<bool, OrganizeError> {
+    let names: Vec<String> = keys.iter().map(|k| format!("pdfx:{k}")).collect();
+    edit_packet(doc, |xmp| if binds_prefix_elsewhere(xmp, "pdfx", PDFX) { None } else { remove_all(xmp, &names) })
+}
+
+/// Whether `xmp` has the property `name`, as an element or an attribute, whatever its value.
+fn has_property(xmp: &str, name: &str) -> bool {
+    element_span(xmp, name).is_some() || attribute_span(xmp, name).is_some()
 }
 
 /// Whether `xmp` declares `prefix` for a namespace other than `ns` anywhere (`xmlns:pdfx="…"` on
@@ -121,16 +133,19 @@ fn is_xml_name(name: &str) -> bool {
 /// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
 /// was there.
 pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
-    edit_packet(doc, |xmp| {
-        let mut out: Option<String> = None;
-        for name in names {
-            // Each removal shortens the packet, so this ends.
-            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
-                out = Some(next);
-            }
+    edit_packet(doc, |xmp| remove_all(xmp, names))
+}
+
+/// `xmp` without any occurrence of the properties `names`; `None` when none was there.
+fn remove_all(xmp: &str, names: &[impl AsRef<str>]) -> Option<String> {
+    let mut out: Option<String> = None;
+    for name in names {
+        // Each removal shortens the packet, so this ends.
+        while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name.as_ref(), "", Shape::Text, "") {
+            out = Some(next);
         }
-        out
-    })
+    }
+    out
 }
 
 /// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files

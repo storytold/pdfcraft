@@ -747,17 +747,14 @@ impl Standard {
 /// Remove what identifies the document as meeting `standard`: the `pdfaid:` XMP properties of
 /// ISO 19005, or ISO 15930's `GTS_PDFXVersion` and `GTS_PDFXConformance` in the document
 /// information and as `pdfxid:` XMP properties, with the `pdfx:` copies that mirror those
-/// information entries as custom properties (see `xmp`). Output intents and other metadata stay.
-/// Refused, changing nothing, when the document declares nothing of the kind: a `pdfx:` copy alone
-/// is not a declaration.
+/// information entries as custom properties (see `xmp`; a packet that binds `pdfx` to another
+/// namespace keeps that namespace's properties). Output intents and other metadata stay. Refused,
+/// changing nothing, when the document declares nothing of the kind: a `pdfx:` copy alone is not a
+/// declaration.
 pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), OrganizeError> {
-    let (props, info_keys, copies): (&[&str], &[&str], &[&str]) = match standard {
-        Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[], &[]),
-        Standard::PdfX => (
-            &["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance"],
-            &["GTS_PDFXVersion", "GTS_PDFXConformance"],
-            &["pdfx:GTS_PDFXVersion", "pdfx:GTS_PDFXConformance"],
-        ),
+    let (props, info_keys): (&[&str], &[&str]) = match standard {
+        Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[]),
+        Standard::PdfX => (&["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance"], &["GTS_PDFXVersion", "GTS_PDFXConformance"]),
     };
     let mut removed = xmp::remove_properties(doc, props)?;
     for key in info_keys {
@@ -769,7 +766,8 @@ pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), 
     if !removed {
         return Err(OrganizeError::Invalid(format!("the document doesn't declare {}", standard.label())));
     }
-    xmp::remove_properties(doc, copies)?;
+    // The information entries' custom-property copies go with them.
+    xmp::remove_custom_properties(doc, info_keys)?;
     Ok(())
 }
 
