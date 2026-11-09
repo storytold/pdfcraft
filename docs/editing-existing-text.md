@@ -102,10 +102,16 @@ HTML-to-PDF converters and stamps are, is extracted, searched and rendered, but 
 is grouped it is one artwork item that moves as a whole (#2964). **Ungroup** (the artwork's
 right-click menu; `image_edit` action `ungroup`) draws that placement's content in place on
 the page with its resources merged, and its text then lists as paragraphs that can be retyped;
-undo brings the form back. Ungrouping never changes the pixels: a knockout group, a
-transparency group that blends inside, is drawn translucent or blends in another colour space
-than the page's, and a form whose `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` the page
-doesn't share (ISO 32000-2 §8.6.5.6) are refused rather than changed (see
+undo brings the form back. Ungrouping goes one level deep: a form drawn inside the ungrouped
+one stays grouped, and text inside it lists only after that form is ungrouped in turn
+(where Ungroup allows it, as below).
+Ungrouping never changes the pixels: a knockout group, a transparency group that blends
+inside, is drawn translucent, with a blend mode other than Normal or Compatible or under a
+soft mask, or blends in another colour space than the page's, and a form whose `/DefaultGray`,
+`/DefaultRGB` or `/DefaultCMYK` the page doesn't share (ISO 32000-2 §8.6.5.6) are refused
+rather than changed. Tagged form content (a form with `/StructParent` or `/StructParents`) is
+refused too, since drawing it inline would lose its link to the structure tree; its text can be
+edited in a copy without tags, which drops that structure information (see
 [Editing images](editing-images.md)).
 
 Explicit marked paragraph/heading scopes prevent unrelated tagged regions from merging.
