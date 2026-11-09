@@ -636,7 +636,7 @@ fn document_info_edits_update_the_xmp_packet() {
     set_info(&mut doc, "Author", "Demo Consulting").unwrap();
     set_info(&mut doc, "Subject", "").unwrap();
     set_info(&mut doc, "Keywords", "alpha, beta").unwrap();
-    set_info(&mut doc, "Rating", "5").unwrap(); // no XMP counterpart: /Info only
+    set_info(&mut doc, "Rating", "5").unwrap(); // a custom property: pdfx:Rating
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Title").as_deref(), Some("Sales Guide v1.0 & <draft>"));
     let xmp = xmp_text(&doc).unwrap();
@@ -644,6 +644,7 @@ fn document_info_edits_update_the_xmp_packet() {
     assert_eq!(xmp_values(&xmp, "dc:creator"), ["Demo Consulting"]);
     assert!(xmp_values(&xmp, "dc:description").is_empty(), "{xmp}");
     assert_eq!(xmp_values(&xmp, "pdf:Keywords"), ["alpha, beta"]);
+    assert_eq!(xmp_values(&xmp, "pdfx:Rating"), ["5"]);
     assert_eq!(xmp_values(&xmp, "pdf:Producer"), ["Writer 1.0"]);
     assert!(xmp.starts_with("<?xpacket begin=") && xmp.ends_with("<?xpacket end=\"w\"?>"), "{xmp}");
     // Stored unfiltered, still typed as metadata.
@@ -690,9 +691,10 @@ fn document_info_falls_back_to_the_xmp_packet() {
 
 #[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
-    // No packet: none is added.
+    // No packet: none is added, for a custom property either.
     let mut doc = open(fixture());
     set_info(&mut doc, "Title", "New").unwrap();
+    set_info(&mut doc, "Project", "Apollo").unwrap();
     assert_eq!(xmp_text(&save_and_reopen(&doc)), None);
     // A packet that isn't UTF-8 is not rewritten.
     let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
@@ -702,6 +704,96 @@ fn document_info_edits_leave_files_without_usable_xmp_alone() {
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Title").as_deref(), Some("New"));
     assert_eq!(xmp_stream(&doc).unwrap().decoded().unwrap(), latin1);
+}
+
+/// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the
+/// http://ns.adobe.com/pdfx/1.3/ schema), so tools that read XMP see the same properties as
+/// Document Properties ▸ Custom.
+#[test]
+fn custom_document_properties_are_kept_in_the_xmp_packet_as_pdfx() {
+    // An Acrobat-style packet already holding one, in a description of its own.
+    let acrobat = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>Sales</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(acrobat.as_bytes());
+    set_info(&mut doc, "Project", "Apollo & <X>").unwrap();
+    set_info(&mut doc, "Größe", "A4").unwrap();
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    let mut doc = save_and_reopen(&doc);
+    assert_eq!((info(&doc, "Project").as_deref(), info(&doc, "Dept").as_deref()), (Some("Apollo & <X>"), Some("R&D")));
+    let xmp = xmp_text(&doc).unwrap();
+    assert_eq!(xmp_values(&xmp, "pdfx:Project"), ["Apollo &amp; &lt;X&gt;"], "{xmp}");
+    assert_eq!(xmp_values(&xmp, "pdfx:Größe"), ["A4"], "{xmp}");
+    assert!(xmp.contains("<rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Project>"), "{xmp}");
+    // One already there changes where it stands; the rest of the packet is as it was.
+    assert!(xmp.contains("xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>R&amp;D</pdfx:Dept></rdf:Description>"), "{xmp}");
+    assert_eq!(xmp_values(&xmp, "dc:title"), ["Untitled 1"]);
+    assert_eq!(xmp_values(&xmp, "pdf:Producer"), ["Writer 1.0"]);
+    // Changed again, then removed with the property.
+    set_info(&mut doc, "Project", "Gemini").unwrap();
+    let xmp = xmp_text(&doc).unwrap();
+    assert_eq!((xmp.matches("<pdfx:Project>").count(), xmp_values(&xmp, "pdfx:Project")), (1, vec!["Gemini".to_string()]), "{xmp}");
+    for key in ["Project", "Größe", "Dept"] {
+        set_info(&mut doc, key, "").unwrap();
+    }
+    let xmp = xmp_text(&save_and_reopen(&doc)).unwrap();
+    assert!(!xmp.contains("<pdfx:"), "{xmp}");
+
+    // A name that can't be an XML element name stays in /Info only, and the packet is untouched.
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    for key in ["1st", "Q&A", "a:b"] {
+        set_info(&mut doc, key, "v").unwrap();
+        assert_eq!(info(&doc, key).as_deref(), Some("v"));
+    }
+    // So do the standard entries XMP doesn't mirror here.
+    set_info(&mut doc, "Trapped", "False").unwrap();
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), LIBREOFFICE_XMP);
+}
+
+/// PDF/A-1 to -3 allow an XMP schema only when the packet describes it (ISO 19005-2 §6.6.2.3), so
+/// a PDF/A file gets no new `pdfx:` property, while one it already has still follows `/Info`. A
+/// packet that binds `pdfx` to another namespace keeps that namespace's properties.
+#[test]
+fn custom_properties_add_nothing_to_pdfa_packets_or_another_schemas_pdfx() {
+    let pdfa = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"2\" pdfaid:conformance=\"B\"/>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(pdfa.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Project").as_deref(), Some("Apollo"));
+    assert_eq!(xmp_text(&doc).unwrap(), pdfa, "no undescribed schema in a PDF/A packet");
+    // The declaration counts however its value is written (here CDATA, which isn't read as text).
+    let cdata = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part><![CDATA[2]]></pdfaid:part></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(cdata.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), cdata);
+    // One the packet already has (described, as an Acrobat PDF/A file would) is changed and removed.
+    let described = pdfa.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>Sales</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(described.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace(">Sales<", ">R&amp;D<"));
+    set_info(&mut doc, "Dept", "").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace("<pdfx:Dept>Sales</pdfx:Dept>", ""));
+
+    // `pdfx` bound to the PDF/X identification namespace: neither changed nor added to.
+    let other = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx = 'http://www.npes.org/pdfx/ns/id/'><pdfx:Dept>keep</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(other.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!((info(&doc, "Dept").as_deref(), info(&doc, "Project").as_deref()), (Some("R&D"), Some("Apollo")));
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), other);
 }
 
 #[test]
@@ -1384,6 +1476,28 @@ fn removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims() {
     let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)", None);
     remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
     assert_eq!((info(&x1a, "GTS_PDFXVersion"), info(&x1a, "GTS_PDFXConformance")), (None, None));
+
+    // Those information entries are custom properties, so XMP may also hold them as pdfx: (an
+    // element or an attribute); the copies go with them, and other custom properties stay.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description \
+               rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\" pdfx:GTS_PDFXConformance=\"PDF/X-1a:2001\">\
+               <pdfx:GTS_PDFXVersion>PDF/X-1:2001</pdfx:GTS_PDFXVersion><pdfx:Dept>Print</pdfx:Dept></rdf:Description></rdf:RDF></x:xmpmeta>";
+    let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)", Some(xmp));
+    remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
+    let x = pdfx_of(&full_roundtrip(&x1a));
+    assert!(x.xmp.as_deref().is_some_and(|x| !x.contains("GTS_") && x.contains("<pdfx:Dept>Print</pdfx:Dept>")), "{:?}", x.xmp);
+
+    // A copy alone declares nothing: refused, and the copy stays.
+    let mut copy_only = doc_print("CGATS TR 001", "icc", "/Title (Flyer)", Some(xmp));
+    assert!(matches!(remove_standard_id(&mut copy_only, Standard::PdfX), Err(OrganizeError::Invalid(_))));
+    assert!(!copy_only.is_modified(), "a refused removal changes nothing");
+
+    // `pdfx` bound to another namespace: the declaration in /Info goes, that namespace's property stays.
+    let foreign = xmp.replace("http://ns.adobe.com/pdfx/1.3/", "http://example.com/other/");
+    let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001)", Some(foreign.as_str()));
+    remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
+    assert_eq!(info(&x1a, "GTS_PDFXVersion"), None);
+    assert_eq!(pdfx_of(&full_roundtrip(&x1a)).xmp.as_deref(), Some(foreign.as_str()));
 }
 
 #[test]
