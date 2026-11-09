@@ -1237,9 +1237,11 @@ mod revert_draft_tests {
     use crate::forms_ui::Focus;
     use pdfcraft_engine::FieldValue;
 
+    /// An open editor on the first widget of the field "name", holding `text` as typed.
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            obj: None,
             widget: 0,
             text: text.into(),
             picked: Vec::new(),
@@ -1249,6 +1251,7 @@ mod revert_draft_tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            list: Default::default(),
             had_focus: false,
         }
     }
