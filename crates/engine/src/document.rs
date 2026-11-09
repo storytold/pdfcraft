@@ -32,7 +32,8 @@ pub struct Document {
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
-    /// The generation last handed out by `autosave_snapshots`.
+    /// The generation last handed out by `autosave_snapshots`, or another one when storing that
+    /// snapshot failed (`autosave_failed`), so it is due again.
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
@@ -303,6 +304,22 @@ impl Document {
         measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())
     }
 
+    /// [`Self::measurement_paths`] within `limits`.
+    pub fn measurement_paths_within(&self, page: usize, limits: measure::snap::Limits) -> Result<measure::snap::Geometry, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::snap::geometry_with_limits(&e.cos, page, limits).map_err(|e| e.to_string())
+    }
+
+    /// [`Self::measurement_paths`] as work to run away from the UI: a heavy drawing takes
+    /// seconds to read (millions of segments). It works on a copy of the document as it is now.
+    pub fn measurement_paths_job(&self, page: usize) -> impl FnOnce() -> Result<measure::snap::Geometry, String> + Send + 'static {
+        let cos = self.editor.as_ref().map(|e| e.cos.clone());
+        move || {
+            let cos = cos.ok_or("the document can't be read")?;
+            measure::snap::geometry(&cos, page).map_err(|e| e.to_string())
+        }
+    }
+
     /// A counter that changes with every edit (for caches of derived data).
     pub fn edit_generation(&self) -> u64 {
         self.generation
@@ -425,16 +442,22 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.cos.permissions())
     }
 
+    /// The renderer opened an encrypted file that the editing parser did not, so its permission
+    /// bits are unknown. Unknown is not unrestricted: printing and copying are refused.
+    fn permissions_unknown(&self) -> bool {
+        self.editor.is_none() && self.info.encrypted
+    }
+
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
-        self.permissions().is_none_or(|p| p.print())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print())
     }
 
     /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
     /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
     /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
     pub fn allows_copying(&self) -> bool {
-        self.permissions().is_none_or(|p| p.copy())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy())
     }
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
@@ -589,6 +612,12 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan(&e.cos)).unwrap_or_default()
     }
 
+    /// [`Self::hidden_info`] for the categories in `which` alone, without the reading the others
+    /// need (see [`pdfcraft_redact::sanitize::scan_only`]).
+    pub fn hidden_info_of(&self, which: &[Hidden]) -> Vec<(Hidden, usize)> {
+        self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan_only(&e.cos, which)).unwrap_or_default()
+    }
+
     /// Verification: faux redactions (opaque covers over extractable text) and redaction
     /// marks that were never applied. Fails closed: any read error is returned, never an
     /// empty list.
@@ -727,6 +756,14 @@ pub(crate) fn write_display_copy(
     }
 }
 
+/// `doc` as the reader shows it: comments without an appearance stream drawn
+/// (`pdfcraft_annot::with_missing_appearances`) and form fields drawn from their values where the
+/// file leaves that to the viewer. `None` when `doc` needs neither. The vector print draws from
+/// this copy too, so what prints is what the page shows (#371, #3475 draw them for display only).
+pub(crate) fn as_displayed(doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
+    with_field_appearances(pdfcraft_annot::with_missing_appearances(doc), doc)
+}
+
 /// Carry the marks across a revalidation that leaves the display copy alone, when it may: only
 /// when every verdict is the one the copy was drawn with. Returns whether it did; otherwise the
 /// copy has to be drawn again.
@@ -778,7 +815,7 @@ pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec
         let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok()?;
         let mut signatures = signatures_of(&cos, &bytes, &TrustStore::default(), &pdfcraft_sign::DigestCache::default());
         let layered = pdfcraft_sign::has_status_layers(&cos, &signatures);
-        let (mut display, added) = match with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos) {
+        let (mut display, added) = match as_displayed(&cos) {
             Some(display) => (display, true),
             None if layered => (cos, false),
             None => return None,
