@@ -99,6 +99,7 @@ impl PdfCraftApp {
                     view.redactions_applied = view.redactions_downloaded;
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;
+                    self.share_redaction_state(i);
                 }
                 self.notify_tr("Reverted to the last saved version");
             }

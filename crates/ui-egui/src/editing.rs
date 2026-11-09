@@ -174,15 +174,6 @@ impl PdfCraftApp {
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
-                if matches!(edit, Edit::ApplyRedactions { .. }) {
-                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
-                    view.redactions_applied = view.redactions_applied.saturating_add(1);
-                    // A new step clears the redo history, so the undone saved steps can't come back.
-                    if view.redactions_undone_after_save > 0 || delivered_undone {
-                        view.redactions_undone_after_save = 0;
-                        view.saved_redactions_cut_off = true;
-                    }
-                }
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;
@@ -250,6 +241,9 @@ impl PdfCraftApp {
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
                     });
                 }
+                if matches!(edit, Edit::ApplyRedactions { .. }) {
+                    self.count_applied_redactions(i);
+                }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
                 true
@@ -275,6 +269,27 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
+        }
+    }
+
+    /// Counts an Apply redactions step that succeeded in view `i` and the document's other views.
+    fn count_applied_redactions(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+        view.redactions_applied = view.redactions_applied.saturating_add(1);
+        // A new step clears the redo history, so the undone saved steps can't come back.
+        if view.redactions_undone_after_save > 0 || delivered_undone {
+            view.redactions_undone_after_save = 0;
+            view.saved_redactions_cut_off = true;
+        }
+        self.share_redaction_state(i);
+    }
+
+    /// Copies view `i`'s Apply redactions fields to the document's other views (split view).
+    pub(crate) fn share_redaction_state(&mut self, i: usize) {
+        let Some((id, state)) = self.views.get(i).map(|v| (v.id, v.redaction_state())) else { return };
+        for view in self.views.iter_mut().filter(|v| v.id == id) {
+            view.set_redaction_state(state);
         }
     }
 
@@ -399,6 +414,7 @@ impl PdfCraftApp {
                         (false, _, 0) => view.redactions_applied = applied.saturating_add(1),
                         (false, _, _) => view.redactions_undone_after_save = undone.saturating_sub(1),
                     }
+                    self.share_redaction_state(i);
                 }
                 let label = crate::i18n::edit_label(&label);
                 if undo {

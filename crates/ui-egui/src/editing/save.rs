@@ -125,6 +125,7 @@ impl PdfCraftApp {
                         view.document_changed(&doc.info);
                         view.redactions_delivered();
                     }
+                    self.share_redaction_state(index);
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
                         self.notify_fmt("Downloaded {name}", &[("name", &name)]);

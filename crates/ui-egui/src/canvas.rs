@@ -978,6 +978,16 @@ impl DocView {
         self.saved_redactions_cut_off = false;
     }
 
+    /// The Apply redactions fields Save reads, which every view of a document shares.
+    pub(crate) fn redaction_state(&self) -> (usize, usize, bool, usize) {
+        (self.redactions_applied, self.redactions_undone_after_save, self.saved_redactions_cut_off, self.redactions_downloaded)
+    }
+
+    /// Sets the fields [`Self::redaction_state`] returns.
+    pub(crate) fn set_redaction_state(&mut self, state: (usize, usize, bool, usize)) {
+        (self.redactions_applied, self.redactions_undone_after_save, self.saved_redactions_cut_off, self.redactions_downloaded) = state;
+    }
+
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()
@@ -1256,13 +1266,16 @@ impl DocView {
     /// points into the old version.
     pub(crate) fn follow_document(&mut self, info: &DocInfo) {
         let continuous = self.continuous;
+        let redactions = self.redaction_state();
         self.document_replaced(info);
         self.continuous = continuous;
+        self.set_redaction_state(redactions);
     }
 
     /// A second view of this document (split view), showing what this one shows.
     pub(crate) fn twin(&self, info: &DocInfo) -> Self {
         let mut v = Self::new(self.id, info, ViewDefaults::default());
+        v.set_redaction_state(self.redaction_state());
         v.zoom = self.zoom;
         v.fit = self.fit;
         v.layout = self.layout;

@@ -481,6 +481,7 @@ impl PdfCraftApp {
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
                 }
+                self.share_redaction_state(i);
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
@@ -579,6 +580,22 @@ mod tests {
     fn doc<'a>(h: &'a Harness<'static, PdfCraftApp>) -> &'a pdfcraft_engine::Document {
         let app = h.state();
         app.session.get(app.views[0].id).unwrap()
+    }
+
+    /// Reload from disk drops the unsaved Apply redactions step in every view of the document.
+    #[test]
+    fn reloading_clears_the_apply_redactions_count_in_every_view() {
+        let mut app = crate::PdfCraftApp::new();
+        app.open_bytes("a.pdf", None, fixture(2)).unwrap();
+        let twin = {
+            let doc = app.session.get(app.views[0].id).unwrap();
+            app.views[0].twin(&doc.info)
+        };
+        app.views.push(twin);
+        app.views[0].redactions_applied = 1;
+        app.views[1].redactions_applied = 1;
+        app.reload_view(0, Arc::new(fixture(2)));
+        assert_eq!(app.views[1].redactions_applied, 0);
     }
 
     /// Association recovery changes ctime without replacing PDF contents. It must neither
