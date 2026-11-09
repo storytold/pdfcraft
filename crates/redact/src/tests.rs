@@ -2103,6 +2103,26 @@ fn hidden_fixture() -> Document {
     doc
 }
 
+/// A field whose `/Kids` is an indirect array loses its children's actions too: the walk edits
+/// the array the file holds, not a copy, so a full save cannot carry the script forward.
+#[test]
+fn actions_are_removed_from_an_indirect_kids_array() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Fields [5 0 R] >>".to_vec(),
+        b"<< /T (parent) /Kids 6 0 R >>".to_vec(),
+        b"[<< /T (inner) /FT /Sig /Rect [0 0 10 10] /A << /S /JavaScript /JS (app.alert(1)) >> >>]".to_vec(),
+    ]);
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let kids = (*doc.get(pdfcraft_cos::ObjRef::new(6, 0))).clone();
+    let items = kids.as_array().expect("the indirect array").clone();
+    let inner = doc.resolve(&items[0]).as_dict().expect("the child field").clone();
+    assert!(!inner.contains(b"A"), "the action survived: {inner:?}");
+}
+
 #[test]
 fn hidden_information_is_counted_and_removed() {
     use crate::sanitize::{Hidden, remove_hidden, sanitize, scan};

@@ -379,9 +379,16 @@ fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize) -> Re
     for item in items.iter_mut() {
         let Some(mut field) = doc.resolve(item).as_dict().cloned() else { continue };
         field.remove(b"A");
-        if let Some(mut kids) = field.get(b"Kids").cloned() {
-            strip_field_array(doc, &mut kids, depth + 1)?;
-            field.set(b"Kids".to_vec(), kids);
+        if let Some(kids) = field.get(b"Kids").cloned() {
+            // A child list may be an indirect array: it is edited in place, or the actions in it
+            // would stay in the file while the walk reported them removed.
+            let kids_ref = kids.as_ref();
+            let mut list = (*doc.resolve(&kids)).clone();
+            strip_field_array(doc, &mut list, depth + 1)?;
+            match kids_ref {
+                Some(r) => doc.set(r, list),
+                None => field.set(b"Kids".to_vec(), list),
+            }
         }
         match item.as_ref() {
             Some(r) => doc.set(r, Object::Dict(field)),
