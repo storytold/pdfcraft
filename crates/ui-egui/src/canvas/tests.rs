@@ -4,6 +4,21 @@ use super::*;
 use craft::pages::ui::PlacedPage;
 use craft::ui::primitives::textures::{LoadFailure, Revision, TextureState, TextureStore, TextureStoreOptions};
 
+/// #5141: a selection becomes the search phrase on one line; white space alone, or a selection too
+/// long to be a search, is none.
+#[test]
+fn a_selection_is_a_search_phrase_on_one_line() {
+    assert_eq!(super::find::find_phrase("sample"), Some("sample".into()));
+    assert_eq!(super::find::find_phrase("  two\n  lines \t here "), Some("two lines here".into()));
+    assert_eq!(super::find::find_phrase(" \n\t "), None);
+    assert_eq!(super::find::find_phrase(""), None);
+    let limit = "a".repeat(200);
+    assert_eq!(super::find::find_phrase(&limit), Some(limit.clone()));
+    assert_eq!(super::find::find_phrase(&format!("{limit}b")), None, "past the limit");
+    // Counted in characters, not bytes.
+    assert!(super::find::find_phrase(&"é".repeat(200)).is_some());
+}
+
 #[test]
 fn typed_zoom_percentages_parse() {
     for (typed, zoom) in [("150", 1.5), ("150%", 1.5), (" 62.5 % ", 0.625), ("6400%", 64.0)] {
