@@ -15,8 +15,9 @@ use pdfcraft_cos::{CosError, DECODE_PARMS_KEYS, Dict, Document, ImageBudget, MAX
 /// The references followed from `/JBIG2Globals` towards a stream, so that a ring of them ends.
 const MAX_HOPS: usize = 32;
 
-/// The objects a full save would keep, by number: a reference reads the object of its number,
-/// whatever generation it gives. Fails only when a full save couldn't number them all.
+/// The objects a full save would keep, by number, as [`reachable_objects`] finds them: a reference
+/// whose generation isn't its object's reads as null there (#1143), so it keeps nothing. Fails only
+/// when a full save couldn't number them all.
 pub(crate) fn kept(doc: &Document) -> Result<HashSet<u32>, CosError> {
     reachable_objects(doc)
 }
@@ -75,8 +76,11 @@ enum How {
 }
 
 /// What one redaction or Remove Hidden Information run reads, to find what shares a dictionary with
-/// what left, against [`RUN_BUDGET`]. Each object is fetched at most once a run for each way it is
-/// read, and kept only as what is read of it: a value many streams share, by reference, through a
+/// what left, against [`RUN_BUDGET`]. What a stream names is read by object number, whatever
+/// generation a reference gives ([`Run::fetch_numbered`]); what one is stored again with is read as
+/// cos reads it, by number and generation, so a reference of another generation reads its own way.
+/// Each object is fetched at most once a run for each way it is read, and kept only as what is read
+/// of it: a value many streams share, by reference, through a
 /// chain of them or through an entry, costs it once however many there are. The exceptions are a
 /// `/JBIG2Globals` chain named part way, which is followed again from there, and a ring of
 /// references or a chain past the limit, read again (up to 33 fetches) wherever it is met; every
@@ -85,8 +89,10 @@ pub(crate) struct Run {
     budget: usize,
     /// What was spent of the budget.
     pub(crate) spent: usize,
-    /// What a reference leads to, as it is read, under every reference on the way.
-    reduced: HashMap<(u32, How), Rc<Object>>,
+    /// What a reference leads to, as it is read, under every reference on the way, by number and
+    /// generation: one whose generation isn't its object's reads as null (#1143), and must not give
+    /// another reference to that number what it read, nor take what that one read.
+    reduced: HashMap<(pdfcraft_cos::ObjRef, How), Rc<Object>>,
     /// What a reference leads to names, under every reference on the way, with the key of the one
     /// that names what it ends at: aliases and chains find it, and are counted as that one.
     names: HashMap<Key, (Rc<[u32]>, Key)>,
@@ -119,10 +125,19 @@ impl Run {
         Ok(doc.get(r))
     }
 
+    /// Fetches the object of `r`'s number, whatever generation `r` gives, counted. Cos reads a
+    /// reference whose generation isn't its object's as null (#1143), but a reader that doesn't
+    /// compare generations draws with the object: what an image that left names this way may hold
+    /// its shapes, so it is named, as what names it this way is a user of it.
+    fn fetch_numbered(&mut self, doc: &Document, r: pdfcraft_cos::ObjRef) -> Result<Arc<Object>, crate::RedactError> {
+        self.fetch(doc, pdfcraft_cos::ObjRef::new(r.num, doc.generation(r.num)))
+    }
+
     /// What `v` leads to through references, as `followed` goes, kept as `read` makes it. Each
     /// reference is looked up before it is fetched, and what it leads to is remembered under every
-    /// one on the way, so one remembered costs nothing more, and an alias or a chain only the
-    /// references before it. A ring, or a chain past the limit, is read as the reference it ends at.
+    /// one on the way, so one remembered costs nothing more, and a chain only the references before
+    /// it. A reference of another generation is looked up as itself, and read as cos reads it. A
+    /// ring, or a chain past the limit, is read as the reference it ends at.
     fn follow(
         &mut self,
         doc: &Document,
@@ -130,17 +145,17 @@ impl Run {
         how: How,
         read: impl FnOnce(&mut Self, &Document, &Object) -> Result<Object, crate::RedactError>,
     ) -> Result<Rc<Object>, crate::RedactError> {
-        let mut keys: Vec<(u32, How)> = Vec::new();
+        let mut keys: Vec<(pdfcraft_cos::ObjRef, How)> = Vec::new();
         let mut fetched: Option<Arc<Object>> = None;
         for _ in 0..=MAX_HOPS {
             let Some(r) = fetched.as_deref().unwrap_or(v).as_ref() else { break };
-            if let Some(hit) = self.reduced.get(&(r.num, how)).cloned() {
+            if let Some(hit) = self.reduced.get(&(r, how)).cloned() {
                 for k in keys {
                     self.reduced.insert(k, hit.clone());
                 }
                 return Ok(hit);
             }
-            keys.push((r.num, how));
+            keys.push((r, how));
             fetched = Some(self.fetch(doc, r)?);
         }
         let made = Rc::new(read(self, doc, fetched.as_deref().unwrap_or(v))?);
@@ -177,7 +192,7 @@ impl Run {
                 return Ok((hit, Some(at)));
             }
             keys.push(key);
-            fetched = Some(self.fetch(doc, r)?);
+            fetched = Some(self.fetch_numbered(doc, r)?);
         }
         self.read += 1;
         let held = fetched.as_deref().unwrap_or(v);
@@ -227,7 +242,7 @@ impl Run {
                 break;
             }
             found.push(at.num);
-            match &*self.fetch(doc, at)? {
+            match &*self.fetch_numbered(doc, at)? {
                 Object::Ref(next) => at = *next,
                 _ => break,
             }

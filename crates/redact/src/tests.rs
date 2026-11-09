@@ -1932,6 +1932,27 @@ fn ways_out(scan: &SharedScan) -> Vec<(&'static str, [f64; 4], SharedPages)> {
             SharedPages { first: format!("{} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED)), ..base() },
         ),
         ("another generation", COVERS, SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 9 1 R >>"), ..base() }),
+        // Cos reads a reference of another generation as null (#1143); a reader that doesn't compare
+        // generations draws with what it names. Read first, it mustn't hide what the other names.
+        (
+            "parameters through another generation, then their own",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [10 1 R 10 0 R]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]"),
+                extra: vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "parameters through another generation",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms 10 1 R"), extra: vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()], ..base() },
+        ),
+        (
+            "a reference to it of another generation",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 10 1 R >>"), extra: vec![b"9 0 R".to_vec()], ..base() },
+        ),
     ]
 }
 
@@ -1952,6 +1973,26 @@ fn a_redacted_scans_shared_jbig2_dictionary_leaves_the_file() {
         assert_gone(&doc, b"JBIG2Globals");
         assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{way}: its pixels are unchanged");
     }
+}
+
+/// A size given through a reference of another generation is null, as cos reads it (#1143), whatever
+/// another image read through the reference of that number's own: the image can't be stored again, so
+/// the redaction refuses, rather than storing it with the size the other reference read.
+#[test]
+fn a_size_through_another_generation_isnt_the_one_its_own_reference_reads() {
+    let scan = shared_scan();
+    let stale = shared_image(SHARED).replace("/Width 400", "/Width 11 1 R");
+    let mut doc = SharedPages {
+        content: [DRAWS, b" q 200 0 0 20 0 200 cm /Stale Do Q".as_slice()].concat(),
+        resources: "/XObject << /Im 7 0 R /Stale 12 0 R >>".into(),
+        other: shared_image(SHARED).replace("/Width 400", "/Width 11 0 R"),
+        extra: vec![b"null".to_vec(), b"400".to_vec(), stream(&stale, scan.page.clone())],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    mark(&mut doc, 0, &[COVERS], "");
+    let result = apply(&mut doc, None);
+    assert!(matches!(result, Err(RedactError::SharedJbig2Globals(1))), "{result:?}");
 }
 
 /// However the image that stays names the dictionary, it comes out without it: its parameters by

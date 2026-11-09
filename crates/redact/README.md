@@ -34,7 +34,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   the same way, but it has changed the document by the time it refuses: a caller passes a copy it
   can drop. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
   nothing names, and an image that hasn't left keeps its globals with its pixels: one another page
-  still draws, or one something that doesn't draw it still refers to. Finding what to store again
+  still draws, or one something that doesn't draw it still refers to. What an image names as
+  globals is read by object number, whatever generation a reference gives, as a reader that doesn't
+  compare generations draws it (cos reads such a reference as null); what one is stored again with,
+  its size, filters and parameters, is read as cos reads it. Finding what to store again
   reads each object at most once for each way it is read (a `/JBIG2Globals` chain named part way,
   or a ring of references or a chain of more than 32, may be read again), and what it fetches, remembers and decodes (a decode that
   fails counting as much as it was allowed, and an image the dictionaries it names) counts against
