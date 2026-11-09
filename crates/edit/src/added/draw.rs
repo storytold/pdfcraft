@@ -3,17 +3,17 @@ use super::layout::{
 };
 use super::types::{AddedText, Align, Family, Ink};
 use super::{
-    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
-    align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, Object, PdfString, ShapedScript, align_code, literal, matrix_number, n,
+    shaped_glyph, win_ansi,
 };
+use pdfcraft_fonts::shaped_text::{self, ShapedFonts};
 
 fn font_name(base: &str) -> String {
     format!("PCF{}", base.replace('-', ""))
 }
 
-/// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. An item gets one such font
-/// per 240 distinct glyphs it needs.
-pub(super) const GLYPHS_PER_FONT: usize = 240;
+#[cfg(test)]
+pub(super) use pdfcraft_fonts::shaped_text::GLYPHS_PER_FONT;
 
 /// A line of a shaped-text item after layout: its text, whether its paragraph runs right to left,
 /// its paragraph, its pieces in drawing order and its width at the item's size.
@@ -61,50 +61,15 @@ pub(super) fn draw_laid_shaped(
 ) -> Result<(), EditError> {
     let r = text_rect(t);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
-    // Every distinct cluster (a letter with its dots and the text it stands for) is one glyph of
-    // one of the fonts, so copy and search get each character exactly once.
-    let mut keys: Vec<&ShapedCluster> = Vec::new();
-    let mut index: HashMap<ClusterKey, usize> = HashMap::new();
-    for c in laid.iter().flat_map(|(_, _, _, pieces, _)| pieces).flat_map(|p| match p {
-        Piece::Shaped(clusters) => clusters.as_slice(),
-        Piece::Latin(_) => &[],
-    }) {
-        index.entry(cluster_key(c)).or_insert_with(|| {
-            keys.push(c);
-            keys.len() - 1
-        });
-    }
-
-    // Every outline is read before anything is written, so a failure leaves the document as it was.
-    let mut outlines = HashMap::new();
-    for c in &keys {
-        for (id, _) in &c.glyphs {
-            if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
-                entry.insert(outline(c.script, *id).map_err(|e| match c.script {
-                    ShapedScript::Arabic => arabic_error(e, &c.text),
-                    ShapedScript::Hebrew => hebrew_error(e, &c.text),
-                    ShapedScript::Thai => thai_error(e, &c.text),
-                })?);
-            }
-        }
-    }
-    // The names the page and this item already use: a new font never takes one of them.
-    let mut taken_names: HashSet<Vec<u8>> = taken.iter().chain(fonts.iter()).map(|(name, _)| name.clone()).collect();
-    let mut names = Vec::new();
-    for chunk in keys.chunks(GLYPHS_PER_FONT) {
-        let font = type3_shaped(doc, chunk, &outlines);
-        // A name no font on the page has, so items never replace each other's fonts (object
-        // numbers alone don't do: a full save renumbers objects but keeps resource names).
-        let mut name = format!("PCAr{}", font.num);
-        let mut suffix = 0usize;
-        while taken_names.contains(name.as_bytes()) {
-            suffix = suffix.saturating_add(1);
-            name = format!("PCAr{}_{suffix}", font.num);
-        }
-        taken_names.insert(name.clone().into_bytes());
-        fonts.set(name.clone().into_bytes(), Object::Ref(font));
-        names.push(name);
-    }
+    let shaped =
+        ShapedFonts::new(shaped_text::clusters(laid.iter().map(|(_, _, _, pieces, _)| pieces.as_slice())), outline, taken, fonts, "PCAr", &mut |o| {
+            Object::Ref(doc.add(o))
+        })
+        .map_err(|(e, c)| match c.script {
+            ShapedScript::Arabic => arabic_error(e, &c.text),
+            ShapedScript::Hebrew => hebrew_error(e, &c.text),
+            ShapedScript::Thai => thai_error(e, &c.text),
+        })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
@@ -119,136 +84,23 @@ pub(super) fn draw_laid_shaped(
         let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
         let mut pen = x;
-        let mut current: Option<&str> = None;
+        let mut current = None;
         for piece in pieces {
             match piece {
                 Piece::Latin(s) => {
                     out.extend(format!("/{latin} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(tw), n(pen), n(y)).bytes());
                     out.extend(literal(&win_ansi(s)));
                     out.extend_from_slice(b" Tj\n");
-                    current = Some(latin.as_str());
+                    current = None;
                     pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
                 }
-                Piece::Shaped(clusters) => {
-                    for c in clusters {
-                        let Some(&k) = index.get(&cluster_key(c)) else { continue };
-                        let Some(name) = names.get(k / GLYPHS_PER_FONT) else { continue };
-                        // Codes start at 1; k % 240 + 1 is at most 240.
-                        let code = u8::try_from(k % GLYPHS_PER_FONT + 1).unwrap_or(1);
-                        if current != Some(name.as_str()) {
-                            out.extend(format!("/{name} {} Tf ", n(t.size)).bytes());
-                            current = Some(name.as_str());
-                        }
-                        out.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
-                        out.extend(literal(&[code]));
-                        out.extend_from_slice(b" Tj\n");
-                        pen += c.advance * t.size + t.char_spacing + if c.text == " " { tw } else { 0.0 };
-                    }
-                }
+                Piece::Shaped(clusters) => pen = shaped.show(out, clusters, pen, y, t.size, t.char_spacing, tw, &mut current),
             }
         }
         out.extend_from_slice(b"EMC\n");
     }
     out.extend_from_slice(b"ET\n");
     Ok(())
-}
-
-/// What makes two clusters the same Type 3 glyph: text, glyphs, offsets and advance (bit for bit;
-/// equal clusters come from the same font units).
-type ClusterKey<'a> = (ShapedScript, &'a str, Vec<(u32, u64, u64)>, u64);
-
-fn cluster_key(c: &ShapedCluster) -> ClusterKey<'_> {
-    (c.script, c.text.as_str(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
-}
-
-/// A Type 3 font with `clusters` as codes 1…, each drawn from its script face's glyph `outlines`.
-fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> ObjRef {
-    let mut charprocs = Dict::new();
-    let mut differences = vec![Object::Int(1)];
-    let mut widths = Vec::with_capacity(clusters.len());
-    let mut bbox = [0.0f64; 4];
-    let mut to_unicode = Vec::new();
-    for (i, c) in clusters.iter().enumerate() {
-        let code = i + 1;
-        // Glyph space is 1000 units per em.
-        let mut paths = Vec::new();
-        let mut ink: Option<[f64; 4]> = None;
-        for (id, [dx, dy]) in &c.glyphs {
-            let Some(g) = outlines.get(&(c.script, *id)) else { continue };
-            for contour in &g.contours {
-                for (j, p) in contour.iter().enumerate() {
-                    paths.extend(format!("{} {} {}\n", n((p[0] + dx) * 1000.0), n((p[1] + dy) * 1000.0), if j == 0 { "m" } else { "l" }).bytes());
-                }
-                paths.extend_from_slice(b"h\n");
-                let b = [g.bbox[0] + dx, g.bbox[1] + dy, g.bbox[2] + dx, g.bbox[3] + dy];
-                ink = Some(ink.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]));
-            }
-        }
-        // Rounded outwards so no ink is clipped.
-        let [x0, y0, x1, y1] =
-            ink.map_or([0.0; 4], |b| [(b[0] * 1000.0).floor(), (b[1] * 1000.0).floor(), (b[2] * 1000.0).ceil(), (b[3] * 1000.0).ceil()]);
-        bbox = [bbox[0].min(x0), bbox[1].min(y0), bbox[2].max(x1), bbox[3].max(y1)];
-        let mut proc = format!("{} 0 {} {} {} {} d1\n", n(c.advance * 1000.0), n(x0), n(y0), n(x1), n(y1)).into_bytes();
-        if !paths.is_empty() {
-            proc.extend(paths);
-            proc.extend_from_slice(b"f\n");
-        }
-        let glyph = format!("g{code:02X}");
-        charprocs.set(glyph.clone().into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &proc)))));
-        differences.push(Object::name(&glyph));
-        widths.push(Object::Real((c.advance * 1000.0).round()));
-        if !c.text.is_empty() {
-            let hex: String = c.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
-            to_unicode.push(format!("<{code:02X}> <{hex}>\n"));
-        }
-    }
-    let mut cmap = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
-    );
-    // A CMap block holds at most 100 entries.
-    for block in to_unicode.chunks(100) {
-        cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", block.len(), block.concat()));
-    }
-    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-    let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
-    // The face's family when every glyph comes from one script; without the face, the script's
-    // name (as Arabic items were always named).
-    let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
-        Some(script) => script.font().map_or(
-            match script {
-                ShapedScript::Arabic => "Arabic",
-                ShapedScript::Hebrew => "Hebrew",
-                ShapedScript::Thai => "Thai",
-            },
-            |f| f.family,
-        ),
-        None => "PdfCraft Shaped Text",
-    };
-    let mut descriptor = Dict::new();
-    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
-    descriptor.set(b"FontName".to_vec(), Object::name(&family.replace(' ', "")));
-    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(4));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
-    let mut encoding = Dict::new();
-    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(differences));
-    let mut font = Dict::new();
-    font.set(b"Type".to_vec(), Object::name("Font"));
-    font.set(b"Subtype".to_vec(), Object::name("Type3"));
-    font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
-    font.set(b"FontBBox".to_vec(), Object::Array(bbox.iter().map(|v| Object::Real(*v)).collect()));
-    font.set(
-        b"FontMatrix".to_vec(),
-        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
-    );
-    font.set(b"FirstChar".to_vec(), Object::Int(1));
-    font.set(b"LastChar".to_vec(), Object::Int(clusters.len() as i64));
-    font.set(b"Widths".to_vec(), Object::Array(widths));
-    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
-    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
-    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
-    doc.add(Object::Dict(font))
 }
 
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
@@ -401,9 +253,9 @@ pub(crate) fn thai_glyph_resources(
     if shaped.glyphs.len() > 65_534 {
         return Err(EditError::Invalid("shaped row exceeds its geometry budget".into()));
     }
-    let mut outlines = HashMap::new();
+    let mut outlines = std::collections::HashMap::new();
     let mut clusters = Vec::new();
-    let mut index = HashMap::new();
+    let mut index = std::collections::HashMap::new();
     let mut indices = Vec::new();
     for glyph in &shaped.glyphs {
         let id = glyph.id.to_u32();
@@ -414,7 +266,12 @@ pub(crate) fn thai_glyph_resources(
         let at = *index.entry((id, glyph.text.as_str())).or_insert_with(|| {
             let at = clusters.len();
             let width = outlines.get(&key).map_or(0.0, |g| g.width);
-            clusters.push(ShapedCluster { script: ShapedScript::Thai, glyphs: vec![(id, [0.0, 0.0])], advance: width, text: glyph.text.clone() });
+            clusters.push(pdfcraft_fonts::ShapedCluster {
+                script: ShapedScript::Thai,
+                glyphs: vec![(id, [0.0, 0.0])],
+                advance: width,
+                text: glyph.text.clone(),
+            });
             at
         });
         indices.push(at);
@@ -422,9 +279,9 @@ pub(crate) fn thai_glyph_resources(
     // Validate all outlines before adding resources. Type 3 character codes are single bytes;
     // shard long rows and return the appropriate resource/code for every positioned glyph.
     let mut names = Vec::new();
-    for chunk in clusters.chunks(GLYPHS_PER_FONT) {
+    for chunk in clusters.chunks(shaped_text::GLYPHS_PER_FONT) {
         let refs: Vec<_> = chunk.iter().collect();
-        let font = type3_shaped(doc, &refs, &outlines);
+        let font = shaped_text::add_type3_font(doc, &refs, &outlines);
         doc.update_dict(font, |f| f.set(b"Name".to_vec(), Object::name("PCThai")))?;
         let mut name = format!("PCThai{}", font.num);
         while fonts.contains(name.as_bytes()) {
@@ -436,8 +293,8 @@ pub(crate) fn thai_glyph_resources(
     indices
         .into_iter()
         .map(|at| {
-            let name = names.get(at / GLYPHS_PER_FONT).ok_or_else(|| EditError::Invalid("Thai font resource is missing".into()))?;
-            let code = u8::try_from(at % GLYPHS_PER_FONT + 1).map_err(|_| EditError::Invalid("Thai glyph limit".into()))?;
+            let name = names.get(at / shaped_text::GLYPHS_PER_FONT).ok_or_else(|| EditError::Invalid("Thai font resource is missing".into()))?;
+            let code = u8::try_from(at % shaped_text::GLYPHS_PER_FONT + 1).map_err(|_| EditError::Invalid("Thai glyph limit".into()))?;
             Ok((name.clone(), vec![code]))
         })
         .collect()

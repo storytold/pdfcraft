@@ -15,7 +15,7 @@ mod body;
 mod draft;
 
 pub(crate) use body::body;
-pub use draft::{Handling, PrintDraft, Which};
+pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
 const PREVIEW_W: f32 = 320.0;
@@ -34,6 +34,10 @@ pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send +
 /// Where a printer's driver options come from: the spooler's (`spool::printer_options_in`, in the
 /// UI language) unless a test stands in. Called off the GUI thread.
 pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption> + Send + Sync>;
+
+/// What takes a print job in place of the system spooler: a test's stand-in, which gets the
+/// print-ready PDF and the job and answers as the spooler would. Called off the GUI thread.
+pub type Spooler = std::sync::Arc<dyn Fn(&[u8], &spool::Job) -> Result<String, String> + Send + Sync>;
 
 /// The system spooler's printers, as the desktop app's [`PrinterSource`].
 pub fn system_printers() -> PrinterSource {
@@ -148,18 +152,43 @@ impl PdfCraftApp {
         let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
-        let keep = std::mem::take(&mut self.print_draft);
+        let mut keep = std::mem::take(&mut self.print_draft);
+        // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
+        if keep.handling == Handling::Label {
+            keep.set_handling(Handling::Size);
+        }
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
-        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, a choice
-        // left over from another document falls back to the whole document.
-        let which = match (selected.is_empty(), keep.which) {
-            (false, _) => Which::Selected,
-            (true, Which::Selected) => Which::All,
-            (true, other) => other,
-        };
+        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, the whole
+        // document.
+        let which = if selected.is_empty() { Which::All } else { Which::Selected };
+        // Copies, pages, the layout with its own options and orientation are this job's, and start
+        // from the defaults each time the dialog opens: ISO 32000-2 Table 147 initialises them per
+        // document when the print dialog opens (NumCopies, "typically 1"; PrintPageRange). The
+        // choices that describe how this computer prints (two-sided, grayscale, collate, sizing,
+        // Comments & forms, a booklet's binding) carry over, and are remembered across restarts
+        // (#2001).
+        let fresh = PrintDraft::default();
         self.print_draft = PrintDraft {
+            copies: fresh.copies,
+            range: fresh.range,
+            subset: fresh.subset,
+            reverse: fresh.reverse,
+            handling: fresh.handling,
+            per_sheet: fresh.per_sheet,
+            custom_grid: fresh.custom_grid,
+            cols: fresh.cols,
+            rows: fresh.rows,
+            order: fresh.order,
+            border: fresh.border,
+            auto_rotate: fresh.auto_rotate,
+            booklet_subset: fresh.booklet_subset,
+            poster_scale: fresh.poster_scale,
+            overlap: fresh.overlap,
+            cut_marks: fresh.cut_marks,
+            label_flip: fresh.label_flip,
+            orientation: fresh.orientation,
             crops: Vec::new(),
             crop_pages: None,
             printers,
@@ -424,7 +453,16 @@ impl PdfCraftApp {
                     }
                 }
             }
-            Some(printer) => self.send_to_printer(printer, bytes, self.print_draft.job(&name)),
+            Some(printer) => {
+                let mut job = self.print_draft.job(&name);
+                // CUPS is told which way the sheets run (#2713), unless a driver choice already
+                // says; Windows' print ticket already is.
+                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                if let Ok(sheets) = print::layout(&sizes, &settings) {
+                    print::add_cups_orientation(&mut job.options, &sheets);
+                }
+                self.send_to_printer(printer, bytes, job)
+            }
             None => self.save_print_pdf(&name, bytes),
         }
     }
@@ -437,6 +475,7 @@ impl PdfCraftApp {
     fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
+        let spooler = self.spooler.clone();
         std::thread::spawn(move || {
             let repaint = || {
                 if let Some(ctx) = &ctx {
@@ -444,11 +483,15 @@ impl PdfCraftApp {
                 }
             };
             // The receiver may be gone (the app quit): nothing to report to then.
-            let result = spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
-                let _ = tx.send(JobNews::Sent(sent, sheets));
-                repaint();
-            });
-            let _ = tx.send(JobNews::Done(result.map_err(|e| e.to_string())));
+            let result = match &spooler {
+                Some(submit) => submit(&bytes, &job),
+                None => spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                    let _ = tx.send(JobNews::Sent(sent, sheets));
+                    repaint();
+                })
+                .map_err(|e| e.to_string()),
+            };
+            let _ = tx.send(JobNews::Done(result));
             repaint();
         });
         self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });

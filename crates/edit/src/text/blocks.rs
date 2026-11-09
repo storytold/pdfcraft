@@ -44,6 +44,12 @@ impl TextBlock {
         (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
     }
 
+    /// Whether `draft` says what the paragraph says, give or take space around it. Spacing inside
+    /// it has to match: a typed second space is a change.
+    pub fn same_words(&self, draft: &str) -> bool {
+        draft.trim() == self.editor_text.trim()
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -161,6 +167,23 @@ fn edit_script<T: PartialEq>(a: &[T], b: &[T], max: usize) -> Option<Vec<Step>> 
         }
     }
     None
+}
+
+/// For each of `old`'s words, the index in `new` of the word it stays as in the shortest edit from
+/// one to the other (`None` when it goes), or `None` overall past [`MAX_CHANGED_WORDS`] changes.
+pub(crate) fn kept_words<T: PartialEq>(old: &[T], new: &[T]) -> Option<Vec<Option<usize>>> {
+    let mut kept = vec![None; old.len()];
+    let (mut o, mut n) = (0usize, 0usize);
+    for step in edit_script(old, new, MAX_CHANGED_WORDS)? {
+        if step == Step::Keep
+            && let Some(slot) = kept.get_mut(o)
+        {
+            *slot = Some(n);
+        }
+        o = o.saturating_add(usize::from(step != Step::Insert));
+        n = n.saturating_add(usize::from(step != Step::Delete));
+    }
+    Some(kept)
 }
 
 /// Walk Myers' saved frontiers back from the end to the edit script.
@@ -344,6 +367,15 @@ pub(crate) fn paragraph_separator(c: char) -> bool {
     c.is_whitespace() && c != '\u{3000}'
 }
 
+/// Characters that end a row rather than draw a glyph: the Unicode mandatory breaks (UAX #14
+/// class BK: vertical tab, form feed, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR), the
+/// next line (U+0085), the information separators (bidi class B) and CR/LF. Text pasted from a
+/// browser or Word carries these, so a rewrite moves to the next row instead of asking a font
+/// for an outline no face has (#6272).
+pub(crate) fn row_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{001C}'..='\u{001E}' | '\u{2028}' | '\u{2029}')
+}
+
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
 /// those pieces join without a space. Every white-space character is written as one space, so
@@ -435,6 +467,13 @@ pub struct BlockStyle {
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
+    /// For an invisible paragraph whose formatting nobody asked to change: cover and redraw only
+    /// the words the draft changes, and leave the rest as the scan shows them (#3313). The session
+    /// sets this; a caller that sets it should also give `cover`.
+    pub changed_words_only: bool,
+    /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
+    /// on either side that stay (user space).
+    pub cover_between: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
