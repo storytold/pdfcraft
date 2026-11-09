@@ -37,6 +37,13 @@
   and `annotation.reply` carries a review state (`/State`). After
   the rebases those commits are `d3e62ecf6`, `b5a67b098`, `2dfae0fe`/`e043c132`
   being the intermediate pair from the `8d5d39ef` rebase (§4).
+  **§5 p.6 limitation 6 (the publication queue) is done locally in `a639f30c0`**
+  (§4, §6.6): a retryable cabinet failure is retried by the daemon in the
+  background with a doubling backoff and an idempotency key, without waiting for
+  the next commit or the last client leaving; a `409` stops the queue;
+  `pdfcraft_collab_publication_retries_total` counts the attempts. The pushed
+  head, the fork and PR #6622 are unchanged, and nothing was pushed from this
+  session either.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -55,7 +62,7 @@
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`) |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet with an idempotency key, the background publication queue with a backoff, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
@@ -147,13 +154,19 @@ build enables the feature with `trunk build --release --features collab`.
     never silently turns them into something else, and the client does not apply
     them locally. A payload without `shape` is still read as a sticky note for
     the unwritten v1 clients.
-14. **A commit is saved locally first, published second.** `CabinetAdapter`
-    writes the base through `PdfAdapter`, then POSTs
-    `{fileId, bytes, sha256, version, expectedVersion}` to `--callback-url`. Only
-    a `2xx` advances `expectedVersion` and the `CABINET` marker; a `409` refuses
-    the commit (the room is flagged `conflict` in `/health`/`/metrics`, edits
-    keep being accepted), any other failure leaves the room dirty so the next
-    commit or the last-client-leave commit retries the publication.
+14. **A commit is saved locally first, published second — and a retryable
+    failure is queued.** `CabinetAdapter` writes the base through `PdfAdapter`,
+    then POSTs
+    `{fileId, bytes, sha256, version, expectedVersion, idempotencyKey}` to
+    `--callback-url`. Only a `2xx` advances `expectedVersion` and the
+    `CABINET` marker; a `409` refuses the commit (the room is flagged
+    `conflict` in `/health`/`/metrics`, edits keep being accepted) and stops the
+    queue. A network error, `429` or `5xx` is retryable: the room keeps
+    `publishing`, and the transport's queue re-runs the same publication after
+    a doubling backoff, with the same version and the same key
+    (`fileId:version:sha256`), so a lost answer becomes a duplicate to the
+    cabinet, not a second version (§4). A non-retryable `4xx` leaves the room
+    dirty so the next commit retries it, as before.
 15. **The cabinet marker is separate from the base marker.** `--data/<id>/CABINET`
     (`{"version","etag"}`) records what the cabinet holds; it may lag behind
     `CURRENT` exactly by the unpublished commits. Keeping it in `CURRENT` would
@@ -174,8 +187,10 @@ build enables the feature with `trunk build --release --features collab`.
     the base and returns a `Commit`; the transport runs its publication after
     releasing the lock and reports back with `Room::finish`. A second commit of
     the same document while one is publishing gets `busy` (retryable), so two
-    versions cannot reach the cabinet out of order. Moving the call back inside
-    `with_hub` makes one slow cabinet freeze every document in the process —
+    versions cannot reach the cabinet out of order; a retryable failure keeps
+    the room `publishing` for the same reason, and the queue's retry is what
+    releases it (`Room::finish_retry`). Moving the call back inside `with_hub`
+    makes one slow cabinet freeze every document in the process —
     `a_commit_does_not_block_presence_in_another_room` is the guard.
 
 ## 3. Running it
@@ -207,13 +222,18 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   etag, `404` no room and no source, `413` file too large, `502` the source URL
   failed. `fileId` is restricted to `[A-Za-z0-9._-]{1,128}`.
 - Commit callback: `POST --callback-url` with
-  `{fileId, bytes(base64), sha256, version, expectedVersion}` and
-  `Authorization: Bearer $PDFCRAFT_COLLAB_CALLBACK_TOKEN` when the env var is
-  set; `2xx` accepted, `409` conflict, anything else unpublished.
+  `{fileId, bytes(base64), sha256, version, expectedVersion, idempotencyKey}`
+  and `Authorization: Bearer $PDFCRAFT_COLLAB_CALLBACK_TOKEN` when the env var
+  is set, plus the same value in the `Idempotency-Key` header; `2xx` accepted,
+  `409` conflict (and the queue stops), a network error / `429` / `5xx` is
+  retried in the background with a backoff, any other `4xx` is unpublished
+  until the next commit.
 - `/health` → `{"ok":true,"rooms":N,"clients":M,"poisoned":[],"conflict":[]}`;
   `ok` is false when a room's journal failed. `/metrics` adds
-  `pdfcraft_collab_room_read_only{room="…"} 1` and
-  `pdfcraft_collab_room_conflict{room="…"} 1`.
+  `pdfcraft_collab_room_read_only{room="…"} 1`,
+  `pdfcraft_collab_room_conflict{room="…"} 1`,
+  `pdfcraft_collab_forced_commits_total` and
+  `pdfcraft_collab_publication_retries_total`.
 - `--data/<fileId>/` is the durable state: `CURRENT`, `versions/<N>/file.pdf`,
   `journal.jsonl`, `CABINET`. Delete the directory to reset the room. The flat
   `--data/<fileId>.pdf` working copy of earlier sessions is not migrated:
@@ -236,6 +256,80 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The publication queue — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
+
+A commit writes its base locally and then POSTs the file to the cabinet. Until
+now a failed POST was only retried by the next commit or by the last-client-leave
+commit (limitation 6), so a room whose cabinet was down for a minute stayed dirty
+until somebody acted.
+
+- **A retryable failure is queued, not dropped.** `Publication::run` now takes
+  `&self` (it used to consume the box), so the same publication object can be run
+  again with exactly the same payload. `Room::finish` marks a failure as
+  retryable when the adapter says so and the code is not `Conflict`, keeps the
+  room `publishing`, and hands the publication back through
+  `Room::take_retry`; `Hub::finish` returns it to the transport.
+- **The queue lives in the transport, the thread in the daemon.**
+  `collab-ws` keeps one `Queued` entry per document (`publication`, `attempts`,
+  `due_ms`), `WsServer::retry_publications(now_ms)` runs the entries whose
+  backoff elapsed (outside the hub lock, `Room::finish_retry` records the
+  outcome) and `WsServer::spawn_publication_retries(interval)` is the loop the
+  daemon starts with 100 ms. Backoff is `publication_backoff` (default 1 s)
+  doubling per attempt up to `publication_backoff_max` (default 60 s); both are
+  `collab-ws::Config` fields, so a test can use 20 ms.
+- **A retry cannot become a second version.** The queue re-runs the publication
+  of the same base: same `version`, same `expectedVersion`, same `sha256`. The
+  callback also carries an idempotency key, `fileId:version:sha256`, in the body
+  (`idempotencyKey`) and in the `Idempotency-Key` header, so a cabinet that took
+  the bytes but lost the answer recognises the duplicate instead of creating
+  another version. The key is derived, not generated: a retry after a restart
+  sends the same one.
+- **A queued retry keeps the room `publishing`,** so a client commit in the
+  meantime gets `busy` (retryable) rather than a newer base overtaking the
+  queued one (the rule of limitation 11). A successful retry advances
+  `committed_version` and releases the room; if edits arrived while the
+  publication was queued and nobody is connected, the transport publishes that
+  newer base too, so nothing waits for a join.
+- **A `409` stops the queue until a re-seed.** `finish_retry` flags the room
+  `conflict`, releases it, and the entry is dropped: retrying the same
+  `expectedVersion` cannot succeed (RFC §8.2). A `4xx` that a retry would get
+  again (a contract error) is not queued either — only `TransportError`s, `429`
+  and `5xx` are, which is what `Publisher` reports as `PublishError::Retryable`.
+- `/metrics` gains `pdfcraft_collab_publication_retries_total`
+  (`Metrics::publication_retries`, a process counter of background attempts).
+  `/health` is unchanged.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-server` | `a_retryable_publication_failure_is_queued_and_keeps_the_room_busy` (failure → queued → `busy` commit → retry succeeds → room free), `a_failure_no_retry_would_fix_is_not_queued`, and the `409` test now asserts the queue stays empty and the room is released |
+| `collab-ws` | unit `the_publication_backoff_doubles_and_caps`; e2e `a_retryable_publication_failure_is_retried_in_the_background` (a publication that fails once; the queue retries it, `metrics().publication_retries` is 1, the room is clean and not `publishing` when the test ends) |
+| daemon | `tests/publication_retry.rs` `a_lost_callback_answer_is_retried_with_the_same_key_and_one_version`: the real daemon in dev mode with `--callback-url`; the fake cabinet **takes** the first delivery and closes without an answer (the classic lost response), sees the retry as a duplicate of the same key and answers `2xx`. Asserts two deliveries, same `version`/`expectedVersion`/`sha256`/`idempotencyKey` in both, one stored version, `pdfcraft_collab_publication_retries_total 1`, no `conflict`, and that the next commit sends `version 2, expectedVersion 1` — the marker advanced without a second version. |
+| daemon (rooms) | `a_transport_failure_is_retryable_and_a_refused_body_is_not` (503/network → `Retryable`, 400 → `Failed`), and `a_commit_posts_the_file_and_the_versions` now checks `idempotencyKey` |
+
+The existing `a_failed_forced_publication_is_not_retried_in_a_loop` still holds
+and is the guard against the opposite mistake: its publication fails with
+`retryable: false`, so the queue never picks it up and exactly two publications
+run (the forced commit and the last leave).
+
+Gates (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **173**: proto 12, server 24, hub 5, client 12, client-pdf 20, session 5, ws 7 unit, pdf 30, annot 15, daemon 29 + `crash_recovery` 1 + `publication_retry` 1, e2e 12/12 |
+
+What this does **not** cover: the queue is in-process, so a restart loses it —
+an unpublished base is then republished by the next commit, the next join or the
+last leave (the existing paths), and the derived idempotency key still makes
+that repeat a duplicate to the cabinet. A time-based republish for a room that
+goes quiet after a restart is still open. A cabinet that accepts the bytes and
+then answers `4xx` forever leaves the room dirty with the queue empty (the next
+commit retries) — that is deliberate: a `4xx` is the contract being wrong, not a
+transport failure.
 
 ### Restyling a comment and status replies — §5 p.2 / limitation 2 (2026-11-09, local; not pushed)
 
@@ -424,15 +518,16 @@ were the only compaction (limitation 10). Now:
 - `/metrics` gains `pdfcraft_collab_forced_commits_total`
   (`Metrics::forced_commits`, a process counter incremented when a compaction
   writes its base). `/health` is unchanged.
-- A publication that fails leaves the room dirty and is **not** retried by the
-  transport in a loop: the next commit (including the last-leave one) retries
-  it, which is the rule of limitation 6.
+- A publication that fails retryably used to leave the room dirty until the
+  next commit (limitation 6). It now stays `publishing` and is retried by the
+  daemon's queue (§4); a non-retryable failure still leaves the room dirty for
+  the next commit.
 
-What is not covered: a time-based threshold. A room that becomes dirty when a
-publication fails and then sees no further edit waits for the next edit, a
-join, or the last-client-leave commit (limitation 6). The base write itself
-(serialising the PDF) is under the hub lock, like a client commit; only the
-cabinet POST is outside.
+What is not covered: a time-based threshold for the *journal*. A room that
+becomes dirty when a non-retryable publication fails and then sees no further
+edit waits for the next edit, a join, or the last-client-leave commit. The base
+write itself (serialising the PDF) is under the hub lock, like a client commit;
+only the cabinet POST is outside.
 
 Gates at `8fc898bae` (host `agents`, toolchain 1.99.1, `-j 8`):
 
@@ -928,16 +1023,21 @@ Ordered by the risk they pose to production.
    copy fits `MAX_RESTORE_PAGE_BYTES` (160 KiB); a larger page is deleted without
    a copy. Copies are memory-bounded (64 / 64 MiB) and are rebuilt by replay, not
    persisted on their own.
-6. **The cabinet contract is implemented, the production loop is not closed.**
-   `POST /v1/sessions`, the commit callback and `409` exist (RFC §8.2). What is
-   still missing: an idempotent retry/queue for a failed publication (today the
-   next commit or the last-client-leave commit retries it), an endpoint to
-   resolve a `conflict` room (the cabinet decides "new session over my version"
-   or "save a copy" — the daemon only refuses), and `https` without a proxy.
-   The shared cabinet contract also lets the cabinet number versions and return
-   its own `{version, etag}` from the callback; v1 ignores that body and uses
-   the room's numbering, so a cabinet with its own numbering needs an adapter
-   (RFC §8.2 says so explicitly).
+6. **The cabinet contract is implemented, the retry queue is in place, the
+   production loop is still open.** `POST /v1/sessions`, the commit callback,
+   the background publication queue and `409` exist (RFC §8.2, §4). A failed
+   POST (network error, `429`, `5xx`) is retried by the daemon with an
+   exponential backoff (1 s doubling to 60 s) under a derived idempotency key,
+   without waiting for the next commit or the last-client-leave commit; a
+   retry publishes the same version, never a second one, and a `409` stops the
+   queue until an operator re-seeds the room (§4). What is still missing: the
+   queue is in-process, so a restart falls back to the next commit/join/leave;
+   an endpoint to resolve a `conflict` room (the cabinet decides "new session
+   over my version" or "save a copy" — the daemon only refuses); and `https`
+   without a proxy. The shared cabinet contract also lets the cabinet number
+   versions and return its own `{version, etag}` from the callback; v1 ignores
+   that body and uses the room's numbering, so a cabinet with its own numbering
+   needs an adapter (RFC §8.2 says so explicitly).
 7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
@@ -965,9 +1065,10 @@ Ordered by the risk they pose to production.
     cabinet that does not answer delays the committer's connection, not the
     other documents. A second commit of the same document while one is
     publishing gets `busy` (retryable), so two versions cannot reach the
-    cabinet out of order. What is still missing is a publication *queue*: a
-    failed POST is retried by the next commit or the last-client-leave commit,
-    not in the background.
+    cabinet out of order. ~~What is still missing is a publication *queue*.~~
+    Closed in §4: a retryable failure stays `publishing` and is retried by the
+    daemon's queue with a backoff; the queue is in-process, so a restart falls
+    back to the next commit, join or leave.
 12. **The legacy annotation payload lives until the flag ships.** A payload
     without `shape` is read as a sticky note; RFC §16 p. 10 sets the deadline —
     the first release with `collab` on by default makes `shape` mandatory.
@@ -1011,8 +1112,9 @@ in flight) is retried by the next message or by that publication's completion; a
 `409` sets the room's `conflict` flag and stops further forced commits, the same
 rule as a manual commit. `/metrics` gains
 `pdfcraft_collab_forced_commits_total`. What is still open here: a time-based
-threshold, so a room that is dirty after a failed publication and then sees no
-edit waits for a join or the last leave; and a kill between the base write and
+threshold, so a room whose journal stays small and then sees no edit waits for a
+join or the last leave (a failed *publication* is queued and retried, §4); and a
+kill between the base write and
 the `CURRENT` rename is still covered at the `Store` level only. The fault
 injection limitation 1 asked for is done for the real process in the
 journal→base window (`apps/pdfcraft-collab-server/tests/crash_recovery.rs`,
@@ -1137,8 +1239,8 @@ has to be repeated for PdfCraft's origin/CSP.
   `a_commit_does_not_block_presence_in_another_room` (two rooms, the cabinet
   call held open on a gate, presence in the other room still arrives; fails on
   the 5 s read timeout when the call is put back under the lock).
-- Still open here: publication retry/queue, an endpoint to resolve a conflict
-  room, `https` without a proxy (limitations 6–7).
+- Still open here: the `conflict`-resolution endpoint and `https` without a
+  proxy (limitation 6–7). The publication queue is done in §4 (in-process).
 
 ### 6.5 Presence cursors and undo — done in this branch
 
@@ -1212,6 +1314,17 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
+- **The publication queue (limitation 6 / §5 p.6) is done locally in §4**
+  (2026-11-09, not pushed): a retryable cabinet failure is retried by the
+  daemon's background queue with a doubling backoff (1 s → 60 s) and a derived
+  idempotency key, the room stays `publishing` while it is queued (so a new
+  commit is `busy` and no second version is created), a `409` stops the queue,
+  and `/metrics` exposes `pdfcraft_collab_publication_retries_total`. Tests:
+  `collab-server` queue state machine, `collab-ws` e2e retry and backoff,
+  `apps/pdfcraft-collab-server/tests/publication_retry.rs` (lost answer →
+  retry → the cabinet sees a duplicate and stores one version). Still open: the
+  queue is in-process (a restart falls back to the next commit/join/leave) and
+  the `conflict`-resolution endpoint.
 - **Rebase onto `origin/main`.** The branch had already been rebased onto
   `43f24aa1` (2026-11-08; that rebase had one conflict in
   `crates/engine/src/session/editing.rs` — main's
@@ -1276,7 +1389,8 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 - Remaining limitations stated in that body: no web client/host bridge
   (§6.3) — **since closed locally in `81a92f32f`, not yet in the pushed head or
   that body** — no publication queue (a failed cabinet POST is retried only by
-  the next commit or the last-client-leave commit), no endpoint to resolve a
+  the next commit or the last-client-leave commit) — **since closed locally in
+  §4 (the queue is in-process)**, no endpoint to resolve a
   `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
   160 KiB, text selections not shared, and signatures / custom stamps /
   redaction / attachments / page insert-duplicate-split refused as
@@ -1332,7 +1446,23 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   `a_commit_does_not_block_presence_in_another_room` fails on its 5 s timeout.
   `Hub::send` returns a `Pending` commit; a caller that drops it without
   `Hub::finish` leaves the room `publishing` and every later commit answers
-  `busy`.
+  `busy`. The same holds for a queued retry: take it with `Room::take_retry`,
+  run it outside the lock, and always report back with `Room::finish_retry` —
+  a dropped retry leaves the room `publishing` for ever.
+- The publication queue is one entry per document (`Shared::retries`) and one
+  background thread (`WsServer::spawn_publication_retries`, started by the
+  daemon with a 100 ms tick). The backoff is `Config::publication_backoff` /
+  `publication_backoff_max` (1 s / 60 s by default; tests pass 20 ms). A
+  `retryable: false` failure is never queued: that is the difference between
+  "the cabinet did not answer" and "the cabinet refused the body", and queueing
+  the second would spin forever. The queue does not survive a restart: the
+  room comes back dirty and the next commit, join or leave republishes it with
+  the same derived `idempotencyKey`.
+- The idempotency key is `fileId:version:sha256`, in the body
+  (`idempotencyKey`) and the `Idempotency-Key` header. It names the payload, so
+  a retry of the same version carries the same key and the cabinet can answer
+  "already have it"; do not make it random per attempt — that would turn a lost
+  answer into a second version.
 - The daemon's HTTP client is plain `http://` only and refuses redirects,
   chunked responses and `https`. If the cabinet endpoint needs any of those,
   fix the daemon, do not "just use curl".
