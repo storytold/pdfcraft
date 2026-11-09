@@ -3216,10 +3216,17 @@ mod area_shrink_tests {
                     ImageData::Luma(_) => gray.iter().zip(&alpha).flat_map(|(g, a)| [*g, *g, *g, *a]).collect(),
                     ImageData::Rgb(_) => rgb.chunks_exact(3).zip(&alpha).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect(),
                 };
+                // Worked out through `AlphaColor`, so that both integer paths are held to something
+                // neither of them computed: channels swapped in both would otherwise still agree.
+                let float: Vec<u8> = whole
+                    .chunks_exact(4)
+                    .flat_map(|c| AlphaColor::from_rgba8(c[0], c[1], c[2], c[3]).premultiply().to_rgba8().to_u8_array())
+                    .collect();
                 premultiply_rgba(&mut whole);
+                assert_eq!(whole, float, "{source:?} → {target:?}");
                 assert_eq!(
                     area_shrink_premultiplied(color, &alpha, source, target),
-                    area_shrink::<4>(&whole, source, target),
+                    area_shrink::<4>(&float, source, target),
                     "{source:?} → {target:?}"
                 );
             }
