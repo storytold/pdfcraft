@@ -1537,6 +1537,21 @@ fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
 }
 
 #[test]
+fn continuous_two_page_prefetch_counts_rows_from_the_end_of_the_row_shown() {
+    let mut two = view(20, PageLayout::TwoUp, true);
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[8]), [9, 10, 11, 12, 13], "the right page off to the side, then two rows");
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[9]), [8, 7, 6, 5, 4], "the left page off to the side, then two rows");
+    two.cover = true;
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[0]), [1, 2, 3, 4], "the cover is a row of its own");
+    assert_eq!(scroll_prefetch(&two, &[3]), [4, 5, 6, 7, 8]);
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[4]), [3, 2, 1, 0]);
+}
+
+#[test]
 fn scrolling_the_other_way_drops_the_prefetch_from_the_queue() {
     let info = DocInfo {
         pages: (0..20)
