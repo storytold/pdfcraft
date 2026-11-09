@@ -442,26 +442,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     if settings.discard_print_settings
         && let Some(root) = root
     {
-        const PRINT: [&[u8]; 7] = [b"PrintScaling", b"Duplex", b"PickTrayByPDFSize", b"PrintPageRange", b"NumCopies", b"PrintArea", b"PrintClip"];
-        let vp = doc.get(root).as_dict().and_then(|c| c.get(b"ViewerPreferences").cloned());
-        let edit = |d: &mut pdfcraft_cos::Dict| PRINT.iter().filter(|k| d.remove(k).is_some()).count();
-        match vp {
-            Some(Object::Ref(r)) => {
-                let mut n = 0;
-                doc.update_dict(r, |d| n = edit(d))?;
-                report.print_settings += n;
-            }
-            Some(Object::Dict(_)) => {
-                let mut n = 0;
-                doc.update_dict(root, |c| {
-                    if let Some(Object::Dict(d)) = c.get_mut(b"ViewerPreferences") {
-                        n = edit(d);
-                    }
-                })?;
-                report.print_settings += n;
-            }
-            _ => {}
-        }
+        report.print_settings += discard_print_settings(doc, root)?;
     }
     if settings.discard_form_actions {
         report.form_actions = form_actions::discard(doc)?;
@@ -652,6 +633,24 @@ pub(crate) fn stored_len(s: &Stream) -> Option<usize> {
     let mut out = Vec::new();
     serialize(&Object::Dict(dict), &mut out);
     out.len().checked_add(s.raw.len())
+}
+
+/// Removes the print entries from the catalog's /ViewerPreferences, returning how many went.
+fn discard_print_settings(doc: &mut Document, root: ObjRef) -> Result<usize, OptimizeError> {
+    const PRINT: [&[u8]; 7] = [b"PrintScaling", b"Duplex", b"PickTrayByPDFSize", b"PrintPageRange", b"NumCopies", b"PrintArea", b"PrintClip"];
+    let vp = doc.get(root).as_dict().and_then(|c| c.get(b"ViewerPreferences").cloned());
+    let edit = |d: &mut pdfcraft_cos::Dict| PRINT.iter().filter(|k| d.remove(k).is_some()).count();
+    let mut n = 0;
+    match vp {
+        Some(Object::Ref(r)) => doc.update_dict(r, |d| n = edit(d))?,
+        Some(Object::Dict(_)) => doc.update_dict(root, |c| {
+            if let Some(Object::Dict(d)) = c.get_mut(b"ViewerPreferences") {
+                n = edit(d);
+            }
+        })?,
+        _ => {}
+    }
+    Ok(n)
 }
 
 /// Remove the search index entries of the catalog's `/PieceInfo` ([`Settings::discard_search_index`])
