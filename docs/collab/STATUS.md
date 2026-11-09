@@ -49,9 +49,19 @@
   including viewers; changing it writes no operation and moves no version. The
   pushed head, the fork and PR #6622 are unchanged, and nothing was pushed from
   this session either.
+  **§5 p.6 / limitation 6 (the `conflict` resolution endpoint) is done locally
+  in `62d48d30a`** (§4, §6.4): `POST /v1/sessions/{fileId}/resolve` with a
+  service token (the same RS256 JWT, `owner`/`editor`) takes the cabinet's
+  current version and etag, clears the `conflict` flag, adopts the marker and
+  lets the next commit publish again; a wrong version, another file, a role
+  without write access, a missing room or a second resolve are refused without
+  touching the room. The marker now keeps both numberings (the room's and the
+  cabinet's), so a resolution survives the publication that follows and the
+  metric `pdfcraft_collab_conflicts_resolved_total` counts it. Not pushed.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
-- Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
+- Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
+  daemon: `docs/collab/server.md`
 - Task and acceptance criteria: `../../TASK.md` in the cabinet-office checkout
 
 ## 1. What is built
@@ -59,15 +69,15 @@
 | Path | Role |
 |---|---|
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
-| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`) |
+| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`) and its before/expect CAS; the review-state names of a status reply |
-| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
+| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet with an idempotency key, the background publication queue with a backoff, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`) |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
@@ -163,8 +173,10 @@ build enables the feature with `trunk build --release --features collab`.
     failure is queued.** `CabinetAdapter` writes the base through `PdfAdapter`,
     then POSTs
     `{fileId, bytes, sha256, version, expectedVersion, idempotencyKey}` to
-    `--callback-url`. Only a `2xx` advances `expectedVersion` and the
-    `CABINET` marker; a `409` refuses the commit (the room is flagged
+    `--callback-url`. Only a `2xx` advances the `CABINET` marker; its body
+    `{version, etag}` (the shared contract) is the copy the room adopts and the
+    next `expectedVersion`, and an empty body falls back to
+    `expectedVersion + 1`. A `409` refuses the commit (the room is flagged
     `conflict` in `/health`/`/metrics`, edits keep being accepted) and stops the
     queue. A network error, `429` or `5xx` is retryable: the room keeps
     `publishing`, and the transport's queue re-runs the same publication after
@@ -173,7 +185,8 @@ build enables the feature with `trunk build --release --features collab`.
     cabinet, not a second version (§4). A non-retryable `4xx` leaves the room
     dirty so the next commit retries it, as before.
 15. **The cabinet marker is separate from the base marker.** `--data/<id>/CABINET`
-    (`{"version","etag"}`) records what the cabinet holds; it may lag behind
+    (`{"version","etag","expected"}`, where `expected` is optional and defaults
+    to `version`) records what the cabinet holds; it may lag behind
     `CURRENT` exactly by the unpublished commits. Keeping it in `CURRENT` would
     lose the difference and a restart would not know the room is dirty.
 16. **The etag is `sha256:<hex>` of the file bytes, computed by the daemon.**
@@ -187,7 +200,8 @@ build enables the feature with `trunk build --release --features collab`.
     session refuses commits, not edits: the journal keeps the work, `/health`
     says `conflict:["file-N"]`, and the cabinet decides (a new session over its
     version, or "save a copy"). Blocking writes would lose the work anyway and
-    make the editor look broken.
+    make the editor look broken. The first option is the operator's
+    `POST /v1/sessions/{fileId}/resolve` (decision 19).
 18. **A commit's cabinet call runs outside the hub lock.** `Room::commit` writes
     the base and returns a `Commit`; the transport runs its publication after
     releasing the lock and reports back with `Room::finish`. A second commit of
@@ -197,6 +211,26 @@ build enables the feature with `trunk build --release --features collab`.
     releases it (`Room::finish_retry`). Moving the call back inside `with_hub`
     makes one slow cabinet freeze every document in the process —
     `a_commit_does_not_block_presence_in_another_room` is the guard.
+19. **A conflict is resolved by naming the cabinet's copy, once.** `409` stops
+    the queue because retrying the same `expectedVersion` cannot succeed, so
+    the way out is explicit: `POST /v1/sessions/{fileId}/resolve` with
+    `{expectedVersion, etag}` and a service token (the same RS256 JWT,
+    `owner`/`editor`). `Room::resolve_conflict` checks that the room *is* in
+    conflict and is not publishing (a publication in flight was addressed to
+    the old marker), that the version is newer than the one the session knows
+    (a repeat would fail the same way), then writes the marker and clears the
+    flag. It does not publish by itself and does not move `version`: the work
+    the cabinet never took is still in the journal, the room stays dirty, and
+    the next commit (button, last leave, forced compaction) publishes it with
+    the adopted `expectedVersion`. The marker therefore needs two numbers —
+    `version` (the room's, for the dirty check after a restart) and `expected`
+    (the cabinet's, for the next publication) — kept in `CABINET`; they are
+    equal until a resolution. The `{version, etag}` answer to that next
+    publication moves `expected` on, so a resolution lasts for the session
+    rather than one commit. A second resolve is `409 not_conflict`; a wrong
+    version `400`; another file's token, a viewer's role or no room is
+    refused; none of them changes the room. `/metrics` gains
+    `pdfcraft_collab_conflicts_resolved_total`.
 
 ## 3. Running it
 
@@ -226,6 +260,16 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   token for another file, `400` bad body/etag, `409` the room holds another
   etag, `404` no room and no source, `413` file too large, `502` the source URL
   failed. `fileId` is restricted to `[A-Za-z0-9._-]{1,128}`.
+- `POST /v1/sessions/{fileId}/resolve` (`--control`, loopback,
+  `Authorization: Bearer <service token>` — the same RS256 JWT, `owner`/`editor`,
+  `fileId` must match the path): `{"expectedVersion": N, "etag": "sha256:<64 hex>"}`
+  → `200` `{"fileId","version","epoch","etag","cabinetVersion","conflict":false}`;
+  `400` bad body/etag or a version not newer than the room's, `401` no token,
+  `403` another file or a role without write access, `404` no room,
+  `409 not_conflict` (nothing to resolve), `409 busy` (a publication in flight),
+  `503` hub unavailable. Every refusal leaves the room unchanged. On success the
+  `conflict` flag is gone (`/health`, `/metrics`), the marker adopts
+  `{expectedVersion, etag}`, and the next commit publishes with it.
 - Commit callback: `POST --callback-url` with
   `{fileId, bytes(base64), sha256, version, expectedVersion, idempotencyKey}`
   and `Authorization: Bearer $PDFCRAFT_COLLAB_CALLBACK_TOKEN` when the env var
@@ -237,10 +281,12 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   `ok` is false when a room's journal failed. `/metrics` adds
   `pdfcraft_collab_room_read_only{room="…"} 1`,
   `pdfcraft_collab_room_conflict{room="…"} 1`,
-  `pdfcraft_collab_forced_commits_total` and
-  `pdfcraft_collab_publication_retries_total`.
+  `pdfcraft_collab_forced_commits_total`,
+  `pdfcraft_collab_publication_retries_total` and
+  `pdfcraft_collab_conflicts_resolved_total`.
 - `--data/<fileId>/` is the durable state: `CURRENT`, `versions/<N>/file.pdf`,
-  `journal.jsonl`, `CABINET`. Delete the directory to reset the room. The flat
+  `journal.jsonl`, `CABINET` (`{"version","etag","expected"}`: the room's
+  version of the published base, the etag, and the cabinet's numbering of it). Delete the directory to reset the room. The flat
   `--data/<fileId>.pdf` working copy of earlier sessions is not migrated:
   nothing was deployed, so only local scratch data is affected.
 - TLS: neither the callback nor a source `url` speaks `https`; both are expected
@@ -261,6 +307,82 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Conflict resolution — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
+
+`62d48d30a` on `fa89dff5b`. A `409` from the cabinet stopped the publication
+queue for good: nothing in the daemon could change the room's expectation, so
+the only ways out were a new session over the cabinet's version or deleting the
+room (limitation 6). The operator's way out is now an endpoint:
+
+- **`POST /v1/sessions/{fileId}/resolve`** on the control plane, `Authorization:
+  Bearer <service token>` — the same RS256 JWT the session uses, verified by the
+  same `Verifier`; `claims.file_id` must equal the path and the role must be
+  `owner`/`editor` (a commenter/viewer cannot save the file, so it cannot resolve
+  it). Body `{"expectedVersion": N, "etag": "sha256:<64 hex>"}`; etags are
+  normalised to lower-case hex. `200` answers the room's `version`/`epoch`, the
+  adopted `etag`, `cabinetVersion` and `conflict: false`. Refusals: `401` no/bad
+  token, `403` another file or a read-only role, `404` no room, `400` bad body or
+  a version not newer than the room's, `409 not_conflict` (also a repeat),
+  `409 busy` (a publication in flight), `503` hub unavailable. None changes the
+  room.
+- **`Room::resolve_conflict`** checks, in order: the room is in `conflict`; no
+  publication is in flight (it was addressed to the old marker); the version is
+  newer than the one the session already holds (a repeat or a roll-back would
+  fail the same way); then `Adapter::set_published` writes the marker and the
+  flag is cleared. It does not publish and does not move `version`: the room is
+  still `dirty`, and the next commit (button, last leave, forced compaction)
+  publishes the journal's work with the adopted `expectedVersion`.
+- **The marker keeps two numberings.** `CABINET` is now
+  `{"version","etag","expected"}`: `version` is the room's version of the
+  published base (what `startup`/`is_dirty` use after a restart), `expected` the
+  cabinet's numbering of the same copy (the next `expectedVersion`). They are
+  equal until a resolution; `expected` is `#[serde(default)]`, so an older
+  marker is read as `expected = version`. Without this, resolving against an
+  external version would either make the next commit fail again or make a
+  restart believe unpublished work was saved.
+- **The callback answer is used.** `Publisher::publish` now parses the `2xx`
+  body `{version, etag}` (INTEGRATION.md §5.2) and that copy is what the room
+  adopts; an empty or unreadable body falls back to `expectedVersion + 1` and
+  `sha256:<hex>` of the published bytes. This is what makes a resolution last for
+  the session, not one commit.
+- **`WsServer::resolve_conflict`** moves the marker under the hub lock (so no
+  publication can run with the old one) and counts successes in
+  `Shared::conflicts_resolved`, exposed as
+  `pdfcraft_collab_conflicts_resolved_total`. `/health`'s `conflict` list and
+  `/metrics`'s `pdfcraft_collab_room_conflict` are derived from the room, so they
+  clear as soon as the resolve succeeds.
+- Operation of the daemon (endpoints, codes, conflict lifecycle, metrics) is
+  written down in `docs/collab/server.md`, and RFC §8.2/§9/§16 p.6 carry the
+  contract.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-server` | `an_operator_resolution_adopts_the_cabinets_marker_and_clears_the_conflict` (conflict → resolve → flag gone, marker adopted, still dirty; a repeat is refused and changes nothing), `a_resolution_must_name_a_version_the_cabinet_moved_to` (5/4/0 refused as `invalid` against a known 5; 6 accepted), `a_resolution_waits_for_a_publication_in_flight` (a conflicted room committed again → resolve is `busy`, nothing moves, the publication's own answer decides) |
+| `collab-ws` | `a_resolution_needs_a_room_and_a_conflict` (`Missing`/`NotInConflict`, no counter increment) |
+| daemon rooms | `an_operator_resolution_lets_the_next_commits_publish_again`: a cabinet holding version 7 refuses two commits (both `expectedVersion 0`, queue stopped); resolve →7; the next commit sends `version 2, expectedVersion 7` with the derived key, the cabinet answers `{version: 8}`, and the commit after that sends `expectedVersion 8` |
+| daemon control | `an_operator_resolves_a_conflict_and_a_second_call_is_refused`: conflict through a real callback `409`; 401/403 (another file, viewer)/400 (bad etag, version 0)/404; then a 200 with `version 1` (unmoved), `cabinetVersion 4`, `conflict:false`; metrics show no conflict and `conflicts_resolved 1`; a second resolve is `409 not_conflict` and is not counted |
+| daemon e2e (`tests/conflict_resolve.rs`) | `a_conflict_is_resolved_once_and_the_next_commits_publish_again`: the real daemon in dev mode against a fake cabinet holding version 7 — the commit is refused, `/health` and `/metrics` flag the room, a second commit is refused with the same expectation, no token is `401`, resolve is accepted, `/health`/`/metrics` clear and count 1, a second resolve is `409`, the next commit reaches the cabinet with `expectedVersion 7` and the derived idempotency key, the cabinet stores one version (8), the commit after that expects 8 |
+
+Gates at `62d48d30a` (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **182**: proto 12, server 27, hub 5, client 13, client-pdf 20, session 5, ws 8 unit, pdf 30, annot 15, daemon 31 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1, e2e 13/13 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, 13/13 (inside the run above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+
+What this does **not** cover: the resolve does not publish by itself, so a room
+with no further commit, no join and no last leave waits for one of those (the
+queue is in-process, as before); the cabinet's own numbering is taken from the
+callback body, and a cabinet that reuses numbers would need an adapter; a
+conflict caused by the dev-mode mirror changing needs the operator to name the
+mirror file's etag (the source file is the cabinet there); and nothing was run
+against a real cabinet.
 
 ### Presence selections — §5 p.4 / limitation 4 (2026-11-09, local; not pushed)
 
@@ -1105,14 +1227,19 @@ Ordered by the risk they pose to production.
    exponential backoff (1 s doubling to 60 s) under a derived idempotency key,
    without waiting for the next commit or the last-client-leave commit; a
    retry publishes the same version, never a second one, and a `409` stops the
-   queue until an operator re-seeds the room (§4). What is still missing: the
-   queue is in-process, so a restart falls back to the next commit/join/leave;
-   an endpoint to resolve a `conflict` room (the cabinet decides "new session
-   over my version" or "save a copy" — the daemon only refuses); and `https`
-   without a proxy. The shared cabinet contract also lets the cabinet number
-   versions and return its own `{version, etag}` from the callback; v1 ignores
-   that body and uses the room's numbering, so a cabinet with its own numbering
-   needs an adapter (RFC §8.2 says so explicitly).
+   queue until an operator re-seeds the room (§4). The operator's way out is
+   `POST /v1/sessions/{fileId}/resolve` (`62d48d30a`, §4): it names the
+   cabinet's current version and etag, clears the flag and lets the next commit
+   publish again; a repeat, a wrong version, another file or a role without
+   write access is refused without a change. What is still missing: the queue is
+   in-process, so a restart falls back to the next commit/join/leave; the
+   resolve does not republish by itself (a room that then goes quiet waits for a
+   commit, a join or the last leave); and `https` without a proxy. The shared
+   cabinet contract also lets the cabinet number versions and return its own
+   `{version, etag}` from the callback; the daemon now adopts that body as the
+   copy it holds (falling back to `expectedVersion + 1`) and keeps both numbers
+   in `CABINET`, so a cabinet with its own numbering works as long as that
+   number is per file and monotonic.
 7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
@@ -1131,8 +1258,9 @@ Ordered by the risk they pose to production.
     `pdfcraft_collab_forced_commits_total` counts the compactions. What is still
     open: a time-based threshold (a room that is dirty with no further edits
     waits for a join or the last leave), and a `409` from the cabinet stops
-    forced commits (the room is flagged `conflict`, an operator re-seeds) —
-    retrying the same `expectedVersion` cannot succeed. Bases are pruned to the
+    forced commits (the room is flagged `conflict` until the operator's
+    `POST /v1/sessions/{fileId}/resolve`, §4) — retrying the same
+    `expectedVersion` cannot succeed. Bases are pruned to the
     one `CURRENT` names, so disk is one PDF plus the journal, not one PDF per
     commit.
 11. ~~The callback is synchronous inside the hub lock~~ — the base is written
@@ -1185,7 +1313,8 @@ compacts itself: `Room::commit_now` writes the base under the hub lock, the
 another compaction if edits arrived while it ran. A `busy` answer (a publication
 in flight) is retried by the next message or by that publication's completion; a
 `409` sets the room's `conflict` flag and stops further forced commits, the same
-rule as a manual commit. `/metrics` gains
+rule as a manual commit; the flag clears through the operator's resolve (§4),
+after which the threshold is due again on the next call. `/metrics` gains
 `pdfcraft_collab_forced_commits_total`. What is still open here: a time-based
 threshold, so a room whose journal stays small and then sees no edit waits for a
 join or the last leave (a failed *publication* is queued and retried, §4); and a
@@ -1314,8 +1443,11 @@ has to be repeated for PdfCraft's origin/CSP.
   `a_commit_does_not_block_presence_in_another_room` (two rooms, the cabinet
   call held open on a gate, presence in the other room still arrives; fails on
   the 5 s read timeout when the call is put back under the lock).
-- Still open here: the `conflict`-resolution endpoint and `https` without a
-  proxy (limitation 6–7). The publication queue is done in §4 (in-process).
+- **Done since:** the `conflict`-resolution endpoint
+  (`POST /v1/sessions/{fileId}/resolve`, §4, `62d48d30a`) and the callback's
+  `{version, etag}` answer (the marker keeps the room's and the cabinet's
+  numbering). Still open here: `https` without a proxy (limitation 7). The
+  publication queue is done in §4 (in-process).
 
 ### 6.5 Presence cursors and undo — done in this branch
 
@@ -1405,9 +1537,11 @@ comments, per-line range geometry, caret).
   and `/metrics` exposes `pdfcraft_collab_publication_retries_total`. Tests:
   `collab-server` queue state machine, `collab-ws` e2e retry and backoff,
   `apps/pdfcraft-collab-server/tests/publication_retry.rs` (lost answer →
-  retry → the cabinet sees a duplicate and stores one version). Still open: the
-  queue is in-process (a restart falls back to the next commit/join/leave) and
-  the `conflict`-resolution endpoint.
+  retry → the cabinet sees a duplicate and stores one version). **The
+  `conflict`-resolution endpoint is done in `62d48d30a`** (`POST
+  /v1/sessions/{fileId}/resolve`, §4). Still open: the queue is in-process (a
+  restart falls back to the next commit/join/leave), and a resolved room waits
+  for the next commit/join/leave to republish.
 - **Rebase onto `origin/main`.** The branch had already been rebased onto
   `43f24aa1` (2026-11-08; that rebase had one conflict in
   `crates/engine/src/session/editing.rs` — main's
@@ -1473,11 +1607,11 @@ comments, per-line range geometry, caret).
   (§6.3) — **since closed locally in `81a92f32f`, not yet in the pushed head or
   that body** — no publication queue (a failed cabinet POST is retried only by
   the next commit or the last-client-leave commit) — **since closed locally in
-  §4 (the queue is in-process)**, no endpoint to resolve a
-  `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
-  160 KiB, text selections not shared, and signatures / custom stamps /
-  redaction / attachments / page insert-duplicate-split refused as
-  `unsupported` (insert and duplicate are shared since `b13933e9b`, §4; the
+  §4 (the queue is in-process)** — no endpoint to resolve a `conflict` room —
+  **since closed locally in `62d48d30a`, §4** — WSS/TLS behind a reverse proxy,
+  page restore capped at 160 KiB, text selections not shared, and signatures /
+  custom stamps / redaction / attachments / page insert-duplicate-split refused
+  as `unsupported` (insert and duplicate are shared since `b13933e9b`, §4; the
   body and the pushed head still say the old list).
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
   limitation 11 (§8.2, §9, §16 p. 9).
