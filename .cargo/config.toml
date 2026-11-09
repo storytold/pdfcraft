@@ -1,2 +1,7 @@
 [alias]
 xtask = "run -p xtask --"
+
+# WebAssembly SIMD (every current browser has it; there's no runtime detection on wasm). The OCR
+# engine's kernels (rten-simd) and other vectorised code only use it when compiled in.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
