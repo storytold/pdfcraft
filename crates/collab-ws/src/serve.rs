@@ -8,7 +8,7 @@
 
 use crate::token::{TokenError, Verifier};
 use pdfcraft_collab_hub::{ClientId, Hub, Pending};
-use pdfcraft_collab_proto::{ActorId, ClientMessage, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
+use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
 use pdfcraft_collab_server::Adapter;
 use std::collections::HashMap;
 use std::io;
@@ -65,6 +65,9 @@ struct Shared<A: Adapter> {
     /// Commits that have written their base and wait for the cabinet call.
     /// The lock is released before they run (RFC §16, limitation 9).
     pending: Vec<Pending>,
+    /// Server-initiated journal compactions so far (limitation 10). A counter,
+    /// not a gauge: it only grows, and `/metrics` exposes it as a `_total`.
+    forced_commits: u64,
 }
 
 impl<A: Adapter> Shared<A> {
@@ -104,11 +107,23 @@ impl<A: Adapter> Shared<A> {
     fn take_pending(&mut self) -> Vec<Pending> {
         std::mem::take(&mut self.pending)
     }
+
+    /// Queue a journal compaction if the room crossed its threshold (RFC §4.6,
+    /// limitation 10). The base is written here under the lock; the caller runs
+    /// the returned publication outside it. A `busy` room (a publication
+    /// already in flight) queues nothing: the threshold stays crossed, so the
+    /// next message or the end of that publication retries.
+    fn queue_forced(&mut self, doc: &DocKey) {
+        if let Some(pending) = self.hub.forced_commit(doc) {
+            self.forced_commits = self.forced_commits.saturating_add(1);
+            self.pending.push(pending);
+        }
+    }
 }
 
 impl<A: Adapter> WsServer<A> {
     pub fn new(hub: Hub<A>, verifier: Arc<dyn Verifier>, config: Config) -> Self {
-        Self { shared: Arc::new(Mutex::new(Shared { hub, sinks: HashMap::new(), pending: Vec::new() })), verifier, config }
+        Self { shared: Arc::new(Mutex::new(Shared { hub, sinks: HashMap::new(), pending: Vec::new(), forced_commits: 0 })), verifier, config }
     }
 
     /// Run the cabinet calls of commits that were prepared under the lock, and
@@ -117,9 +132,23 @@ impl<A: Adapter> WsServer<A> {
     /// documents in the process (RFC §16).
     fn run_pending(&self, mut pending: Vec<Pending>) {
         while let Some(mut item) = pending.pop() {
+            let doc = item.doc().clone();
             let outcome = item.publish();
             let Ok(mut shared) = lock(&self.shared) else { return };
+            let published = outcome.is_ok();
             shared.hub.finish(item, outcome);
+            // Edits accepted while the publication ran may have crossed the
+            // threshold again: the compaction is not lost behind the lock.
+            if published && shared.hub.members(&doc) == 0 {
+                // The last participant left while this publication ran: the
+                // room still has to reach the cabinet (RFC §8). Only after a
+                // successful publication, so a cabinet that keeps failing is
+                // retried by the next commit, not in a loop here.
+                if let Some(next) = shared.hub.commit_if_dirty(&doc) {
+                    shared.pending.push(next);
+                }
+            }
+            shared.queue_forced(&doc);
             shared.pump();
             pending.extend(shared.take_pending());
         }
@@ -234,6 +263,10 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                 Ok(id) => {
                     shared.sinks.insert(id, sink);
                     shared.pump();
+                    // A room resumed with a journal past the threshold is
+                    // compacted as soon as somebody is there to keep the work
+                    // alive (limitation 10).
+                    shared.queue_forced(&doc);
                     let pending = shared.take_pending();
                     drop(shared);
                     self.run_pending(pending);
@@ -276,7 +309,18 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
     ) -> Result<(), TransportError> {
         loop {
             match ws.read() {
-                Ok(Message::Text(text)) => self.handle_text(ws, id, text.as_str())?,
+                Ok(Message::Text(text)) => {
+                    let pending = self.handle_text(ws, id, text.as_str())?;
+                    // The author sees the acknowledgement of its own operation
+                    // before a server-initiated compaction that operation
+                    // triggered waits for the cabinet: the edit is confirmed,
+                    // only the cabinet call stalls this connection.
+                    if !drain_outbox(ws, outbox)? {
+                        return Ok(());
+                    }
+                    flush(ws)?;
+                    self.run_pending(pending);
+                }
                 Ok(Message::Binary(_)) => {
                     send_error(ws, ErrorCode::Unsupported, "binary frames are not supported")?;
                 }
@@ -286,34 +330,29 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                 Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(()),
                 Err(e) => return Err(TransportError::Socket(e.to_string())),
             }
-            loop {
-                match outbox.try_recv() {
-                    Ok(message) => send(ws, &message)?,
-                    Err(TryRecvError::Empty) => break,
-                    // The hub dropped this connection (backlog or shutdown).
-                    Err(TryRecvError::Disconnected) => return Ok(()),
-                }
+            if !drain_outbox(ws, outbox)? {
+                // The hub dropped this connection (backlog or shutdown).
+                return Ok(());
             }
-            if let Err(e) = ws.flush() {
-                return match e {
-                    WsError::Io(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => Ok(()),
-                    WsError::ConnectionClosed | WsError::AlreadyClosed => Ok(()),
-                    other => Err(TransportError::Socket(other.to_string())),
-                };
-            }
+            flush(ws)?;
         }
     }
 
-    fn handle_text(&self, ws: &mut WebSocket<TcpStream>, id: ClientId, text: &str) -> Result<(), TransportError> {
+    fn handle_text(&self, ws: &mut WebSocket<TcpStream>, id: ClientId, text: &str) -> Result<Vec<Pending>, TransportError> {
         let message = match serde_json::from_str::<ClientMessage>(text) {
             Ok(message) => message,
-            Err(_) => return send_error(ws, ErrorCode::Invalid, "the frame is not a protocol message"),
+            Err(_) => {
+                send_error(ws, ErrorCode::Invalid, "the frame is not a protocol message")?;
+                return Ok(Vec::new());
+            }
         };
         if let Err(e) = message.validate() {
-            return send_error(ws, ErrorCode::Invalid, e.to_string());
+            send_error(ws, ErrorCode::Invalid, e.to_string())?;
+            return Ok(Vec::new());
         }
         let pending = {
             let mut shared = lock(&self.shared)?;
+            let doc = shared.hub.client_doc(id);
             let mut pending = match shared.hub.send(id, message, now_ms()) {
                 Ok(pending) => pending.into_iter().collect::<Vec<_>>(),
                 Err(e) => {
@@ -321,14 +360,41 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                     Vec::new()
                 }
             };
+            // The accepted operation may have filled the journal: compact it
+            // while the client stays connected (limitation 10). A ping or a
+            // presence frame retries a commit that was refused as busy.
+            if let Some(doc) = doc {
+                shared.queue_forced(&doc);
+            }
             shared.pump();
             pending.extend(shared.take_pending());
             pending
         };
-        // A commit answers only after its publication ran, and it runs here,
-        // outside the hub lock.
-        self.run_pending(pending);
-        Ok(())
+        // The caller runs these outside the hub lock: a commit answers only
+        // after its publication ran.
+        Ok(pending)
+    }
+}
+
+/// Move every message the room queued to the socket. `false` means the hub
+/// dropped this connection (backlog or shutdown).
+fn drain_outbox(ws: &mut WebSocket<TcpStream>, outbox: &std::sync::mpsc::Receiver<ServerMessage>) -> Result<bool, TransportError> {
+    loop {
+        match outbox.try_recv() {
+            Ok(message) => send(ws, &message)?,
+            Err(TryRecvError::Empty) => return Ok(true),
+            Err(TryRecvError::Disconnected) => return Ok(false),
+        }
+    }
+}
+
+/// Flush without treating a busy socket or an orderly close as a failure.
+fn flush(ws: &mut WebSocket<TcpStream>) -> Result<(), TransportError> {
+    match ws.flush() {
+        Ok(()) => Ok(()),
+        Err(WsError::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => Ok(()),
+        Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => Ok(()),
+        Err(other) => Err(TransportError::Socket(other.to_string())),
     }
 }
 
@@ -343,6 +409,9 @@ pub struct Metrics {
     /// Rooms that refuse commits because the cabinet's copy changed outside
     /// the session.
     pub conflict: Vec<String>,
+    /// Server-initiated journal compactions since the process started
+    /// (limitation 10), exposed as `pdfcraft_collab_forced_commits_total`.
+    pub forced_commits: u64,
 }
 
 impl<A: Adapter> WsServer<A> {
@@ -362,7 +431,7 @@ impl<A: Adapter> WsServer<A> {
                 }
             }
         }
-        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned, conflict })
+        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned, conflict, forced_commits: shared.forced_commits })
     }
 }
 

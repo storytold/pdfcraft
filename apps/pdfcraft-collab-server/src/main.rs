@@ -185,7 +185,10 @@ fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_coll
             .to_string(),
         ),
         Ok(metrics) if path == "/metrics" => {
-            let mut body = format!("pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\n", metrics.rooms, metrics.clients);
+            let mut body = format!(
+                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\n",
+                metrics.rooms, metrics.clients, metrics.forced_commits
+            );
             for (room, version, epoch) in metrics.versions {
                 body.push_str(&format!(
                     "pdfcraft_collab_room_version{{room=\"{room}\"}} {version}\npdfcraft_collab_room_epoch{{room=\"{room}\"}} {epoch}\n"
@@ -234,7 +237,7 @@ mod tests {
     use super::{Args, parse_args, render};
     use crate::rooms::{self, RoomError, RoomsConfig};
     use pdfcraft_collab_hub::Hub;
-    use pdfcraft_collab_proto::{ActorId, ClientInfo, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role};
+    use pdfcraft_collab_proto::{ActorId, ClientInfo, ClientMessage, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role};
     use pdfcraft_collab_server::{Adapter, RoomConfig};
 
     fn fixture() -> Vec<u8> {
@@ -310,6 +313,76 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_commit_stops_the_journal_from_growing() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!("pdfcraft-collab-forced-{}", std::process::id()));
+        let documents = root.join("documents");
+        std::fs::create_dir_all(&documents)?;
+        std::fs::write(documents.join("file-1.pdf"), fixture())?;
+        let config = rooms_config(&root);
+        let doc = DocKey::new("file-1")?;
+        let hello = Hello {
+            v: 1,
+            app: "pdfcraft".into(),
+            doc: doc.clone(),
+            jwt: "t".into(),
+            client: ClientInfo { name: "test".into(), version: "0".into() },
+        };
+        // The threshold is small so the test does not need thousands of edits;
+        // the production default is in `RoomConfig::default`.
+        let mut hub = Hub::new(RoomConfig { forced_commit_ops: 3, forced_commit_bytes: 0, ..RoomConfig::default() });
+        rooms::seed_rooms(&mut hub, &documents, &config)?;
+        let editor = ActorId::new("editor")?;
+        let client = hub.connect(editor, Role::Editor, &hello, 0)?;
+        let _ = hub.receive(client);
+
+        let journal = config.data.join("file-1").join("journal.jsonl");
+        let mut sizes: Vec<u64> = Vec::new();
+        let mut forced = 0;
+        for i in 0..10u64 {
+            let op = Op {
+                op_id: OpId::new(format!("forced-{i}"))?,
+                doc: doc.clone(),
+                base_version: 0,
+                epoch: 0,
+                kind: OpKind::Primitive,
+                class: ConflictClass::Merge,
+                target: pdfcraft_collab_proto::Target::Page(PageRef { index: 0, epoch: 0 }),
+                payload: serde_json::json!({
+                    "action": "annotation.add",
+                    "at": [40.0, 250.0],
+                    "contents": format!("note {i}"),
+                    "nm": format!("forced-{i}"),
+                }),
+                preview: None,
+            };
+            hub.send(client, ClientMessage::Op(op), 0)?;
+            // What the transport does after every client message: the room
+            // decides whether its journal crossed the threshold.
+            if let Some(mut pending) = hub.forced_commit(&doc) {
+                let outcome = pending.publish();
+                hub.finish(pending, outcome);
+                forced += 1;
+            }
+            sizes.push(std::fs::metadata(&journal).map(|meta| meta.len()).unwrap_or(0));
+        }
+
+        let room = hub.room(&doc).ok_or("no room")?;
+        assert_eq!(room.version(), 10);
+        assert!(forced >= 3, "the room compacted itself while its client stayed connected, not only on leave: {forced}");
+        let text = std::fs::read_to_string(&journal)?;
+        let left: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+        assert_eq!(left.len(), 1, "the base at version 9 holds the first nine operations");
+        // The journal stays at the size of the threshold, not of every accepted
+        // operation: three records of the same shape, not ten.
+        let line = left[0].len() as u64;
+        let largest = sizes.iter().copied().max().unwrap_or(0);
+        assert!(largest <= 3 * (line + 8), "the journal never grew past the threshold: {sizes:?}, one line is {line} bytes");
+        assert!(sizes.iter().filter(|size| **size == 0).count() >= 3, "every forced commit truncates the journal: {sizes:?}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
     fn a_restart_recovers_the_last_commit() -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir().join(format!("pdfcraft-collab-restart-{}", std::process::id()));
         let documents = root.join("documents");
@@ -372,8 +445,14 @@ mod tests {
 
     #[test]
     fn health_and_metrics_say_what_they_are() {
-        let metrics =
-            pdfcraft_collab_ws::Metrics { rooms: 2, clients: 3, versions: vec![("file-1".into(), 7, 1)], poisoned: Vec::new(), conflict: Vec::new() };
+        let metrics = pdfcraft_collab_ws::Metrics {
+            rooms: 2,
+            clients: 3,
+            versions: vec![("file-1".into(), 7, 1)],
+            poisoned: Vec::new(),
+            conflict: Vec::new(),
+            forced_commits: 4,
+        };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));
         assert_eq!(status, "200 OK");
         assert_eq!(content_type, "application/json");
@@ -381,6 +460,7 @@ mod tests {
         let (status, _, body) = render("/metrics", Ok(metrics));
         assert_eq!(status, "200 OK");
         assert!(body.contains("pdfcraft_collab_rooms 2"));
+        assert!(body.contains("pdfcraft_collab_forced_commits_total 4"));
         assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
         assert!(!body.contains("read_only"), "a healthy room is not reported as read-only");
 
@@ -390,6 +470,7 @@ mod tests {
             versions: Vec::new(),
             poisoned: vec!["file-2".into()],
             conflict: vec!["file-3".into()],
+            forced_commits: 0,
         };
         let (_, _, body) = render("/health", Ok(broken.clone()));
         assert!(body.contains(r#""ok":false"#));
@@ -401,7 +482,14 @@ mod tests {
 
         let (status, _, _) = render(
             "/nope",
-            Ok(pdfcraft_collab_ws::Metrics { rooms: 0, clients: 0, versions: Vec::new(), poisoned: Vec::new(), conflict: Vec::new() }),
+            Ok(pdfcraft_collab_ws::Metrics {
+                rooms: 0,
+                clients: 0,
+                versions: Vec::new(),
+                poisoned: Vec::new(),
+                conflict: Vec::new(),
+                forced_commits: 0,
+            }),
         );
         assert_eq!(status, "404 Not Found");
     }

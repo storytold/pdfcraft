@@ -50,6 +50,11 @@ pub struct Pending {
 }
 
 impl Pending {
+    /// The document this commit belongs to.
+    pub fn doc(&self) -> &DocKey {
+        &self.doc
+    }
+
     /// Run the cabinet call. Must be called without the hub lock held.
     pub fn publish(&mut self) -> PublishOutcome {
         self.commit.publish()
@@ -231,6 +236,24 @@ impl<A: Adapter> Hub<A> {
             Ok(commit) => Some(Pending { doc: doc.clone(), client: None, commit }),
             // Nobody to answer: a failed commit leaves the room dirty and the
             // next commit (or the next last-client-leave) retries it.
+            Err(_) => None,
+        }
+    }
+
+    /// Compact a room whose journal passed a configured size or operation
+    /// threshold, while clients are connected (RFC §4.6, limitation 10).
+    ///
+    /// The base is written here, under the hub lock, like any other commit; the
+    /// caller runs [`Pending::publish`] outside it. `None` means no threshold is
+    /// crossed, or a publication is already in flight (`busy`, retryable): the
+    /// threshold stays crossed, so the next call tries again.
+    pub fn forced_commit(&mut self, doc: &DocKey) -> Option<Pending> {
+        let entry = self.rooms.get_mut(doc)?;
+        if !entry.room.forced_commit_due() {
+            return None;
+        }
+        match entry.room.commit_now() {
+            Ok(commit) => Some(Pending { doc: doc.clone(), client: None, commit }),
             Err(_) => None,
         }
     }
@@ -421,6 +444,29 @@ mod tests {
         let outcome = pending.publish();
         hub.finish(pending, outcome);
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::CommitResult(r)] if r.sha256 == "abc"));
+        Ok(())
+    }
+
+    #[test]
+    fn an_accepted_operation_compacts_the_journal_at_the_threshold() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let mut hub = Hub::new(RoomConfig { forced_commit_ops: 2, forced_commit_bytes: 0, ..RoomConfig::default() });
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let editor = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let comment = |id: &str| op(id, ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0);
+
+        hub.send(editor, ClientMessage::Op(comment("f1")?), 0)?;
+        assert!(hub.forced_commit(&doc).is_none(), "one operation is below the threshold");
+        hub.send(editor, ClientMessage::Op(comment("f2")?), 0)?;
+        let mut pending = hub.forced_commit(&doc).ok_or("the journal crossed the threshold")?;
+        assert_eq!(pending.doc(), &doc, "the caller publishes for the document that was compacted");
+
+        // The base is written under the hub lock; the publication runs without
+        // it. Until it is reported, the room does not start a second one.
+        assert!(hub.forced_commit(&doc).is_none(), "a commit in flight is not duplicated");
+        let outcome = pending.publish();
+        hub.finish(pending, outcome);
+        assert!(hub.forced_commit(&doc).is_none(), "the base now contains both operations");
         Ok(())
     }
 }

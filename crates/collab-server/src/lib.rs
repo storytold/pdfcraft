@@ -151,11 +151,28 @@ pub struct RoomConfig {
     /// How many journal entries the tail keeps before compaction must use a base.
     pub journal_len: usize,
     pub lease_ttl_secs: u64,
+    /// Compact the journal with a server-initiated commit after this many
+    /// accepted operations, even while clients are connected (RFC §4.6,
+    /// limitation 10). `0` disables the operation threshold.
+    pub forced_commit_ops: u64,
+    /// The same in bytes of journal records appended since the last base.
+    /// `0` disables the byte threshold.
+    pub forced_commit_bytes: u64,
 }
 
 impl Default for RoomConfig {
     fn default() -> Self {
-        Self { limits: Limits::default(), op_window: 10_000, journal_len: 10_000, lease_ttl_secs: 120 }
+        Self {
+            limits: Limits::default(),
+            op_window: 10_000,
+            journal_len: 10_000,
+            lease_ttl_secs: 120,
+            // A live session is compacted after a few thousand operations (roughly
+            // 600 KiB of comment records) or 8 MiB of journal, whichever comes
+            // first, instead of waiting for the last client to leave.
+            forced_commit_ops: 2_000,
+            forced_commit_bytes: 8 << 20,
+        }
     }
 }
 
@@ -194,6 +211,13 @@ pub struct Room<A: Adapter> {
     journal: VecDeque<JournalEntry>,
     /// The version last written to the cabinet's file.
     committed_version: u64,
+    /// The version of the last base written locally. Operations after it are
+    /// what the journal on disk holds, so this is what a forced commit counts.
+    base_version: u64,
+    /// Bytes of journal records appended since that base, as the adapter
+    /// serialises them. An estimate of the on-disk journal, kept by the room so
+    /// the threshold does not need a `stat` per operation.
+    journal_bytes: u64,
     applied_order: VecDeque<String>,
     applied: HashMap<String, Applied>,
     /// Set when the adapter could not persist an accepted operation. The
@@ -232,6 +256,8 @@ impl<A: Adapter> Room<A> {
             lease: None,
             journal: VecDeque::new(),
             committed_version: version,
+            base_version: version,
+            journal_bytes: 0,
             applied_order: VecDeque::new(),
             applied: HashMap::new(),
             poisoned: None,
@@ -428,6 +454,10 @@ impl<A: Adapter> Room<A> {
             let hint = Some(VersionHint { version: self.version, epoch: self.epoch });
             return Err(Rejected { op_id: applied.op_id, code: ErrorCode::Internal, retryable: false, hint, message: e.message });
         }
+        // The record is on disk now: it counts towards the forced-commit
+        // threshold. Counting after `record` keeps a poisoned room from
+        // claiming bytes the journal does not hold.
+        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(self.version, actor, &applied.op));
         Ok(applied)
     }
 
@@ -467,6 +497,7 @@ impl<A: Adapter> Room<A> {
         }
         self.version = version;
         self.epoch = outcome.epoch;
+        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(version, &actor, &outcome.op));
         let applied = Applied { op_id: op.op_id.clone(), actor_id: actor, version, epoch: self.epoch, op: outcome.op, result: outcome.result };
         if let Ok(op_value) = serde_json::to_value(&applied.op) {
             self.journal.push_back(JournalEntry { version, op: op_value });
@@ -540,6 +571,28 @@ impl<A: Adapter> Room<A> {
         self.version > self.committed_version
     }
 
+    /// Bytes of journal records the room believes are waiting on disk.
+    pub fn journal_bytes(&self) -> u64 {
+        self.journal_bytes
+    }
+
+    /// The journal has grown past a configured threshold, so the room should be
+    /// compacted by a server-initiated commit even though clients are connected
+    /// (RFC §4.6, limitation 10). `publishing` is deliberately ignored: the
+    /// caller retries when another publication is in flight, and a refused
+    /// commit leaves the threshold crossed so the next call tries again.
+    pub fn forced_commit_due(&self) -> bool {
+        if self.conflict.is_some() {
+            // The cabinet moved on: only a re-seed can resolve it, and a commit
+            // storm would not. The room stays readable and the journal keeps the
+            // work until an operator acts.
+            return false;
+        }
+        let ops = self.version.saturating_sub(self.base_version);
+        (self.config.forced_commit_ops > 0 && ops >= self.config.forced_commit_ops)
+            || (self.config.forced_commit_bytes > 0 && self.journal_bytes >= self.config.forced_commit_bytes)
+    }
+
     /// Declare which version the cabinet already holds. A room resumed from a
     /// base that was written but never published is dirty again: the last
     /// client leaving has to publish it.
@@ -603,6 +656,10 @@ impl<A: Adapter> Room<A> {
             }
         };
         self.publishing = true;
+        // The base at `version` now contains every accepted operation, so the
+        // journal starts empty whatever the publication does next.
+        self.base_version = version;
+        self.journal_bytes = 0;
         Ok(Commit {
             result: CommitResult { version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict },
             publication: self.adapter.take_publication(),
@@ -636,6 +693,21 @@ impl<A: Adapter> Room<A> {
 
 fn server_error(code: ErrorCode, message: impl Into<String>, retryable: bool) -> ServerError {
     ServerError { code, message: message.into(), retryable }
+}
+
+/// The size of the line the durable adapter writes for one accepted operation:
+/// `{"version":N,"actor":"…","op":{…}}` plus the newline
+/// (`collab_pdf::store::JournalRecord`). The room keeps a byte counter so the
+/// forced-commit threshold costs no `stat` per operation; the fields and their
+/// values are the ones the adapter serialises, so the sum matches the file.
+fn journal_line_bytes(version: u64, actor: &ActorId, op: &Op) -> u64 {
+    serde_json::to_vec(&serde_json::json!({
+        "version": version,
+        "actor": actor.as_str(),
+        "op": op,
+    }))
+    .map(|line| line.len() as u64 + 1)
+    .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1146,6 +1218,120 @@ mod tests {
         foreign.doc = DocKey::new("file-2")?;
         assert!(room.replay(editor, foreign, 5).is_err());
         assert_eq!(room.version(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn the_journal_threshold_turns_into_a_server_commit_and_resets() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = Room::new(
+            SessionId::new("session-1")?,
+            DocKey::new("file-1")?,
+            Fake::new(),
+            RoomConfig { forced_commit_ops: 2, forced_commit_bytes: 0, ..RoomConfig::default() },
+        );
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("f1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(!room.forced_commit_due(), "one operation is below the threshold");
+        room.apply(&editor, &op("f2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(room.forced_commit_due(), "the journal reached the operation threshold");
+
+        let mut commit = room.commit_now()?;
+        let outcome = commit.publish();
+        room.finish(commit, outcome)?;
+        assert!(!room.forced_commit_due(), "the base contains both operations, so the journal is empty again");
+        assert_eq!(room.version(), 2);
+
+        // The counter is real state, not a one-shot latch: the next two
+        // operations fill the journal again.
+        room.apply(&editor, &op("f3", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        room.apply(&editor, &op("f4", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(room.forced_commit_due());
+        Ok(())
+    }
+
+    #[test]
+    fn the_byte_threshold_counts_what_the_adapter_writes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = Room::new(
+            SessionId::new("session-1")?,
+            DocKey::new("file-1")?,
+            Fake::new(),
+            RoomConfig { forced_commit_ops: 0, forced_commit_bytes: 1, ..RoomConfig::default() },
+        );
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        let first = op("b1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        room.apply(&editor, &first, 0)?;
+        assert!(room.journal_bytes() > 0, "the room counts the line the adapter appended");
+        assert!(room.forced_commit_due(), "one byte is past a one-byte threshold");
+        Ok(())
+    }
+
+    #[test]
+    fn a_room_in_conflict_does_not_force_commits_but_keeps_the_journal() -> Result<(), Box<dyn std::error::Error>> {
+        // A conflict is set either by `Adapter::commit` or by a refused
+        // publication; here the simplest route: the adapter refuses the base.
+        struct Conflicting(Fake);
+        impl Adapter for Conflicting {
+            fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+                self.0.apply(actor, op)
+            }
+            fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
+                Err(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false))
+            }
+            fn base(&self) -> Option<BlobRef> {
+                self.0.base()
+            }
+        }
+
+        let mut room = Room::new(
+            SessionId::new("session-1")?,
+            DocKey::new("file-1")?,
+            Conflicting(Fake::new()),
+            RoomConfig { forced_commit_ops: 1, forced_commit_bytes: 0, ..RoomConfig::default() },
+        );
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("c1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(room.forced_commit_due());
+        assert!(room.commit_now().is_err());
+        assert_eq!(room.conflict(), Some("the cabinet holds another version"));
+        assert!(!room.forced_commit_due(), "a conflict cannot be committed away: a retry storm would help nobody");
+        assert_eq!(room.version(), 1, "the edit and its journal entry are still there for an operator");
+        Ok(())
+    }
+
+    #[test]
+    fn a_commit_in_flight_makes_the_threshold_wait_for_the_next_call() -> Result<(), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let adapter = Publishing { inner: Fake::new(), runs: runs.clone(), failure: None };
+        let mut room = Room::new(
+            SessionId::new("session-1")?,
+            DocKey::new("file-1")?,
+            adapter,
+            RoomConfig { forced_commit_ops: 1, forced_commit_bytes: 0, ..RoomConfig::default() },
+        );
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        // A client commit is publishing; the threshold is still crossed but the
+        // room answers `busy` until that publication finishes.
+        let mut commit = room.commit(&editor, 1)?;
+        room.apply(&editor, &op("p2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(room.forced_commit_due());
+        assert!(matches!(room.commit_now(), Err(e) if e.code == ErrorCode::Busy && e.retryable));
+        let outcome = commit.publish();
+        room.finish(commit, outcome)?;
+        // The base written by the client commit holds version 1, not version 2,
+        // so the threshold is still crossed and the next call succeeds.
+        let mut forced = room.commit_now()?;
+        let outcome = forced.publish();
+        room.finish(forced, outcome)?;
+        assert!(!room.forced_commit_due());
         Ok(())
     }
 }

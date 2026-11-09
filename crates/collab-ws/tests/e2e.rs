@@ -387,55 +387,55 @@ fn a_commit_over_the_wire_produces_a_readable_pdf() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Holds the publication until the test opens it, and says when it started.
+#[derive(Clone)]
+struct Gate {
+    started: std::sync::mpsc::Sender<()>,
+    release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+
+struct GatePublication(Gate);
+
+impl Publication for GatePublication {
+    fn run(self: Box<Self>) -> PublishOutcome {
+        let _ = self.0.started.send(());
+        let (lock, condvar) = &*self.0.release;
+        let mut released = lock.lock().expect("the gate is not poisoned");
+        while !*released {
+            released = condvar.wait(released).expect("the gate is not poisoned");
+        }
+        Ok(None)
+    }
+}
+
+struct Slow {
+    inner: PdfAdapter,
+    gate: Gate,
+}
+
+impl Adapter for Slow {
+    fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        self.inner.apply(actor, op)
+    }
+    fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+        self.inner.commit(version, epoch)
+    }
+    fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+        self.inner.base()
+    }
+    fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+        Some(Box::new(GatePublication(self.gate.clone())))
+    }
+    fn finish_publish(&mut self, _version: u64, _outcome: PublishOutcome) -> Result<(), AdapterError> {
+        Ok(())
+    }
+}
+
 /// RFC §16, limitation 9: the cabinet call of a commit runs outside the hub
 /// lock. A cabinet that does not answer for one document must not freeze
 /// presence in another.
 #[test]
 fn a_commit_does_not_block_presence_in_another_room() -> Result<(), Box<dyn std::error::Error>> {
-    /// Holds the publication until the test opens it, and says when it started.
-    #[derive(Clone)]
-    struct Gate {
-        started: std::sync::mpsc::Sender<()>,
-        release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
-    }
-
-    struct GatePublication(Gate);
-
-    impl Publication for GatePublication {
-        fn run(self: Box<Self>) -> PublishOutcome {
-            let _ = self.0.started.send(());
-            let (lock, condvar) = &*self.0.release;
-            let mut released = lock.lock().expect("the gate is not poisoned");
-            while !*released {
-                released = condvar.wait(released).expect("the gate is not poisoned");
-            }
-            Ok(None)
-        }
-    }
-
-    struct Slow {
-        inner: PdfAdapter,
-        gate: Gate,
-    }
-
-    impl Adapter for Slow {
-        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
-            self.inner.apply(actor, op)
-        }
-        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
-            self.inner.commit(version, epoch)
-        }
-        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
-            self.inner.base()
-        }
-        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
-            Some(Box::new(GatePublication(self.gate.clone())))
-        }
-        fn finish_publish(&mut self, _version: u64, _outcome: PublishOutcome) -> Result<(), AdapterError> {
-            Ok(())
-        }
-    }
-
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let gate = Gate { started: started_tx, release: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())) };
     let doc_a = DocKey::new("file-1")?;
@@ -490,6 +490,109 @@ fn a_commit_does_not_block_presence_in_another_room() -> Result<(), Box<dyn std:
     };
     assert_eq!(result.version, 1);
     assert!(!result.conflict);
+    Ok(())
+}
+
+/// RFC §4.6, limitation 10: a live room compacts its journal on its own once
+/// the threshold is crossed, and the cabinet call of that compaction runs
+/// outside the hub lock. A room whose cabinet does not answer must not freeze
+/// another room, and the author still sees its edit acknowledged first.
+#[test]
+fn a_forced_commit_does_not_block_another_room_and_is_counted() -> Result<(), Box<dyn std::error::Error>> {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let gate = Gate { started: started_tx, release: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())) };
+    let doc_a = DocKey::new("file-1")?;
+    let doc_b = DocKey::new("file-2")?;
+    // One operation fills the journal of either room.
+    let mut hub = Hub::new(RoomConfig { forced_commit_ops: 1, forced_commit_bytes: 0, ..RoomConfig::default() });
+    hub.open_room(doc_a.clone(), Slow { inner: PdfAdapter::open("a.pdf", fixture(1).into())?, gate: gate.clone() })?;
+    hub.open_room(doc_b.clone(), Slow { inner: PdfAdapter::open("b.pdf", fixture(1).into())?, gate: gate.clone() })?;
+    let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), Config::default()));
+    let handle = server.clone().bind_arc("127.0.0.1:0")?;
+    let addr = handle.local_addr();
+
+    let mut ada = Peer::join_doc(addr, "editor:ada:file-1", "ada", "file-1")?;
+    let mut bo = Peer::join_doc(addr, "editor:bo:file-2", "bo", "file-2")?;
+
+    // The server compacts room A on its own after this edit; the cabinet call
+    // blocks until this test opens the gate.
+    let add = merge_op(doc_a.clone(), OpId::new("op-forced")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)), "the edit is acknowledged before the cabinet answers");
+    started_rx.recv_timeout(Duration::from_secs(5))?;
+
+    let metrics = server.metrics()?;
+    assert_eq!(metrics.forced_commits, 1, "the compaction is counted as a forced commit");
+
+    // Room B is not behind room A's cabinet call: it accepts an edit, not just
+    // presence.
+    let note = merge_op(doc_b.clone(), OpId::new("op-b")?, 0, 0, page(0, 0), add_note_payload("bo-1", [30.0, 240.0], "b", "bo"));
+    bo.send(note)?;
+    assert!(matches!(bo.settle()?, ServerMessage::Applied(_)), "room B was blocked by room A's forced commit");
+
+    // The publication is reported; room A keeps working and crosses the
+    // threshold again with its next edit.
+    let (lock, condvar) = &*gate.release;
+    *lock.lock().expect("the gate is not poisoned") = true;
+    condvar.notify_all();
+    let second =
+        merge_op(doc_a.clone(), OpId::new("op-after")?, ada.version, 0, page(0, 0), add_note_payload("ada-2", [40.0, 230.0], "after", "ada"));
+    ada.send(second)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)));
+    Ok(())
+}
+
+/// A publication that keeps failing must not become a retry loop in the
+/// transport: the failure leaves the room dirty, and the next commit (here the
+/// last-leave one) retries it — it does not spin on its own.
+#[test]
+fn a_failed_forced_publication_is_not_retried_in_a_loop() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Failing {
+        inner: PdfAdapter,
+        runs: Arc<AtomicUsize>,
+    }
+
+    struct Fail(Arc<AtomicUsize>);
+
+    impl Publication for Fail {
+        fn run(self: Box<Self>) -> PublishOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Err(AdapterError::new(ErrorCode::Internal, "the cabinet is down", false))
+        }
+    }
+
+    impl Adapter for Failing {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+            Some(Box::new(Fail(self.runs.clone())))
+        }
+    }
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let doc = DocKey::new("file-1")?;
+    let mut hub = Hub::new(RoomConfig { forced_commit_ops: 1, forced_commit_bytes: 0, ..RoomConfig::default() });
+    hub.open_room(doc.clone(), Failing { inner: PdfAdapter::open("f.pdf", fixture(1).into())?, runs: runs.clone() })?;
+    let handle = WsServer::new(hub, Arc::new(TestVerifier), Config::default()).bind("127.0.0.1:0")?;
+    let addr = handle.local_addr();
+
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let add = merge_op(doc.clone(), OpId::new("op-fail")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)), "the edit is acknowledged even though the cabinet is down");
+    // Leaving makes the room's last-leave commit retry the publication once.
+    drop(ada);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(runs.load(Ordering::Relaxed), 2, "one forced commit and one last-leave retry; a spin would keep publishing a cabinet that is down");
     Ok(())
 }
 
