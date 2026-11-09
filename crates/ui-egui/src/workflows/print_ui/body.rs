@@ -350,15 +350,13 @@ pub(crate) fn body(
                     });
                 }
                 Handling::Multiple => {
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Pages per sheet:"));
-                        combo(ui, "per-sheet", tl!("Pages per sheet:"), &mut d.per_sheet, &[(2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 60.0);
+                    let page_order = |ui: &mut egui::Ui, order: &mut PageOrder| {
                         ui.label(tl!("Page order:"));
                         combo(
                             ui,
                             "order",
                             tl!("Page order:"),
-                            &mut d.order,
+                            order,
                             &[
                                 (PageOrder::Horizontal, tl!("Horizontal")),
                                 (PageOrder::HorizontalReversed, tl!("Horizontal reversed")),
@@ -368,7 +366,34 @@ pub(crate) fn body(
                             ],
                             150.0,
                         );
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Pages per sheet:"));
+                        // `None` is Custom: columns by rows, typed in.
+                        let mut per_sheet = (!d.custom_grid).then_some(d.per_sheet);
+                        combo(
+                            ui,
+                            "per-sheet",
+                            tl!("Pages per sheet:"),
+                            &mut per_sheet,
+                            &[(Some(2), "2"), (Some(4), "4"), (Some(6), "6"), (Some(9), "9"), (Some(16), "16"), (None, tl!("Custom"))],
+                            70.0,
+                        );
+                        d.custom_grid = per_sheet.is_none();
+                        if let Some(n) = per_sheet {
+                            d.per_sheet = n;
+                            page_order(ui, &mut d.order);
+                        } else {
+                            let max = print::MAX_GRID;
+                            ui.add(egui::DragValue::new(&mut d.cols).range(1..=max)).accessible_name(tl!("Columns"));
+                            ui.label(tl!("by"));
+                            ui.add(egui::DragValue::new(&mut d.rows).range(1..=max)).accessible_name(tl!("Rows"));
+                        }
                     });
+                    if d.custom_grid {
+                        // The grid's fields take the room the page order had.
+                        ui.horizontal(|ui| page_order(ui, &mut d.order));
+                    }
                     ui.horizontal(|ui| {
                         ui.add(widgets::checkbox(&mut d.border, tl!("Print page border")));
                         ui.add(widgets::checkbox(&mut d.auto_rotate, tl!("Auto-rotate pages")));

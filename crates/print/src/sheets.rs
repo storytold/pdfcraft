@@ -134,6 +134,52 @@ fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
     if dw <= 0.0 || dh <= 0.0 { 1.0 } else { (cw / dw).min(ch / dh) }
 }
 
+/// A selected area: one page, within it, printed as if it were a page of that size.
+fn selected_area(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings) -> Result<Option<[f64; 4]>, PrintError> {
+    let Some(a) = settings.area else { return Ok(None) };
+    if !matches!(settings.layout, Layout::Size(_)) {
+        return Err(PrintError::Invalid("an area prints with Fit, Actual size, Shrink or a custom scale".into()));
+    }
+    let refused = || PrintError::Invalid("the selected area is empty or not on one page".into());
+    let [p] = pages else { return Err(refused()) };
+    let d = sizes.get(*p).copied().ok_or_else(refused)?;
+    // `min` and `max` pass over NaN, which would make an all-NaN area the whole page.
+    if a.iter().any(|v| !v.is_finite()) {
+        return Err(refused());
+    }
+    // Cut to the page; what is left must be a point wide.
+    let [x0, y0, x1, y1] = [a[0].min(a[2]).max(0.0), a[1].min(a[3]).max(0.0), a[0].max(a[2]).min(d.0), a[1].max(a[3]).min(d.1)];
+    if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) {
+        return Err(refused());
+    }
+    Ok(Some([x0, y0, x1, y1]))
+}
+
+/// One sheet per page (or per selected area), scaled by `mode`.
+fn layout_size(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings, mode: SizeMode, area: Option<[f64; 4]>) -> Result<Vec<Sheet>, PrintError> {
+    let mut sheets = Vec::new();
+    for &p in pages {
+        let d = area.map_or(sizes[p], |a| (a[2] - a[0], a[3] - a[1]));
+        let size = oriented(settings.paper, settings.orientation, d.0 > d.1);
+        let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
+        let s = match mode {
+            SizeMode::Fit => fit,
+            SizeMode::Actual => 1.0,
+            SizeMode::Shrink => fit.min(1.0),
+            SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
+            SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
+        };
+        let sheet = [0.0, 0.0, size.0, size.1];
+        // An area is placed as a page of its size would be, and clipped to it.
+        let placed = match area {
+            Some(a) => place_crop(p, a, sheet, s, 0),
+            None => place_in(p, d, sheet, s, false),
+        };
+        sheets.push(Sheet { size, placed: vec![placed], ..Sheet::default() });
+    }
+    Ok(sheets)
+}
+
 /// Lay out the sheets for `settings` given each source page's display size.
 pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, PrintError> {
     let pages: Vec<usize> = settings.pages.iter().copied().filter(|p| *p < sizes.len()).collect();
@@ -144,56 +190,17 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
     if !(paper.0 >= 72.0 && paper.1 >= 72.0 && paper.0.is_finite() && paper.1.is_finite()) {
         return Err(PrintError::Invalid("invalid paper size".into()));
     }
-    // A selected area: one page, within it, printed as if it were a page of that size.
-    let area = match settings.area {
-        None => None,
-        Some(_) if !matches!(settings.layout, Layout::Size(_)) => {
-            return Err(PrintError::Invalid("an area prints with Fit, Actual size, Shrink or a custom scale".into()));
-        }
-        Some(a) => {
-            let refused = || PrintError::Invalid("the selected area is empty or not on one page".into());
-            let [p] = pages.as_slice() else { return Err(refused()) };
-            let d = sizes.get(*p).copied().ok_or_else(refused)?;
-            // `min` and `max` pass over NaN, which would make an all-NaN area the whole page.
-            if a.iter().any(|v| !v.is_finite()) {
-                return Err(refused());
-            }
-            // Cut to the page; what is left must be a point wide.
-            let [x0, y0, x1, y1] = [a[0].min(a[2]).max(0.0), a[1].min(a[3]).max(0.0), a[0].max(a[2]).min(d.0), a[1].max(a[3]).min(d.1)];
-            if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) {
-                return Err(refused());
-            }
-            Some([x0, y0, x1, y1])
-        }
-    };
+    let area = selected_area(sizes, &pages, settings)?;
     let mut sheets = Vec::new();
     match settings.layout {
-        Layout::Size(mode) => {
-            for &p in &pages {
-                let d = area.map_or(sizes[p], |a| (a[2] - a[0], a[3] - a[1]));
-                let size = oriented(paper, settings.orientation, d.0 > d.1);
-                let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
-                let s = match mode {
-                    SizeMode::Fit => fit,
-                    SizeMode::Actual => 1.0,
-                    SizeMode::Shrink => fit.min(1.0),
-                    SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
-                    SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
-                };
-                let sheet = [0.0, 0.0, size.0, size.1];
-                // An area is placed as a page of its size would be, and clipped to it.
-                let placed = match area {
-                    Some(a) => place_crop(p, a, sheet, s, 0),
-                    None => place_in(p, d, sheet, s, false),
-                };
-                sheets.push(Sheet { size, placed: vec![placed], ..Sheet::default() });
-            }
-        }
+        Layout::Size(mode) => sheets = layout_size(sizes, &pages, settings, mode, area)?,
         Layout::Label { flip } => {
             sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
-        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
-            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate, custom } => {
+            // A predefined count has at most 16 × 16 cells; a custom grid up to 99 each way.
+            let fits = if custom { cols <= crate::MAX_GRID && rows <= crate::MAX_GRID } else { cols.checked_mul(rows).is_some_and(|n| n <= 256) };
+            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && fits);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
@@ -205,7 +212,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
-            let (gc, gr, sheet_landscape) = if cols == rows {
+            let (gc, gr, sheet_landscape) = if custom {
+                // A custom grid is laid out as given, on the sheet as chosen (Auto: portrait).
+                (cols, rows, false)
+            } else if cols == rows {
                 (cols, rows, page_landscape)
             } else if settings.orientation == Orientation::Landscape || (settings.orientation == Orientation::Auto && cols < rows) {
                 // 2 per sheet (1 × 2 on portrait) prints side by side on landscape paper.
