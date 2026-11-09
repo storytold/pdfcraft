@@ -241,7 +241,13 @@ fn rgb_of(c: Color32) -> Rgb {
 
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    swatch_sized(ui, c, on, tooltip, 22.0)
+}
+
+/// [`swatch`] with a `hit` px square to press: the dot stays 18 px, the style bar gives it a
+/// finger's worth of room.
+fn swatch_sized(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str, hit: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(hit, hit), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
@@ -469,8 +475,8 @@ pub(crate) fn style_bar(
         .pivot(egui::Align2::CENTER_BOTTOM)
         .constrain_to(viewport);
     area.fixed_pos(pos2(bounds.center().x, bounds.top() - 6.0)).show(ctx, |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
-            edit = style_controls(ui, page, index, &props, draft);
+        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
+            edit = style_controls(ui, page, index, &props, draft, 1 + others.len());
         });
     });
     let edit = edit?;
@@ -517,23 +523,53 @@ fn bar_placement(
 /// Colour submenu and in Properties).
 const BAR_SWATCHES: usize = 6;
 
+/// The style bar's swatch hit square in px: room for a finger or a pen, the dot inside stays 18 px.
+const BAR_HIT: f32 = 32.0;
+
+/// The style bar's opacity button: the blend icon and the comment's opacity in percent, so the
+/// value reads without opening the slider. 48 x 32 px.
+fn opacity_button(ui: &mut egui::Ui, percent: f64, label: &str) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(48.0, 32.0), Sense::click());
+    let ink = ui.visuals().widgets.inactive.fg_stroke.color;
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 6.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    icons::paint(ui, Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(14.0, 14.0)), "blend", 14.0, ink);
+    let shown = if percent.is_finite() { percent.round().clamp(0.0, 100.0) } else { 100.0 };
+    ui.painter().text(pos2(r.right() - 4.0, r.center().y), egui::Align2::RIGHT_CENTER, format!("{shown}%"), theme::regular(10.5), ink);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    resp.on_hover_text(label)
+}
+
 /// The style bar's controls: the first [`BAR_SWATCHES`] palette swatches, applied with one click,
-/// and an opacity button opening a slider (`draft`: where its drag in progress is kept; dropped
-/// while the popup is closed). The labels differ from the quick bar's ("Colour", "Blue",
-/// "Opacity"), which can show at the same time. Returns the edit a choice makes.
-pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props: &CommentProps, draft: egui::Id) -> Option<Edit> {
+/// and an opacity button, showing the comment's percentage, that opens a slider (`draft`: where
+/// its drag in progress is kept; dropped while the popup is closed). `applies_to`: how many
+/// selected comments a choice reaches; above one, the labels say so. The labels differ from the
+/// quick bar's ("Colour", "Blue", "Opacity"), which can show at the same time. Returns the edit a
+/// choice makes.
+pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props: &CommentProps, draft: egui::Id, applies_to: usize) -> Option<Edit> {
     let mut edit = None;
     let style = |color, opacity| Edit::StyleAnnotation { page, index, color, opacity, width: None, endings: None };
+    let several = applies_to.to_string();
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 6.0;
         for (name, c) in SWATCHES.iter().take(BAR_SWATCHES) {
             let on = props.color.is_some_and(|cur| same_colour(&cur, c));
-            let label = crate::i18n::fmt(tl!("Comment colour: {name}"), &[("name", tl!(name))]);
-            if swatch(ui, *c, on, &label).clicked() {
+            let label = if applies_to > 1 {
+                crate::i18n::fmt(tl!("Comment colour: {name} ({n} selected)"), &[("name", tl!(name)), ("n", &several)])
+            } else {
+                crate::i18n::fmt(tl!("Comment colour: {name}"), &[("name", tl!(name))])
+            };
+            if swatch_sized(ui, *c, on, &label, BAR_HIT).clicked() {
                 edit = Some(style(Some(*c), None));
             }
         }
-        let resp = icons::button(ui, "blend", 32.0, false, tl!("Comment opacity"));
+        let label = if applies_to > 1 {
+            crate::i18n::fmt(tl!("Comment opacity ({n} selected)"), &[("n", &several)])
+        } else {
+            tl!("Comment opacity").to_string()
+        };
+        let resp = opacity_button(ui, props.opacity * 100.0, &label);
         let open =
             egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 ui.set_min_width(200.0);

@@ -5871,7 +5871,7 @@ fn the_style_bar_recolours_every_selected_comment() {
     click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
     click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
     assert_eq!(h.state().views[0].comments.selection().len(), 3);
-    h.get_by_label("Comment colour: Blue").click();
+    h.get_by_label("Comment colour: Blue (3 selected)").click();
     h.run_steps(3);
     let id = h.state().views[0].id;
     let colours = |h: &Harness<'static, PdfCraftApp>| -> Vec<Option<[f64; 3]>> {

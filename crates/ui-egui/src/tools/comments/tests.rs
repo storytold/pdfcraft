@@ -798,7 +798,7 @@ fn the_style_bar_controls_recolour_and_fade_the_comment() {
     };
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
-            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), 1) {
                 edits.push(e);
             }
         },
@@ -855,7 +855,7 @@ fn the_opacity_slider_commits_once_when_a_drag_ends() {
     };
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
-            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), 1) {
                 edits.push(e);
             }
         },
@@ -882,4 +882,47 @@ fn the_opacity_slider_commits_once_when_a_drag_ends() {
         }
         other => panic!("one edit, at the end of the drag: {other:?}"),
     }
+}
+
+/// The bar's controls take a finger (32 px swatches, a 48 x 32 px opacity button that shows the
+/// percentage), and with several comments selected their labels say how many a choice reaches.
+#[test]
+fn the_bar_controls_have_touch_sized_hit_areas_and_count_the_selection() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 0.5,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (props, applies_to): &mut (pdfcraft_engine::CommentProps, usize)| {
+            style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), *applies_to);
+        },
+        (props, 1),
+    );
+    h.run();
+    let swatch = h.get_by_label("Comment colour: Yellow").rect();
+    assert!(swatch.width() >= 32.0 && swatch.height() >= 32.0, "{swatch:?}");
+    let button = h.get_by_label("Comment opacity").rect();
+    assert!(button.width() >= 48.0 && button.height() >= 32.0, "{button:?}");
+    h.state_mut().1 = 3;
+    h.run();
+    h.get_by_label("Comment colour: Yellow (3 selected)");
+    h.get_by_label("Comment opacity (3 selected)");
+    assert!(h.query_by_label("Comment opacity").is_none(), "the plain label gives way to the counted one");
 }
