@@ -21,12 +21,13 @@ pub(super) struct Own {
 
 impl Own {
     /// Whether the signature's field, and its dictionary when indirect, are in `old` (the signed
-    /// revision) as they are in `doc`, under the same fully qualified name: renaming an ancestor
+    /// revision) as they are in `doc` ([`same_object`]: a save that respells them changes nothing),
+    /// under the same fully qualified name: renaming an ancestor
     /// leaves the field's own objects untouched but shows the signature under a name the signer
     /// never signed. A field that is a direct object can't be found there, so it is never the
     /// signed one (ISO 32000-2 requires fields to be indirect).
     fn unchanged(&self, doc: &Document, old: &Document) -> bool {
-        let same = |r: ObjRef| old.generation(r.num) == r.generation && old.try_get(r.num).ok().is_some_and(|o| *o == *doc.get(r));
+        let same = |r: ObjRef| old.generation(r.num) == r.generation && old.try_get(r.num).ok().is_some_and(|o| same_object(&o, &doc.get(r)));
         let name = |d: &Document| super::listing::sig_fields(d).into_iter().find(|f| f.r.is_some() && f.r == self.field).map(|f| f.name);
         self.field.is_some_and(same) && self.value.is_none_or(same) && name(doc) == name(old)
     }
@@ -1172,7 +1173,7 @@ mod tests {
         doc.update_dict(ObjRef { num: 3, generation: 0 }, |p| p.set(b"DocMDP".to_vec(), Object::Ref(other))).unwrap();
         let edited = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
         let doc = Document::open(Arc::new(edited)).unwrap();
-        match classify_changes(&doc, Some(old), Some(1)) {
+        match classify_changes(&doc, Some(old), Some(1), None) {
             Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
             other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
         }

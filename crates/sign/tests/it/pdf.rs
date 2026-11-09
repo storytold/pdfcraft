@@ -400,6 +400,46 @@ fn a_field_reusing_a_field_held_document_timestamp_is_not_a_second_timestamp() {
     assert_eq!(own.status, Status::Valid, "{:?} {:?}", own.modification, own.details);
 }
 
+#[test]
+fn a_signed_field_respelled_by_a_later_save_is_still_the_signed_one() {
+    // A later save writes the signed field and its signature dictionary out again, the field's
+    // name and the signing date now in hexadecimal. They say what they said when signed, so the
+    // signature is still the signer's own.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let doc = open(&signed);
+    let value = signature_dict(&doc);
+    let field = doc
+        .object_numbers()
+        .into_iter()
+        .map(|num| pdfcraft_cos::ObjRef { num, generation: doc.generation(num) })
+        .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.get(b"V") == Some(&Object::Ref(value))))
+        .expect("the signed field");
+    let respelled = edit_after(&signed, |doc| {
+        for (r, key) in [(field, b"T".as_slice()), (value, b"M".as_slice())] {
+            doc.update_dict(r, |d| {
+                if let Some(Object::String(s)) = d.get(key).cloned() {
+                    d.set(key.to_vec(), Object::String(PdfString { bytes: s.bytes, hex: true }));
+                }
+            })
+            .unwrap();
+        }
+    });
+    for r in [field, value] {
+        assert_ne!(*open(&respelled).get(r), *doc.get(r), "object {} is written differently", r.num);
+    }
+    let sigs = signatures(&open(&respelled), &respelled, &trust);
+    let own = sigs.iter().find(|s| s.field == "Signature1").expect("the signed field is listed");
+    assert!(
+        own.status == Status::Valid && !matches!(own.modification, Modification::Disallowed(_)),
+        "a respelled signed field is no longer the signed one: {:?} {:?} {:?}",
+        own.status,
+        own.modification,
+        own.details
+    );
+}
+
 /// A page whose /Annots is an object of its own: signing and commenting update that array in
 /// place, not the page. A second signature is a signature change for the first, as with an
 /// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
