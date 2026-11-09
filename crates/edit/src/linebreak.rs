@@ -49,7 +49,7 @@ fn thai_breaks(word: &str) -> Vec<usize> {
             let before = word.get(..at).and_then(|s| s.chars().next_back());
             let after = word.get(at..).and_then(|s| s.chars().next());
             match (before, after) {
-                (Some(b), Some(a)) => (thai(b) || thai(a)) && !thai_no_start(a) && !thai_no_end(b) && !no_start(a) && !no_end(b),
+                (Some(b), Some(a)) => (thai(b) || thai(a)) && row_may_end_between(b, a),
                 // The start and end of the word are not breaks inside it.
                 _ => false,
             }
@@ -128,7 +128,21 @@ fn no_end(c: char) -> bool {
 /// Whether a row may end between `before` and `after` in Chinese or Japanese, neither of them a
 /// space. Thai needs the whole word ([`breaks`]).
 fn between(before: char, after: char) -> bool {
-    (ideographic(before) || ideographic(after)) && !no_start(after) && !no_end(before) && !thai_no_start(after) && !thai_no_end(before)
+    (ideographic(before) || ideographic(after)) && row_may_end_between(before, after)
+}
+
+/// Neither character is held to the other: `after` may begin a row and `before` may end one.
+fn row_may_end_between(before: char, after: char) -> bool {
+    !no_start(after) && !no_end(before) && !thai_no_start(after) && !thai_no_end(before)
+}
+
+/// Whether two neighbouring pieces of a word too wide for its row have to stay on one row, because
+/// the second can't begin a row or the first can't end one. Spaces hold nothing to them.
+pub(crate) fn held_together(before: &str, after: &str) -> bool {
+    match (before.chars().next_back(), after.chars().next()) {
+        (Some(b), Some(a)) => !b.is_whitespace() && !a.is_whitespace() && !row_may_end_between(b, a),
+        _ => false,
+    }
 }
 
 /// Byte offsets inside `word` (text without spaces) where a row may end, in order: never 0 or the

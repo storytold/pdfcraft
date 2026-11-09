@@ -1902,7 +1902,22 @@ pub(crate) fn rewrite_styled_block(
 
 #[cfg(test)]
 mod tests {
-    use super::styled_run_end;
+    use super::{StyledChar, styled_run_end, wrap_styled_rows};
+
+    /// Rows of `text` at one unit per character. The break positions come from compiled-in
+    /// dictionary data, so this needs no Thai face and runs in every build.
+    fn wrapped(text: &str, width: f64) -> Vec<String> {
+        let chars: Vec<StyledChar> = text.chars().map(|c| (c, 0, "F1".into())).collect();
+        let (rows, ..) = wrap_styled_rows(&chars, width, |word| Ok(word.len() as f64)).unwrap();
+        rows.iter().map(|row| row.iter().map(|c| c.0).collect()).collect()
+    }
+
+    #[test]
+    fn styled_thai_rows_end_between_dictionary_words() {
+        assert_eq!(wrapped("ภาษาไทยไม่มีช่องว่างระหว่างคำ", 8.0), ["ภาษาไทย", "ไม่มี", "ช่องว่าง", "ระหว่าง", "คำ"]);
+        // Mai Yamok stays with the word before it.
+        assert_eq!(wrapped("เด็กๆชอบกินขนม", 5.0), ["เด็กๆ", "ชอบ", "กิน", "ขนม"]);
+    }
 
     #[test]
     fn styled_runs_stop_at_style_or_font_changes() {

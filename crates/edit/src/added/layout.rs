@@ -100,7 +100,9 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
 
 /// `words` (each a list of text and advance, with the spaces that follow it) laid into rows no
 /// wider than `width`: a word that doesn't fit what is left of a row starts the next one, and only
-/// a word wider than a whole row is split, between its clusters.
+/// a word wider than a whole row is split, between its clusters. The split keeps to the same rules
+/// as any other row end ([`crate::linebreak::held_together`]); a row too narrow for a pair that has
+/// to stay together is overhung rather than started with a mark.
 fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
     let blank = |s: &str| s.chars().all(char::is_whitespace);
     let mut lines: Vec<String> = Vec::new();
@@ -119,6 +121,7 @@ fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
         }
         // Too wide for what is left of the row, counting the spaces that open the paragraph.
         let too_wide = blank(&line) && used + ink > width;
+        let word = if too_wide { unsplittable(word) } else { word };
         for (text, advance) in word {
             if too_wide && !blank(&line) && !blank(&text) && used + advance > width {
                 end_row(&mut lines, &mut line);
@@ -134,6 +137,21 @@ fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
     }
     lines.push(line);
     lines
+}
+
+/// The clusters of `word` with each one that has to stay beside the one before it joined to it.
+fn unsplittable(word: Vec<(String, f64)>) -> Vec<(String, f64)> {
+    let mut out: Vec<(String, f64)> = Vec::new();
+    for (text, advance) in word {
+        match out.last_mut() {
+            Some((held, width)) if crate::linebreak::held_together(held, &text) => {
+                held.push_str(&text);
+                *width += advance;
+            }
+            _ => out.push((text, advance)),
+        }
+    }
+    out
 }
 
 /// The shaped clusters `atoms` (text and advance) grouped into words: a word starts after spaces,
@@ -443,5 +461,20 @@ mod thai_wrap_tests {
         let opening = vec![vec![(" ".into(), 1.0)], vec![("a".into(), 2.0), ("b".into(), 2.0)]];
         assert_eq!(wrap_words(opening, 3.0), [" a", "b"]);
         assert_eq!(wrap_words(Vec::new(), 3.0), [""]);
+    }
+
+    #[test]
+    fn splitting_an_overlong_word_keeps_marks_and_leading_vowels_with_their_neighbours() {
+        let split = |text: &str, width: f64| wrap_words(vec![atoms(text, 1.0)], width);
+        // Mai Yamok, Paiyannoi and a following vowel take the character before them to the next row.
+        assert_eq!(split("กขคงๆ", 2.0), ["กข", "ค", "งๆ"]);
+        assert_eq!(split("กขคฯ", 2.0), ["กข", "คฯ"]);
+        assert_eq!(split("กขคา", 2.0), ["กข", "คา"]);
+        // A leading vowel goes down with the consonant it is written before.
+        assert_eq!(split("กขเค", 3.0), ["กข", "เค"]);
+        // A row too narrow for the pair still doesn't start with the mark: the pair overhangs it.
+        assert_eq!(split("กขๆ", 1.0), ["ก", "ขๆ"]);
+        // A word that fits is left alone.
+        assert_eq!(split("กขๆ", 3.0), ["กขๆ"]);
     }
 }
