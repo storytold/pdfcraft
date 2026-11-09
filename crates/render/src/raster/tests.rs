@@ -5778,6 +5778,28 @@ fn content_bombs_stop_at_the_budget_and_say_so() {
     assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the cut content is observable");
 }
 
+/// The text of a cut page says so too (#623): what was extracted is incomplete, and a page
+/// read whole is not marked.
+#[test]
+fn cut_content_marks_the_pages_text_incomplete() {
+    let text_of = |pdf: Vec<u8>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(60)).expect("text extraction must not stall")
+    };
+    let bomb = zlib_zeros(hayro::hayro_syntax::MAX_DECODED_STREAM + (32 << 20));
+    let page = text_of(one_page_pdf(&bomb, "/Filter /FlateDecode"));
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert!(page.text.as_ref().is_some_and(|t| t.truncated), "the text says it is incomplete");
+    assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "and the page says so");
+    let page = text_of(one_page_pdf(b"1 0 0 rg 0 0 4 4 re f", ""));
+    assert!(page.text.as_ref().is_some_and(|t| !t.truncated), "a page read whole is not marked");
+    assert!(page.warnings.is_empty());
+}
+
 /// A stream read in pieces of any size gives the same bytes: stored and dynamic blocks, and in
 /// a `/Contents` array a stream that is not Flate-coded, between two that are.
 #[test]
@@ -10511,6 +10533,101 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
 
+/// #5631: a reply of type R (`/IRT`, no `/RT` or `/RT /R`) is not drawn on the page, whatever
+/// its appearance: ISO 32000-2 Table 172, "shall not display replies to an annotation
+/// individually". The comment it answers draws, and so does a `/RT /Group` member.
+#[test]
+fn replies_are_not_drawn_but_their_comment_and_group_members_are() {
+    let form = |rgb: &str| {
+        let content = format!("{rgb} rg 0 0 20 18 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 18] /Length {} >>\nstream\n{content}\nendstream", content.len())
+    };
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>".to_string(),
+        // The comment: blue.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [10 40 30 58] /AP << /N 8 0 R >> >>".to_string(),
+        // A reply with no /RT, and one with /RT /R, to it and to that reply: red.
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 4 0 R /Rect [50 40 70 58] /AP << /N 9 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 5 0 R /RT /R /Rect [90 40 110 58] /AP << /N 9 0 R >> >>".to_string(),
+        // A member of the comment's group: green.
+        "<< /Type /Annot /Subtype /Square /F 4 /IRT 4 0 R /RT /Group /Rect [130 40 150 58] /AP << /N 10 0 R >> >>".to_string(),
+        form("0 0 1"),
+        form("1 0 0"),
+        form("0 1 0"),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let p = r.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    // The middle of each annotation, top-left based at scale 1.
+    let px = |x: u32| -> [u8; 4] { p.rgba[((51 * p.width + x) * 4) as usize..][..4].try_into().unwrap() };
+    let (comment, reply, reply_r, member) = (px(20), px(60), px(100), px(140));
+    assert!(comment[2] > 200 && comment[0] < 60, "the comment draws: {comment:?}");
+    assert!(reply.iter().all(|v| *v > 240), "a reply with no /RT is not drawn: {reply:?}");
+    assert!(reply_r.iter().all(|v| *v > 240), "a reply with /RT /R is not drawn: {reply_r:?}");
+    assert!(member[1] > 200 && member[0] < 60, "a group member draws: {member:?}");
+}
+
+/// #5632 review: an `/RT` that isn't `/Group` reads as the default R, as the comment list reads
+/// it, so a reply with an unknown name or a string there isn't drawn either. `/IRT` is a markup
+/// annotation's entry: a form field carrying one still draws.
+#[test]
+fn an_unknown_or_malformed_rt_is_a_reply_and_a_widget_with_irt_still_draws() {
+    let form = |rgb: &str| {
+        let content = format!("{rgb} rg 0 0 20 18 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 18] /Length {} >>\nstream\n{content}\nendstream", content.len())
+    };
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>".to_string(),
+        // The comment: blue.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [10 40 30 58] /AP << /N 8 0 R >> >>".to_string(),
+        // Replies with an unknown /RT name and with a string there: red.
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 4 0 R /RT /Answer /Rect [50 40 70 58] /AP << /N 9 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 4 0 R /RT (Group) /Rect [90 40 110 58] /AP << /N 9 0 R >> >>".to_string(),
+        // A form field with a stray /IRT: green.
+        "<< /Type /Annot /Subtype /Widget /F 4 /IRT 4 0 R /Rect [130 40 150 58] /AP << /N 10 0 R >> >>".to_string(),
+        form("0 0 1"),
+        form("1 0 0"),
+        form("0 1 0"),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let p = r.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    let px = |x: u32| -> [u8; 4] { p.rgba[((51 * p.width + x) * 4) as usize..][..4].try_into().unwrap() };
+    let (comment, unknown, string, widget) = (px(20), px(60), px(100), px(140));
+    assert!(comment[2] > 200 && comment[0] < 60, "the comment draws: {comment:?}");
+    assert!(unknown.iter().all(|v| *v > 240), "a reply with an unknown /RT is not drawn: {unknown:?}");
+    assert!(string.iter().all(|v| *v > 240), "a reply with a string /RT is not drawn: {string:?}");
+    assert!(widget[1] > 200 && widget[0] < 60, "a form field with /IRT draws: {widget:?}");
+}
+
 /// `/Crypt` has nothing to undo, so a chain naming it thousands of times costs no copy of the data
 /// for each. A chain of filters that does work has its own cost, which this isn't about.
 #[test]
@@ -10876,19 +10993,27 @@ trailer << /Root 1 0 R >>
 /// A stream with no `endstream` after it, as a producer that writes `endstrea` after every stream
 /// leaves it, is the bytes its `/Length` gives: "how many bytes of the PDF file are used for the
 /// stream's data" (ISO 32000-2 7.3.8.2). Nothing found its end, so the page's content was lost and
-/// the page drew blank, while other readers draw it. Vendored hayro-syntax patch 36.
+/// the page drew blank, while other readers draw it. The objects after it are still read: a second
+/// content stream paints the right half. A `/Length` past the end of the file, or none, leaves the
+/// stream unreadable and its half blank, without a panic. Vendored hayro-syntax patch 36.
 #[test]
 fn a_content_stream_without_endstream_is_drawn_to_its_length() {
     use super::*;
-    let content = "1 0 0 rg 0 0 200 200 re f";
-    let centre = |end: &str| -> [u8; 4] {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    let left = "1 0 0 rg 0 0 100 200 re f";
+    let right = "0 0 1 rg 100 0 100 200 re f";
+    // The left and right pixels of a page whose content is objects 4 and 5, with `stream_4` the
+    // whole of object 4 and `rest` written after the trailer.
+    let pixels = |stream_4: &str, rest: &str| -> [[u8; 4]; 2] {
         let page = format!(
             "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
-             4 0 obj << /Length {} >> stream\n{content}\n{end}\nendobj\n\
-             trailer << /Root 1 0 R >>\n%%EOF",
-            content.len()
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R 5 0 R] >> endobj\n\
+             5 0 obj << /Length {} >> stream\n{right}\nendstream\nendobj\n\
+             {stream_4}trailer << /Root 1 0 R >>\n{rest}",
+            right.len()
         );
         let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
             page: 0,
@@ -10898,15 +11023,101 @@ fn a_content_stream_without_endstream_is_drawn_to_its_length() {
             tag: 0,
             preview: false,
         });
-        let start = (100 * page.width as usize + 100) * 4;
-        let mut pixel = [0; 4];
-        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
-        pixel
+        [50, 150].map(|x| {
+            let start = (100 * page.width as usize + x) * 4;
+            let mut pixel = [0; 4];
+            pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("pixel"));
+            pixel
+        })
     };
-    assert_eq!(centre("endstream"), [255, 0, 0, 255]);
+    let object_4 = |length: &str, end: &str| format!("4 0 obj << {length} >> stream\n{left}\n{end}\nendobj\n");
+    let length = format!("/Length {}", left.len());
+    assert_eq!(pixels(&object_4(&length, "endstream"), "%%EOF"), [RED, BLUE]);
     for end in ["endstrea", "", "end"] {
-        assert_eq!(centre(end), [255, 0, 0, 255], "{end:?}");
+        assert_eq!(pixels(&object_4(&length, end), "%%EOF"), [RED, BLUE], "{end:?}");
     }
+    // The last object in the file, which ends with its data.
+    let last = format!("4 0 obj << {length} >> stream\n{left}");
+    assert_eq!(pixels("", &last), [RED, BLUE], "at the end of the file");
+    // A /Length past the end of the file, and none: object 4 can't be read and its half stays
+    // blank (as does the rest of the page: a `/Contents` array with an unreadable member isn't
+    // drawn, as before this change).
+    let past = format!("4 0 obj << /Length {} >> stream\n{left}", left.len() + 1);
+    assert_eq!(pixels("", &past)[0], WHITE, "past the end of the file");
+    assert_eq!(pixels(&object_4("", "endstrea"), "%%EOF")[0], WHITE, "no /Length");
+}
+
+/// The raw bytes hayro-syntax reads for object 4 of a file whose objects are `objects`.
+fn hayro_stream_4(objects: &str) -> Vec<u8> {
+    use hayro_syntax::object::{ObjectIdentifier, Stream};
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+         {objects}trailer << /Root 1 0 R >>\n%%EOF"
+    );
+    let parsed = hayro_syntax::Pdf::new(pdf.into_bytes()).unwrap();
+    let stream = parsed.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).expect("object 4 is a stream");
+    stream.raw_data().to_vec()
+}
+
+/// A stream whose `endstream` is misspelt (`endstrea`) or left out before `endobj` is its
+/// `/Length` in hayro-syntax too, not the bytes up to a later object's `endstream` (vendored
+/// hayro-syntax patch 36).
+#[test]
+fn hayro_reads_a_stream_without_endstream_to_its_length_before_a_later_one() {
+    for end in ["endstrea\nendobj", "endobj"] {
+        let objects = format!("4 0 obj << /Length 5 >> stream\nHELLO\n{end}\n5 0 obj << /Length 5 >> stream\nWORLD\nendstream\nendobj\n");
+        assert_eq!(hayro_stream_4(&objects), b"HELLO", "{end:?}");
+    }
+}
+
+/// A wrong `/Length` that stops before payload bytes beginning like an end marker (`endobject`,
+/// `endstreak`, `endstreamer`) does not end the stream there: a token runs on through regular
+/// characters (ISO 32000-2 7.2.3), and the search for `endstream` finds the whole payload, past
+/// `endstreamer` too. Neither does a whole `endobj` or `endstrea` that the object does not end
+/// after (`endobj more`); one followed by another object's header, by `trailer` or by the end of
+/// the data still does.
+#[test]
+fn hayro_does_not_end_a_stream_inside_a_longer_word() {
+    for word in ["endobject", "endstreak", "endstreamer", "endobj more", "endstrea more", "endstrea endobj more"] {
+        let objects = format!("4 0 obj << /Length 5 >> stream\nHELLO {word} more\nendstream\nendobj\n");
+        assert_eq!(hayro_stream_4(&objects), format!("HELLO {word} more").as_bytes(), "{word}");
+    }
+    for end in ["endobj\n", "endstrea\n", "endstrea\nendobj\n%c\n"] {
+        assert_eq!(hayro_stream_4(&format!("4 0 obj << /Length 5 >> stream\nHELLO\n{end}")), b"HELLO", "{end:?} then trailer");
+    }
+}
+
+/// A stream ending in `endstrea` is its `/Length` even when a later object has an `endstream`:
+/// the search for one ran on into that object. Here the content is ASCIIHex-encoded without its
+/// `>` end marker, so reading on took the next object's header as hex data, which it isn't, and
+/// the page drew blank instead of red.
+#[test]
+fn a_content_stream_without_endstream_is_not_read_into_a_later_stream() {
+    use super::*;
+    let content: String = "1 0 0 rg 0 0 200 200 re f".bytes().map(|b| format!("{b:02X}")).collect();
+    let unused = "0 1 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} /Filter /ASCIIHexDecode >> stream\n{content}\nendstrea\nendobj\n\
+         5 0 obj << /Length {} >> stream\n{unused}\nendstream\nendobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        unused.len()
+    );
+    let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        preview: false,
+    });
+    let start = (100 * page.width as usize + 100) * 4;
+    assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]));
 }
 
 /// A ToUnicode CMap with a token the scanner can't read before its mappings (a stray `>` after

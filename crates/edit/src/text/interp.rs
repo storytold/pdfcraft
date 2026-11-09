@@ -359,6 +359,7 @@ pub(super) struct Shown {
     /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
     /// matching the single space a rejoin always used before #2529.
     pub(super) soft_gap: usize,
+    pub(super) edited: Option<usize>,
 }
 
 impl Shown {
@@ -492,6 +493,9 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
+    /// `TJ` that may start with the space glyph that gap widened.
+    pub(super) gap_space: bool,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -522,7 +526,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
     }
 }
 
@@ -537,6 +541,8 @@ type Invocation = (usize, Vec<u8>, Ts);
 struct MarkedContent {
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
+    // The `/PCEdLine` sequences around the text (a replacement mixing fonts), innermost last.
+    edited: Vec<Option<usize>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
 
@@ -550,6 +556,7 @@ impl MarkedContent {
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
             .push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{index}").into_bytes(), <[u8]>::to_vec)));
+        self.edited.push(if op.name(0) == Some(b"PCEdLine") { Some(index) } else { self.edited.last().copied().flatten() });
         // The property list is inline or named in the resources' /Properties (§14.6.2).
         let list = logical_text.and_then(|properties| match op.operands.get(1) {
             Some(Object::Name(name)) => properties.get(name).and_then(|object| doc.dict(object)),
@@ -565,34 +572,37 @@ impl MarkedContent {
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
         self.layers.pop();
+        self.edited.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
-            let mut items = tail.into_iter();
-            if let Some(mut first) = items.next() {
-                for item in items {
-                    first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
-                    first.extra_ops.push(item.op);
-                    first.extra_ops.extend(item.extra_ops);
-                    first.rect = [
-                        first.rect[0].min(item.rect[0]),
-                        first.rect[1].min(item.rect[1]),
-                        first.rect[2].max(item.rect[2]),
-                        first.rect[3].max(item.rect[3]),
-                    ];
-                    first.frame = union(first.frame, item.frame);
-                    first.ink.extend(item.ink);
+            if tail.iter().any(|s| s.glyph_count > 0) {
+                let mut items = tail.into_iter();
+                if let Some(mut first) = items.next() {
+                    for item in items {
+                        first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
+                        first.extra_ops.push(item.op);
+                        first.extra_ops.extend(item.extra_ops);
+                        first.rect = [
+                            first.rect[0].min(item.rect[0]),
+                            first.rect[1].min(item.rect[1]),
+                            first.rect[2].max(item.rect[2]),
+                            first.rect[3].max(item.rect[3]),
+                        ];
+                        first.frame = union(first.frame, item.frame);
+                        first.ink.extend(item.ink);
+                    }
+                    first.extra_ops.extend([open, index]);
+                    // Only right-to-left ActualText is already in typing order and must stay out of
+                    // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
+                    first.logical_order = logical.chars().any(crate::bidi::is_rtl);
+                    first.actual_text = true;
+                    first.text = logical;
+                    first.start_x = first.rect[0];
+                    first.end_x = first.rect[2];
+                    first.end_y = first.baseline;
+                    first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                    shown.push(first);
                 }
-                first.extra_ops.extend([open, index]);
-                // Only right-to-left ActualText is already in typing order and must stay out of
-                // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
-                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
-                first.actual_text = true;
-                first.text = logical;
-                first.start_x = first.rect[0];
-                first.end_x = first.rect[2];
-                first.end_y = first.baseline;
-                first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
-                shown.push(first);
             }
         }
     }
@@ -654,6 +664,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // the next glyph continues the last word.
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
+    // Whether the text ends in a space read from a gap rather than from a glyph. The run just
+    // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
+    let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
     for p in &pieces {
         match p {
@@ -662,13 +675,17 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     glyph_count = glyph_count.saturating_add(1);
                     let shown = m.text_of(code);
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                    // A space glyph right after a gap that read as a space is that space:
+                    // LibreOffice stretches a justified line on both sides of each space glyph.
+                    let after_gap = std::mem::take(&mut gap_space);
                     match shown {
-                        Some(t) => {
+                        Some(shown) => {
+                            let t: &str = if after_gap { shown.strip_prefix(' ').unwrap_or(&shown) } else { &shown };
                             carry.text_left = carry
                                 .text_left
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                            text.push_str(&t);
+                            text.push_str(t);
                         }
                         None => decodable = false,
                     }
@@ -709,6 +726,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                         let dy = -n / 1000.0 * ts.size;
                         if -dy > ts.size * 0.2 && !text.ends_with(' ') {
                             text.push(' ');
+                            gap_space = true;
                         }
                         if dy.abs() > ts.size.abs() * 0.2 {
                             in_word = false;
@@ -720,6 +738,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     // A large gap inside TJ reads as a space.
                     if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
                         text.push(' ');
+                        gap_space = true;
                     }
                     // Tracking and kerning keep a word together; a larger jump
                     // ends it (whatever the sign of the size or `Tz`).
@@ -761,8 +780,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         .collect();
     let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
     // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
-    // It must not create a phantom editable line or enlarge its neighbours' boxes.
-    if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
+    // Outside an `/ActualText` replacement it must not create a phantom editable
+    // line or enlarge its neighbours' boxes; inside one (such as a space gap in a
+    // subset font without a space glyph, #4229) it is part of the span's box and
+    // operators when the span also paints glyphs.
+    if !marked.actual_text.iter().any(Option::is_some) && !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
         return Ok(());
     }
     out.push(Shown {
@@ -809,7 +831,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         soft_break: state.soft_break,
         hard_break: state.hard_break,
         soft_gap: state.soft_gap,
+        edited: marked.edited.last().copied().flatten(),
     });
+    carry.gap_space = gap_space;
     Ok(())
 }
 
@@ -843,6 +867,10 @@ pub(super) fn interpret(
     // as 1, the single space a rejoin always used before #2529.
     let mut soft_gap = 1usize;
     for (i, op) in ops.iter().enumerate() {
+        // A gap's space carries only into a `Tj` or `TJ` right after it.
+        if !matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+            carry.gap_space = false;
+        }
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
@@ -1006,6 +1034,7 @@ pub(super) fn interpret(
     carry.stack = stack;
     carry.marked = marked.regions;
     carry.layers = marked.layers;
+    out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
     Ok(out)
 }
