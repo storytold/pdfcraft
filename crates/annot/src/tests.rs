@@ -1812,6 +1812,26 @@ fn link_listing_indexes_pages_and_cuts_long_action_names() {
     assert!(matches!(&all[1].action, links::LinkAction::Other(n) if n.len() == 64), "{:?}", all[1].action);
 }
 
+/// A short unsupported action name is described rather than indexed past its end, and a
+/// description widened by lossy conversion still stays within the 64-byte cap.
+#[test]
+fn link_listing_describes_short_and_wide_action_names() {
+    let invalid = "#FF".repeat(64);
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".into(),
+        "<< /Subtype /Link /Rect [0 0 1 1] /A << /S /Launch >> >>".into(),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{} >> >>", "N".repeat(64)),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{invalid} >> >>"),
+    ]);
+    let all = links::list(&doc);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].action, links::LinkAction::Other("Launch".into()));
+    assert!(matches!(&all[1].action, links::LinkAction::Other(n) if n == &"N".repeat(64)), "{:?}", all[1].action);
+    assert!(matches!(&all[2].action, links::LinkAction::Other(n) if n.len() <= 64), "{:?}", all[2].action);
+}
+
 #[test]
 fn web_address_cap_counts_the_text_kept_after_conversion() {
     // 200 links sharing a 64 KiB address of invalid UTF-8: 12.5 MiB of bytes, each byte kept as a

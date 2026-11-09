@@ -133,11 +133,20 @@ fn action_of(doc: &Document, d: &Dict, pages: &HashMap<ObjRef, usize>, uri_budge
         Some(s) => {
             // Cut on a character boundary: cutting inside a sequence makes the lossy conversion
             // add a replacement character, which would put the result past `MAX_ACTION_NAME`.
+            // Only a cut inside a sequence needs backing up: at the whole length there is no
+            // byte past the end to look at.
             let mut end = MAX_ACTION_NAME.min(s.len());
-            while end > 0 && (s[end] & 0xC0) == 0x80 {
+            while end > 0 && end < s.len() && (s[end] & 0xC0) == 0x80 {
                 end -= 1;
             }
-            LinkAction::Other(String::from_utf8_lossy(&s[..end]).into_owned())
+            // Lossy conversion widens each invalid byte to a three-byte replacement character, so
+            // the converted name is cut on a character boundary as well.
+            let text = String::from_utf8_lossy(&s[..end]);
+            let mut cut = text.len().min(MAX_ACTION_NAME);
+            while cut > 0 && !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            LinkAction::Other(text[..cut].to_owned())
         }
         None => LinkAction::Other("no action".into()),
     }
