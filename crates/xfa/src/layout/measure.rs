@@ -83,48 +83,7 @@ impl Layouter<'_> {
         let w = clamp_opt(w, c.min_w, c.max_w);
         let h = match c.h {
             Some(h) => h,
-            None => {
-                let inner_w = (w - c.margin.horizontal()).max(1.0);
-                let content = match node {
-                    Node::Draw(d) => self.value_height(&d.value, inner_w, ctx),
-                    Node::Field(f) => self.field_height(f, inner_w, ctx, outer_para),
-                    Node::ExclGroup(g) => self.group_height(g, inner_w, ctx, depth),
-                    Node::Area(a) => self.positioned_height(&a.children, inner_w, ctx, depth),
-                    Node::Subform(s) => match s.layout {
-                        Layout::Positioned => self.positioned_height(&s.children, inner_w, ctx, depth),
-                        // Each instance of a repeating child takes its own height.
-                        Layout::Tb => {
-                            let sibs = SomIndices::of(&s.children);
-                            s.children
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, k)| k.common().presence.occupies())
-                                .map(|(i, k)| self.instances_height(k, inner_w, ctx, depth + 1, &som, sibs.at(i)))
-                                .sum()
-                        }
-                        Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, ctx, depth, &som).1,
-                        Layout::Table => {
-                            let cols = self.columns(s, inner_w);
-                            let sibs = SomIndices::of(&s.children);
-                            s.children
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, k)| k.common().presence.occupies())
-                                .map(|(i, k)| match k {
-                                    // Each instance of a repeating row takes its own height, as drawn.
-                                    Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, &som))
-                                        .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
-                                        .sum(),
-                                    _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
-                                })
-                                .sum()
-                        }
-                        // `ctx` is already this row instance's own.
-                        Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
-                    },
-                };
-                content + c.margin.vertical()
-            }
+            None => self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth) + c.margin.vertical(),
         };
         // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
         // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's
@@ -141,6 +100,50 @@ impl Layouter<'_> {
     /// another, the first at SOM index `sib` among its siblings: each instance takes its own.
     fn instances_height(&self, k: &Node, inner_w: f64, ctx: &Ctx, depth: usize, som: &str, sib: usize) -> f64 {
         (0..self.instances(k, som)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
+    }
+
+    /// The height of `node`'s content within `inner_w` (inside its margins), whatever height it
+    /// gives itself. `ctx` is the node's own context ([`Ctx::with_som`]), `som` its SOM path and
+    /// `outer_para` the paragraph around it, which a field's caption takes.
+    fn content_height(&self, node: &Node, inner_w: f64, ctx: &Ctx, som: &str, outer_para: &Para, depth: usize) -> f64 {
+        match node {
+            Node::Draw(d) => self.value_height(&d.value, inner_w, ctx),
+            Node::Field(f) => self.field_height(f, inner_w, ctx, outer_para),
+            Node::ExclGroup(g) => self.group_height(g, inner_w, ctx, depth),
+            Node::Area(a) => self.positioned_height(&a.children, inner_w, ctx, depth),
+            Node::Subform(s) => match s.layout {
+                Layout::Positioned => self.positioned_height(&s.children, inner_w, ctx, depth),
+                // Each instance of a repeating child takes its own height.
+                Layout::Tb => {
+                    let sibs = SomIndices::of(&s.children);
+                    s.children
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, k)| k.common().presence.occupies())
+                        .map(|(i, k)| self.instances_height(k, inner_w, ctx, depth + 1, som, sibs.at(i)))
+                        .sum()
+                }
+                Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, ctx, depth, som).1,
+                Layout::Table => {
+                    let cols = self.columns(s, inner_w);
+                    let sibs = SomIndices::of(&s.children);
+                    s.children
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, k)| k.common().presence.occupies())
+                        .map(|(i, k)| match k {
+                            // Each instance of a repeating row takes its own height, as drawn.
+                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som))
+                                .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
+                                .sum(),
+                            _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
+                        })
+                        .sum()
+                }
+                // `ctx` is already this row instance's own.
+                Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
+            },
+        }
     }
 
     /// The natural width of a container's content within `avail_w`.
@@ -461,6 +464,19 @@ impl Layouter<'_> {
             let span = k.common().col_span.max(1);
             let w = if col < cols.len() { cols.iter().skip(col).take(span).sum::<f64>() } else { k.common().w.unwrap_or((inner_w - x).max(1.0)) };
             let (_, ch) = self.size_at(k, w, &ctx, depth + 1, sibs.at(i));
+            // A flowed subform in a cell is as tall as its content even when it gives a height:
+            // other viewers (Adobe Acrobat, PDF-XChange Editor) lay a section of a table row out
+            // that way, though a height makes a container fixed (XFA 3.3 p. 276).
+            let ch = match k {
+                Node::Subform(s) if s.common.h.is_some() && matches!(s.layout, Layout::Tb | Layout::LrTb | Layout::RlTb | Layout::Table) => {
+                    let own = ctx.with_som(&s.common, sibs.at(i));
+                    // At the width it is drawn at: the column's, not the cell's own.
+                    let inner = (w - s.common.margin.horizontal()).max(1.0);
+                    let content = self.content_height(k, inner, &own, &own.som, &ctx.para, depth + 1);
+                    clamp_opt(content + s.common.margin.vertical(), None, s.common.max_h)
+                }
+                _ => ch,
+            };
             out.push((i, Rect::new(x, 0.0, w, ch)));
             h = h.max(ch);
             x += w;
