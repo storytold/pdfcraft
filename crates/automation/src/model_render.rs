@@ -42,17 +42,22 @@ impl Automation {
         let prc = PrcFile::parse(&model.data).map_err(|e| failed(format!("the 3D model could not be read: {e}")))?;
         let meshes = assemble(&prc).map_err(failed)?;
         let annot = doc.info.annots_3d.iter().find(|m| m.page == page && m.index == index);
+        let framing = a.get("direction").is_some() || a.get("perspective").is_some();
         let chosen = match a.opt_str("view")? {
+            // A saved view has its own camera and projection: framing arguments would be ignored.
+            Some("saved") if framing => {
+                return Err(ToolError::InvalidArgs("direction and perspective frame view \"fit\"; a saved view keeps its own camera".into()));
+            }
             Some("saved") => Some(annot.and_then(|m| m.view).ok_or_else(|| failed("this 3D model has no saved view; use view \"fit\""))?),
             Some("fit") => None,
             Some(_) => return Err(Args::wrong("view", "\"saved\" or \"fit\"")),
-            None if a.get("direction").is_none() && a.get("perspective").is_none() => annot.and_then(|m| m.view),
+            None if !framing => annot.and_then(|m| m.view),
             None => None,
         };
         let saved = chosen.zip(annot);
         // A saved view is drawn in its annotation's shape unless a size is asked for.
         let shape = saved.map(|(_, m)| [f64::from(m.rect[2] - m.rect[0]), f64::from(m.rect[3] - m.rect[1])]);
-        let (width, height) = image_size(width_arg, height_arg, shape);
+        let (width, height) = image_size(width_arg, height_arg, shape)?;
         let mut options = RenderOptions { width, height, ..RenderOptions::default() };
         let camera = match saved {
             Some((view, _)) => {
@@ -86,18 +91,30 @@ fn side(a: &Args, key: &str) -> Result<Option<u32>> {
 }
 
 /// The image's size: the sides asked for; a side not asked for follows `shape` (width, height)
-/// from the other, or is [`DEFAULT_SIDE`] on the longer side when neither is given.
-fn image_size(width: Option<u32>, height: Option<u32>, shape: Option<[f64; 2]>) -> (u32, u32) {
+/// from the other, or is [`DEFAULT_SIDE`] on the longer side when neither is given. A side that
+/// would follow past [`MAX_SIDE`] is refused, as one asked for is, rather than cut and the
+/// picture squashed.
+fn image_size(width: Option<u32>, height: Option<u32>, shape: Option<[f64; 2]>) -> Result<(u32, u32)> {
     let aspect = shape.map(|[w, h]| w.abs() / h.abs()).filter(|r| r.is_finite() && *r > 0.0);
-    let fit = |v: f64| (v.round() as u32).clamp(1, MAX_SIDE);
-    match (width, height, aspect) {
+    let follow = |v: f64, given: &str, key: &str| {
+        let side = v.round().max(1.0);
+        if side <= f64::from(MAX_SIDE) {
+            Ok(side as u32)
+        } else {
+            Err(ToolError::InvalidArgs(format!(
+                "the model's shape would make the {key} {side}, past {MAX_SIDE}: give a smaller {given}, or both width and height"
+            )))
+        }
+    };
+    Ok(match (width, height, aspect) {
         (Some(w), Some(h), _) => (w, h),
-        (Some(w), None, Some(r)) => (w, fit(f64::from(w) / r)),
-        (None, Some(h), Some(r)) => (fit(f64::from(h) * r), h),
-        (None, None, Some(r)) if r >= 1.0 => (DEFAULT_SIDE, fit(f64::from(DEFAULT_SIDE) / r)),
-        (None, None, Some(r)) => (fit(f64::from(DEFAULT_SIDE) * r), DEFAULT_SIDE),
+        (Some(w), None, Some(r)) => (w, follow(f64::from(w) / r, "width", "height")?),
+        (None, Some(h), Some(r)) => (follow(f64::from(h) * r, "height", "width")?, h),
+        // The default side is the longer one, so the other never passes it.
+        (None, None, Some(r)) if r >= 1.0 => (DEFAULT_SIDE, (f64::from(DEFAULT_SIDE) / r).round().max(1.0) as u32),
+        (None, None, Some(r)) => ((f64::from(DEFAULT_SIDE) * r).round().max(1.0) as u32, DEFAULT_SIDE),
         (w, h, None) => (w.unwrap_or(DEFAULT_SIDE), h.unwrap_or(DEFAULT_SIDE)),
-    }
+    })
 }
 
 /// `direction`: three finite numbers, not all zero, from the eye towards the model.
@@ -157,13 +174,24 @@ mod tests {
     #[test]
     fn a_saved_view_image_takes_its_annotation_shape_unless_sized() {
         let wide = Some([700.0, 350.0]);
-        assert_eq!(image_size(None, None, wide), (512, 256));
-        assert_eq!(image_size(None, None, Some([100.0, 400.0])), (128, 512));
-        assert_eq!(image_size(Some(300), None, wide), (300, 150));
-        assert_eq!(image_size(None, Some(100), wide), (200, 100));
-        assert_eq!(image_size(Some(64), Some(64), wide), (64, 64));
-        assert_eq!(image_size(None, Some(100), None), (512, 100));
-        assert_eq!(image_size(None, None, Some([0.0, 0.0])), (512, 512));
+        let size = |w, h, shape| image_size(w, h, shape).ok();
+        assert_eq!(size(None, None, wide), Some((512, 256)));
+        assert_eq!(size(None, None, Some([100.0, 400.0])), Some((128, 512)));
+        assert_eq!(size(Some(300), None, wide), Some((300, 150)));
+        assert_eq!(size(None, Some(100), wide), Some((200, 100)));
+        assert_eq!(size(Some(64), Some(64), wide), Some((64, 64)));
+        assert_eq!(size(None, Some(100), None), Some((512, 100)));
+        assert_eq!(size(None, None, Some([0.0, 0.0])), Some((512, 512)));
+        // A very thin model stays at least a pixel across.
+        assert_eq!(size(None, None, Some([10_000.0, 1.0])), Some((512, 1)));
+    }
+
+    #[test]
+    fn a_side_that_would_follow_past_the_largest_is_refused_not_squashed() {
+        let tall = Some([100.0, 400.0]);
+        assert_eq!(image_size(Some(1024), None, tall).ok(), Some((1024, 4096)));
+        assert!(matches!(image_size(Some(1025), None, tall), Err(ToolError::InvalidArgs(m)) if m.contains("height 4100")));
+        assert!(matches!(image_size(None, Some(2049), Some([700.0, 350.0])), Err(ToolError::InvalidArgs(m)) if m.contains("width 4098")));
     }
 
     #[test]
