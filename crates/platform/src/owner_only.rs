@@ -536,12 +536,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An `OWNER RIGHTS` entry replaces what an owner may do implicitly. Granting only *write
-    /// owner* that way, the access list can't be replaced although the owner can still be set: the
-    /// file isn't taken as restricted.
+    /// OWNER RIGHTS can prevent an ordinary owner from replacing the access list. A privileged
+    /// caller may still replace it: success must leave the requested full-control entries,
+    /// while refusal leaves the original list unchanged.
     #[cfg(windows)]
     #[test]
-    fn a_file_whose_access_list_cant_be_replaced_is_not_restricted() {
+    fn owner_rights_are_either_replaced_or_reported_as_a_failure() {
         let dir = std::env::temp_dir().join(format!("pdfcraft-owner-only-ow-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -570,7 +570,16 @@ mod tests {
         let sddl = sddl_of(&file).unwrap();
         assert_eq!(section(&sddl, "O:"), Some(me.as_str()), "{sddl}");
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
-        assert!(restrict_to_owner(&file, &user()).is_err(), "the access list could not be replaced");
+        let result = restrict_to_owner(&file, &me);
+        let after = sddl_of(&file).unwrap();
+        if result.is_ok() {
+            assert_eq!(foreign_access(&after, &me), None, "{after}");
+            assert!(after.contains(&format!("(A;;2032127;;;{me})")), "user has full control: {after}");
+            assert!(after.contains("(A;;2032127;;;S-1-5-18)"), "SYSTEM has full control: {after}");
+            assert!(!after.contains("S-1-3-4"), "OWNER RIGHTS was replaced: {after}");
+        } else {
+            assert_eq!(after, sddl, "failed restriction leaves the original list unchanged");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
