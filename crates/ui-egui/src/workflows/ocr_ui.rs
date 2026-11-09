@@ -240,6 +240,9 @@ const OCR_DIALOG_RESERVE: f32 = 220.0;
 /// buttons still fit the smallest window at the largest interface size (173 pt), as Preferences.
 const OCR_MIN_SCROLL: f32 = 40.0;
 
+/// The Recognize Text dialog: the title, the settings groups (scrolling when the window is too
+/// short for them), any engine notice, and the Cancel / Recognize text row. Returns
+/// `(recognize, cancel)`, which of those buttons was clicked this frame.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
     let d = &mut app.ocr_draft;
