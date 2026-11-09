@@ -180,6 +180,7 @@ pub const WORDINGS: &[&str] = &[
     // What came after the signature.
     "This document has not been modified since this signature was applied.",
     "The document has been modified since this signature was applied, but the changes are permitted ({}).",
+    "The document has been modified since this signature was applied, and the fields of the revision it covers could not all be read, so the changes it permits are unknown.",
     "The document has been altered since this signature was applied in ways it does not permit ({}).",
     // Who signed, and when.
     "The signer's certificate was not valid at the time of signing.",

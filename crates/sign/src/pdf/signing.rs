@@ -1,4 +1,4 @@
-use super::listing::{mk_rotation, nums, sig_fields};
+use super::listing::{mk_rotation, nums, sig_fields_bounded};
 use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
@@ -197,10 +197,20 @@ fn sign_inner(
     }
     // The field and its widget.
     let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
-    let existing = opts
-        .field
-        .as_deref()
-        .map(|n| sig_fields(&doc).into_iter().find(|f| f.name == n).ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}"))));
+    // A field the walk could not reach might be the one named, or might already hold the name an
+    // automatic one would take, so a cut walk is not trusted for either.
+    let (fields, cut) = sig_fields_bounded(&doc);
+    let taken: HashSet<String> = fields.iter().map(|f| f.name.clone()).collect();
+    let existing = opts.field.as_deref().map(|n| {
+        fields.into_iter().find(|f| f.name == n).ok_or_else(|| {
+            let why = if cut {
+                format!("the signature fields are too many or too deep to read, so {n:?} may be one of them")
+            } else {
+                format!("there is no signature field {n:?}")
+            };
+            SignError::Pdf(why)
+        })
+    });
     // `turn`: how far the appearance is turned to read upright (`/MK /R`, counterclockwise).
     let (widget, rect, turn) = match existing {
         Some(f) => {
@@ -221,11 +231,16 @@ fn sign_inner(
         }
         None => {
             let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
-            let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
-            let fname = opts
-                .new_field_name
-                .clone()
-                .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
+            let fname = match opts.new_field_name.clone() {
+                Some(n) => n,
+                // A field the cut walk could not reach may already hold `SignatureN`.
+                None if cut => {
+                    return Err(SignError::Pdf(
+                        "the signature fields are too many or too deep to read, so an automatic name can't be checked".into(),
+                    ));
+                }
+                None => (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default(),
+            };
             let rect = opts.rect.unwrap_or([0.0; 4]);
             let mut w = Dict::new();
             w.set(b"Type".to_vec(), Object::name("Annot"));

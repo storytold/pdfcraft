@@ -2985,3 +2985,49 @@ fn signature_discovery_bounds_the_field_hierarchy_depth() {
     assert!(names(&chain(4)).iter().any(|n| n == "g.g.g.leaf"), "{:?}", names(&chain(4)));
     assert!(names(&chain(2_000)).iter().all(|n| !n.ends_with("leaf")));
 }
+
+/// `fixture()`'s page with a /Kids chain of `levels` signature fields as its /AcroForm.
+fn deep_field_chain(levels: usize) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    for i in 0..levels {
+        let num = 7 + i;
+        objs.push(
+            if i + 1 == levels {
+                format!("<< /T (leaf) /FT /Sig /Parent {} 0 R >>", num - 1)
+            } else {
+                format!("<< /T (g) /FT /Sig /Kids [{} 0 R] >>", num + 1)
+            }
+            .into_bytes(),
+        );
+    }
+    write_pdf(&objs.iter().map(Vec::as_slice).collect::<Vec<_>>())
+}
+
+/// A field tree past the depth the walk follows leaves the signed permission unknown: no
+/// permission is claimed from the current revision, changes after it are not permitted as an
+/// approval signature's would be, and signing a field the cut walk could not reach says so
+/// instead of calling the field missing.
+#[test]
+fn a_cut_field_walk_leaves_the_signed_permission_unknown() {
+    let base = deep_field_chain(80);
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    // The leaf is past the cut, so it is not called missing.
+    let said = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { field: Some("g.leaf".into()), ..opts() }).unwrap_err().to_string();
+    assert!(said.contains("too many or too deep"), "{said}");
+    // Signed under P 2 with a name that needn't be checked against the cut walk.
+    let opts = SignOptions { certify: Some(2), new_field_name: Some("S".into()), ..opts() };
+    let signed = pdfcraft_sign::sign(&open(&base), &id, &opts).unwrap();
+    let bytes = edit_after(&signed, add_comment);
+    let s = signatures(&open(&bytes), &bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.certify, None, "a cut walk claims no permission for the signed revision");
+    assert_eq!(s.status, Status::Unknown, "{:?} {:?}", s.modification, s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("unknown")), "{:?}", s.details);
+}

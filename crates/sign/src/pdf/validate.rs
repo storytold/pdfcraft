@@ -239,6 +239,9 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     let signer = info.chain.first().cloned();
     let revocation = check_dss_revocation(doc, signer.as_ref(), &at, info);
     let revoked = revocation == DssRevocation::Revoked;
+    // Whether the walk over the signed revision's fields was cut short, so the permission that
+    // revision granted is unknown.
+    let mut permissions_unknown = false;
     // Changes after signing.
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
@@ -253,6 +256,7 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
             // current revision, would let a later `/P` rewrite speak for the signed one.
             info.certify = None;
             let (fields, cut) = sig_fields_bounded(old);
+            permissions_unknown = cut;
             if !cut
                 && let Some(v) = fields
                     .iter()
@@ -262,17 +266,32 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
                 info.certify = docmdp(old, &v);
             }
         }
-        classify_changes(doc, old, info.certify)
+        // Judged as the strictest permission allows when the signed one is unknown, never as
+        // an approval signature's permitted changes.
+        classify_changes(doc, old, if permissions_unknown { Some(1) } else { info.certify })
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
     // interface can say both in its own language.
+    if permissions_unknown {
+        // The revision's fields could not all be read, so which permission it carried is unknown:
+        // the changes are reported as unverified rather than permitted or refused.
+        info.status = Status::Unknown;
+        info.details.push(Detail::plain(
+            "The document has been modified since this signature was applied, and the fields of the revision it covers could not all be read, so the changes it permits are unknown.",
+        ));
+        problems = true;
+    }
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this signature was applied.")),
-        Modification::Allowed(kinds) => info.details.push(Detail::of(
+        Modification::Allowed(kinds) if !permissions_unknown => info.details.push(Detail::of(
             "The document has been modified since this signature was applied, but the changes are permitted ({}).",
             Fill::Changes(kinds.clone()),
         )),
+        // Everything a P 1 certification would permit, which is nothing beyond metadata. The
+        // changes themselves are reported as unverified above, not as permitted or refused.
+        Modification::Allowed(_) => {}
+        Modification::Disallowed(_) if permissions_unknown => {}
         Modification::Disallowed(kinds) => {
             let said = Detail::of(
                 "The document has been altered since this signature was applied in ways it does not permit ({}).",
