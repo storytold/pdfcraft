@@ -172,8 +172,9 @@ fn reconstructed_and_unreadable_objects_are_not_cached_as_complete() {
         assert_eq!(cache.timestamp_candidates(&repaired), vec![ObjRef::new(3, 0)]);
     }
     // A single invalid keyword immediately before endobj is deliberately recovered as
-    // Null by parse_indirect. Use a stream without endstream to exercise a real read error.
-    let unreadable = fixture(&[STAMP, "<< /Length 0 >>\nstream\nunterminated"]);
+    // Null by parse_indirect. Use a stream with neither endstream nor /Length to exercise a real
+    // read error (with a /Length that fits, the stream is that many bytes).
+    let unreadable = fixture(&[STAMP, "<< >>\nstream\nunterminated"]);
     assert!(unreadable.repair_log().is_empty());
     assert!(unreadable.try_get(4).is_err());
     assert!(unreadable.scan_objects_checked().any(|(r, object)| r.num == 4 && object.is_err()));
