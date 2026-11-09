@@ -134,6 +134,177 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+/// Month and weekday names (weekdays from Sunday): full, then short.
+type Names = ([&'static str; 12], [&'static str; 12], [&'static str; 7], [&'static str; 7]);
+
+const ENGLISH: Names = (
+    MONTHS,
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    DAYS,
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+);
+
+static NAMES: std::sync::RwLock<Names> = std::sync::RwLock::new(ENGLISH);
+
+/// Sets the month and weekday names `util.printd` writes for `mmmm`, `mmm`, `dddd` and `ddd`
+/// (weekdays from Sunday), as a localized Acrobat writes its own language's (#5303).
+/// `util.scand` reads them as well as English.
+pub fn set_date_names(months: [&'static str; 12], months_short: [&'static str; 12], days: [&'static str; 7], days_short: [&'static str; 7]) {
+    *NAMES.write().unwrap_or_else(std::sync::PoisonError::into_inner) = (months, months_short, days, days_short);
+}
+
+/// `text` with the month and weekday names of `lists` (in the order months, short months,
+/// weekdays, short weekdays) written as their English names, so a parser that reads English
+/// reads them. The longest name wins at each place, case ignored, and only a whole name: one
+/// that doesn't continue a word, nor end in a digit that a number continues. A name may hold
+/// digits ("10月"), spaces ("tháng 10"), dots ("ม.ค.") or combining vowel signs, which a
+/// word-by-word reader would split (#5303). Where a weekday and a month share a name (Italian
+/// "mar"), the order of the format's name fields (`mmm`, `ddd`) decides. English names are
+/// found too, so that one typed ("Tue" before "Mar") fills its field of the format as a
+/// localized one does.
+fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4]) -> String {
+    const EN: [&[&str]; 4] = [&MONTHS, &MONTHS, &DAYS, &DAYS];
+    // No date is this long: hostile text is left as it is rather than scanned name by name.
+    if text.len() > MAX_DATE_TEXT_BYTES {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let typed_english: [&[&str]; 4] = [&ENGLISH.0, &ENGLISH.1, &ENGLISH.2, &ENGLISH.3];
+    // Each name as folded chars, whether it is a month, and its English name.
+    let mut names: Vec<(Vec<String>, bool, &str)> = Vec::new();
+    for (k, (list, en)) in lists.into_iter().zip(EN).chain(typed_english.into_iter().zip(EN)).enumerate() {
+        for (name, english) in list.iter().zip(en.iter()) {
+            // A short name ending in a dot ("mar.") is also read typed without it, as the same
+            // kind of name, so that where it equals another ("Mar", March) the format decides.
+            let bare = name.trim_end_matches('.');
+            for name in std::iter::once(*name).chain((bare.len() < name.len()).then_some(bare)) {
+                let n: Vec<String> = name.chars().map(fold).collect();
+                if !n.is_empty() && n.len() <= MAX_NAME_CHARS {
+                    names.push((n, k % 4 < 2, english));
+                }
+            }
+        }
+    }
+    names.sort_by_key(|(n, ..)| std::cmp::Reverse(n.len()));
+    // The format's name fields in order: true for a month, false for a weekday.
+    let f: Vec<char> = fmt.chars().collect();
+    let mut expected = Vec::new();
+    let mut j = 0;
+    while let Some(&c) = f.get(j) {
+        let run = f.get(j..).map_or(1, |r| r.iter().take_while(|x| **x == c).count()).max(1);
+        if run >= 3 && (c == 'm' || c == 'd') {
+            expected.push(c == 'm');
+        }
+        j = j.saturating_add(run);
+    }
+    let mut slot = 0;
+    // A name's first letter may not continue a word; its last may not run on into a letter, nor
+    // (a digit) into a number.
+    let letter = |c: Option<&char>| c.is_some_and(|c| c.is_alphabetic());
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        let fits = |n: &Vec<String>| {
+            let end = i.saturating_add(n.len());
+            let first = n.first().and_then(|e| e.chars().next());
+            let last = n.last().and_then(|e| e.chars().next());
+            chars.get(i..end).is_some_and(|t| t.iter().map(|c| fold(*c)).eq(n.iter().cloned()))
+                && !(first.is_some_and(char::is_alphabetic) && letter(i.checked_sub(1).and_then(|p| chars.get(p))))
+                && !match last {
+                    Some(l) if l.is_ascii_digit() => chars.get(end).is_some_and(char::is_ascii_digit),
+                    Some(l) if l.is_alphabetic() => letter(chars.get(end)),
+                    _ => false,
+                }
+        };
+        let longest = names.iter().find(|(n, ..)| fits(n)).map(|(n, ..)| n.len());
+        let hit = longest.and_then(|len| {
+            let mut same = names.iter().filter(|(n, ..)| n.len() == len && fits(n));
+            let want = expected.get(slot).copied();
+            let all: Vec<_> = same.by_ref().collect();
+            all.iter().find(|(_, month, _)| Some(*month) == want).or_else(|| all.first()).copied()
+        });
+        match hit {
+            Some((n, month, english)) => {
+                if expected.get(slot) == Some(month) {
+                    slot += 1;
+                }
+                // Apart from what touches it ("10月18"), but no space added at either end.
+                if out.ends_with(char::is_alphanumeric) {
+                    out.push(' ');
+                }
+                out.push_str(english);
+                i = i.saturating_add(n.len());
+                if chars.get(i).is_some_and(|c| c.is_alphanumeric()) {
+                    out.push(' ');
+                }
+            }
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// `c` as names are compared: lower case, with the capital I and the Turkish dotted and dotless
+/// i all "i", and a combining dot above (U+0307) dropped, so that "EKİM", "SALI" and "MAYIS" are
+/// Turkish "Ekim", "Salı" and "Mayıs", which lower-casing alone makes "ekim" with a dotted i,
+/// "sali" and "mayis" (#5303). The Greek final sigma is a sigma, since a capital Σ, which
+/// lower-cases to σ on its own, ends "ΙΑΝΟΥΆΡΙΟΣ" for "Ιανουάριος". One piece for each char, so
+/// positions in the text stay aligned.
+fn fold(c: char) -> String {
+    match c {
+        'I' | 'ı' | 'İ' => "i".to_string(),
+        'ς' => "σ".to_string(),
+        _ => c.to_lowercase().filter(|&l| l != '\u{307}').collect(),
+    }
+}
+
+/// `s` [`fold`]ed char by char.
+fn folded(s: &str) -> String {
+    s.chars().map(fold).collect()
+}
+
+/// Typed dates longer than this are not searched for names.
+const MAX_DATE_TEXT_BYTES: usize = 1024;
+
+/// Names longer than this are not looked for (settings are trusted, but a cap keeps the scan cheap).
+const MAX_NAME_CHARS: usize = 32;
+
+fn names() -> Names {
+    *NAMES.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+std::thread_local! {
+    /// Whether `util.printd` on this thread writes English names, whatever the date language.
+    static PRINTD_ENGLISH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `run` with `util.printd` writing English month and weekday names when `english` (scripts
+/// it starts carry this to their own thread): for an appearance whose fonts can't draw the date
+/// language's names, which would come out as `?` (#5303). `util.scand` still reads both.
+pub fn with_english_printd<R>(english: bool, run: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PRINTD_ENGLISH.with(|e| e.set(self.0));
+        }
+    }
+    let _restore = Restore(PRINTD_ENGLISH.with(|e| e.replace(english)));
+    run()
+}
+
+/// Whether [`with_english_printd`] is on for this thread.
+pub(crate) fn printd_english() -> bool {
+    PRINTD_ENGLISH.with(std::cell::Cell::get)
+}
+
+/// The names `util.printd` writes.
+fn printd_names() -> Names {
+    if printd_english() { ENGLISH } else { names() }
+}
+
 /// `util.printd(cFormat, oDate)`: yyyy yy mmmm mmm mm m dddd ddd dd d HH H hh h MM M ss s tt,
 /// and the numeric formats 0 (D:yyyymmddHHMMss), 1 (yyyy.mm.dd HH:MM:ss) and 2 (m/d/yy h:MM:ss tt).
 pub(crate) fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -161,6 +332,7 @@ pub(crate) fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     let (y, mo, day, wd, h, mi, sec) =
         (part("getFullYear")?, part("getMonth")?, part("getDate")?, part("getDay")?, part("getHours")?, part("getMinutes")?, part("getSeconds")?);
     let mut out = String::new();
+    let (months, months_short, days, days_short) = printd_names();
     let b = fmt.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -186,13 +358,13 @@ pub(crate) fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
                 }
             }
             b'm' => match run {
-                r if r >= 4 => out.push_str(MONTHS[mo as usize % 12]),
-                3 => out.push_str(&MONTHS[mo as usize % 12][..3]),
+                r if r >= 4 => out.push_str(months.get(mo.rem_euclid(12) as usize).copied().unwrap_or_default()),
+                3 => out.push_str(months_short.get(mo.rem_euclid(12) as usize).copied().unwrap_or_default()),
                 n => push_num(&mut out, mo + 1, n),
             },
             b'd' => match run {
-                r if r >= 4 => out.push_str(DAYS[wd as usize % 7]),
-                3 => out.push_str(&DAYS[wd as usize % 7][..3]),
+                r if r >= 4 => out.push_str(days.get(wd.rem_euclid(7) as usize).copied().unwrap_or_default()),
+                3 => out.push_str(days_short.get(wd.rem_euclid(7) as usize).copied().unwrap_or_default()),
                 n => push_num(&mut out, day, n),
             },
             b'H' => push_num(&mut out, h, run),
@@ -435,11 +607,13 @@ fn scan_date(fmt: &str, text: &str, this_year: i32) -> Option<Scanned> {
                 p += 1;
             }
             (ScanPart::Field { unit: DateUnit::MonthName, .. }, ScanToken::Letters(l)) => {
-                v.mo = Some(named(&MONTHS, l)?.saturating_add(1));
+                let (months, months_short, ..) = names();
+                v.mo = Some(named(&months, l).or_else(|| named(&months_short, l)).or_else(|| named(&MONTHS, l))?.saturating_add(1));
                 p += 1;
             }
             (ScanPart::Field { unit: DateUnit::Weekday, .. }, ScanToken::Letters(l)) => {
-                named(&DAYS, l)?;
+                let (.., days, days_short) = names();
+                named(&days, l).or_else(|| named(&days_short, l)).or_else(|| named(&DAYS, l))?;
                 p += 1;
             }
             (ScanPart::Field { unit: DateUnit::AmPm, .. }, ScanToken::Letters(l)) => {
@@ -509,10 +683,11 @@ fn scan_date(fmt: &str, text: &str, this_year: i32) -> Option<Scanned> {
 
 /// The index of the name `word` is, in full or as its first three letters, in any case.
 fn named(names: &[&str], word: &str) -> Option<u32> {
-    let word = word.to_lowercase();
+    let word = folded(word);
     let i = names.iter().position(|n| {
-        let n = n.to_lowercase();
-        word == n || n.get(..3) == Some(word.as_str())
+        let n = folded(n);
+        // A short name may end in a dot ("Okt."); three letters may be cut from any name.
+        word == n || word == n.trim_end_matches('.') || n.chars().take(3).collect::<String>() == word
     })?;
     u32::try_from(i).ok()
 }
@@ -524,6 +699,8 @@ pub(crate) fn scand(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         return Ok(JsValue::null());
     };
     let fmt = text(&arg(args, 0), ctx)?;
+    let (months, months_short, days, days_short) = names();
+    let typed = english_names(&typed, &fmt, [&months, &months_short, &days, &days_short]);
     let date = JsDate::new(ctx);
     let this_year = date.get_full_year(ctx)?.to_number(ctx)?;
     let this_year = if this_year.is_finite() { this_year as i32 } else { 2000 };
