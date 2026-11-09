@@ -891,6 +891,33 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
     }
 }
 
+#[test]
+fn xfdf_comment_import_preserves_text_around_comments_and_instructions() {
+    for (body, expected) in [
+        ("left<!-- ignored -->right", "leftright"),
+        ("left<nested>excluded</nested>right", "leftright"),
+        ("<!-- first -->left<?note ignored?>middle<!-- last -->right", "leftmiddleright"),
+        ("<![CDATA[Å<left>]]><!-- ignored -->&amp;Ω", "Å<left>&Ω"),
+        (" left <!-- ignored --> right ", " left  right "),
+        ("left\n<!-- ignored -->right&#13;\nlast", "left\rright\rlast"),
+        ("<!-- empty --><?note ignored?>", ""),
+    ] {
+        let mut doc = blank();
+        let xml = format!(
+            r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="split-text" rect="10,10,30,30"><contents>{body}</contents></text></annots></xfdf>"#
+        );
+        let report = import(&mut doc, xml.as_bytes()).unwrap();
+        assert_eq!(report.comments, 1);
+        assert!(report.rejected.is_empty());
+        for saved in [write_full(&doc, &SaveOptions::default()).unwrap(), write_incremental(&doc, &SaveOptions::default()).unwrap()] {
+            let reopened = Document::open(Arc::new(saved)).unwrap();
+            let comments = annots_of(&reopened);
+            let note = comments.iter().find(|d| d.name(b"Subtype") == Some(b"Text")).unwrap();
+            assert_eq!(note.get(b"Contents").unwrap().as_string().unwrap().to_text(), expected, "XFDF contents: {body}");
+        }
+    }
+}
+
 /// Importing the same note again must not leave the earlier pop-up on the page.
 #[test]
 fn reimporting_a_note_replaces_its_popup() {
@@ -2515,6 +2542,44 @@ fn copies_placed_with_an_offset_move_whole_and_the_text_reports_its_bounds() {
     // A non-finite offset is ignored rather than written into the document.
     import_comments(&mut dst, &xfdf, Some(1), Some("q"), Some([f64::NAN, 0.0])).unwrap();
     assert_eq!(summaries(&dst).iter().filter(|s| s.page == 1 && s.subtype == "Text").map(|s| s.rect[0]).next(), Some(b[0]));
+}
+
+/// Preview text follows the same direct character data as import, including text after XML
+/// comments or processing instructions, without changing its geometry, font or blank-text rule.
+#[test]
+fn comment_previews_keep_complete_direct_contents_text() {
+    for (body, expected) in [
+        ("plain text", "plain text"),
+        ("left<!-- ignored -->right", "leftright"),
+        ("<!-- ignored -->after", "after"),
+        ("left<?editor keep?>right", "leftright"),
+        (" Å<![CDATA[<&>]]><!-- ignored -->&amp;Ω ", " Å<&>&Ω "),
+        ("left<unknown>excluded</unknown>right", "leftright"),
+        ("before&#13;&#10;after", "before\nafter"),
+        ("", ""),
+        ("<!-- ignored --><?editor keep?>", ""),
+        (" \t<!-- ignored --> \n ", " \t \n "),
+    ] {
+        for callout in [false, true] {
+            let extra = if callout { r#" callout="1,2,10,20" fringe="1,2,3,4""# } else { "" };
+            let xml = format!(
+                r##"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><freetext page="0" rect="10,20,110,70" color="#FF0000"{extra}><contents>{body}</contents><defaultappearance>0 0.5 1 rg /Helv 14 Tf</defaultappearance></freetext></annots></xfdf>"##
+            );
+            let mut want = vec![Outline::Rect { rect: [10.0, 20.0, 110.0, 70.0], round: false, color: Some([1.0, 0.0, 0.0]) }];
+            if callout {
+                want.push(Outline::Line { points: vec![[1.0, 2.0], [10.0, 20.0]], color: Some([1.0, 0.0, 0.0]) });
+            }
+            if !expected.trim().is_empty() {
+                want.push(Outline::Text {
+                    rect: if callout { [11.0, 22.0, 107.0, 66.0] } else { [10.0, 20.0, 110.0, 70.0] },
+                    text: expected.into(),
+                    size: 14.0,
+                    color: Some([0.0, 0.5, 1.0]),
+                });
+            }
+            assert_eq!(comment_outlines(&xml), want, "body={body:?}, callout={callout}");
+        }
+    }
 }
 
 /// Fill & Sign marks and text boxes copied: the bundle on the pointer shows the tick, cross, dot

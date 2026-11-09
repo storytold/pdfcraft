@@ -662,6 +662,11 @@ fn pairs(text: &str) -> Vec<[f64; 2]> {
     text.split(';').filter_map(|p| if let [x, y] = csv(p).as_slice() { Some([*x, *y]) } else { None }).collect()
 }
 
+/// Comments and processing instructions split character data; nested element text stays out.
+fn contents_text(node: roxmltree::Node<'_, '_>) -> String {
+    node.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect()
+}
+
 /// The outlines of the comments in an XFDF text (replies, which have no place of their own,
 /// left out): what a paste shows hanging on the pointer.
 pub fn comment_outlines(text: &str) -> Vec<Outline> {
@@ -743,7 +748,7 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
                 // is its rect inset by the fringe).
                 if tag == "freetext"
                     && let Some(rect) = rect
-                    && let Some(text) = node.children().find(|c| c.has_tag_name("contents")).and_then(|c| c.text()).filter(|t| !t.trim().is_empty())
+                    && let Some(text) = node.children().find(|c| c.has_tag_name("contents")).map(contents_text).filter(|t| !t.trim().is_empty())
                 {
                     let mut da = Dict::new();
                     if let Some(s) = node.children().find(|c| c.has_tag_name("defaultappearance")).and_then(|c| c.text()) {
@@ -943,7 +948,8 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     for child in node.children().filter(|c| c.is_element()) {
         match child.tag_name().name() {
             "contents" => {
-                d.set(b"Contents".to_vec(), PdfString::text(&child.text().unwrap_or("").replace("\r\n", "\r").replace('\n', "\r")));
+                let text = contents_text(child);
+                d.set(b"Contents".to_vec(), PdfString::text(&text.replace("\r\n", "\r").replace('\n', "\r")));
             }
             "defaultappearance" => {
                 d.set(b"DA".to_vec(), PdfString::literal(child.text().unwrap_or("").as_bytes().to_vec()));
