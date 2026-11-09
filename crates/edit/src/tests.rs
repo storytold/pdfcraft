@@ -549,7 +549,7 @@ fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
-fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
+fn flattening_draws_cloudy_squares_and_keeps_one_it_cannot_draw() {
     let page = stream("", " ");
     let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
     let case = |extra: &str, drawn: usize, left: bool| {
@@ -571,10 +571,90 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
             assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
         }
     };
-    case("/BE << /S /C /I 2 >>", 0, true);
+    // A cloudy square is drawn (ISO 32000-2 Table 169); one whose /RD leaves no square inside
+    // its /Rect (Table 180: the sums "shall be less than" the width and height) cannot be, and stays.
+    case("/BE << /S /C /I 2 >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30]", 0, true);
     case("/BE << /S /S >>", 1, false);
-    case("/BE << /S /C /I 2 >> /F 2", 0, true);
-    case("/BE << /S /C /I 2 >> /AP << /N 6 0 R >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /F 2", 0, true);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /AP << /N 6 0 R >>", 1, false);
+}
+
+/// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
+/// valid OCMDs, including ISO 32000-1 §8.11.2.2 `/VE` expressions within depth 16 and the
+/// 4,096-node visit budget) in `/OC /PCFlOC0 BDC … EMC` and registers them in
+/// `/Resources /Properties`, while retaining annotations with untransferable, malformed,
+/// overly deep, or over-budget `/OC` definitions in `/Annots`.
+#[test]
+fn flattening_transfers_annotation_optional_content_to_marked_content() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
+    let case = |extra: &str, drawn: usize, left: bool, bdc: bool| {
+        let annot = format!("<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /AP << /N 6 0 R >> {extra} >>");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R 13 0 R] /D << /OFF [7 0 R] /ON [8 0 R 13 0 R] >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 5 0 R /Annots [4 0 R] >>",
+            &annot,
+            &page,
+            form,
+            "<< /Type /OCG /Name (Hidden layer) >>",
+            "<< /Type /OCG /Name (Shown layer) >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOn >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOff >>",
+            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOff >>",
+            "<< /Type /OCG /Name (Second shown layer) >>",
+            "[ /Or 15 0 R 15 0 R 15 0 R 15 0 R ]",
+            "[ /Or 16 0 R 16 0 R 16 0 R 16 0 R ]",
+            "[ /Or 17 0 R 17 0 R 17 0 R 17 0 R ]",
+            "[ /Or 18 0 R 18 0 R 18 0 R 18 0 R ]",
+            "[ /Or 8 0 R 8 0 R 8 0 R 8 0 R ]",
+        ]);
+        let before = streams(&doc, 0);
+        let expected_oc = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().and_then(|d| d.get(b"OC").cloned());
+        assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), drawn, "{extra}");
+        let doc = reopen(&doc);
+        let p = &pdfcraft_model::pages(&doc)[0];
+        assert_eq!(p.dict.contains(b"Annots"), left, "{extra}");
+        if drawn == 0 {
+            assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the retained comment: {extra}");
+        } else {
+            let flat = streams(&doc, 0).pop().unwrap();
+            assert_eq!(flat.contains("/OC /PCFlOC0 BDC") && flat.contains("EMC"), bdc, "{extra}: {flat}");
+            if bdc {
+                let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+                let props = doc.resolve(res.as_dict().unwrap().get(b"Properties").unwrap());
+                assert_eq!(props.as_dict().unwrap().get(b"PCFlOC0").cloned(), expected_oc, "{extra}");
+            }
+        }
+    };
+    case("/OC 7 0 R", 1, false, true);
+    case("/OC 8 0 R", 1, false, true);
+    case("/OC 9 0 R", 1, false, true);
+    case("/OC 10 0 R", 1, false, true);
+    case("/OC 11 0 R", 1, false, true);
+    case("/OC 12 0 R", 1, false, true);
+    case("", 1, false, false);
+    // Valid ISO 32000-1 §8.11.2.2 /VE visibility expressions are transferred with their OCMD.
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 7 0 R [ /And 8 0 R 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R [ /Not 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] /OCGs [8 0 R] /P /AllOn >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] /OCGs [7 0 R] /P /AllOn >>", 1, false, true);
+    // Malformed /VE, invalid /P, inline /OCG, and /VE exceeding depth 16 or the node budget fail closed and stay in /Annots.
+    case("/OC << /Type /OCG /Name (Inline layer) >>", 0, true, false);
+    case("/OC << /Type /OCMD /OCGs [8 0 R] /P /InvalidPolicy >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE 8 0 R /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Xor 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    let deep_ve = format!("{}8 0 R{}", "[ /Not ".repeat(17), " ]".repeat(17));
+    case(&format!("/OC << /Type /OCMD /VE {deep_ve} /OCGs [8 0 R] /P /AllOn >>"), 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Or 14 0 R 14 0 R 14 0 R 14 0 R ] /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
 }
 
 /// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must
@@ -725,10 +805,12 @@ fn flattening_keeps_a_widget_whose_value_is_past_the_parent_limit() {
     assert_eq!(annots, Some(1), "the widget stays");
 }
 
-/// #1794: a reply this builder cannot draw stays on the page even when the comment it replies to
-/// is flattened; the comment's pop-up still goes with it.
+/// #1794, #5631: a reply this builder cannot draw goes with the comment it replies to, as its
+/// pop-up does. A reply of type R is not shown on the page (ISO 32000-2 Table 172), so it has no
+/// ink of its own to keep; before #5631 it stayed, the orphan of a comment that was gone. (A
+/// `/RT /Group` member that cannot be drawn still stays: it is drawn on the page.)
 #[test]
-fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
+fn flattening_takes_an_undrawable_reply_with_its_comment() {
     let page = stream("", " ");
     let mut doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -736,15 +818,212 @@ fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
         &page,
         "<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /Contents (Synthetic comment) /AP << /N 8 0 R >> /Popup 7 0 R >>",
-        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /RD [60 30 60 30] /IRT 5 0 R >>",
         "<< /Type /Annot /Subtype /Popup /Rect [300 600 400 700] /Parent 5 0 R >>",
         "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream",
     ]);
-    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the cloudy reply cannot be");
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the reply is not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the comment, its reply and its pop-up are gone");
+}
+
+/// #5631: flattening draws no reply of type R into the page, whatever its appearance, and builds
+/// none for one without (a note reply would get an icon); every reply goes with its comment, a
+/// reply to a reply too, even listed before the reply it answers. A `/RT /Group` member is
+/// drawn as any annotation.
+#[test]
+fn flattening_draws_no_reply_and_takes_the_thread_with_its_comment() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        // The reply to the reply (8) is listed before the reply it answers (6).
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 8 0 R 6 0 R 7 0 R 9 0 R] >>",
+        &page,
+        // The comment (blue), its reply (red), its pop-up, a reply to the reply with no
+        // appearance, and a member of its group (green).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 10 0 R >> /Popup 7 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Popup /Rect [300 500 400 600] /Parent 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply to the reply) /IRT 6 0 R /RT /R >>",
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    let n = flatten(&mut doc, &[0], true, false).unwrap();
+    assert_eq!(n, 2, "the comment and the group member are drawn; the replies are not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the whole thread, its pop-up and the group member are gone");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [10, 12], "the comment's and the member's appearances; not the reply's, and none built for the other");
+}
+
+/// #5632 review: a reply's text never blocks flattening (a reply is not drawn into the page, so
+/// it can't bake in a `?`), and a `/RT /Group` member that flattening skipped (Hidden here)
+/// stays when its primary is flattened: only replies go with what they answer.
+#[test]
+fn flattening_skips_replies_in_the_question_mark_check_and_keeps_skipped_group_members() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 60 40] /F 4 /AP << /N 8 0 R >> >>",
+        // A text-box reply whose text Helvetica can't draw, with no appearance.
+        "<< /Type /Annot /Subtype /FreeText /Rect [10 50 150 80] /DA (0 g /Helv 12 Tf) /Contents <FEFF6B228FCE> /F 4 /IRT 5 0 R >>",
+        // A hidden member of the square's group.
+        "<< /Type /Annot /Subtype /Circle /Rect [70 10 100 40] /F 6 /IRT 5 0 R /RT /Group /AP << /N 8 0 R >> >>",
+        &stream("/Type /XObject /Subtype /Form /BBox [0 0 50 30]", "0 0 1 rg 0 0 50 30 re f"),
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "flattened, the square drawn");
     let doc = reopen(&doc);
     let p = &pdfcraft_model::pages(&doc)[0];
     let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
-    assert_eq!(left, [6], "the undrawn reply stays; the comment and its pop-up are gone");
+    assert_eq!(left, [7], "the reply went with the square; the hidden group member stays");
+}
+
+/// #5632 review: a thread three replies deep, listed in `/Annots` in reverse (the deepest reply
+/// first, the comment last), goes whole with its comment, none of the replies drawn; a reply to a
+/// `/RT /Group` member goes with that member, which is drawn.
+#[test]
+fn flattening_takes_a_thread_three_deep_in_reverse_order_and_a_group_members_reply() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [8 0 R 7 0 R 6 0 R 5 0 R 9 0 R 10 0 R] >>",
+        &page,
+        // The comment (blue), and three replies, each to the one before, all with appearances (red).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply 1) /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply 2) /IRT 6 0 R /RT /R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [115 485 135 503] /Contents (Reply 3) /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A member of the comment's group (green), and a reply to the member.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 13 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /Contents (Reply to the member) /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 2, "the comment and the group member are drawn; no reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the three replies and the member's reply go with what they answer");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [11, 13], "the comment's and the member's appearances, not the replies'");
+}
+
+/// #5632 review: `/Annots` should hold references (ISO 32000-2 Table 31), but a reply or pop-up
+/// written inline in it still goes with the comment it points at, as a referenced one does. One
+/// pointing at a comment that stays, stays.
+#[test]
+fn flattening_takes_inline_replies_and_popups_with_their_comment() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Inline reply) /IRT 5 0 R >> \
+         << /Type /Annot /Subtype /Popup /Rect [200 400 300 500] /Parent 5 0 R >> \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 395 125 413] /Contents (Reply to a hidden note) /IRT 6 0 R >> 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 7 0 R >> >>",
+        // Hidden: not flattened, so it stays, and so does its inline reply.
+        "<< /Type /Annot /Subtype /Text /F 30 /Rect [100 400 120 418] /Contents (Hidden note) /AP << /N 7 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(p.dict.get(b"Annots").unwrap());
+    let left: Vec<String> = annots
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| doc.resolve(a).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string().map(|s| s.to_text())).unwrap_or_default())
+        .collect();
+    assert_eq!(left, ["Reply to a hidden note", "Hidden note"], "the inline reply and pop-up went with the comment");
+}
+
+/// #5632 review: replies whose `/IRT` runs in a loop (two replying to each other, one replying to
+/// itself, and a square and a note each answering the other) end the flattening. None of them is
+/// drawn: each is a reply. Those that answer nothing flattened stay; the comment beside them is
+/// flattened and its reply goes with it.
+#[test]
+fn flattening_ends_on_replies_whose_irt_loops() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >>",
+        &page,
+        // A comment and its reply.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [100 500 120 518] /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        // Two replies to each other.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [200 500 220 518] /IRT 8 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A reply to itself.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [300 500 320 518] /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        // A square and a note each answering the other: both are replies.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [400 500 420 518] /IRT 11 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [405 495 425 513] /IRT 10 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
+    assert_eq!(left, [7, 8, 9, 10, 11], "the comment's reply went with it; the looping replies stay");
+}
+
+/// #5632 review: an `/RT` that isn't `/Group` reads as the default R, as the comment list and the
+/// page read it, so replies with an unknown name or a string there are neither drawn nor kept
+/// once their comment is flattened. A form field with a stray `/IRT` is no reply: it is flattened
+/// as a field.
+#[test]
+fn flattening_reads_an_unknown_or_malformed_rt_as_a_reply_and_a_widget_with_irt_as_a_field() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 9 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /RT /Answer /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply) /IRT 5 0 R /RT (Group) /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /F 4 /Rect [200 500 220 518] /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, true).unwrap(), 2, "the comment and the field are drawn; neither reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "both replies went with the comment, and the field was flattened");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, not the replies'");
 }
 
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
@@ -1521,6 +1800,45 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// ISO 32000-2 §9.6.4: an Edit-text line set in a Type 3 bitmap font is as high as the boxes its
+/// glyphs declare with `d1`, whatever its `/FontBBox` says and whichever way its font matrix
+/// turns glyph space, so two lines 8 points apart are two lines with 7-point boxes, not slivers.
+#[test]
+fn edit_lines_in_a_type3_font_are_as_high_as_their_glyphs() {
+    // Glyph `a` is drawn 60 units wide, from 20 below the baseline to 50 above it, at 0.1 Tf:
+    // 7 points high, 2 below the baseline.
+    for (matrix, flip) in [("1 0 0 1 0 0", 1), ("1 0 0 -1 0 0", -1)] {
+        for bbox in ["[0 0 0 0]", "[0 0 1 1]"] {
+            let mut doc = text_page(&format!("BT /T3 0.1 Tf 1 0 0 {flip} 72 700 Tm (aa) Tj 1 0 0 {flip} 72 692 Tm (aa) Tj ET"));
+            let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"60 0 0 -20 60 50 d1 0 -20 60 70 re f".to_vec())));
+            let font = doc.add(
+                pdfcraft_cos::parse_indirect(
+                    format!(
+                        "1 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [{matrix}] /FontBBox {bbox} /FirstChar 97 /LastChar 97 /Widths [60] /Encoding << /Differences [97 /a] >> /CharProcs << /a {} 0 R >> >> endobj",
+                        glyph.num
+                    )
+                    .as_bytes(),
+                    0,
+                    &|_| None,
+                )
+                .unwrap()
+                .1,
+            );
+            let p = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(p, |d| {
+                d.set(
+                    b"Resources".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])))])),
+                )
+            })
+            .unwrap();
+            let lines = text::text_lines(&doc, 0).unwrap();
+            let rects: Vec<_> = lines.iter().map(|l| (l.text.as_str(), l.rect.map(|v| (v * 100.0).round() / 100.0))).collect();
+            assert_eq!(rects, [("aa", [72.0, 698.0, 84.0, 705.0]), ("aa", [72.0, 690.0, 84.0, 697.0])], "{matrix} {bbox}");
+        }
+    }
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";
@@ -1586,6 +1904,30 @@ fn tracked_text_preserves_larger_word_gaps() {
         let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
         assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "TEST WORD", "{show}");
     }
+}
+
+/// LibreOffice stretches a justified line on both sides of each space glyph, so a gap that reads
+/// as a space comes right before the space glyph it widens: one space, not two. A gap after the
+/// space glyph, a space glyph with no gap before it, and two space glyphs after a gap read as
+/// before.
+#[test]
+fn a_gap_before_a_space_glyph_reads_as_one_space() {
+    for show in ["[(Word) -250 ( next) -250 ( last)] TJ", "[(Word ) -250 (next ) -250 (last)] TJ", "[(Word) -250 (next) 0 ( last)] TJ"] {
+        let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last", "{show}");
+    }
+    // Only the first space glyph after the gap is the gap's: two real spaces stay two.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // The same line split over operators: the gap ends one run, its space glyph starts the next.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250] TJ [( next) -250] TJ ( last) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last");
+    // Space glyphs on both sides of a break between runs, with no gap, are two spaces.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (Word ) Tj ( next) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // Down a vertical column the same.
+    let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");
 }
 
 #[test]
@@ -5446,6 +5788,20 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
 }
 
 #[test]
+fn text_blocks_split_at_headings_and_blank_lines() {
+    let page = |size: u32, gap: u32, words: &[&str], top: u32| -> String {
+        words.iter().enumerate().map(|(i, w)| format!("BT /F1 {size} Tf 40 {} Td ({w}) Tj ET\n", top - i as u32 * gap)).collect()
+    };
+    let count = |content: String| text::text_blocks(&text_page(&content), 0).unwrap().len();
+    let heading = page(12, 14, &["First line of text", "second line here", "third line ends"], 340)
+        + &page(12, 14, &["HEADING"], 340 - 28 - 24)
+        + &page(12, 14, &["Next paragraph one", "next two", "next three"], 340 - 28 - 24 - 24);
+    assert_eq!(count(heading), 3);
+    assert_eq!(count(page(12, 14, &["Para one a", "para one b"], 340) + &page(12, 14, &["Para two a", "para two b"], 340 - 42)), 2);
+    assert_eq!(count(page(24, 29, &["VISIBLE", "HIDDEN"], 340)), 1);
+}
+
+#[test]
 fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
     let listed = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
     // #1756: a rotated watermark's bounding box covers the middle of the page, and a body line
@@ -6488,6 +6844,142 @@ fn reading_follows_forms_however_their_resources_are_stored() {
     }
 }
 
+/// #3503: a form XObject's `/BBox` clips its content, so text drawn outside it is not shown and
+/// should not be read either -- matching the renderer, which already honours the clip.
+#[test]
+fn form_bbox_clips_text_from_reading() {
+    let page = stream("", "/Fm Do");
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 6 0 R >> >>",
+        "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &fm,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE"]);
+}
+
+/// #3503: a page's own `re`/`W`/`n` clip (not a form's `/BBox`) hides text outside it the same
+/// way, and `Q` lifts it again -- the clip is scoped to its `q`/`Q` like the rest of the graphics
+/// state, not a one-way switch.
+#[test]
+fn page_re_w_n_clip_hides_text_from_reading_until_q() {
+    let page = stream(
+        "",
+        "q 0 0 50 50 re W n BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 100 100 Td (AFTER) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE", "AFTER"]);
+}
+
+/// The text `reading_blocks` reads on a 400 × 400 pt page drawing `content` with Helvetica as
+/// `/F1`, and forms `/Fa` and `/Fb` (objects 6 and 7) with the given dictionary entries and content.
+fn read_clipped(content: &str, forms: [(&str, &str); 2]) -> Vec<String> {
+    let font = "/Font << /F1 5 0 R >>";
+    let resources = format!("<< {font} /XObject << /Fa 6 0 R /Fb 7 0 R >> >>");
+    let form = |(dict, body): (&str, &str)| stream(&format!("/Type /XObject /Subtype /Form {dict} /Resources {resources}"), body);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents 4 0 R >>"),
+        &stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &form(forms[0]),
+        &form(forms[1]),
+    ]);
+    text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+/// #5075 review: a `/BBox` with anything but four numbers is no bound. Reading the numbers it
+/// happens to hold (`[0 /Bad 0 50 50]` as `[0 0 50 50]`) invented a clip and hid real text.
+#[test]
+fn a_malformed_form_bbox_clips_nothing() {
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET";
+    for bbox in ["[0 /Bad 0 50 50]", "[0 0 50]", "[0 0 50 50 60]", "[0 (x) 50 50]"] {
+        let texts = read_clipped("/Fa Do", [(&format!("/BBox {bbox}"), body), ("", "")]);
+        assert_eq!(texts, ["INSIDE", "OUTSIDE"], "/BBox {bbox}");
+    }
+}
+
+/// #5075 review: a clipping path of several rectangles clips to all of them, not to the last one
+/// drawn (text seen through the first rectangle was hidden), and not to the box around them
+/// either (text in the gap between them was read, though nothing of it shows).
+#[test]
+fn a_clip_of_several_rectangles_keeps_text_in_each() {
+    let content = "q 0 0 50 50 re 100 100 50 50 re W n BT /F1 12 Tf 5 5 Td (FIRST) Tj ET BT /F1 12 Tf 105 105 Td (SECOND) Tj ET \
+                   BT /F1 12 Tf 60 60 Td (GAP) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["FIRST", "SECOND"]);
+}
+
+/// #5075 review: a form's `/BBox` clips however thin it is and wherever its matrix puts it. A box
+/// one point by 1e-10 was taken for no box (its area fell under a fixed threshold), and one moved
+/// 1e12 points away lost its area to rounding; either way the text outside it was read.
+#[test]
+fn a_thin_or_far_off_form_bbox_still_clips() {
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET";
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let thin = read_clipped(&format!("/Fa Do {after}"), [("/BBox [0 0 1 1e-10]", body), ("", "")]);
+    assert_eq!(thin, ["AFTER"], "a thin /BBox");
+    let far = read_clipped(&format!("/Fa Do {after}"), [("/Matrix [1 0 0 1 1e12 1e12] /BBox [0 0 100 100]", body), ("", "")]);
+    assert_eq!(sorted(far), ["AFTER", "INSIDE"], "a /BBox 1e12 points away");
+}
+
+/// #5075 review: a clip of no area has no inside, so nothing drawn under it shows (ISO 32000-2
+/// §8.5.4). It was taken for no clip at all, and everything under it was read.
+#[test]
+fn a_clip_of_no_area_shows_nothing() {
+    let content = "q 0 0 100 0 re W n BT /F1 12 Tf 5 5 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["AFTER"]);
+}
+
+/// #5075 review: what shows is the intersection of every clip in force. A long run that crosses a
+/// page clip and, apart from it, a form's `/BBox` overlaps each of them but shows in neither, as it
+/// does not when one form's `/BBox` lies apart from the one of the form it is drawn in.
+#[test]
+fn disjoint_clips_show_nothing_between_them() {
+    let run = "BT /F1 12 Tf 5 10 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET";
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    // A page clip and a form's `/BBox` side by side.
+    let page_clip = format!("q 0 0 50 50 re W n /Fa Do Q {after}");
+    assert_eq!(read_clipped(&page_clip, [("/BBox [100 0 150 50]", run), ("", "")]), ["AFTER"]);
+    // A form's `/BBox` and the `/BBox` of the form inside it, side by side.
+    let nested = format!("/Fa Do {after}");
+    assert_eq!(read_clipped(&nested, [("/BBox [0 0 50 50]", "/Fb Do"), ("/BBox [100 0 150 50]", run)]), ["AFTER"]);
+}
+
+/// #5075 review: a clip turned with its matrix keeps its turned shape. Its upright bounding box
+/// takes in corners it does not cover, and text there was read although it is clipped away.
+#[test]
+fn a_turned_clip_hides_text_in_the_corners_of_its_bounding_box() {
+    // A 100 pt square turned 45° about (200, 0): a diamond with its lower corner at (200, 0).
+    // Undone straight after the clip, so the text is drawn upright on the page.
+    let (turn, undo) =
+        ("0.70710678 0.70710678 -0.70710678 0.70710678 200 0 cm", "0.70710678 -0.70710678 0.70710678 0.70710678 -141.421356 141.421356 cm");
+    let texts = "BT /F1 6 Tf 132 3 Td (CORNER) Tj ET BT /F1 6 Tf 195 65 Td (CENTRE) Tj ET";
+    let page_clip = format!("q {turn} 0 0 100 100 re W n {undo} {texts} Q");
+    assert_eq!(read_clipped(&page_clip, [("", ""), ("", "")]), ["CENTRE"], "a turned page clip");
+    // The same diamond as a form's `/BBox`, under its `/Matrix`.
+    let matrix = "/Matrix [0.70710678 0.70710678 -0.70710678 0.70710678 200 0] /BBox [0 0 100 100]";
+    assert_eq!(read_clipped("/Fa Do", [(matrix, &format!("{undo} {texts}")), ("", "")]), ["CENTRE"], "a turned form /BBox");
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -6602,24 +7094,28 @@ fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
 /// missing are read once (or skipped) without panicking or looping.
+///
+/// `/BBox [0 0 20 420]` is wide enough to hold every form's own text below (#3503 clips a form's
+/// content to its `/BBox`; this test is about the loop and resource handling, not clipping).
 #[test]
 fn hostile_form_xobjects_are_read_once() {
     let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
     let font = "/Font << /F1 5 0 R >>";
     let lp = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
         "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
     );
     let a = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /B 8 0 R >> >>"),
         "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
     );
     let b = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /A 7 0 R >> >>"),
         "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
     );
-    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
-    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let nores = stream("/Subtype /Form /BBox [0 0 20 420]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad =
+        stream(&format!("/Subtype /Form /BBox [0 0 20 420] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
     let doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -8903,6 +9399,52 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Fix hairlines: zero-width strokes and strokes thinner than the threshold on
+/// the page (after the CTM) get the chosen width, in page content and the forms it draws; wider
+/// lines, and glyphs and patterns unless asked, are left alone.
+#[test]
+fn hairlines_are_widened_in_page_content_and_forms() {
+    use crate::hairlines::{Hairlines, fix_hairlines};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // A form drawn at half scale with a 0.1 pt line (0.05 pt on the page) and a 4 pt line.
+    let mut fd = Dict::new();
+    fd.set(b"Type".to_vec(), Object::name("XObject"));
+    fd.set(b"Subtype".to_vec(), Object::name("Form"));
+    fd.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, 100.0, 100.0].iter().map(|v| Object::Real(*v)).collect()));
+    let form = doc.add(Object::Stream(Stream::flate(fd, b"0.1 w 0 0 m 50 50 l S 4 w 0 50 m 50 0 l S")));
+    let content = b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S q 0.5 0 0 0.5 0 0 cm 0.2 w 0 0 m 10 10 l S /Fm1 Do Q 0.5 w 10 30 m 100 30 l S";
+    let cs = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    let mut xo = Dict::new();
+    xo.set(b"Fm1".to_vec(), Object::Ref(form));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(cs));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap();
+    // Page: the 0 w line and the 0.2 w line at half scale (0.1 pt); the 2 pt and 0.5 pt lines stay.
+    // Form: the 0.1 w line (0.05 pt on the page); the 4 pt line stays.
+    assert_eq!(fixed, crate::hairlines::Fixed { lines: 3, pages: 1, elsewhere: 0 });
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = flat(&page_content_bytes(&doc, 0));
+    assert!(text.contains("0.72 w 10 10 m 100 10 l S"), "zero width → 0.72 pt: {text}");
+    assert!(text.contains("2 w 10 20 m 100 20 l S") && text.contains("0.5 w 10 30 m 100 30 l S"), "wider lines untouched: {text}");
+    assert!(text.contains("1.44 w 0 0 m 10 10 l S"), "under a half-scale CTM the width is doubled: {text}");
+    let Object::Stream(fs) = &*doc.get(form) else { panic!() };
+    let ft = flat(&fs.decoded().unwrap());
+    assert!(ft.contains("1.44 w 0 0 m 50 50 l S") && ft.contains("4 w 0 50 m 50 0 l S"), "{ft}");
+    // Nothing left to fix: a second run changes nothing.
+    assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0);
+    // A stricter threshold catches the 0.5 pt line too, with a custom width.
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines { narrower_than: 0.6, width: 1.0, ..Hairlines::default() }).unwrap();
+    assert_eq!(fixed.lines, 1);
+    assert!(flat(&page_content_bytes(&doc, 0)).contains("1 w 10 30 m 100 30 l S"));
+    assert!(fix_hairlines(&mut doc, &[0], &Hairlines { width: 0.0, ..Hairlines::default() }).is_err());
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.
@@ -9429,7 +9971,7 @@ fn vertical_page(content: &str) -> Document {
     ]);
     let unicode = doc.add(Object::Stream(Stream::flate(
         Dict::new(),
-        b"1 begincodespacerange <0000> <ffff> endcodespacerange 6 beginbfchar <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 7 beginbfchar <0020> <0020> <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
     )));
     font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
     font.set(
@@ -10072,6 +10614,20 @@ fn added_text_is_wrapped_once_per_write() {
     add_content(&mut doc, 0, &Content::Text(text)).unwrap();
     let calls = added::WRAP_CALLS.with(std::cell::Cell::get);
     assert!(calls <= 4, "the text was wrapped {calls} times for 40 lines");
+}
+
+/// Negative character spacing keeps a line from ever filling its box. Wrapping then holds every
+/// word on one line, appended and measured once each rather than copied and measured again for
+/// each word (which took minutes for this text); the widths still decide the breaks.
+#[test]
+fn added_text_that_never_fills_its_line_wraps_in_linear_time() {
+    let words = vec!["word"; 200_000].join(" ");
+    let packed = AddedText { rect: [0.0, 0.0, 100.0, 100.0], text: words.clone(), char_spacing: -10.0, ..AddedText::default() };
+    let start = std::time::Instant::now();
+    assert_eq!(added::lines(&packed), [words]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let plain = AddedText { rect: [0.0, 0.0, 60.0, 100.0], text: "one two three four".into(), size: 10.0, ..AddedText::default() };
+    assert_eq!(added::lines(&plain), ["one two", "three four"]);
 }
 
 /// Character spacing on added text (#4245) is the PDF's `Tc`, kept in `/PCAdded` so the item
@@ -11176,8 +11732,250 @@ fn carriage_returns_break_rows_on_the_styled_path() {
 fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
-    let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
+    let reopened = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "ab  ba   ab");
+}
+
+/// Spaces drawn as TJ gaps in a subset without a space glyph are wrapped in `/ActualText`, so
+/// repeated spaces and leading indents read back through `text_lines`, `editor_text`, and text
+/// extraction, and survive a second edit without shifting the line or miscalibrating its scale
+/// (#4229).
+#[test]
+fn spaces_and_indents_in_a_subset_without_a_space_glyph_round_trip_across_edits() {
+    for paragraph in [true, false] {
+        for typed in ["  ab  ba", "ab  ba   ab", "  ab  ba   ab  "] {
+            let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+            let edit = if paragraph { text::replace_block(&mut doc, 0, 0, typed) } else { text::replace_line(&mut doc, 0, 0, typed) };
+            assert_eq!(edit.unwrap().substituted, None, "{typed:?}");
+            let mut doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), 1, "{typed:?}: {lines:?}");
+            assert_eq!(lines[0].text, typed, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks[0].editor_text, typed, "{typed:?}");
+
+            // Re-edit the reopened document and verify the origin, gap count, and scale stay exact.
+            let next = "   ba  ab";
+            let edit2 = if paragraph { text::replace_block(&mut doc, 0, 0, next) } else { text::replace_line(&mut doc, 0, 0, next) };
+            assert_eq!(edit2.unwrap().substituted, None, "{typed:?}");
+            let doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines[0].text, next, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+            assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+        }
+    }
+
+    // Styled multi-row path: untouched calibration and row breaks keep 100 Tz and every space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba   ab").unwrap().substituted, None);
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba   ab");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba  ab").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  ab  ba", "ba  ab"]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba  ab");
+
+    // Two subsets of the same face (/F2 holds 'a' only, /F3 holds 'b' only, neither has ' '):
+    // spaces adopt their neighbour's subset on the row so no space is stranded in a glyph-less run.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (a) Tj /F1 12 Tf ( ) Tj /F3 12 Tf (b) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(97));
+        f.set(b"LastChar".to_vec(), Object::Int(97));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500)]));
+    })
+    .unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(98));
+        f.set(b"LastChar".to_vec(), Object::Int(98));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(520)]));
+    })
+    .unwrap();
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  b  a  \n  a  b  ").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  b  a  ", "  a  b  "]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  b  a  \n  a  b  ");
+
+    // A RangeStyle covering only spaces in a subset without a space glyph joins an adjacent
+    // glyph-bearing segment so its space count survives save/reopen.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab   ba");
+}
+
+/// A space that joins a neighbour's subset for `/ActualText` keeps the underline of its own
+/// style, not the neighbour's, and still reads back as that space.
+#[test]
+fn a_reassigned_subset_space_keeps_its_own_underline() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let line = text::text_lines(&doc, 0).unwrap().into_iter().next().expect("a line");
+    assert_eq!(line.text, "ab   ba");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let mut widths = Vec::new();
+    let mut from = None;
+    for row in content.lines() {
+        if let Some(rest) = row.strip_suffix(" m") {
+            from = rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
+        } else if let Some(rest) = row.strip_suffix(" l")
+            && let (Some(x0), Some(x1)) = (from.take(), rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()))
+        {
+            widths.push((x1 - x0).abs());
+        }
+    }
+    let text_width = line.rect[2] - line.rect[0];
+    assert!(widths.iter().any(|w| *w > 1.0), "the spaces lost their underline: {widths:?}\n{content}");
+    assert!(
+        widths.iter().all(|w| *w < text_width * 0.6),
+        "the space underline covered the neighbouring glyphs ({text_width}): {widths:?}\n{content}"
+    );
+}
+
+/// #6131: a subset that writes width 0 for its unused space (pdfTeX does) has no space glyph. A word added to
+/// the line takes a positioning gap for its spaces, not code 32 at width 0, which would run the words together.
+#[test]
+fn a_space_in_a_subset_that_gives_it_no_width_is_a_gap_not_code_32() {
+    for subtype in ["TrueType", "Type1"] {
+        // Codes 32..=98: the space and everything else 0 wide, but a and b (97, 98).
+        let widths: Vec<String> = (32..=98).map(|c| if c == 97 || c == 98 { "500" } else { "0" }.to_string()).collect();
+        let font = format!(
+            "<< /Type /Font /Subtype /{subtype} /BaseFont /ABCDEF+Sample /FirstChar 32 /LastChar 98 /Widths [{}] /Encoding /WinAnsiEncoding >>",
+            widths.join(" ")
+        );
+        let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len()
+            ),
+            font,
+        ];
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+{o}
+endobj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+        }
+        let x = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offs {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{x}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        let mut doc = Document::open(Arc::new(out)).unwrap();
+        assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None, "{subtype}");
+        // Every byte the text-showing operators draw (strings inside `TJ` arrays too) and every
+        // `TJ` adjustment, read from the saved content rather than matched as text.
+        let ops = pdfcraft_content::parse(&page_content_bytes(&reopen(&doc), 0)).ops;
+        let mut shown: Vec<u8> = Vec::new();
+        let mut adjustments: Vec<f64> = Vec::new();
+        // How many bytes had been drawn when each adjustment came: the gap must sit between the words.
+        let mut positions: Vec<usize> = Vec::new();
+        for op in ops.iter().filter(|o| matches!(o.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")) {
+            for operand in &op.operands {
+                match operand {
+                    Object::String(s) => shown.extend_from_slice(&s.bytes),
+                    Object::Array(items) => {
+                        for item in items {
+                            match item {
+                                Object::String(s) => shown.extend_from_slice(&s.bytes),
+                                number => {
+                                    if let Some(adjustment) = number.as_f64() {
+                                        adjustments.push(adjustment);
+                                        positions.push(shown.len());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(shown, b"abba", "{subtype}: the words are drawn and no code 32 at width 0 between them");
+        assert!(matches!(adjustments.as_slice(), [gap] if *gap < 0.0), "{subtype}: one adjustment moves the second word right: {adjustments:?}");
+        assert_eq!(positions, [2], "{subtype}: the gap is between the words, after \"ab\"");
+    }
 }
 
 #[test]
@@ -11442,6 +12240,38 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
     }
 }
 
+#[test]
+fn variation_public_line_and_block_edits_preserve_selectors_after_reopen() {
+    let replacement = "1\u{FE0F}";
+    let mut results = Vec::new();
+    for kind in ["line", "block"] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        if kind == "line" {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        }
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        results.push((kind, lines[0].text.clone()));
+    }
+    assert_eq!(results, vec![("line", replacement.to_owned()), ("block", replacement.to_owned())]);
+}
+
+#[test]
+fn variation_public_selector_does_not_shift_centered_text_with_character_spacing() {
+    // қ requires the same bundled fallback for both drafts, without optional font inputs.
+    for spacing in [0.0, 2.0] {
+        let mut plain = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        let mut selected = plain.clone();
+        let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(spacing), ..Default::default() };
+        text::rewrite_block(&mut plain, 0, 0, Some("1қ"), &style).unwrap();
+        text::rewrite_block(&mut selected, 0, 0, Some("1\u{FE0F}қ"), &style).unwrap();
+        let a = text::text_lines(&reopen(&plain), 0).unwrap();
+        let b = text::text_lines(&reopen(&selected), 0).unwrap();
+        assert_eq!(a[0].base_font, b[0].base_font);
+        assert!(close(a[0].rect, b[0].rect), "Tc={spacing}: plain {:?}, selector {:?}", a[0].rect, b[0].rect);
+    }
+}
 /// Whole-paragraph alignment retains both soft wraps and typed hard breaks after save/reopen.
 /// Selected-row alignment for existing PDF content is withheld until it can persist safely.
 #[test]
@@ -14081,5 +14911,86 @@ fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_aft
         let Object::Stream(saved) = doc.get(raw).as_ref().clone() else { panic!("fixture font") };
         assert_eq!(saved.decoded().unwrap(), program);
         assert_eq!(page_font_programs(&doc), fonts, "no replacement font program may be added");
+    }
+}
+
+/// The Unicode row breaks are invisible moves, not glyphs. A draft carrying them (text pasted
+/// from a browser or Word) breaks the row on both rewrite paths, rather than being refused
+/// because no fallback face has an outline for U+2028 (#6272). The paragraph is one wide row, so
+/// a break that was dropped would leave the words on one row instead of two. A one-line edit has
+/// no next row, so there each break is written as a space.
+#[test]
+fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
+    let red = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    for separator in ['\u{2028}', '\u{2029}', '\u{0085}', '\u{000B}', '\u{000C}', '\u{001C}', '\u{001D}', '\u{001E}'] {
+        let draft = format!("one{separator}two");
+        for style in [
+            text::BlockStyle::default(),
+            text::BlockStyle { ranges: vec![red.clone()], ..Default::default() },
+            text::BlockStyle { ranges: vec![text::RangeStyle { range: 0..draft.len(), ..red.clone() }], ..Default::default() },
+            text::BlockStyle { bold: Some(true), ..Default::default() },
+        ] {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+            let doc = reopen(&doc);
+            let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+            assert_eq!(lines, ["one", "two"], "U+{:04X}", u32::from(separator));
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_line(&mut doc, 0, 0, &draft).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+        let doc = reopen(&doc);
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one two"], "a one-line edit keeps U+{:04X} on its line", u32::from(separator));
+    }
+}
+
+/// Thai text on the styled path has its own coverage checks and row splits. A Unicode row break
+/// in a Thai draft breaks the row there too, whether the paragraph keeps its legacy subset, takes
+/// the bundled Thai face by choice or is completed by the matching one, instead of being refused
+/// for a glyph no face has (#6272).
+#[test]
+fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
+    let rows = |doc: &Document| -> Vec<String> { text::text_lines(&reopen(doc), 0).unwrap().into_iter().map(|l| l.text).collect() };
+    let thai_face = pdfcraft_fonts::document_thai_font().is_some();
+    if !thai_face {
+        eprintln!("thai_paragraphs_break_the_row_on_unicode_row_breaks: built without craft-fonts, so only the legacy subset is checked");
+    }
+    for separator in ['\u{2028}', '\u{001C}'] {
+        let draft = format!("กข{separator}ค");
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("legacy U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "legacy U+{:04X}", u32::from(separator));
+        if !thai_face {
+            continue;
+        }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let chosen = BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &chosen).unwrap_or_else(|e| panic!("chosen U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "chosen U+{:04X}", u32::from(separator));
+        let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+        let cmap = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar",
+        )));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+            f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai-Regular"));
+            f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        })
+        .unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
+            .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
+        assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
