@@ -5122,6 +5122,8 @@ version = "0.21.1"
 dependencies = [
  "craft-image-codecs",
  "ocrs",
+ "pdfcraft-cos",
+ "pdfcraft-filters",
  "pdfcraft-fonts",
  "rten",
  "rten-imageproc",
@@ -5129,6 +5131,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "zune-jpeg",
 ]
 
 [[package]]
