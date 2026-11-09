@@ -466,6 +466,9 @@ pub(super) struct Shown {
     pub(super) ink: Vec<[f64; 4]>,
     pub(super) baseline: f64,
     pub(super) start_x: f64,
+    /// Where its last right-to-left letter starts along the baseline (see [`Shown::span`]), when
+    /// it has one: a combining mark drawn after the run is placed from that letter's start.
+    pub(super) last_letter: Option<f64>,
     end_x: f64,
     end_y: f64,
     pub(super) bt: usize,
@@ -556,6 +559,73 @@ fn typical_tracking(gaps: &mut [f64], limit: f64) -> f64 {
     let at = gaps.len() / 3;
     gaps.select_nth_unstable_by(at, f64::total_cmp);
     gaps.get(at).copied().filter(|n| n.is_finite() && *n <= limit).unwrap_or(0.0).max(0.0)
+}
+
+/// Combining marks drawn before the glyph after them, inside one run: Word draws a Hebrew point or
+/// an Arabic haraka that way, the mark first and the letter it sits on after it (in a `TJ`, the
+/// mark, then a kerning step back onto the letter). Positions are along the run, in text space.
+struct MarksFirst {
+    text: String,
+    /// Where the first mark is drawn, and where the letter drawn before it starts.
+    at: f64,
+    before: Option<f64>,
+}
+
+/// Adds one glyph's text to a run read in drawing order. A mark goes after the letter it is
+/// placed from: a mark is drawn from its letter's origin, so of the letters on either side it
+/// belongs to the one whose start it is nearer. Marks with no letter after them stay where they
+/// are (the run's last letter, or a later run, takes them).
+fn place_glyph(text: &mut String, held: &mut Option<MarksFirst>, last_letter: &mut Option<f64>, glyph: &str, (x, width): (f64, f64), em: f64) {
+    let marks = !glyph.is_empty() && glyph.chars().all(crate::bidi::is_mark);
+    let letter = glyph.chars().next().is_some_and(|c| crate::bidi::is_rtl(c) && !crate::bidi::is_mark(c));
+    if marks {
+        match held {
+            Some(h) => h.text.push_str(glyph),
+            None => *held = Some(MarksFirst { text: glyph.to_owned(), at: x, before: *last_letter }),
+        }
+        return;
+    }
+    let (lo, hi) = (x.min(x + width), x.max(x + width));
+    let sits_here = |h: &MarksFirst| {
+        h.at > lo - em * 0.3 && h.at < hi.max(lo + em * 0.05) && h.before.is_none_or(|before| (h.at - lo).abs() < (h.at - before).abs())
+    };
+    match held.take() {
+        Some(h) if letter && sits_here(&h) => {
+            text.push_str(glyph);
+            text.push_str(&h.text);
+        }
+        Some(h) => {
+            text.push_str(&h.text);
+            text.push_str(glyph);
+        }
+        None => text.push_str(glyph),
+    }
+    if letter {
+        *last_letter = Some(x);
+    }
+}
+
+/// Whether a glyph's text is combining marks alone.
+fn only_marks(text: Option<&str>) -> bool {
+    text.is_some_and(|t| !t.is_empty() && t.chars().all(crate::bidi::is_mark))
+}
+
+/// A pending `TJ` gap reads as a space, unless the glyph after it is a mark (`before_mark`).
+fn settle_gap(pending: &mut bool, before_mark: bool, text: &mut String, held: &mut Option<MarksFirst>, gap_space: &mut bool) {
+    if std::mem::take(pending) && !before_mark {
+        push_gap_space(text, held, gap_space);
+    }
+}
+
+/// A gap inside a `TJ` read as a space, after any marks still waiting for their letter.
+fn push_gap_space(text: &mut String, held: &mut Option<MarksFirst>, gap_space: &mut bool) {
+    if let Some(marks) = held.take() {
+        text.push_str(&marks.text);
+    }
+    if !text.ends_with(' ') {
+        text.push(' ');
+    }
+    *gap_space = true;
 }
 
 fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f64 {
@@ -738,6 +808,7 @@ impl MarkedContent {
                     first.actual_text = true;
                     first.text = logical;
                     first.start_x = first.rect[0];
+                    first.last_letter = None;
                     first.end_x = first.rect[2];
                     first.end_y = first.baseline;
                     first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
@@ -808,6 +879,12 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
     let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
+    // Combining marks waiting for the glyph after them (see `MarksFirst`), and where the last
+    // right-to-left letter started (text space).
+    let mut held: Option<MarksFirst> = None;
+    let mut last_letter: Option<f64> = None;
+    // A gap in a `TJ` wide enough to read as a space, unless a mark comes next.
+    let mut gap_pending = false;
     for p in &pieces {
         match p {
             Object::String(s) => {
@@ -817,6 +894,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                     // A space glyph right after a gap that read as a space is that space:
                     // LibreOffice stretches a justified line on both sides of each space glyph.
+                    // A gap before a combining mark positions the mark over its letter (Word's
+                    // Hebrew points): it is not a word space.
+                    settle_gap(&mut gap_pending, only_marks(shown.as_deref()), &mut text, &mut held, &mut gap_space);
                     let after_gap = std::mem::take(&mut gap_space);
                     match shown {
                         Some(shown) => {
@@ -825,7 +905,10 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .text_left
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                            text.push_str(&crate::bidi::glyph_in_drawing_order(t));
+                            let t = crate::bidi::glyph_in_drawing_order(t);
+                            let em = (ts.size * ts.scale).abs().max(1e-6);
+                            let width = m.width(code) * ts.size * ts.scale;
+                            place_glyph(&mut text, &mut held, &mut last_letter, &t, (x_text, width), em);
                         }
                         None => decodable = false,
                     }
@@ -877,8 +960,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     let dx = -n / 1000.0 * ts.size * ts.scale;
                     // A large gap inside TJ reads as a space.
                     if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                        text.push(' ');
-                        gap_space = true;
+                        gap_pending = true;
                     }
                     // Tracking and kerning keep a word together; a larger jump
                     // ends it (whatever the sign of the size or `Tz`).
@@ -889,6 +971,10 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                 }
             }
         }
+    }
+    settle_gap(&mut gap_pending, false, &mut text, &mut held, &mut gap_space);
+    if let Some(marks) = held.take() {
+        text.push_str(&marks.text);
     }
     *tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(tm);
     let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
@@ -953,6 +1039,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         ink,
         baseline: start.1,
         start_x: start.0,
+        last_letter: last_letter.filter(|_| vertical.is_none()).map(|x| to_frame(direction(&trm0), trm0.apply(x, ts.rise)).0),
         end_x: end.0,
         end_y: end.1,
         bt,

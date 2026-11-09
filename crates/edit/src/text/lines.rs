@@ -478,7 +478,10 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             s.text = crate::bidi::to_visual(&s.text);
             s.logical_order = false;
         }
-        let drift = if cluster { 0.6 } else { 0.3 };
+        // Word draws a large mark (Traditional Arabic's) on its own, raised or lowered by half an
+        // em from the row it sits on, and some spaces among the marks the same way.
+        let only_marks = !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark);
+        let drift = if cluster || only_marks || s.text.chars().all(char::is_whitespace) { 0.6 } else { 0.3 };
         // A line belongs to one stream piece. Within it, PDF producers often put every word
         // in its own BT/ET: geometry and text state, not object boundaries, define a line.
         let si = ops.get(s.op).map_or(0, |op| pieces.pieces_of(op).0);
@@ -508,13 +511,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             if spaced {
                 l.text.push(' ');
             }
-            // Marks drawn just before this letter, over it, follow it instead.
+            // Marks drawn just before this run's first letter, over it, follow that letter instead.
             let held = marks.filter(|m| !spaced && m.sit_on(&s)).map_or(0, |m| m.len);
             let at = l.text.len().saturating_sub(held);
             match (held > 0 && l.text.is_char_boundary(at)).then(|| l.text.split_off(at)) {
                 Some(held) => {
-                    l.text.push_str(&s.text);
+                    let first = first_cluster_len(&s.text);
+                    l.text.push_str(s.text.get(..first).unwrap_or(&s.text));
                     l.text.push_str(&held);
+                    l.text.push_str(s.text.get(first..).unwrap_or_default());
                 }
                 None => l.text.push_str(&s.text),
             }
@@ -572,15 +577,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 },
             });
         }
-        // A joined cluster leaves the line on its own baseline, not on its raised mark.
+        // A joined cluster leaves the line on its own baseline, not on its raised mark, and so
+        // does a run of marks or spaces alone (Word raises a space it draws among the marks).
         let mut pen = Pen::after(&s);
         if joins
-            && cluster
+            && (cluster || only_marks || s.text.chars().all(char::is_whitespace))
             && let Some((_, before)) = last
         {
             pen.across = before.across;
         }
-        let only_marks = !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark);
         if joins
             && only_marks
             && let Some((_, before)) = last
@@ -597,7 +602,8 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         } else {
             marks = None;
             if s.text.chars().any(|c| !c.is_whitespace()) {
-                last_letter = Some((start.min(end), start.max(end)));
+                // The start of the run's last letter: a mark after the run is placed from it.
+                last_letter = Some((s.last_letter.unwrap_or(start.min(end)), start.max(end)));
             }
         }
     }
@@ -635,7 +641,8 @@ struct MarkFirst {
 }
 
 impl MarkFirst {
-    /// Whether the marks sit on `s`, one right-to-left letter, rather than on the letter before:
+    /// Whether the marks sit on the first letter of `s`, a right-to-left run, rather than on the
+    /// letter before:
     /// a mark is placed from its letter's origin, so it belongs to the one whose start it is
     /// nearer. (A writer that draws the mark after its letter puts it at that letter's start.)
     fn sit_on(&self, s: &Shown) -> bool {
@@ -643,12 +650,18 @@ impl MarkFirst {
         let (lo, hi) = (start.min(end), start.max(end));
         let letter = s.text.chars().next().is_some_and(|c| crate::bidi::is_rtl(c) && !crate::bidi::is_mark(c));
         let near = (self.at - lo).abs();
-        s.glyph_count == 1
-            && letter
+        letter
             && self.at > lo - self.size.max(1.0) * 0.3
-            && self.at < hi
+            && self.at < hi.min(lo + self.size.max(1.0))
             && self.before.is_none_or(|(before, _)| near < (self.at - before).abs())
     }
+}
+
+/// The length in bytes of the first character of `text` with the combining marks after it.
+fn first_cluster_len(text: &str) -> usize {
+    let mut chars = text.char_indices();
+    chars.next();
+    chars.find(|(_, c)| !crate::bidi::is_mark(*c)).map_or(text.len(), |(i, _)| i)
 }
 
 /// Word writes a right-to-left line that it splits into runs (a word in another language, a
@@ -669,22 +682,29 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
     // A run's first show (its font, size and baseline) and its extent along the baseline.
     let extent = |run: &std::ops::Range<usize>| -> Option<(&Shown, f64, f64)> {
         let members = shown.get(run.clone())?;
-        let first = members.first()?;
+        // Its first letter's show: spaces may be in another font, and marks off the row.
+        let letter = |s: &&Shown| s.text.chars().any(|c| !c.is_whitespace() && !crate::bidi::is_mark(c));
+        let first = members.iter().find(letter).or(members.first())?;
         let (lo, hi) = members.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
             let (_, start, end, _) = s.span();
             (lo.min(start).min(end), hi.max(start).max(end))
         });
         let alike = members.iter().all(|s| {
-            s.font == first.font
-                && (s.size - first.size).abs() < 0.01
+            (s.text.trim().is_empty() || (s.font == first.font && (s.size - first.size).abs() < 0.01))
                 && s.state.vertical.is_none()
                 && !s.logical_order
                 && !s.text.chars().any(|c| c.is_alphabetic() && !crate::bidi::is_rtl(c))
         });
         (alike && lo.is_finite() && hi.is_finite()).then_some((first, lo, hi))
     };
-    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
-        let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent(a), extent(b)) else { return false };
+    // A run of marks alone, which Word draws half an em off the row (see `text_lines_in`).
+    let only_marks = |run: &std::ops::Range<usize>| {
+        shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark)))
+    };
+    // Marks drawn over the left end of run `a` (its first glyph in drawing order), or just left
+    // of it over the start of the run that comes next.
+    let sits_over = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
+        let (Some((fa, sa, ea)), Some((fb, sb, _))) = (extent(a), extent(b)) else { return false };
         let (da, _, _, xa) = fa.span();
         let (db, _, _, xb) = fb.span();
         let size = fa.size.max(1.0);
@@ -692,7 +712,24 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
             && (fa.size - fb.size).abs() < 0.01
             && (da.0 - db.0).abs() < 1e-3
             && (da.1 - db.1).abs() < 1e-3
-            && (xa - xb).abs() < size * 0.3
+            && (xa - xb).abs() < size * 0.6
+            && sb > sa - size * 0.3
+            && sb < ea.min(sa + size)
+    };
+    // A run of spaces alone, which Word may draw off the row among the marks.
+    let only_spaces =
+        |run: &std::ops::Range<usize>| shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| s.text.chars().all(char::is_whitespace)));
+    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
+        let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent(a), extent(b)) else { return false };
+        let (da, _, _, xa) = fa.span();
+        let (db, _, _, xb) = fb.span();
+        let size = fa.size.max(1.0);
+        let drift = if only_spaces(a) || only_spaces(b) { 0.6 } else { 0.3 };
+        fa.font == fb.font
+            && (fa.size - fb.size).abs() < 0.01
+            && (da.0 - db.0).abs() < 1e-3
+            && (da.1 - db.1).abs() < 1e-3
+            && (xa - xb).abs() < size * drift
             && sb < sa - size * 0.05
             && eb <= sa + size * 0.3
             && sa - eb < size * 1.5
@@ -701,9 +738,16 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
     let mut i = 0;
     while i < runs.len() {
         let mut j = i.saturating_add(1);
-        while let (Some(a), Some(b)) = (runs.get(j.saturating_sub(1)), runs.get(j)) {
-            if !leftward(a, b) {
+        // The chain's last run of letters: a run of marks alone sits over it (or over the run
+        // after it) rather than left of it, and the next run continues from it.
+        let mut anchor = i;
+        while let (Some(a), Some(b)) = (runs.get(anchor), runs.get(j)) {
+            let over = only_marks(b) && sits_over(a, b);
+            if !over && !leftward(a, b) {
                 break;
+            }
+            if !over {
+                anchor = j;
             }
             j = j.saturating_add(1);
         }

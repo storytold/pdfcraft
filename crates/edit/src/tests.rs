@@ -8285,7 +8285,12 @@ fn a_mark_drawn_before_the_letter_it_sits_on_stays_on_that_letter() {
     let at = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 6 -1.8 Td (D) Tj 0 1.8 Td (A) Tj ET";
     // Drawn after the letter it sits on, near that letter's start, with a letter after it.
     let between = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (A) Tj 1.2 0 Td (D) Tj 4.8 0 Td (B) Tj ET";
-    for (content, expected) in [(word, "سُم"), (left, "سُم"), (at, "سُم"), (after, "سُم"), (between, "مسُ")] {
+    // Inside one TJ, as Word draws Hebrew points: the mark, then a kerning step back onto its letter.
+    let kerned = "BT /F1 12 Tf 72 700 Td [(B) -50 (D) 50 (A)] TJ ET";
+    // A step wide enough to read as a word space, there only to put the mark over a wide letter.
+    let wide = "BT /F1 12 Tf 72 700 Td [(B) -400 (D) 400 (A)] TJ ET";
+    for (content, expected) in [(word, "سُم"), (left, "سُم"), (at, "سُم"), (after, "سُم"), (between, "مسُ"), (kerned, "سُم"), (wide, "سُم")]
+    {
         let doc = arabic_marks_page(content);
         for doc in [&doc, &reopen(&doc)] {
             let lines = text::text_lines(doc, 0).unwrap();
@@ -8312,6 +8317,29 @@ fn runs_of_a_right_to_left_line_written_in_typing_order_make_one_line() {
         assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
         let blocks = text::text_blocks(doc, 0).unwrap();
         assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
+    }
+}
+
+/// With a large font (Traditional Arabic) Word draws a haraka as a run of its own between the
+/// runs of letters, half an em below or above the row, over the letter it sits on. Each such
+/// mark read as a paragraph of its own and split the row at every vowelled letter.
+#[test]
+fn a_mark_drawn_as_its_own_run_off_the_row_stays_on_its_letter() {
+    // Typed "سمُسس": the run سم (drawn م س), the damma 6 pt low over م, then the run سس.
+    let content = "BT /F1 12 Tf 1 0 0 1 78 700 Tm (BA) Tj ET BT /F1 12 Tf 1 0 0 1 78.5 694 Tm (D) Tj ET \
+                   BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
+    // Typed "سم سس": Word draws a space among the marks 5 pt below the row, and the run after
+    // it is still on the row.
+    let space = "BT /F1 12 Tf 1 0 0 1 81 700 Tm (BA) Tj ET BT /F1 12 Tf 1 0 0 1 78 695 Tm ( ) Tj ET \
+                 BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
+    for (content, expected) in [(content, "سمُسس"), (space, "سم سس")] {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected]);
+            let blocks = text::text_blocks(doc, 0).unwrap();
+            assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), [expected]);
+        }
     }
 }
 
