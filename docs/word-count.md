@@ -25,8 +25,9 @@ Explicit Table/Code/Figure marked content still works there. Cyclic and oversize
 graphs are bounded and reported as incomplete.
 
 PDF `/ActualText` replacements are respected. If one replacement spans both included and
-excluded glyphs, there is no reliable mapping of its words to the selected content: counting
-fails with an explanation instead of silently returning the wrong total. Disable exclusions to
+excluded glyphs (or, with no glyphs, included and excluded outlines or pictures), there is no
+reliable mapping of its words to the selected content: counting fails with an explanation
+instead of silently returning the wrong total. Disable exclusions to
 count that page. Unreadable pages likewise fail the operation, without a misleading partial total.
 
 Images alone contain no extractable words. Run Scan & OCR first when counting scanned pages.

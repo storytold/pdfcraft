@@ -2,8 +2,8 @@
 use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
-    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
-    SomIndices, XfaError, text,
+    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_DRAW_CHARS, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para,
+    Rc, Rect, SomIndices, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -19,12 +19,30 @@ impl Layouter<'_> {
     }
 
     /// The text an embedded field `id` shows, at most `max` bytes of a field value (the page
-    /// number and count are a few bytes; the text layout cuts them).
+    /// number and count are a few bytes; the text layout cuts them): its first instance's.
     pub(super) fn embed(&self, id: &str, max: usize) -> String {
+        self.embed_in(id, max, "")
+    }
+
+    /// [`Self::embed`] in text laid out at `scope` (the SOM of what holds it): a field in a
+    /// repeating subform shows the value of the instance the text is in, the one whose data path
+    /// takes the instance numbers `scope` gives the same names.
+    pub(super) fn embed_in(&self, id: &str, max: usize, scope: &str) -> String {
         let v = match self.tpl.page_roles.iter().find(|(i, _)| i == id).map(|(_, r)| *r) {
             Some(PageRole::Number) => self.page_no().to_string(),
             Some(PageRole::Count) => PAGE_COUNT_MARK.to_string(),
-            None => self.values.get(id).map(|v| text::prefix(v, max).to_string()).unwrap_or_default(),
+            None => match self.values.get(id) {
+                None => String::new(),
+                Some(src) => {
+                    let at = super::common::instance_path(&src.path, &data_path(self.tpl, scope));
+                    let shown = if at == src.path {
+                        std::borrow::Cow::Borrowed(src.value.as_str())
+                    } else {
+                        std::borrow::Cow::Owned(src.shown(super::common::data_value(self.data, &at)))
+                    };
+                    text::prefix(&shown, max).to_string()
+                }
+            },
         };
         #[cfg(test)]
         EMBED_COPIED.with(|c| c.set(c.get().saturating_add(v.len() as u64)));
@@ -35,6 +53,14 @@ impl Layouter<'_> {
     pub(super) fn check_measures(&self) -> Result<(), XfaError> {
         if self.measures.get() > MAX_MEASURES {
             return Err(XfaError::TooLarge("the form is nested too deeply to lay out".into()));
+        }
+        Ok(())
+    }
+
+    /// `TooLarge` once the draw phase has laid out far more text than a real form does.
+    pub(super) fn check_drawn_chars(&self) -> Result<(), XfaError> {
+        if self.drawn_chars.get() > MAX_DRAW_CHARS {
+            return Err(XfaError::TooLarge("the form draws far more text than the reader lays out".into()));
         }
         Ok(())
     }
@@ -139,7 +165,7 @@ impl Layouter<'_> {
     }
 
     /// Whether the flow is still in the content area `m` was taken in.
-    fn on_area(&self, m: &FlowMark) -> bool {
+    pub(super) fn on_area(&self, m: &FlowMark) -> bool {
         self.pages.len() == m.page && self.cur.as_ref().is_some_and(|c| c.area == m.area && c.content == m.content)
     }
 
@@ -160,7 +186,7 @@ impl Layouter<'_> {
         let (rect, mut y, _) = self.cursor();
         let page = self.pages.len().saturating_sub(1);
         let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
-        let filled: Vec<bool> = self.frames.iter().map(|f| self.has_items_from(page, f.part.items)).collect();
+        let filled: Vec<bool> = self.frames.iter().map(|f| f.held || self.has_items_from(page, f.part.items)).collect();
         for ((f, here), filled) in self.frames.iter_mut().zip(here).zip(filled).rev() {
             y = (y + f.margin.bottom).min(rect.bottom());
             if !here {
@@ -180,12 +206,20 @@ impl Layouter<'_> {
             let Some(mark) = self.flow_mark() else { break };
             let Some(f) = self.frames.get_mut(i) else { break };
             f.part = mark;
+            f.held = false;
             // `max` before `min`: a NaN margin counts as none and leaves `room` a number.
             let top = f.margin.top.max(0.0).min(room);
             room = (room - top).max(0.0);
             self.advance(top);
         }
         Ok(())
+    }
+
+    /// The bottom margins of the flowed subforms being laid out, which a break leaves below their
+    /// content ([`Self::break_frames`]).
+    pub(super) fn frames_bottom(&self) -> f64 {
+        // `max` first: a NaN margin counts as none.
+        self.frames.iter().map(|f| f.margin.bottom.max(0.0)).sum()
     }
 
     /// Close flowed subform `f` once its content is placed: its last part ends where the flow
@@ -204,7 +238,7 @@ impl Layouter<'_> {
         let page = self.pages.len().saturating_sub(1);
         if !self.on_area(&f.part) {
             f.lost = true;
-        } else if self.has_items_from(page, f.part.items) && end - f.part.y >= 0.01 {
+        } else if (f.held || self.has_items_from(page, f.part.items)) && end - f.part.y >= 0.01 {
             f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, end - f.part.y)));
         }
         if f.lost {
@@ -220,7 +254,7 @@ impl Layouter<'_> {
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    pub(super) fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
         self.draw_border(b, rect)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {
