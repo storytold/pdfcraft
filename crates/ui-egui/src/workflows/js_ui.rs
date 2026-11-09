@@ -345,6 +345,9 @@ mod tests {
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
         let hindi = date_language("hi");
         assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");

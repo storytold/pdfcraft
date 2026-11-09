@@ -67,8 +67,15 @@ impl Host for crate::PdfCraftApp {
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
-        let pending_opens: Vec<Value> =
-            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
+        let pending_opens: Vec<Value> = self
+            .pending_opens
+            .iter()
+            .map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path }))
+            .chain(self.deferred_opens.iter().map(|deferred| {
+                let name = std::path::Path::new(&deferred.path).file_name().map(|n| n.to_string_lossy().into_owned());
+                json!({ "token": null, "name": name, "path": deferred.path })
+            }))
+            .collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({
@@ -96,6 +103,8 @@ impl Host for crate::PdfCraftApp {
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
+                // Every selected comment (⌘-click adds), the one with the handles first.
+                "selected_comments": v.comments.selection().iter().map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })).collect::<Vec<_>>(),
                 "comment_composer_open": v.comments.composer.is_some(),
             })),
             // The Combine files tab: how its files show, and each grid thumbnail's state.

@@ -251,8 +251,29 @@ pub(super) fn notices(
 fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
     const ROW: f32 = 28.0;
     const ICON: f32 = 16.0;
+    /// Content width below which the buttons stack under the message.
+    const STACK_BELOW: f32 = 200.0;
+    /// Content width under which stacking is not tried: the message would wrap to a column of a
+    /// few characters, thousands of points tall, and push the hotbar off the screen. Such a width
+    /// is below the smallest supported window, so the single row stays as it was.
+    const STACK_ABOVE: f32 = 100.0;
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
         let width = ui.available_width();
+        if (STACK_ABOVE..STACK_BELOW).contains(&width) {
+            // A narrow document area (a half-width window): the message takes the full width and
+            // the buttons sit on a row of their own below it, rather than squeezing it to nothing.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                let (slot, _) = ui.allocate_exact_size(vec2(ICON, ICON), Sense::hover());
+                icons::paint(ui, Rect::from_center_size(slot.center(), vec2(ICON, ICON)), icon, ICON, icon_color);
+                ui.add(egui::Label::new(egui::RichText::new(text).color(t.text)).wrap());
+            });
+            // The buttons wrap onto further rows when even the full width is too narrow for them all.
+            ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
+                ui.set_min_height(ROW);
+                buttons(ui);
+            });
+            return;
+        }
         ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_height(ROW);
             buttons(ui);
@@ -315,7 +336,7 @@ mod tests {
 
     #[test]
     fn a_wider_quick_bar_centres_by_its_own_width_and_needs_a_wider_margin() {
-        // Fill & Sign's Text tool widens the bar to 70 pt: it centres by that, and 72 pt no longer holds it.
+        // A 70 pt bar centres by that, and 72 pt no longer holds it.
         assert_eq!(quick_bar_offset(120.0, 70.0), 15.0);
         assert_eq!(quick_bar_offset(72.0, 70.0), 14.0);
     }

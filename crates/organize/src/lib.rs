@@ -20,6 +20,7 @@ mod dedupe;
 mod import;
 mod labels;
 mod outline;
+mod outline_io;
 mod pdfx;
 mod prune;
 mod transition;
@@ -32,14 +33,15 @@ pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
 pub use import::{
     CombineOutcome, Combiner, FieldConflicts, ImportOutcome, Run, SplitBy, combine, combine_field_conflicts, combine_grouped, combine_grouped_with,
-    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, insert_file_pages,
-    page_as_form, split, split_ranges,
+    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, import_value,
+    insert_file_pages, page_as_form, reachable, split, split_ranges,
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
     Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
+pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
 

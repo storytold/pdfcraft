@@ -94,6 +94,36 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
+    let rect_get = getter!(ctx, n, |f, c| match f.rect {
+        Some(rect) => JsArray::from_iter(rect.into_iter().map(JsValue::from).collect::<Vec<_>>(), c).into(),
+        None => JsValue::null(),
+    });
+    let rect_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let value = arg(args, 0);
+            let object = value.as_object().filter(|o| o.is_array()).ok_or_else(|| error("rect must be an array of four finite numbers"))?;
+            let array = JsArray::from_object(object.clone())?;
+            if array.length(c)? != 4 {
+                return Err(error("rect must be an array of four finite numbers"));
+            }
+            let mut rect = [0.0; 4];
+            for (i, coordinate) in rect.iter_mut().enumerate() {
+                *coordinate = array.get(i as u64, c)?.to_number(c)?;
+            }
+            if !rect.iter().all(|coordinate| coordinate.is_finite()) {
+                return Err(error("rect coordinates must be finite"));
+            }
+            let width = (rect[2] - rect[0]).abs();
+            let height = (rect[3] - rect[1]).abs();
+            if !width.is_finite() || !height.is_finite() || width < 4.0 || height < 4.0 {
+                return Err(error("rect must be at least 4 points wide and high"));
+            }
+            let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+            write(c, name, |f| f.rect = Some(rect))?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
 
     fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
@@ -167,6 +197,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .accessor(js_string!("currentValueIndices"), Some(indices), None, rw)
         .accessor(js_string!("textColor"), Some(text_color_get), Some(text_color_set), rw)
         .accessor(js_string!("fillColor"), Some(fill_color_get), Some(fill_color_set), rw)
+        .accessor(js_string!("rect"), Some(rect_get), Some(rect_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)

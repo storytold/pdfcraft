@@ -35,7 +35,22 @@ pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) ->
 
 /// Show [`modal`], outline its controls, and remember the card rect for layout checks.
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
+    show_modal_sized(ctx, id, false, content)
+}
+
+/// [`show_modal`], growing from its contents' own height when `remeasure` is set rather than
+/// from the height it had last frame: one modal id that shows different contents would
+/// otherwise keep the height of the previous ones, since rows that fill the height offered to
+/// them take all of it (#5118). The width stays, and the contents stay visible (no hidden
+/// sizing frame), so the control channel can inspect a dialog the frame it opens.
+pub fn show_modal_sized<R>(ctx: &egui::Context, id: &str, remeasure: bool, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
     let stored = egui::Id::unique(id);
+    if remeasure && let Some(mut state) = egui::AreaState::load(ctx, stored) {
+        state.size = state.size.map(|s| egui::vec2(s.x, 0.0));
+        ctx.memory_mut(|m| m.areas_mut().set_state(egui::Modal::default_area(stored).layer(), state));
+        // The card is centred on the height it ends with: draw once more at that height.
+        ctx.request_repaint();
+    }
     modal(ctx, id).show(ctx, |ui| {
         begin_dialog(ui);
         let inner = content(ui);
@@ -113,6 +128,7 @@ pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = if active { theme::semibold(13.5) } else { theme::medium(13.5) };
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
+    // Keep in step with `mode_tab_width`.
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 22.0, 48.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label));
     let press = theme::Press::track(ui, &resp);
@@ -131,6 +147,12 @@ pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
         ui.painter().rect_filled(r, CornerRadius { nw: 1, ne: 1, sw: 0, se: 0 }, t.accent);
     }
     theme::hand(resp)
+}
+
+/// Width [`mode_tab`] takes for `label` (the semibold, active, form is the widest).
+pub fn mode_tab_width(ui: &egui::Ui, label: &str) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), theme::semibold(13.5), t.text).size().x) + 22.0
 }
 
 /// Rounded pill button; `primary` fills with the accent.
@@ -477,6 +499,9 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Above the progress notice while a job runs.
     let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
     let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
+    // A running batch keeps its toast up (poll_ocr re-notifies), so it can carry the one
+    // control a long job needs: Cancel — the file in flight finishes, the rest are not run.
+    let batch_running = app.ocr_batch.is_some();
     egui::Area::new(egui::Id::unique("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
@@ -494,7 +519,12 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
                     let ink = if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE };
                     let text = |ui: &mut egui::Ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                            if batch_running && ui.small_button(crate::i18n::t("Cancel")).clicked() {
+                                app.cancel_ocr_batch();
+                            }
+                        });
                     };
                     match script {
                         // A form script's message: its icon, then its title (when it gave one)
@@ -698,6 +728,9 @@ mod tests {
 
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         for (code, expected) in [("en", "Ctrl+K"), ("de", "Strg+K")] {
             crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());

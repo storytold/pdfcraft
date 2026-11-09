@@ -94,7 +94,7 @@ Real-world typography: world scripts, vertical Japanese, colour emoji, gradients
 <td width="33%" valign="top">
 
 ### Fearless
-Every save appends your changes and leaves the original bytes untouched. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
+Ordinary saves append your changes and leave the original bytes untouched. Edits to damaged objects whose xref and header generations disagree use a full rewrite, keeping both accepted references connected to the same repaired object. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
 
 </td>
 <td width="33%" valign="top">
@@ -252,6 +252,18 @@ Documents restricted by their author show a clear notice, and PdfCraft honours t
 <td valign="top"><b>Layers</b>: switch optional content on and off and the page re-renders instantly. <b>Comments</b> appear as threaded conversations, and <b>attachments</b> can be opened or saved.</td>
 </tr>
 </table>
+
+## Scan pages, then read the words back before trusting them
+
+**Scan & OCR ▸ Recognize text** turns a scan into searchable text — the current page, a range, or a folder of files written as searchable copies — with optional cleanup before reading (auto-rotate, deskew, denoise, binarize; word boxes map back to the original scan) and a second engine: an installed Tesseract joins the built-in one, merged per your strategy. A searchable result applies as one undoable step; the **Editable text** output opens the **OCR Verify screen** instead, where each word carries the engine's confidence as a colour, suspects are one keypress away, and corrections, a user dictionary and Re-OCR of a region or a page happen before Accept writes the new document. **Scan & OCR ▸ Correct recognized text** reviews any recognition there before it is applied.
+
+<p align="center">
+  <img src="docs/images/pdfcraft-ocr-verify.png" alt="The OCR Verify screen: a scanned note with each recognized word boxed in its confidence colour, the info strip reporting a 95% average confidence and one low-confidence word, and the confidence legend with its thresholds below" width="100%">
+  <br>
+  <sub>The OCR Verify screen: words coloured by confidence — the legend spells the thresholds out — reviewed and corrected before anything is applied.</sub>
+</p>
+
+---
 
 ## Every tool, one keystroke away
 
@@ -486,6 +498,12 @@ command line always wins: `=1` puts one back and `=0` removes it. Upgrading from
 didn't have a menu yet (0.6.0 and earlier for the PDF menu, 0.2.1 and earlier for the image menu)
 adds it, as a first install would. Use the MSI for your architecture. Per-user installation
 overrides are not supported.
+
+To install somewhere other than the default `ArtCraft\PdfCraft` folder, change the folder on the
+welcome screen (type it, or Browse…) or pass it on the command line:
+`INSTALLFOLDER="D:\Apps\PdfCraft"`. It is installed for whoever the first screen chose (`ALLUSERS=1`
+on the command line for everyone). An upgrade keeps the folder the installed version uses unless
+the command line gives another one.
 
 **Pin the checksum, not just the version.** Release candidates of a version share its MSI version
 (MSI versions are numbers only, so 1.2.3-rc.1 and 1.2.3 are both 1.2.3), and the installer lets an

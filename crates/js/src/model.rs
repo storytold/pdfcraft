@@ -88,6 +88,8 @@ pub struct FieldState {
     pub fill_color: Option<Vec<String>>,
     /// Signature fields: whether the field is signed, and how its signature checks.
     pub signature: SignatureState,
+    /// Rectangle of the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 impl FieldState {
@@ -105,6 +107,7 @@ impl FieldState {
             text_color: None,
             fill_color: None,
             signature: SignatureState::Unsigned,
+            rect: None,
         }
     }
 
@@ -318,6 +321,8 @@ pub struct Outcome {
     pub rc: bool,
     /// `event.value` after the script.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
