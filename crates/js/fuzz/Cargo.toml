@@ -1,0 +1,24 @@
+[package]
+name = "pdfcraft-js-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detached from the PdfCraft workspace: run with `cargo +nightly fuzz run run_script`
+# from crates/js/.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pdfcraft-js = { path = ".." }
+
+[[bin]]
+name = "run_script"
+path = "fuzz_targets/run_script.rs"
+test = false
+doc = false
+bench = false

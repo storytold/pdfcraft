@@ -13,7 +13,10 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 - **Size**: fit (to the sheet minus an 18 pt margin), actual size, shrink oversized, custom %;
   centred; auto orientation turns the sheet for landscape pages.
 - **Multiple**: 2/4/6/9/16 (or any n) pages per sheet, horizontal/vertical (reversed) order,
-  page borders, auto-rotation of pages that don't match the cell.
+  page borders, auto-rotation of pages that don't match the cell. With auto orientation a
+  predefined count turns the sheet to suit its grid (2 per sheet prints side by side on
+  landscape). A custom grid (`Layout::grid`, `doc_print` `cols`/`rows`, 1-99 each) is laid
+  out across and down the sheet as given and doesn't turn it: auto prints portrait.
 - **Cut and stack** (Multiple's page order): consecutive pages in each cell's pile,
   with aligned cut marks in the gutters. For example, 10 pages at 4 per sheet give
   `[1, 4, 7, 10]`, `[2, 5, 8, blank]`, `[3, 6, 9, blank]`. Print single-sided,
@@ -31,6 +34,17 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   the GUI thread, and gives `lpoptions` ten seconds: a CUPS that has stopped answering leaves
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`
   kills and reaps the command at the deadline).
+- **Remembered choices** (#2001): the dialog keeps two-sided (including leaving it to the
+  printer), grayscale, collate, page sizing (with its custom percent), Comments & forms and a
+  booklet's binding side across restarts, in the settings file under `print` with the names
+  `doc_print` takes (`names::duplex`, `names::content`, `names::size_mode` and their `parse_*`
+  counterparts are the one vocabulary). The paper is saved by its own setting (#2156).
+- **Each job starts afresh**: copies, pages (the choice, the range, odd/even and reverse), the
+  layout with its own options (pages per sheet, order, borders, booklet subset, poster scale,
+  overlap and cut marks) and orientation reset to the defaults each time Print opens, in the
+  same session too; ISO 32000-2 Table 147 initialises them per document when the print dialog
+  opens. Picked thumbnails still open it on Selected pages. The printer picked last carries over
+  within a session (#3537) but is not saved.
 
 Each source page becomes a Form XObject (its content wrapped in q/Q, plus the printable
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
@@ -46,9 +60,11 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`; on macOS they also carry the job
-name and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog
-sends them, which some vendors' filters need (#5743). Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`, and with `orientation-requested=4` when
+every sheet is landscape (`cups_orientation`), since CUPS would otherwise shrink a landscape
+sheet into portrait paper. On macOS they also carry the job name and owner
+(`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog sends them, which
+some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
