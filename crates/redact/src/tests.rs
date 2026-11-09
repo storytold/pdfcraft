@@ -3098,7 +3098,20 @@ fn page_thumbnails_go_with_private_data_and_sanitize() {
         let mut doc = one_page(b"BT /F1 10 Tf 10 10 Td (Visible) Tj ET", "", vec![thumb]);
         let page = pdfcraft_model::pages(&doc)[0].obj;
         doc.update_dict(page, |d| d.set(b"Thumb".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+        // A collection item's field may be named Thumb too: that is the producer's data, not a
+        // page thumbnail, and stays.
+        let names =
+            pdfcraft_cos::Lexer::new(b"<< /EmbeddedFiles << /Names [(a.txt) << /Type /Filespec /F (a.txt) /CI << /Thumb (KEEP) >> >>] >> >>", 0)
+                .object()
+                .unwrap();
+        doc.update_dict(doc.root().unwrap(), |d| d.set(b"Names".to_vec(), names)).unwrap();
         doc
+    };
+    let item_keeps_its_field = |doc: &Document| {
+        let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let files = cat.get(b"Names").and_then(Object::as_dict).and_then(|n| n.get(b"EmbeddedFiles")).and_then(Object::as_dict).cloned().unwrap();
+        let spec = files.get(b"Names").and_then(Object::as_array).and_then(|a| a.get(1)).and_then(Object::as_dict).cloned().unwrap();
+        spec.get(b"CI").and_then(Object::as_dict).is_some_and(|ci| ci.contains(b"Thumb"))
     };
     let holds = |doc: &Document| {
         let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
@@ -3111,6 +3124,7 @@ fn page_thumbnails_go_with_private_data_and_sanitize() {
     assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 1)]);
     assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Thumb"));
     assert!(!holds(&doc), "private data leaves no thumbnail in the saved file");
+    assert!(item_keeps_its_field(&doc), "a collection item's Thumb field is not a page thumbnail");
 
     let mut doc = thumbed();
     sanitize(&mut doc).unwrap();

@@ -162,8 +162,8 @@ sanitize::sanitize(&mut doc)?;                             // all of them
 Categories: metadata (`/Info`, XMP), file attachments, comments, form fields (flattened so the
 values stay visible), hidden text (render modes 3 and 7, or wholly off the page), hidden layers
 (content of off optional-content groups, then the groups), bookmarks, links/actions/JavaScript,
-and private data (`/PieceInfo`, prepress `/OPI` and `/Alternates`, and page thumbnails, `/Thumb`,
-which picture the page as it was). XMP metadata, private data, associated files (`/AF`) and
+and private data (`/PieceInfo`, prepress `/OPI` and `/Alternates`, and pages' thumbnails, `/Thumb`,
+which picture the page as it was). XMP metadata, private data other than thumbnails, associated files (`/AF`) and
 additional actions (`/AA`) are removed from every object reachable from the catalog that owns
 them (images, fonts, Forms, annotations and fields as well as the catalog and pages), never from
 name maps such as resource dictionaries. Content is read strictly: a page whose content can't be

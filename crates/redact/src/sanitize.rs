@@ -272,14 +272,11 @@ fn outline_action_count(doc: &Document, cat: &Dict) -> usize {
 /// XMP on images, fonts and Forms, private data on Forms, associated files on pages and
 /// annotations, additional actions on fields. Images and Forms also carry prepress data: an OPI
 /// proxy's link to the original file, and alternate images, which can be the unedited original.
-/// A page's thumbnail is a picture of the page as it was, whatever was removed from it since
-/// (#6749).
-const OWNED: [(Hidden, &[u8]); 7] = [
+const OWNED: [(Hidden, &[u8]); 6] = [
     (Hidden::Metadata, b"Metadata"),
     (Hidden::PrivateData, b"PieceInfo"),
     (Hidden::PrivateData, b"OPI"),
     (Hidden::PrivateData, b"Alternates"),
-    (Hidden::PrivateData, b"Thumb"),
     (Hidden::Attachments, b"AF"),
     (Hidden::LinksActionsScripts, b"AA"),
 ];
@@ -421,6 +418,13 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
             strip_owned(v, role.child(&k), keys, depth + 1);
         }
     }
+}
+
+/// The pages that hold a thumbnail (`/Thumb`), a picture of the page as it was whatever was removed
+/// from it since (#6749). Only a page's own entry is one: elsewhere `/Thumb` can be a name a
+/// producer chose (a collection item's field), so it is not swept like an [`OWNED`] key.
+fn page_thumbnails(doc: &Document) -> Vec<ObjRef> {
+    pdfcraft_model::pages(doc).into_iter().filter(|p| p.dict.contains(b"Thumb")).map(|p| p.obj).collect()
 }
 
 /// Every value of `key` held outside a name map, as [`owners`] finds them: with the indirect
@@ -808,7 +812,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                         + sub(doc, names(), b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                         + outline_action_count(doc, &cat)
                 }
-                Hidden::PrivateData => owned(Hidden::PrivateData),
+                Hidden::PrivateData => owned(Hidden::PrivateData) + page_thumbnails(doc).len(),
             };
             (h, n)
         })
@@ -1018,6 +1022,13 @@ pub(crate) fn remove_counted(
             }
             Hidden::FormFields => {
                 cat.remove(b"AcroForm");
+            }
+            Hidden::PrivateData => {
+                for page in page_thumbnails(doc) {
+                    doc.update_dict(page, |d| {
+                        d.remove(b"Thumb");
+                    })?;
+                }
             }
             _ => {}
         }
