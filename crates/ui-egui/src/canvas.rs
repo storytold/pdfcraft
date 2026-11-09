@@ -1321,6 +1321,8 @@ struct PageEnv<'a> {
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
+    /// The custom stamp's line, filled in now (#1741).
+    custom_line: &'a Option<String>,
     custom_stamp: &'a Option<crate::stamps_ui::CustomStamp>,
     date_text: &'a Result<String, String>,
     doc: &'a pdfcraft_engine::Document,
@@ -2740,7 +2742,8 @@ fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, allowed, author, avail, can_modify, comments_hidden, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } =
+        *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2758,6 +2761,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
+    }
+    if let Some(e) = comments::popups(ui.ctx(), view, info, prefs, comments_hidden, allowed) {
+        // A click on the composer's Post also takes the focus from a pop-up's box, saving what
+        // was typed there: both edits land in this frame, so both are kept, in one batch.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
+            None => e,
+        });
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
@@ -3211,6 +3222,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let custom_line = custom_stamp.as_ref().and_then(|cs| cs.line.as_deref()).map(|t| app.session.stamp_line(t, &author));
     let mut open_props: Option<(usize, usize)> = None;
     let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     // The table being set up in its window, shown on its own document's page.
@@ -3253,6 +3265,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         comments_hidden,
         content_h,
         content_w,
+        custom_line: &custom_line,
         custom_stamp: &custom_stamp,
         date_text: &date_text,
         doc,
@@ -3630,7 +3643,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                 Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
         }
         Some(PageMenuAction::FlattenComments) => {
-            app.views[index].comments.selected = None;
+            app.views[index].comments.select(None);
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
         Some(PageMenuAction::AddBookmark) => {
