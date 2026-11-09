@@ -295,8 +295,9 @@ impl Emitter<'_> {
                 ff |= 1 << 16;
                 d.set(IMAGE_FIELD_KEY.to_vec(), Object::Bool(true));
             }
-            WidgetKind::CheckBox { on, .. } => {
+            WidgetKind::CheckBox { on, mark, .. } => {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
+                mk.set(b"CA".to_vec(), Object::String(PdfString::text(mark.zapf_code())));
                 let on = state_name(on);
                 let checked = w.value.is_some();
                 d.set(b"V".to_vec(), Object::name(if checked { &on } else { "Off" }));
@@ -312,8 +313,9 @@ impl Emitter<'_> {
                 d.set(b"AP".to_vec(), Object::Dict(ap));
                 d.set(b"PCItems".to_vec(), Object::Array(w.items.iter().map(|i| Object::String(PdfString::text(i))).collect()));
             }
-            WidgetKind::Radio { group, on, .. } => {
+            WidgetKind::Radio { group, on, mark, .. } => {
                 top_level = false;
+                mk.set(b"CA".to_vec(), Object::String(PdfString::text(mark.zapf_code())));
                 let parent = match self.radio_groups.get(group) {
                     Some((p, _)) => *p,
                     None => {

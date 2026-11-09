@@ -7096,6 +7096,34 @@ fn round_xfa_check_buttons_open_drawn_round() {
     }
 }
 
+/// An opened dynamic XFA form's check boxes and radio buttons draw the mark their template asks
+/// for (`<checkButton mark>`), and without one the spec's default: a cross on a square button and
+/// a filled circle on a round one (XFA 3.3, pp. 650–651), not the check (or, for a radio button,
+/// the circle) a plain AcroForm field gets.
+#[test]
+fn xfa_check_buttons_open_with_the_mark_their_template_asks_for() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<field name="plain" w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="round" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="star" w="1in" h="0.3in"><ui><checkButton mark="star"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<exclGroup name="pick" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui><items><text>Y</text></items></field></exclGroup>
+</subform></template></xdp:xdp>"##;
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let all = pdfcraft_forms::fields(&cos);
+    let style = |name: &str| {
+        let f = all.iter().find(|f| f.name.ends_with(name)).unwrap_or_else(|| panic!("no field {name}"));
+        pdfcraft_forms::check_style(&cos, f)
+    };
+    use pdfcraft_forms::CheckStyle;
+    assert_eq!(style("plain"), CheckStyle::Cross, "a square button's default mark");
+    assert_eq!(style("round"), CheckStyle::Circle, "a round button's default mark");
+    assert_eq!(style("star"), CheckStyle::Star, "the template's mark");
+    assert_eq!(style("pick"), CheckStyle::Cross, "a square radio button's default mark");
+}
+
 #[test]
 fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     let xdp = pdfcraft_xfa::fixtures::template(3);

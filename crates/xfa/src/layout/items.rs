@@ -1,4 +1,5 @@
 use super::{Arc, Face, HAlign, Rect, Span};
+use crate::model::CheckMark;
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -83,11 +84,13 @@ pub enum WidgetKind {
     CheckBox {
         on: String,
         round: bool,
+        mark: CheckMark,
     },
     Radio {
         group: String,
         on: String,
         round: bool,
+        mark: CheckMark,
     },
     Button {
         caption: String,

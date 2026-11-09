@@ -6,9 +6,9 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Access, Anchor, Area, Border, Caption, CheckMark, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout,
+    Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -534,13 +534,15 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         .map(text_of)
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    let check_round = ui_el.is_some_and(|e| e.attribute("shape") == Some("round"));
     Field {
         common: parse_common(n),
         ui: kind,
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
-        check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
+        check_round,
+        check_mark: CheckMark::parse(ui_el.and_then(|e| e.attribute("mark")), check_round),
         multiline,
         no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
         caption: parse_caption(child(n, "caption"), warnings),

@@ -449,7 +449,7 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     assert_eq!(family.face.family, crate::text::Family::Courier);
     assert_eq!(family.som, "form[0].head[0].familyName[0]");
     let agree = w.iter().find(|w| w.name == "agree").unwrap();
-    assert_eq!(agree.kind, WidgetKind::CheckBox { on: "1".into(), round: false });
+    assert_eq!(agree.kind, WidgetKind::CheckBox { on: "1".into(), round: false, mark: crate::model::CheckMark::Cross });
     assert!((agree.rect.w - 10.0).abs() < 0.01, "a 10 pt square: {:?}", agree.rect);
     let born = w.iter().find(|w| w.name == "born").unwrap();
     assert_eq!(born.kind, WidgetKind::Date("yyyy-mm-dd".into()));
@@ -644,6 +644,85 @@ fn round_check_buttons_are_marked_for_a_round_appearance() {
         .map(|(n, r)| (n.to_string(), r))
         .collect();
     assert_eq!(round, expected);
+}
+
+/// A check box or radio button laid out from a check button records the mark it shows when on
+/// (`/MK /CA`, a ZapfDingbats code the forms layer draws from): the template's `mark`, or for
+/// `default` (also when `mark` is missing or unknown) a cross on a square button and a filled
+/// circle on a round one (XFA 3.3, pp. 650–651). In an exclusion group too.
+#[test]
+fn check_buttons_record_the_mark_the_template_asks_for() {
+    let check = |name: &str, attrs: &str, items: &str| {
+        format!(r#"<field name="{name}" w="1in" h="0.3in"><ui><checkButton{attrs}/></ui><items>{items}</items></field>"#)
+    };
+    let on_off = "<integer>1</integer><integer>0</integer>";
+    let boxes: String = [
+        ("omitted", ""),
+        ("omittedRound", r#" shape="round""#),
+        ("default", r#" mark="default""#),
+        ("defaultRound", r#" mark="default" shape="round""#),
+        ("unknown", r#" mark="tick""#),
+        ("check", r#" mark="check""#),
+        ("circle", r#" mark="circle""#),
+        ("cross", r#" mark="cross" shape="round""#),
+        ("diamond", r#" mark="diamond""#),
+        ("square", r#" mark="square""#),
+        ("star", r#" mark="star""#),
+    ]
+    .iter()
+    .map(|(n, a)| check(n, a, on_off))
+    .collect();
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+{boxes}<exclGroup name="pick" layout="tb">{}{}{}</exclGroup>
+</subform></template></xdp:xdp>"##,
+        check("radioOmitted", "", "<text>a</text>"),
+        check("radioRound", r#" shape="round""#, "<text>b</text>"),
+        check("radioCheck", r#" mark="check" shape="round""#, "<text>c</text>"),
+    );
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    // Every widget among the form's fields and their kids (a radio group's buttons), by the
+    // last step of its SOM path.
+    let catalog = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let mut todo: Vec<_> =
+        doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().iter().filter_map(Object::as_ref).collect();
+    let mut marks = std::collections::BTreeMap::new();
+    while let Some(r) = todo.pop() {
+        let node = doc.get(r);
+        let d = node.as_dict().unwrap();
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)) {
+            todo.extend(kids.as_array().unwrap().iter().filter_map(Object::as_ref));
+            continue;
+        }
+        let som = d.get(SOM_KEY).and_then(Object::as_string).map(|s| s.to_text()).unwrap_or_default();
+        let name = som.rsplit('.').next().unwrap_or_default().split('[').next().unwrap_or_default().to_string();
+        let mk = d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned().unwrap());
+        let ca = mk.and_then(|mk| mk.get(b"CA").and_then(Object::as_string).map(|s| s.to_text()));
+        marks.insert(name, ca);
+    }
+    let expected: std::collections::BTreeMap<String, Option<String>> = [
+        ("omitted", "8"),
+        ("omittedRound", "l"),
+        ("default", "8"),
+        ("defaultRound", "l"),
+        ("unknown", "8"),
+        ("check", "4"),
+        ("circle", "l"),
+        ("cross", "8"),
+        ("diamond", "u"),
+        ("square", "n"),
+        ("star", "H"),
+        ("radioOmitted", "8"),
+        ("radioRound", "l"),
+        ("radioCheck", "4"),
+    ]
+    .into_iter()
+    .map(|(n, ca)| (n.to_string(), Some(ca.to_string())))
+    .collect();
+    assert_eq!(marks, expected);
 }
 
 /// A template whose one draw holds `body` as rich text, in a box `w` wide.

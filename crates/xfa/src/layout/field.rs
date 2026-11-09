@@ -182,12 +182,12 @@ impl Layouter<'_> {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
                     Some((group, on_value, tip, chosen)) => (
-                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
+                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round, mark: f.check_mark },
                         tip.or_else(|| f.tooltip.clone()),
                         chosen,
                     ),
                     None => (
-                        WidgetKind::CheckBox { on: on.clone(), round: f.check_round },
+                        WidgetKind::CheckBox { on: on.clone(), round: f.check_round, mark: f.check_mark },
                         f.tooltip.clone(),
                         plain_value.as_deref().is_some_and(|v| is_on(v, &on)),
                     ),

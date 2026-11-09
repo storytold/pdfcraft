@@ -501,6 +501,52 @@ pub struct ChoiceList {
     pub editable: bool,
 }
 
+/// The mark a check button shows when it is on (`<checkButton mark>`, XFA 3.3 pp. 650–651),
+/// with `default` already resolved from `shape`: a cross on a square button, a filled circle on
+/// a round one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CheckMark {
+    Check,
+    Circle,
+    /// A corner-to-corner X: `cross`, and `default` on a square button (the default shape).
+    #[default]
+    Cross,
+    /// Listed in the spec's syntax but not described: a filled diamond.
+    Diamond,
+    Square,
+    Star,
+}
+
+impl CheckMark {
+    /// `mark`'s value on a check button that is `round` or square. `default`, a missing value
+    /// and one the spec doesn't define all take the shape's default mark.
+    pub fn parse(mark: Option<&str>, round: bool) -> Self {
+        match mark {
+            Some("check") => CheckMark::Check,
+            Some("circle") => CheckMark::Circle,
+            Some("cross") => CheckMark::Cross,
+            Some("diamond") => CheckMark::Diamond,
+            Some("square") => CheckMark::Square,
+            Some("star") => CheckMark::Star,
+            _ if round => CheckMark::Circle,
+            _ => CheckMark::Cross,
+        }
+    }
+
+    /// The ZapfDingbats character a check box's or radio button's `/MK /CA` names for this mark,
+    /// as the forms layer reads it.
+    pub fn zapf_code(self) -> &'static str {
+        match self {
+            CheckMark::Check => "4",
+            CheckMark::Circle => "l",
+            CheckMark::Cross => "8",
+            CheckMark::Diamond => "u",
+            CheckMark::Square => "n",
+            CheckMark::Star => "H",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Script {
     pub activity: String,
@@ -528,6 +574,8 @@ pub struct Field {
     /// Check buttons: the side of the square (default 10 pt) and whether it is round.
     pub check_size: Option<f64>,
     pub check_round: bool,
+    /// Check buttons: the mark shown when on.
+    pub check_mark: CheckMark,
     pub multiline: bool,
     /// The field doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for one
     /// line, `vScrollPolicy="off"` for several): it takes no more text than it shows.
