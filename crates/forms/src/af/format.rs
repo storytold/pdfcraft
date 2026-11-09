@@ -97,6 +97,9 @@ pub struct DateNames {
     pub months_short: [&'static str; 12],
     pub days: [&'static str; 7],
     pub days_short: [&'static str; 7],
+    /// The month after a day number, where the language changes it (`8 במרץ`, `8 октября`).
+    /// What a field writes stays [`months`](Self::months); a typed date is read in this form too.
+    pub months_with_day: Option<[&'static str; 12]>,
 }
 
 /// English, the names until the app sets others.
@@ -105,6 +108,7 @@ pub const ENGLISH_DATE_NAMES: DateNames = DateNames {
     months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
     days: DAYS,
     days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    months_with_day: None,
 };
 
 static DATE_NAMES: std::sync::RwLock<DateNames> = std::sync::RwLock::new(ENGLISH_DATE_NAMES);
@@ -129,7 +133,7 @@ pub fn date_names() -> DateNames {
 /// "mar"), the order of the format's name fields (`mmm`, `ddd`) decides. English names are
 /// found too, so that one typed ("Tue" before "Mar") fills its field of the format as a
 /// localized one does.
-fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4]) -> String {
+fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4], also_months: Option<&[&str; 12]>) -> String {
     const EN: [&[&str]; 4] = [&MONTHS, &MONTHS, &DAYS, &DAYS];
     // No date is this long: hostile text is left as it is rather than scanned name by name.
     if text.len() > MAX_DATE_TEXT_BYTES {
@@ -149,6 +153,15 @@ fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4]) -> String {
                 if !n.is_empty() && n.len() <= MAX_NAME_CHARS {
                     names.push((n, k % 4 < 2, english));
                 }
+            }
+        }
+    }
+    // The same twelve months in the form used after a day (`במרץ`, `октября`).
+    if let Some(extra) = also_months {
+        for (name, english) in extra.iter().copied().zip(MONTHS) {
+            let n: Vec<String> = name.chars().map(fold).collect();
+            if !n.is_empty() && n.len() <= MAX_NAME_CHARS {
+                names.push((n, true, english));
             }
         }
     }
@@ -240,12 +253,16 @@ const MAX_DATE_TEXT_BYTES: usize = 1024;
 const MAX_NAME_CHARS: usize = 32;
 
 /// The month (1 to 12) a typed word names: a start of at least three letters of a month's name,
-/// or its whole short name, in `names` or in English.
+/// its whole day-form (`במרץ`), or its whole short name, in `names` or in English.
 fn month_named(word: &str, names: &DateNames) -> Option<u32> {
     let w = folded(word);
     let starts = |list: &[&str; 12]| list.iter().position(|m| w.chars().count() >= 3 && folded(m).starts_with(&w));
     let whole = |list: &[&str; 12]| list.iter().position(|m| folded(m).trim_end_matches('.') == w);
-    starts(&names.months).or_else(|| whole(&names.months_short)).or_else(|| starts(&MONTHS)).map(|i| i as u32 + 1)
+    starts(&names.months)
+        .or_else(|| names.months_with_day.as_ref().and_then(whole))
+        .or_else(|| whole(&names.months_short))
+        .or_else(|| starts(&MONTHS))
+        .map(|i| i as u32 + 1)
 }
 
 /// A date and time read from text.
@@ -363,12 +380,13 @@ fn order(fmt: &str) -> Vec<Part> {
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
     let names = date_names();
     let lists: [&[&str]; 4] = [&names.months, &names.months_short, &names.days, &names.days_short];
+    let also = names.months_with_day.as_ref();
     // Weekdays are shown, not typed (see `order`): where the format has one but none was typed, a
     // name the language shares between a weekday and a month (Italian "mar") is the month, as
     // the names are read again with no weekday expected (#5303).
-    read_date(&english_names(text, fmt, lists), fmt, &names).or_else(|| {
+    read_date(&english_names(text, fmt, lists, also), fmt, &names).or_else(|| {
         let no_weekday = fmt.replace("dddd", " ").replace("ddd", " ");
-        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists), fmt, &names)).flatten()
+        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists, also), fmt, &names)).flatten()
     })
 }
 

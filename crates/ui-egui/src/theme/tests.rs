@@ -288,6 +288,35 @@ fn press_darkens_then_sinks() {
     assert_eq!(held.offset(), Vec2::new(0.0, 1.0));
 }
 
+/// `he` uses the default face stack. An embedded Hebrew face (craft-fonts) is in that stack.
+/// Without one, the installed Hebrew fallback is included when this machine has a face.
+/// A build with neither skips: that fallback is not required.
+#[test]
+fn hebrew_interface_uses_the_default_stack_with_a_hebrew_face() {
+    assert_eq!(CjkPreference::for_language("he"), CjkPreference::Default);
+    let embedded: Vec<String> = pdfcraft_fonts::ui_hebrew_fonts().iter().map(|f| f.name()).collect();
+    let defs = installed_font_definitions(CjkPreference::for_language("he"));
+    let has_embedded = embedded.iter().any(|name| defs.families.values().any(|stack| stack.iter().any(|got| got == name)));
+    #[cfg(not(target_arch = "wasm32"))]
+    let has_system = crate::system_fonts::hebrew_fallback().is_some();
+    #[cfg(target_arch = "wasm32")]
+    let has_system = false;
+    if !has_embedded && !has_system {
+        eprintln!(
+            "skipping Hebrew face check: no embedded Hebrew face (CRAFT_FONTS_DIR unset, or that checkout has no Hebr face) and no installed Hebrew face. The system fallback was consulted and found none."
+        );
+        return;
+    }
+    if !embedded.is_empty() {
+        assert!(has_embedded, "the default stack used for he is missing an embedded Hebrew face {embedded:?}");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if has_system {
+        let stack = &defs.families[&FontFamily::Proportional];
+        assert!(stack.iter().any(|name| name == SYSTEM_HEBREW_FALLBACK), "he installs {SYSTEM_HEBREW_FALLBACK}: {stack:?}");
+    }
+}
+
 #[test]
 fn text_is_readable_on_every_surface() {
     // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
