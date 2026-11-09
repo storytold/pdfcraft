@@ -4,6 +4,8 @@
 //! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! On macOS the file manager's "Combine files" entry is a Finder Quick Action that opens a list of
+//! the selected files with the app, running or not (`finder_combine`).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -38,6 +40,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 mod apple_events;
 mod compositor_gpu;
 mod decorations;
+mod finder_combine;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
@@ -426,6 +429,8 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+            // Finder's "Combine files in PdfCraft" Quick Action (#585), written or refreshed for this version.
+            finder_combine::install(APP_ID);
             // The native menu bar. Its Quit (⌘Q) closes the window rather than ending the process as
             // winit's does (#1136), so `guard_quit` asks about unsaved changes, as for the close
             // button.
