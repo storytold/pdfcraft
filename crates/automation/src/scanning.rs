@@ -45,45 +45,34 @@ impl Automation {
         let images = vec![("Scan.png".to_string(), image_bytes)];
         let image_res = pdfcraft_engine::ImageResolution::Dpi(dpi_f64);
 
-        if let Some(target_doc_id) = a.opt_int("doc")? {
-            if target_doc_id < 0 {
-                return Err(ToolError::InvalidArgs("doc must be a positive document id".into()));
-            }
-            let doc_id = pdfcraft_engine::DocId::from_u64(target_doc_id as u64);
-            let new_doc_id = self
-                .session
-                .create_from_images_with_resolution(&images, image_res)
-                .map_err(|e| ToolError::Failed(e.to_string()))?;
-
-            let page_count = self.session.get(doc_id).map(|d| d.info.pages.len()).unwrap_or(0);
-            let _ = self.session.edit(
-                doc_id,
-                pdfcraft_engine::Edit::InsertPages {
-                    at: page_count,
-                    from_doc: new_doc_id,
-                    pages: vec![0],
-                },
-            );
-            let _ = self.session.close(new_doc_id);
-            return Ok(json!({ "doc": target_doc_id, "page_inserted": page_count + 1 }));
-        }
-
-        let new_doc_id = self
+        let created_bytes = self
             .session
             .create_from_images_with_resolution(&images, image_res)
             .map_err(|e| ToolError::Failed(e.to_string()))?;
 
+        if a.get("doc").is_some() {
+            let page_count = self.doc(a)?.info.pages.len();
+            self.apply(
+                a,
+                pdfcraft_engine::Edit::InsertPagesFrom {
+                    name: "Scan.pdf".to_string(),
+                    bytes: created_bytes,
+                    pages: None,
+                    at: page_count,
+                    field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+                },
+            )?;
+            return Ok(json!({ "page_inserted": page_count + 1 }));
+        }
+
         if let Some(out_str) = a.opt_str("out")? {
             let out_path = self.resolve(out_str, true)?;
-            let bytes = self
-                .session
-                .save_to_bytes(new_doc_id)
-                .map_err(|e| ToolError::Failed(e.to_string()))?;
-            write_atomic(&out_path, &bytes)?;
-            let _ = self.session.close(new_doc_id);
+            write_atomic(&out_path, &created_bytes)?;
             Ok(json!({ "saved": out_path.to_string_lossy(), "pages": 1 }))
         } else {
-            Ok(json!({ "doc": new_doc_id.as_u64(), "pages": 1 }))
+            let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| "Scan.pdf".to_string());
+            let id = self.session.open_new(name, created_bytes).map_err(failed)?;
+            Ok(json!({ "doc": id.0, "pages": 1 }))
         }
     }
 }
