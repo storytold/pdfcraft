@@ -1,25 +1,26 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main fe3879bc; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M3, #6241 candidate: explicit opens of an existing PDF tab refresh Recent and restore cleared entries without reloading unsaved work; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
-
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -30,11 +31,11 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (M1, #1143: repaired aliases survive preflight, snapshots and normalized saves; retained materialized revisions report generation disagreements; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M1, #1143: explicit live xref/header generation repair policy and bounded diagnostics; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -240,6 +241,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-09 (M3, PR #6323 review):** Recent uses the same path comparison as existing-tab lookup, so relative and absolute aliases replace one row rather than displacing another file. Reopening keeps the document ID and unsaved bytes. A regression covers both open entry points, limits of two and three, and persisted history; it fails before the fix and after actually reverting it. Full scoped UI tests: 2,642 passed, five existing ignores; scoped Clippy/WASM, formatting, layers, assets and parity passed. A real opt-in control run retained the dirty document through Clear Recent and reopening, then showed its restored Home row in inspect and screenshot. The original #6241 report was closed after it could no longer be reproduced; this PR addresses the independent existing-tab case. Estimates unchanged.
+
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
 - **2026-11-08 (M5, comment exchange):** Comments keep their formatting and appearance through XFDF and FDF. XFDF export and import carry rich text, default style, border width, style and dash pattern, rotation, justification, fringe, line leaders and captions, the caret symbol and redaction overlay text as XFDF 3.0 (ISO 19444-1) names them, and a stamp's appearance as `<appearance>` (the DICT/STREAM/DATA encoding, bounded); copy and paste carries every comment's appearance. FDF export keeps a stamp's /AP with its forms and images, as XFDF does, and FDF import keeps any /AP the file carries (ISO 32000-2 §12.7.8.3.4). The intent goes out as both `intent` and `IT`. An unreadable XFDF appearance is left out, said in the import report and the repair log, and the comment is drawn by PdfCraft; an FDF past the import budget is refused whole. A redaction mark is always drawn by PdfCraft.
@@ -249,7 +252,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-05 (M2, #5889):** A non-embedded Arial set as a TrueType CID font (`CIDFontType2`, `Identity-H`, as Word and PDFMaker write it) draws the glyphs its codes name. Those codes are glyph indexes in the author's Arial, whose first 258 glyphs follow the standard Macintosh order, so the standard substitute now draws each glyph by name (vendored hayro-interpret patch 76). Before, it took each code as one of its own glyph indexes, and "Low Power" drew as "@ck 'Dck Yf". Arial Narrow, Black and Unicode MS, and `CIDFontType0` fonts, are not read this way. Copying or searching those runs still needs a `/ToUnicode`.
 
 - **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
-- **2026-11-06 (M3, #6241 candidate):** Reopening a PDF whose tab is already open records it in Recent again and moves it to the front, while preserving the existing tab and unsaved edits. Initial native picker opens through Home and File already recorded correctly; the regression concerns the existing-tab fast path. The original reporter's version and intended Recent list remain unconfirmed. Validation: 756 UI unit and 1489 integration tests passed with the pinned CI inputs (5 existing ignores); scoped Clippy, WASM, formatting, layers, assets and parity passed. A real opt-in UI control run and screenshot confirmed the restored Home entry. Estimates unchanged.
+- **2026-11-06 (M3, #6241 candidate):** Reopening a PDF whose tab is already open records it in Recent again and moves it to the front, while preserving the existing tab and unsaved edits. Initial native picker opens through Home and File already recorded correctly; the regression concerns the existing-tab fast path. The reporter could no longer reproduce the original omission even in older versions; #6241 was closed on November 9, and this independently reproduced case remains scoped to this PR. Validation: 756 UI unit and 1489 integration tests passed with the pinned CI inputs (5 existing ignores); scoped Clippy, WASM, formatting, layers, assets and parity passed. A real opt-in UI control run and screenshot confirmed the restored Home entry. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-07 (M10, `ocr.ocr-web`, port onto #977):** Web OCR rebuilt on main's engines and preprocessing (#977). `OcrJob::run` is now `OcrJob::steps` a page at a time: the page renders, crops to the region and cleans each page, a Web Worker runs ocrs on the result, and `OcrShot::place` maps the words back through the region and preprocessing. Every strategy reads like this when only one engine is present, and the web build has only ocrs. The downloaded models are installed into the engine cache (`ocr::install`), so the Verify screen and the engine-status checks see them too. The batch keeps main's skipped-files bucket, low-confidence notes and cancel. The translations moved to craft-i18n (storytold/craft-i18n#141). The Verify screen starts the model download itself and runs once the models land; before, on a fresh page it failed with the desktop's "set PDFCRAFT_MODELS" message. Known limits: the cleaning steps, and the Verify screen's Run OCR and re-reads, run on the page. Estimates unchanged.

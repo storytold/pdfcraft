@@ -314,6 +314,7 @@ impl PdfCraftApp {
         self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
     }
 
+    /// Admit a prepared document, restore its initial state and record a successful file open.
     fn finish_open(
         &mut self,
         name: &str,
@@ -600,12 +601,13 @@ impl PdfCraftApp {
 
     /// A successful explicit open refreshes history even when it reuses an existing tab.
     fn record_recent(&mut self, entry: RecentFile) {
-        self.recent.retain(|r| r.path != entry.path);
+        self.recent.retain(|r| !same_file(&r.path, &entry.path));
         self.recent_check.opened(&entry.path);
         self.recent.insert(0, entry);
         self.recent.truncate(self.recent_limit);
     }
 
+    /// Activate an existing tab and refresh its history from the in-memory document, keeping edits.
     fn focus_open_tab(&mut self, index: usize) {
         self.active = Some(index);
         let entry =
@@ -649,6 +651,7 @@ impl PdfCraftApp {
         self.open_path_request(path, then, None)
     }
 
+    /// Reuse, join or open a local file, retaining any requested tool and launch display mode.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,

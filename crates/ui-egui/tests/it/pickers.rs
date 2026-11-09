@@ -142,6 +142,7 @@ fn repicking_an_open_pdf_restores_its_cleared_recent_entry() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Explicit path and Recent opens promote an existing tab and honor disabled history.
 #[test]
 fn opening_an_existing_tab_promotes_it_in_recent_without_a_second_tab() {
     let dir = scratch("recent-promote");
@@ -168,6 +169,45 @@ fn opening_an_existing_tab_promotes_it_in_recent_without_a_second_tab() {
         assert!(app.recent.is_empty(), "reusing a tab honors disabled history");
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Reopening an alias replaces the same file's history row without evicting another file.
+#[test]
+fn reopening_a_relative_tab_deduplicates_its_absolute_recent_entry() {
+    let relative = "recent-alias-first.pdf";
+    let absolute = std::path::absolute(relative).unwrap().to_string_lossy().into_owned();
+    for (from_recent, limit) in [(false, "2"), (true, "2"), (false, "3"), (true, "3")] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("recent-files", limit).unwrap();
+        app.open_bytes("other.pdf", Some("recent-alias-other.pdf".into()), fixture(1)).unwrap();
+        app.open_bytes("first.pdf", Some(relative.into()), fixture(2)).unwrap();
+        let id = app.views.last().unwrap().id;
+        rotate_first_page(&mut app);
+        let before = app.session.get(id).unwrap().bytes.clone();
+        assert!(app.session.get(id).unwrap().dirty);
+        app.active = Some(0);
+        // A history row restored from an earlier absolute-path open can coexist with a
+        // tab opened using its relative spelling. No process-wide current-directory change.
+        app.recent.first_mut().unwrap().path = absolute.clone();
+        if from_recent {
+            app.open_recent(&absolute);
+        } else {
+            app.open_path(&absolute);
+        }
+        assert_eq!(app.views.len(), 2, "the alias reuses its existing tab");
+        assert_eq!(app.active, Some(1));
+        assert_eq!(app.views.last().unwrap().id, id);
+        assert!(app.session.get(id).unwrap().dirty);
+        assert_eq!(app.session.get(id).unwrap().bytes, before, "keep unsaved edits");
+        assert_eq!(
+            app.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            [relative, "recent-alias-other.pdf"],
+            "one row per file, preserving the other limited-history entry"
+        );
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert_eq!(restored.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [relative, "recent-alias-other.pdf"]);
+    }
 }
 
 #[test]
