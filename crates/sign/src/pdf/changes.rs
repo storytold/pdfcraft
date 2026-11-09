@@ -672,9 +672,10 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
     let data = doc.bytes();
     let start = old.bytes().len();
     let Some(appended) = data.get(start..) else { return Some(Vec::new()) };
-    // Each candidate header may read a comment or a generation token to its end, and a later one
-    // can start inside it (`%1%1%1…`, `1 +1+1+1…`): without a bound, that is quadratic in the
-    // appended bytes. Ordinary bytes, binary stream data included, spend a small fraction of it.
+    // Each candidate header may read a comment, a generation token or white space to its end, and
+    // later ones can start inside or before it (`%1%1%1…`, `1 +1+1+1…`, `1+1+1…` before long
+    // white space): without a bound, that is quadratic in the appended bytes. Ordinary bytes,
+    // binary stream data included, spend a small fraction of it.
     let mut work = appended.len().saturating_mul(16).saturating_add(1 << 20);
     let mut last: HashMap<(u32, u16), usize> = HashMap::new();
     let mut i = 0;
@@ -750,8 +751,8 @@ fn is_white_space(b: u8) -> bool {
 
 /// An `N G obj` header starting at `at` in `bytes`: its number, its generation (0 when it is no
 /// generation number, as a renderer rebuilding its index reads it) and where it ends. White space
-/// and comments may separate the parts, and the generation may be any number. The comment and
-/// generation bytes read are spent from `work`.
+/// and comments may separate the parts, and the generation may be any number. The white space,
+/// comment and generation bytes read are spent from `work`.
 fn object_header(bytes: &[u8], at: usize, work: &mut usize) -> Option<(u32, u16, usize)> {
     let number_end = at.checked_add(count_while(bytes, at, |c| c.is_ascii_digit()))?;
     let num = std::str::from_utf8(bytes.get(at..number_end)?).ok()?.parse::<u32>().ok()?;
@@ -772,11 +773,12 @@ fn count_while(bytes: &[u8], from: usize, accept: fn(u8) -> bool) -> usize {
     bytes.get(from..).map_or(0, |rest| rest.iter().take_while(|b| accept(**b)).count())
 }
 
-/// Where the white space and comments from `from` end, the comment bytes passed spent from
-/// `work`.
+/// Where the white space and comments from `from` end, every byte passed spent from `work`: many
+/// candidate headers can end in the same long run of white space, as in `1+1+1…` before it.
 fn skip_space_and_comments(bytes: &[u8], mut from: usize, work: &mut usize) -> usize {
     while let Some(b) = bytes.get(from) {
         if is_white_space(*b) {
+            *work = work.saturating_sub(1);
             from = from.saturating_add(1);
         } else if *b == b'%' {
             let comment = count_while(bytes, from.saturating_add(1), |c| c != b'\n' && c != b'\r').saturating_add(1);
@@ -1321,17 +1323,19 @@ mod tests {
         bytes
     }
 
-    /// A comment of digits (`%1%1%1…`) or a run of signed numbers (`1 +1+1+1…`) appended after
-    /// signing would make the header scan start at each digit and read to the end of the run every
-    /// time, quadratic in the appended bytes. Past a bound on that work the appended bytes are not
-    /// judged; an ordinary revision is.
+    /// A comment of digits (`%1%1%1…`), a run of signed numbers (`1 +1+1+1…`), or a short one
+    /// before long white space, appended after signing, would make the header scan start at each
+    /// digit and read to the end of the run every time, quadratic in the appended bytes. Past a
+    /// bound on that work the appended bytes are not judged; an ordinary revision is.
     #[test]
     fn the_header_scan_is_bounded_on_runs_that_restart_it() {
         let signed = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "");
         let old = Document::open(Arc::new(signed.clone())).unwrap();
         let comment = [b"%".to_vec(), b"1%".repeat(50_000), b"\n".to_vec()].concat();
         let numbers = [b"1 ".to_vec(), b"+1".repeat(50_000), b"\n".to_vec()].concat();
-        for (what, run) in [("a comment of digits", comment), ("a run of signed numbers", numbers)] {
+        // Each start reads the short run of numbers, then the same long white space after it.
+        let spaced = [b"1".to_vec(), b"+1".repeat(2_000), b" ".repeat(1 << 20), b"\n".to_vec()].concat();
+        for (what, run) in [("a comment of digits", comment), ("a run of signed numbers", numbers), ("signed numbers before white space", spaced)] {
             let doc = Document::open(Arc::new(append_object_3(&signed, &run))).unwrap();
             assert_eq!(unlisted_bodies(&doc, &old), None, "{what}");
         }
