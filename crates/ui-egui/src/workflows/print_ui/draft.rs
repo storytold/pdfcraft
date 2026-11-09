@@ -1,4 +1,4 @@
-use super::{Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, print, spool};
+use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -66,16 +66,7 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
-    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
-    /// Paper sizes added with Custom…, kept with the settings.
-    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
-    /// The paper each printer is remembered with, kept with the settings.
-    pub remembered_paper: crate::print_paper::RememberedPaper,
-    /// "Remember this paper for …", applied at Print time.
-    pub remember_paper: bool,
-    /// The custom paper being added: name, width and height as typed (the preferences' unit).
-    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -140,10 +131,6 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
-            custom_papers: Vec::new(),
-            remembered_paper: Default::default(),
-            remember_paper: false,
-            custom_new: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -187,7 +174,7 @@ impl PrintDraft {
             SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
             m => m,
         });
-        let paper = self.paper_size();
+        let paper = PAPERS[self.paper.min(PAPERS.len() - 1)].1;
         let raster = self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale });
         // A selected area prints alone, its one page sized like a page of its own: Size is its
         // only handling (the dialog offers no other while it is chosen).

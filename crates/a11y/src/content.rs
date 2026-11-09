@@ -73,7 +73,8 @@ impl Walk<'_> {
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
-        for op in pdfcraft_content::parse(data).ops {
+        // One operator at a time: the walk keeps counts, never the stream's operators.
+        for op in pdfcraft_content::ops(data) {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
