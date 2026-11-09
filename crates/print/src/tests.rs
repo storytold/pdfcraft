@@ -84,7 +84,7 @@ fn page_selection() {
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
 fn wordings_are_said() {
-    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into())];
+    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into()), PrintError::TooManySelected(1_000)];
     for e in &mistakes {
         assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
     }
@@ -126,6 +126,54 @@ fn page_selection_handles_ranges_between_hyphenated_labels() {
     assert_eq!(select_pages(3, Some("A-1-B-C"), &ambiguous, Subset::All, false).unwrap(), [1, 2]);
 }
 
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). With front matter
+/// labelled i–iii and the body 1–7, "1" is the page labelled 1 (the fourth), while "(1)" is the
+/// first page, whatever it is labelled; positions combine with labels and open ends in ranges.
+#[test]
+fn a_number_in_parentheses_names_the_page_at_that_position() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pages = |range| select_pages(10, Some(range), &labels, Subset::All, false);
+    assert_eq!(pages("1").unwrap(), [3], "a bare number is the label");
+    assert_eq!(pages("(1)").unwrap(), [0], "in parentheses it is the position");
+    assert_eq!(pages("( 2 )").unwrap(), [1]);
+    assert_eq!(pages("(1)-(3)").unwrap(), [0, 1, 2]);
+    assert_eq!(pages("(9)-").unwrap(), [8, 9]);
+    assert_eq!(pages("-(2)").unwrap(), [0, 1]);
+    assert_eq!(pages("(2)-1").unwrap(), [1, 2, 3], "a position and a label");
+    assert_eq!(pages("ii-(5)").unwrap(), [1, 2, 3, 4]);
+    assert_eq!(pages("(4)-(2), 7").unwrap(), [3, 2, 1, 9]);
+    assert_eq!(select_pages(10, Some("(1)-(4)"), &labels, Subset::Even, false).unwrap(), [1, 3], "odd and even stay page numbers");
+    assert_eq!(pages("(0)"), Err(PrintError::OutOfRange(0, 10)));
+    assert_eq!(pages("(11)"), Err(PrintError::OutOfRange(11, 10)));
+    for bad in ["(x)", "()", "(1", "1)", "((1))", "(+3)"] {
+        assert_eq!(pages(bad), Err(PrintError::NotAPage(bad.into())), "{bad}");
+    }
+    // The page box takes positions through `position`, with the same digits-only rule.
+    assert_eq!(crate::position("( 3 )"), Some(3));
+    assert_eq!(crate::position("(+3)"), None, "a sign is not part of a page number");
+    assert!(pages("(-1)").is_err(), "a dash inside parentheses is still a range, of nothing");
+    // A label that is itself "(1)" still names its own page, as every label does.
+    let odd: Vec<String> = ["a", "b", "(1)"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(select_pages(3, Some("(1)"), &odd, Subset::All, false).unwrap(), [2]);
+    // Without labels a position is the same page as its number.
+    assert_eq!(select_pages(5, Some("(2)-4"), &[], Subset::All, false).unwrap(), [1, 2, 3]);
+}
+
+/// Odd and even count page positions, never the numbers inside labels: page indices are fixed
+/// and consecutive, while labels can restart, repeat, use letters or carry no number (ISO 32000-2
+/// §12.4.2). With front matter labelled i–iii the page labelled 1 is the fourth, so it is even, and
+/// a range typed in labels keeps the same pages as the same range typed as positions.
+#[test]
+fn odd_and_even_count_positions_on_a_labelled_document() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pick = |range: Option<&str>, subset| select_pages(10, range, &labels, subset, false).unwrap();
+    assert_eq!(pick(Some("1-4"), Subset::Even), [3, 5], "labels 1 and 3, the fourth and sixth pages");
+    assert_eq!(pick(Some("1-4"), Subset::Odd), [4, 6], "labels 2 and 4, the fifth and seventh pages");
+    assert_eq!(pick(Some("1-4"), Subset::Even), pick(Some("(4)-(7)"), Subset::Even), "labels or positions, the same pages");
+    assert_eq!(pick(None, Subset::Odd), [0, 2, 4, 6, 8], "i, iii, 2, 4, 6");
+    assert_eq!(pick(None, Subset::Even), [1, 3, 5, 7, 9]);
+}
+
 #[test]
 fn size_modes() {
     let sizes = [(200.0, 300.0), (1000.0, 1500.0)];
@@ -159,7 +207,10 @@ fn multiple_pages_per_sheet() {
     // Vertical order and borders.
     let v = layout(
         &sizes,
-        &settings(vec![0, 1, 2], Layout::Multiple { cols: 2, rows: 2, per_sheet: 4, order: PageOrder::Vertical, border: true, auto_rotate: false }),
+        &settings(
+            vec![0, 1, 2],
+            Layout::Multiple { cols: 2, rows: 2, per_sheet: 4, order: PageOrder::Vertical, border: true, auto_rotate: false, custom: false },
+        ),
     )
     .unwrap();
     assert!(close(v[0].placed[1].matrix.0[4], v[0].placed[0].matrix.0[4]) && v[0].placed[1].matrix.0[5] < v[0].placed[0].matrix.0[5]);
@@ -183,15 +234,44 @@ fn custom_pages_per_sheet_never_overfill_the_grid() {
     assert_eq!(pages(4), [vec![0, 1, 2, 3], vec![4, 5, 6]]);
     assert_eq!(pages(2), [vec![0, 1], vec![2, 3], vec![4, 5], vec![6]]);
     // Cut-stack piles take the requested count too.
-    let stacked = Layout::Multiple { cols: 2, rows: 2, per_sheet: 3, order: PageOrder::CutStack, border: false, auto_rotate: false };
+    let stacked = Layout::Multiple { cols: 2, rows: 2, per_sheet: 3, order: PageOrder::CutStack, border: false, auto_rotate: false, custom: false };
     assert_eq!(sheet_pages(&layout(&sizes, &settings((0..7).collect(), stacked)).unwrap()), [vec![0, 3, 6], vec![1, 4], vec![2, 5]]);
     // A count larger than the grid is capped by the grid; no pages per sheet is refused.
-    let grid = |per_sheet| Layout::Multiple { cols: 2, rows: 1, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: false };
+    let grid =
+        |per_sheet| Layout::Multiple { cols: 2, rows: 1, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: false };
     assert_eq!(sheet_pages(&layout(&sizes[..3], &settings(vec![0, 1, 2], grid(9))).unwrap()), [vec![0, 1], vec![2]]);
     assert!(matches!(layout(&sizes, &settings(vec![0], grid(0))), Err(PrintError::Invalid(_))));
     // The imposed PDF has one page per sheet.
     let out = impose(&fixture(7), &settings((0..7).collect(), Layout::multiple(3))).unwrap();
     assert_eq!(pdfcraft_model::pages(&Document::open(Arc::new(out)).unwrap()).len(), 3);
+}
+
+#[test]
+fn a_custom_grid_is_laid_out_as_given_on_the_chosen_sheet() {
+    // Columns across and rows down whatever the sheet, which isn't turned for the grid (#6551).
+    let sizes = vec![(200.0, 300.0); 4];
+    let at = |sheet: &Sheet, k: usize| (sheet.placed[k].matrix.0[4], sheet.placed[k].matrix.0[5]);
+    let grid = |cols, rows| Layout::grid(cols, rows).unwrap();
+    for (orientation, size) in
+        [(Orientation::Auto, (612.0, 792.0)), (Orientation::Portrait, (612.0, 792.0)), (Orientation::Landscape, (792.0, 612.0))]
+    {
+        let s = |layout| Settings { orientation, ..settings((0..4).collect(), layout) };
+        let across = layout(&sizes, &s(grid(2, 1))).unwrap();
+        assert_eq!((across.len(), across[0].size), (2, size), "{orientation:?}");
+        assert!(at(&across[0], 1).0 > at(&across[0], 0).0 && close(at(&across[0], 1).1, at(&across[0], 0).1), "side by side, {orientation:?}");
+        let down = layout(&sizes, &s(grid(1, 2))).unwrap();
+        assert_eq!(down[0].size, size, "{orientation:?}");
+        assert!(close(at(&down[0], 1).0, at(&down[0], 0).0) && at(&down[0], 1).1 < at(&down[0], 0).1, "stacked, {orientation:?}");
+        let three = layout(&sizes, &s(grid(3, 1))).unwrap();
+        assert_eq!(sheet_pages(&three), [vec![0, 1, 2], vec![3]]);
+    }
+    // 1 to 99 each way, and a grid too fine for the paper is refused, not drawn.
+    assert!(Layout::grid(0, 1).is_none() && Layout::grid(1, 0).is_none() && Layout::grid(100, 1).is_none() && Layout::grid(1, usize::MAX).is_none());
+    assert_eq!(layout(&sizes, &settings(vec![0], grid(17, 17))).unwrap()[0].placed.len(), 1);
+    assert!(matches!(layout(&sizes, &settings(vec![0], grid(99, 99))), Err(PrintError::Invalid(_))));
+    let hostile =
+        Layout::Multiple { cols: 100, rows: 1, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: true };
+    assert!(matches!(layout(&sizes, &settings(vec![0], hostile)), Err(PrintError::Invalid(_))));
 }
 
 #[test]
@@ -450,7 +530,15 @@ fn driverless_printers_join_the_list_without_a_queue() {
 }
 
 fn cut_stack(cols: usize, rows: usize) -> Layout {
-    Layout::Multiple { cols, rows, per_sheet: cols.saturating_mul(rows), order: PageOrder::CutStack, border: false, auto_rotate: false }
+    Layout::Multiple {
+        cols,
+        rows,
+        per_sheet: cols.saturating_mul(rows),
+        order: PageOrder::CutStack,
+        border: false,
+        auto_rotate: false,
+        custom: false,
+    }
 }
 
 #[test]
@@ -503,7 +591,7 @@ fn cutting_and_stacking_recovers_every_selected_page() {
 fn multiple_rejects_hostile_grids_without_panicking() {
     let sizes = [(200.0, 300.0)];
     for (cols, rows) in [(usize::MAX, 2), (2, usize::MAX), (0, 2), (1, 0), (257, 1)] {
-        let mode = Layout::Multiple { cols, rows, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false };
+        let mode = Layout::Multiple { cols, rows, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: false };
         assert!(matches!(layout(&sizes, &settings(vec![0], mode)), Err(PrintError::Invalid(_))));
     }
     let tiny = Settings { paper: (72.0, 72.0), ..settings(vec![0], cut_stack(16, 16)) };
@@ -1244,4 +1332,16 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
+}
+
+#[test]
+fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
+    let mut doc = fixture(2);
+    let pages = pdfcraft_model::pages(&doc);
+    let res = doc.add(Object::Dict([(b"Font".to_vec(), Object::Dict(Dict::new()))].into_iter().collect()));
+    doc.update_dict(pages[1].obj, |d| d.set(b"Resources".to_vec(), Object::Ref(res))).unwrap();
+    let pages = pdfcraft_model::pages(&doc);
+    let form = imposition::page_form(&mut doc, &pages, 1, Content::default(), &mut Default::default()).unwrap();
+    let Object::Stream(s) = &*doc.get(form) else { panic!("form stream") };
+    assert_eq!(s.dict.get(b"Resources"), Some(&Object::Ref(res)));
 }

@@ -18,6 +18,18 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+fn harness_with_bytes(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
@@ -85,6 +97,41 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
     set_city(&mut h, pdfcraft_engine::FieldProps { tooltip: Some("Where you live".into()), read_only: Some(true), ..Default::default() });
     rest_on_field(&mut h, "city");
     assert!(h.query_all_by_label("Where you live").next().is_some());
+}
+
+#[test]
+fn read_only_widgets_are_skipped_by_tab_navigation() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R 8 0 R 9 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 120] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 10 0 R 7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /Rect [20 80 150 100] /P 3 0 R /F 4 >>",
+        "<< /FT /Tx /T (locked) /Kids [6 0 R 10 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /Rect [20 50 150 70] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (empty) /Rect [20 50 20 50] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (off-page) /Rect [220 50 240 70] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 20 150 40] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [20 35 150 45] /P 3 0 R /F 4 >>",
+    ]);
+    let mut h = harness_with_bytes("readonly-widget.pdf", bytes);
+    {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let locked = doc.form.iter().find(|field| field.name == "locked").unwrap();
+        assert!(!locked.read_only(), "the field itself is editable");
+        assert!(locked.widgets[0].read_only, "only its widget is read-only");
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.as_str(), wi)))
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![("first", 0), ("locked", 1), ("last", 0)], "read-only, empty and off-page widgets are excluded");
+    }
+    click_field(&mut h, "first", 0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 1)), "the writable widget in the same field remains in tab order");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("last".into(), 0)));
 }
 
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
@@ -278,6 +325,84 @@ fn tab_and_space_fill_in_a_check_box_between_text_fields() {
 }
 
 #[test]
+fn tab_uses_the_first_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "pick", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "pick".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 230.0, 336.0, 246.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Tab replaces the off-page focus with the group's remaining widget");
+}
+
+#[test]
+fn shift_tab_uses_the_previous_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "last", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "last".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 270.0, 340.0, 292.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab restores focus to the last stop before the removed widget");
+}
+
+#[test]
+fn shift_tab_wraps_to_the_last_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "first", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "first".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 350.0, 340.0, 372.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Shift+Tab wraps to the last remaining stop");
+}
+
+#[test]
+fn tab_and_shift_tab_follow_widget_order_across_pages() {
+    let mut h = check_box_harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 1,
+        rect: [20.0, 350.0, 180.0, 372.0],
+        kind: pdfcraft_engine::NewField::Text { multiline: false },
+        name: Some("second_page".into()),
+    });
+    h.run_steps(4);
+    let order = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.clone(), wi)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order.first().map(|entry| entry.0.as_str()), Some("first"));
+    assert_eq!(order.last().map(|entry| entry.0.as_str()), Some("second_page"));
+    click_field(&mut h, "first", 0);
+    for expected in order.iter().skip(1) {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "forward traversal: {order:?}");
+    }
+    for expected in order.iter().rev().skip(1) {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "reverse traversal: {order:?}");
+    }
+}
+
+#[test]
 fn clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box() {
     // Issue #2223: the click ticked the box but left no field focused, so Tab started over.
     let mut h = check_box_harness();
@@ -404,7 +529,7 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "name").unwrap();
         let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
-        (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", 0usize)))
+        (rect, egui::Id::unique(("form-field", s.views[0].view_key(), "name", 0usize)))
     };
     // From inside the first word ("Ad|a" at the field's auto size, 13.9 pt) to past the end of the text.
     let (from, to) = (egui::pos2(rect.left() + 38.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));
@@ -563,6 +688,9 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
 
 #[test]
 fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values() {
+    if crate::support::skip_without_catalogs("lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values") {
+        return;
+    }
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
     h.state_mut().set_option("language", "lt").unwrap();
@@ -1575,4 +1703,129 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
     h.run_steps(2);
     assert_eq!(h.state().right, None);
+}
+
+/// Which widgets of field `name` are on (their `/AS` is their on state).
+fn on_widgets(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<bool> {
+    let s = h.state();
+    let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().clone();
+    (0..f.widgets.len()).map(|i| f.widget_on(i)).collect()
+}
+
+/// Radio groups whose buttons share an on state: `plain` (Radio | NoToggleToOff, on states Yes,
+/// Yes, No), `unison` (the same with RadiosInUnison) and `free` (Radio alone, S and M).
+fn shared_state_radios() -> Harness<'static, PdfCraftApp> {
+    let kid = |n: u32, parent: u32, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} {} {} {}] /P 3 0 R /F 4 /AP << /N << /{state} 5 0 R /Off 5 0 R >> >> >>",
+            350 - n * 40,
+            x + 16,
+            366 - n * 40
+        )
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 10 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R 9 0 R 11 0 R 12 0 R 13 0 R 15 0 R 16 0 R] >>".into(),
+        "<< >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /FT /Btn /T (plain) /Ff 49152 /V /Off /Kids [7 0 R 8 0 R 9 0 R] >>".into(),
+        kid(0, 6, 20, "Yes"),
+        kid(0, 6, 60, "Yes"),
+        kid(0, 6, 100, "No"),
+        "<< /FT /Btn /T (unison) /Ff 33603584 /V /Off /Kids [11 0 R 12 0 R 13 0 R] >>".into(),
+        kid(1, 10, 20, "Yes"),
+        kid(1, 10, 60, "Yes"),
+        kid(1, 10, 100, "No"),
+        "<< /FT /Btn /T (free) /Ff 32768 /V /Off /Kids [15 0 R 16 0 R] >>".into(),
+        kid(2, 14, 20, "S"),
+        kid(2, 14, 60, "M"),
+    ];
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let bytes = pdf_from_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("radios.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// ISO 32000-2 Table 229: without RadiosInUnison, radio buttons sharing an on state are mutually
+/// exclusive, so a click turns on only the button clicked; with it they turn on together.
+/// NoToggleToOff keeps a clicked selected button on; without it the click deselects it.
+#[test]
+fn clicking_a_radio_button_that_shares_its_on_state() {
+    let mut h = shared_state_radios();
+    click_field(&mut h, "plain", 0);
+    assert_eq!((on_widgets(&h, "plain"), value(&h, "plain")), (vec![true, false, false], vec!["Yes".to_string()]), "only the clicked Yes");
+    click_field(&mut h, "plain", 1);
+    assert_eq!(on_widgets(&h, "plain"), [false, true, false], "the other Yes takes over");
+    click_field(&mut h, "plain", 1);
+    assert_eq!(on_widgets(&h, "plain"), [false, true, false], "NoToggleToOff: clicking it again changes nothing");
+    click_field(&mut h, "plain", 2);
+    assert_eq!((on_widgets(&h, "plain"), value(&h, "plain")), (vec![false, false, true], vec!["No".to_string()]));
+    click_field(&mut h, "unison", 0);
+    assert_eq!(on_widgets(&h, "unison"), [true, true, false], "RadiosInUnison: both Yes buttons");
+    click_field(&mut h, "free", 0);
+    assert_eq!(value(&h, "free"), ["S"]);
+    click_field(&mut h, "free", 0);
+    assert!(value(&h, "free").is_empty(), "without NoToggleToOff a second click deselects it");
+    // Undo takes the last click back; the exclusive pair stays as it was.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(value(&h, "free"), ["S"]);
+    assert_eq!(on_widgets(&h, "plain"), [false, false, true]);
+}
+
+/// A radio button read-only on its own (its widget's `/Ff`, ISO 32000-2 Table 227) is still
+/// focused by the arrows and Space, but neither tries to turn it on: the form would refuse the
+/// edit and show a failure for a button the user can't change. A click says it is read-only.
+#[test]
+fn a_read_only_radio_button_is_focused_but_not_selected() {
+    let kid = |x: u32, state: &str, extra: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /AS /Off {extra}/Rect [{x} 350 {} 366] /P 3 0 R /F 4 /AP << /N << /{state} 5 0 R /Off 5 0 R >> >> >>",
+            x + 16
+        )
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R] >>".into(),
+        "<< >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /FT /Btn /T (size) /Ff 32768 /V /Off /Kids [7 0 R 8 0 R] >>".into(),
+        kid(20, "S", ""),
+        kid(60, "L", "/Ff 1 "),
+    ];
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let bytes = pdf_from_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("radios.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    click_field(&mut h, "size", 0);
+    assert_eq!(value(&h, "size"), ["S"]);
+    let toast = |h: &Harness<'static, PdfCraftApp>| h.state().toast.as_ref().map(|(m, _)| m.clone());
+    assert_eq!(toast(&h), None);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("size".into(), 1)), "the arrow still moves onto the read-only button");
+    assert_eq!((value(&h, "size"), toast(&h)), (vec!["S".to_string()], None), "and leaves the selection alone");
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert_eq!((value(&h, "size"), toast(&h)), (vec!["S".to_string()], None), "Space doesn't select it");
+    // A click says why nothing happens, as for any read-only field, and is no failed edit.
+    click_field(&mut h, "size", 1);
+    assert_eq!((value(&h, "size"), toast(&h)), (vec!["S".to_string()], Some("size is read-only".to_string())), "nor does a click");
 }
