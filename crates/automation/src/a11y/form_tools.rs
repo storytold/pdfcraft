@@ -2,7 +2,7 @@ use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warni
 
 /// A script's request to the viewer as the JSON that running a script reports; a side panel
 /// goes by its fixed id.
-fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
+pub(crate) fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     use pdfcraft_engine::js::Request as R;
     match r {
         R::Reset(n) => json!({ "reset": n }),
