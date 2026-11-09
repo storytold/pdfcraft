@@ -106,6 +106,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -441,6 +442,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -493,6 +495,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Half red".into(),
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -522,6 +525,7 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         name: "Diagram".into(),
         file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
         author: "Test".into(),
+        line: None,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -5224,6 +5228,85 @@ fn comment_summary_includes_replies_to_replies() {
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
 }
 
+/// ISO 32000-2 §12.5.6.2: a group subordinate (`/RT /Group`) is part of its primary's comment,
+/// not a reply: the summary leaves it out and writes the replies to it as the comment's.
+#[test]
+fn comment_summary_leaves_group_members_out_and_keeps_their_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "MEMBER_TEXT".into(), author: "Bob".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "REPLY_TO_MEMBER".into(), author: "Carol".into() }).unwrap();
+    let mut all = s.get(id).unwrap().info.annotations.clone();
+    all.iter_mut().find(|a| a.contents.as_deref() == Some("MEMBER_TEXT")).unwrap().grouped = true;
+    let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+    assert!(!text.contains("MEMBER_TEXT") && !text.contains("Bob"), "{text}");
+    assert!(text.lines().any(|l| l == "    REPLY_TO_MEMBER"), "the reply is the comment's, one level in: {text}");
+}
+
+/// The summary follows `/IRT` down from a comment at most 64 steps, group subordinates included:
+/// a reply under a longer chain of subordinates is left out, one under a short chain is written,
+/// and a subordinate listed at its own primary's position (a loop, from a malformed listing)
+/// ends the walk.
+#[test]
+fn comment_summary_follows_a_group_chain_a_bounded_number_of_steps() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    let top = s.get(id).unwrap().info.annotations.iter().find(|a| a.is_comment()).unwrap().clone();
+    let at = |a: &pdfcraft_render::Annotation| (a.page, a.index);
+    let under = |index: usize, parent: (usize, usize), grouped: bool, text: &str| pdfcraft_render::Annotation {
+        index,
+        parent: Some(parent),
+        grouped,
+        contents: Some(text.into()),
+        ..top.clone()
+    };
+    for (members, written) in [(10, true), (100, false)] {
+        let mut all = vec![top.clone()];
+        let mut up = at(&top);
+        for k in 0..members {
+            let m = under(1000 + k, up, true, "MEMBER");
+            up = at(&m);
+            all.push(m);
+        }
+        all.push(under(5000, up, false, "DEEP_REPLY"));
+        let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+        assert_eq!(text.contains("DEEP_REPLY"), written, "{members}: {text}");
+        assert!(!text.contains("MEMBER"), "{members}: {text}");
+    }
+    let looped = vec![top.clone(), under(top.index, at(&top), true, "LOOP")];
+    let text = comment_summary("doc.pdf", &looped, SummarySort::Page);
+    assert!(!text.contains("LOOP"), "{text}");
+}
+
+/// Deleting a group's primary removes the subordinate's `/IRT` in the same edit, as Acrobat does:
+/// the subordinate lists as a comment of its own and keeps `/RT /Group`. One undo puts the group
+/// back, `/IRT` included.
+#[test]
+fn deleting_a_group_primary_releases_its_member_in_one_undo_step() {
+    let bytes = pdf_with_annots(&[
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /NM (primary) /Contents (PRIMARY_TEXT) >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [60 60 90 90] /NM (member) /IRT 4 0 R /RT /Group >>",
+    ]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("group.pdf", None, Arc::new(bytes), None).unwrap();
+    let names = |s: &Session| -> Vec<(Option<String>, bool, bool)> {
+        s.get(id).unwrap().info.annotations.iter().map(|a| (a.name.clone(), a.is_comment(), a.is_group_member())).collect()
+    };
+    // Listed by top edge: the Circle is the higher one.
+    let grouped = vec![(Some("member".into()), false, true), (Some("primary".into()), true, false)];
+    assert_eq!(names(&s), grouped);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(names(&s), [(Some("member".into()), true, false)], "a comment of its own");
+    let member = |s: &Session| {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        cos.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().cloned().unwrap()
+    };
+    assert!(member(&s).get(b"IRT").is_none() && member(&s).name(b"RT") == Some(b"Group".as_slice()), "{:?}", member(&s));
+    s.undo(id).unwrap();
+    assert_eq!(names(&s), grouped, "one undo puts the group back");
+    assert!(member(&s).reference(b"IRT").is_some());
+}
+
 #[test]
 fn reading_colors_set_and_invalidated() {
     let (mut s, id) = session_with(1);
@@ -8635,6 +8718,44 @@ fn a_line_without_an_appearance_is_drawn_at_its_leader_length() {
     assert_eq!(px(100, 200), vec![255, 255, 255, 255], "nothing along /L");
 }
 
+/// A text box without `/AP`, `/BS` or `/Border` is drawn with the `/Border` default, a 1-pt
+/// border in its text colour (ISO 32000-2 Table 166), and a redaction mark without `/AP` or
+/// `/QuadPoints` is outlined around `/Rect` (Table 195), here in its array `/OC` colour.
+#[test]
+fn text_boxes_and_redaction_marks_without_appearances_show_their_outlines() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 200 180 260] /Contents (Box) /DA (1 0 0 rg /Helv 10 Tf) >>",
+        b"<< /Type /Annot /Subtype /Redact /Rect [20 20 180 120] /IC [0 0 0] /OC [0 0 1] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("outlines.pdf", None, Arc::new(bytes), None).expect("opens");
+    let p = shown(&s, id, 0);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec();
+    // y down: the text box spans rows 40..100, the redaction mark rows 180..280; both left edges
+    // are column 20.
+    assert_eq!(px(20, 70), [255, 0, 0], "the text box's left border, in its /DA colour");
+    assert_eq!(px(100, 99), [255, 0, 0], "the text box's bottom border");
+    assert_eq!(px(20, 230), [0, 0, 255], "the redaction mark's outline, in its /OC colour");
+    assert_eq!(px(100, 230), [255, 255, 255], "no fill before the redaction is applied");
+}
+
 /// A stamp's `/Rect` and the colour family expected inside it.
 type StampRect = ([f64; 4], char);
 
@@ -10134,7 +10255,8 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into() };
+    let stamp =
+        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), line: None };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -11797,6 +11919,92 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+/// A custom stamp's line template (#1741) fills in the author, date and time as the dynamic
+/// stamps write them, and the "By" line itself is unchanged.
+#[test]
+fn stamp_lines_fill_in_the_name_date_and_time() {
+    let s = Session::new().with_clock(|| 1_700_000_000);
+    assert_eq!(s.stamp_line("Received {date} {time} by {name}", " Ada "), "Received Nov 14, 2023 10:13 pm by Ada");
+    // Review on #2345 (gabglus): placeholders inside the author's name are kept as written.
+    assert_eq!(s.stamp_line("By {name} — {date} {time}", "Ada {date} {time}"), "By Ada {date} {time} — Nov 14, 2023 10:13 pm");
+    assert_eq!(s.stamp_line("{name}{name}", "{name}"), "{name}{name}");
+    assert_eq!(s.stamp_by_line("Ada"), "By Ada at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_by_line(""), "at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_line(&"{date}".repeat(100), "Ada").chars().count(), MAX_STAMP_LINE);
+}
+
+/// A custom stamp's line keeps Western European letters (#1741): the appearance holds them as
+/// WinAnsi bytes. A lossy UTF-8 round trip once turned them into replacement characters.
+#[test]
+fn a_custom_stamp_line_keeps_accented_letters() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let (mut session, id) = session_with(1);
+    let edit = Edit::AddCustomStamp {
+        page: 0,
+        rect: [100.0, 100.0, 100.0, 100.0],
+        name: "Logo".into(),
+        file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+        author: "Zoë".into(),
+        line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
+    };
+    session.apply(id, edit).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved).unwrap();
+    const WANT: &[u8] = b"(Re\xe7u \xe0 Z\xfcrich par Zo\xeb)";
+    let found = doc.scan_objects().any(|(_, o)| match o.as_ref() {
+        pdfcraft_cos::Object::Stream(st) => st.decoded().is_ok_and(|b| b.windows(WANT.len()).any(|w| w == WANT)),
+        _ => false,
+    });
+    assert!(found, "the line's letters are WinAnsi bytes in the appearance");
+}
+
+/// A custom stamp with a line keeps its picture's shape over the line on a turned page: it is
+/// laid out in the displayed box, then turned into `/Rect`. Laid out in user space, a quarter
+/// turn squashed the picture into a narrow strip and stretched the band.
+#[test]
+fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    // A short line: the stamp is the picture's 80 pt wide, 40 / 0.78 pt tall with its band.
+    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"));
+    assert_eq!(w, 80.0);
+    let top = 100.0 - h / 2.0;
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        let edit = Edit::AddCustomStamp {
+            page: 0,
+            rect: [at[0], at[1], at[0], at[1]],
+            name: "Quadrants".into(),
+            file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+            author: "Test".into(),
+            line: Some("OK".into()),
+        };
+        session.apply(id, edit).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let pixel = |x: f64, y: f64| {
+            let offset = ((y as u32 * rendered.width + x as u32) * 4) as usize;
+            rendered.rgba[offset..offset + 4].to_vec()
+        };
+        // The picture fills the top 80 x 40 pt of the displayed box, its quadrants in place.
+        let points = [(70.0, top + 5.0), (130.0, top + 5.0), (70.0, top + 35.0), (130.0, top + 35.0)];
+        for ((x, y), colour) in points.into_iter().zip(colours) {
+            assert_eq!(pixel(x, y), colour, "page rotation {degrees}; displayed point ({x}, {y})");
+        }
+        // The band under it holds no picture.
+        assert_eq!(pixel(64.0, top + h - 3.0), [255, 255, 255, 255], "page rotation {degrees}: the band");
+    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

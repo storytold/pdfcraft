@@ -2844,6 +2844,193 @@ trailer << /Root 1 0 R >>
     assert_eq!((&reply["marked"], &reply["status"]), (&json!(true), &json!("Accepted")), "{reply}");
 }
 
+// Contributor-original PDF: a Square, a Circle grouped with it (`/RT /Group`) that keeps its own
+// author, text, colour, dates and subject, an ordinary reply, a reply to the Circle, a review
+// status reply and a reply with a `/RT` name that is neither `R` nor `Group`.
+const GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-sub) /T (Bob) /Contents (Subordinate) /C [0 0 1] /IRT 5 0 R /RT /Group /M (D:20260101000000) /CreationDate (D:20260101000000) /Subj (Oval) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [120 20 140 40] /NM (reply) /T (Carol) /Contents (Reply) /IRT 5 0 R >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [120 50 140 70] /NM (sub-reply) /T (Dan) /Contents (Reply to the subordinate) /IRT 6 0 R >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /Rect [120 80 140 100] /NM (status) /T (Eve) /IRT 5 0 R /StateModel /Review /State /Accepted >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /Rect [150 20 170 40] /NM (odd) /T (Fay) /Contents (Odd reply type) /IRT 5 0 R /RT /Bogus >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.6.2: an annotation with `/RT /Group` is a subordinate of the group whose
+/// primary its `/IRT` names. It lists as one comment, with the primary's attributes; the
+/// subordinate's own are ignored, and a reply to it joins the primary's thread.
+#[test]
+fn a_group_lists_as_its_primary() {
+    let dir = workdir("rt-group");
+    std::fs::write(dir.join("group.pdf"), GROUP_FIXTURE).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let check = |list: &Value, when: &str| {
+        assert_eq!(list["count"], 1, "{when}: one comment, the group's primary: {list}");
+        let c = &list["comments"][0];
+        assert_eq!((c["id"].as_str(), c["author"].as_str(), c["contents"].as_str()), (Some("sq-primary"), Some("Alice"), Some("Primary")), "{when}");
+        assert_eq!(c["color"], "#FF0000", "{when}: the primary's colour");
+        let group: Vec<&str> = c["group"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+        assert_eq!(group, ["circ-sub"], "{when}: the subordinate is a member of the group");
+        assert_eq!(c["group"][0]["type"], "Circle", "{when}");
+        let mut replies: Vec<&str> = c["replies"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).collect();
+        replies.sort_unstable();
+        assert_eq!(replies, ["odd", "reply", "sub-reply"], "{when}: an unknown /RT reads as a reply, a reply to the subordinate joins the thread");
+        assert_eq!(c["status"], "Accepted", "{when}: a status reply is still a reply");
+        let text = list.to_string();
+        for leak in ["Bob", "Subordinate", "#0000FF"] {
+            assert!(!text.contains(leak), "{when}: the subordinate's own {leak:?} is ignored: {list}");
+        }
+    };
+    // As opened (the inspector), and after an edit (the engine's own list).
+    check(&ok(&mut a, "comment_list", json!({ "doc": doc })), "opened");
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [280, 20], "contents": "Other" }));
+    let after = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let primary = after["comments"].as_array().unwrap().iter().find(|c| c["id"] == "sq-primary").cloned().unwrap();
+    check(&json!({ "count": 1, "comments": [primary] }), "edited");
+    assert_eq!(after["count"], 2, "{after}");
+
+    // Deleting a member deletes just it, as Acrobat does: the subordinate, or the primary, which
+    // leaves the subordinate a comment of its own. One undo step each.
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "circ-sub" }));
+    let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(left["count"], 2, "the primary and the new note are left: {left}");
+    assert!(left.to_string().contains("sq-primary") && !left.to_string().contains("circ-sub"), "{left}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "sq-primary" }));
+    let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let ids: Vec<&str> = left["comments"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+    assert!(ids.contains(&"circ-sub") && !ids.contains(&"sq-primary") && ids.len() == 2, "the new note and the Circle, on its own: {left}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let back = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let primary = back["comments"].as_array().unwrap().iter().find(|c| c["id"] == "sq-primary").cloned().unwrap();
+    check(&json!({ "count": 1, "comments": [primary] }), "undone");
+}
+
+// Contributor-original PDF: group subordinates whose `/IRT` chains loop (each other, and one
+// itself), and a chain of two subordinates that leads to a primary.
+const GROUP_LOOP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Circle /Rect [10 10 30 30] /NM (a) /Contents (Loop A) /IRT 6 0 R /RT /Group >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [40 10 60 30] /NM (b) /Contents (Loop B) /IRT 5 0 R /RT /Group >> endobj
+7 0 obj << /Type /Annot /Subtype /Circle /Rect [70 10 90 30] /NM (self) /Contents (Itself) /IRT 7 0 R /RT /Group >> endobj
+8 0 obj << /Type /Annot /Subtype /Square /Rect [10 100 60 150] /NM (top) /Contents (Top) >> endobj
+9 0 obj << /Type /Annot /Subtype /Circle /Rect [70 100 90 120] /NM (mid) /Contents (Middle) /IRT 8 0 R /RT /Group >> endobj
+10 0 obj << /Type /Annot /Subtype /Circle /Rect [100 100 120 120] /NM (low) /Contents (Lowest) /IRT 9 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Looping `/IRT` chains between group subordinates neither hang nor panic, and list as comments
+/// of their own, as looping replies do; a subordinate of a subordinate joins the group of the
+/// primary the chain leads to.
+#[test]
+fn looping_groups_end_and_chained_groups_reach_their_primary() {
+    let dir = workdir("rt-group-loop");
+    std::fs::write(dir.join("loop.pdf"), GROUP_LOOP_FIXTURE).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "loop.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let comments = list["comments"].as_array().unwrap();
+    let mut ids: Vec<&str> = comments.iter().filter_map(|c| c["id"].as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["a", "b", "self", "top"], "{list}");
+    let top = comments.iter().find(|c| c["id"] == "top").unwrap();
+    let group: Vec<&str> = top["group"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(group, ["mid", "low"], "{list}");
+    assert_eq!(top["replies"], json!([]), "{list}");
+    // Deleting a looping member ends too and takes just it, as any group member goes alone; so
+    // does the lowest subordinate of the chain.
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "a" }));
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "self" }));
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "low" }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let mut ids: Vec<&str> = list["comments"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["b", "top"], "{list}");
+    let top = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == "top").cloned().unwrap_or_default();
+    let group: Vec<&str> = top["group"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(group, ["mid"], "{list}");
+}
+
+// Contributor-original PDF: a Replace Text group as earlier PdfCraft builds wrote it, the
+// strikeout (primary) with empty `/Contents` and the replacement only on the caret (subordinate).
+const OLD_REPLACE_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [20 100 120 120] /QuadPoints [20 120 120 120 20 100 120 100] /NM (strike) /T (Ada) /Contents () /IT /StrikeOutTextEdit >> endobj
+6 0 obj << /Type /Annot /Subtype /Caret /Rect [115 95 125 105] /NM (caret) /T (Ada) /Contents (red) /IRT 5 0 R /RT /Group /Subj (Replace Text) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+// Contributor-original PDF: a Replace Text group with the caret as the primary (holding the
+// text, `/IT /Replace`) and the strikeout as its subordinate, each with its own author, colour
+// and dates.
+const REPLACE_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Caret /Rect [115 95 125 105] /NM (caret) /T (Ada) /C [0 0 1] /Contents (busy) /IT /Replace /Subj (Replace Text) /M (D:20260101000000) >> endobj
+6 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [20 100 120 120] /QuadPoints [20 120 120 120 20 100 120 100] /NM (strike) /T (Grace) /C [1 0 0] /IRT 5 0 R /RT /Group /IT /StrikeOutTextEdit /Subj (Cross-Out) /M (D:20260101000000) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A Replace Text comment lists once, with its replacement text: one made now (the caret is the
+/// primary and holds it), one with that orientation from another writer, and one saved by an
+/// earlier PdfCraft (the strikeout primary with no text, the caret holding it), which is read
+/// leniently and not rewritten.
+#[test]
+fn replace_text_lists_its_replacement() {
+    let dir = workdir("rt-group-replace");
+    std::fs::write(dir.join("old.pdf"), OLD_REPLACE_FIXTURE).unwrap();
+    std::fs::write(dir.join("other.pdf"), REPLACE_FIXTURE).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "replace", "find": "Page 1", "contents": "red" }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "{list}");
+    let c = &list["comments"][0];
+    assert_eq!(
+        (c["type"].as_str(), c["contents"].as_str(), c["group"][0]["type"].as_str()),
+        (Some("Caret"), Some("red"), Some("StrikeOut")),
+        "{list}"
+    );
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "new.pdf" }));
+    let mut b = auto(&dir);
+    for (path, text, primary) in [("new.pdf", "red", "Caret"), ("other.pdf", "busy", "Caret"), ("old.pdf", "red", "StrikeOut")] {
+        let doc = ok(&mut b, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        let list = ok(&mut b, "comment_list", json!({ "doc": doc }));
+        let c = &list["comments"][0];
+        assert_eq!(
+            (list["count"].as_u64(), c["type"].as_str(), c["contents"].as_str()),
+            (Some(1), Some(primary), Some(text)),
+            "{path} as opened: {list}"
+        );
+        assert!(!list.to_string().contains("Grace"), "{path}: the subordinate's author is ignored: {list}");
+        // And from the engine's own list, after an edit.
+        ok(&mut b, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [280, 20], "contents": "Other" }));
+        let list = ok(&mut b, "comment_list", json!({ "doc": doc }));
+        assert_eq!(list["count"], 2, "{path}: {list}");
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == primary).cloned().unwrap();
+        assert_eq!(c["contents"], text, "{path} after an edit: {list}");
+        // Replace Text is one comment: deleting either half deletes both, as Acrobat does, in
+        // either orientation.
+        for id in [c["id"].clone(), c["group"][0]["id"].clone()] {
+            ok(&mut b, "comment_delete", json!({ "doc": doc, "id": id }));
+            let left = ok(&mut b, "comment_list", json!({ "doc": doc }));
+            assert_eq!(left["count"], 1, "{path}: deleting {id} leaves only the note: {left}");
+            assert!(!left.to_string().contains("StrikeOut") && !left.to_string().contains("Caret"), "{path}: {left}");
+            ok(&mut b, "edit_undo", json!({ "doc": doc }));
+        }
+    }
+}
+
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
@@ -7553,17 +7740,26 @@ fn drawing_comments_through_tools() {
     ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page", "color": "green" }));
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 2 }));
     let caret = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
-    assert_eq!(caret["contents"], "second page", "the replacement is on the caret");
-    assert_eq!(caret["replies"][0]["type"], "StrikeOut", "the strikeout is grouped under the caret");
+    // One comment, the caret (the group's primary, ISO 32000-2 §12.5.6.2), holding the new text;
+    // the strikeout is in its group, not a reply or a comment of its own.
+    assert_eq!(caret["contents"], "second page", "{list}");
+    assert_eq!(caret["replies"], json!([]), "{list}");
+    assert_eq!(caret["group"][0]["type"], "StrikeOut", "{list}");
+    assert!(!list["comments"].as_array().unwrap().iter().any(|c| c["type"] == "StrikeOut"), "{list}");
     // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
-    assert_eq!(caret["replies"][0]["color"], caret["color"], "one colour for the pair: {caret}");
-    assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
-    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
+    // The list gives a group the primary's colour alone, so the strikeout's own (`/C`, what it is
+    // drawn in) is read from an XFDF export.
     let pair = |a: &mut Automation| {
         let list = ok(a, "comment_list", json!({ "doc": doc, "page": 2 }));
         let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
-        (c["color"].clone(), c["replies"][0]["color"].clone())
+        ok(a, "doc_export_data", json!({ "doc": doc, "path": "pair.xfdf", "what": "comments" }));
+        let xfdf = std::fs::read_to_string(dir.join("pair.xfdf")).unwrap();
+        let strike = xfdf.split("<strikeout").nth(1).and_then(|e| e.split('>').next()).unwrap_or_default().to_owned();
+        let color = strike.split("color=\"").nth(1).and_then(|v| v.split('"').next()).map(|v| json!(v)).unwrap_or(Value::Null);
+        (c["color"].clone(), color)
     };
+    assert_eq!(pair(&mut a), (json!("#2E9E5C"), json!("#2E9E5C")), "the requested green on both, not the caret's default blue: {caret}");
+    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
     ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 2, "index": caret["index"], "color": "purple" }));
     assert_eq!(pair(&mut a), (json!("#8A3FD1"), json!("#8A3FD1")), "the strikeout follows its caret");
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
@@ -11838,6 +12034,49 @@ fn text_box_and_callout_fill_and_border_through_tools() {
     }
 }
 
+/// A custom stamp can carry a dynamic line (#1741): `{name}`, `{date}` and `{time}` are filled in
+/// when it is placed and drawn under the picture, which keeps its shape; the stamp widens to fit
+/// the line; a line too long is cut.
+#[test]
+fn a_custom_stamp_line_is_filled_in_when_placed() {
+    let dir = workdir("stamp_line");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 2, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Plain" }));
+    ok(
+        &mut a,
+        "stamp_custom",
+        json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Logo", "author": "Ada", "line": "Received {date} {time} by {name}" }),
+    );
+    // The clock is 2023-11-14 22:13:20, taken as local time.
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(text.contains("Received Nov 14, 2023 10:13 pm by Ada"), "{text}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let rect = |page: u64| {
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["page"] == page).unwrap();
+        let r: Vec<f64> = c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        (r[2] - r[0], r[3] - r[1])
+    };
+    let ((pw, ph), (lw, lh)) = (rect(2), rect(1));
+    // The stamp stays within the natural 200 pt. Its line, at its usual size, is wider than the
+    // picture, so the stamp is wider than the picture's shape with the band added.
+    assert!(lw / lh > pw / ph * (1.0 - 0.22) + 0.01, "widened for the line: {pw}x{ph} vs {lw}x{lh}");
+    // A template within the schema's 200 characters whose filled-in line runs past the limit
+    // (33 times of 8 characters) is cut to exactly 200, not refused.
+    let long = "{time}".repeat(33);
+    assert!(long.chars().count() <= 200);
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 3, "path": "b.pdf", "file_page": 2, "at": [100, 150], "line": long }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "stamped.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("stamped.pdf")).unwrap())).unwrap();
+    let lines: Vec<String> = saved
+        .scan_objects()
+        .filter_map(|(_, o)| o.as_dict()?.get(b"PCByLine")?.as_string().map(pdfcraft_cos::PdfString::to_text))
+        .filter(|l| l.starts_with("10:13 pm"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].chars().count(), 200, "{:?}", lines[0]);
+}
+
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
 /// of #2516. Alpha's last baseline is 35.6 pt above Bravo's; moving Alpha down 21.2 pt leaves
 /// 14.4 pt, Alpha's own leading, so the next read groups the two as one paragraph.
@@ -12672,6 +12911,118 @@ fn text_extract_says_when_a_pages_content_was_cut() {
     let whole = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let out = ok(&mut a, "text_extract", json!({ "doc": whole, "pages": [1] }));
     assert!(out["pages"][0].get("truncated").is_none(), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Contributor-original PDF: a Square on page 1 and, on page 2, a Circle with `/IRT` to it and
+// `/RT /Group`.
+const SPREAD_GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-other-page) /T (Bob) /Contents (Member on page 2) /C [0 0 1] /IRT 5 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A group is one page's, as Acrobat reads it: a subordinate whose primary is on another page
+/// lists as a comment of its own, with its own author and text, not as part of the group or a
+/// reply, and deleting the primary leaves it. ISO 32000-2 §12.5.6.2 doesn't limit a group to a
+/// page; Acrobat (desktop and iPad) and PDF-XChange all delete the primary without such a
+/// subordinate, and Acrobat desktop lists it on its own.
+#[test]
+fn a_group_member_on_another_page_is_a_comment_of_its_own() {
+    let dir = workdir("rt-group-spread");
+    std::fs::write(dir.join("group.pdf"), SPREAD_GROUP_FIXTURE).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let check = |list: &Value, when: &str| {
+        assert_eq!(list["count"], 2, "{when}: the Square and the Circle, each a comment: {list}");
+        let circle = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == "circ-other-page").cloned().unwrap();
+        assert_eq!((circle["author"].as_str(), circle["contents"].as_str()), (Some("Bob"), Some("Member on page 2")), "{when}");
+        let square = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == "sq-primary").cloned().unwrap();
+        assert!(square["group"].as_array().unwrap().is_empty() && square["replies"].as_array().unwrap().is_empty(), "{when}: {square}");
+    };
+    check(&ok(&mut a, "comment_list", json!({ "doc": doc })), "opened");
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [280, 20], "contents": "Other" }));
+    let after = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let kept: Vec<Value> = after["comments"].as_array().unwrap().iter().filter(|c| c["contents"] != "Other").cloned().collect();
+    check(&json!({ "count": kept.len(), "comments": kept }), "edited");
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "sq-primary" }));
+    let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert!(left.to_string().contains("circ-other-page"), "deleting the primary leaves the Circle on page 2: {left}");
+}
+
+/// #1152 headless: comment_list gives a callout's arrow point, knee and text box; comment_edit's
+/// `points` moves the arrow point and knee, and `rect` resizes the text box with the arrow left
+/// where it is.
+#[test]
+fn a_callouts_parts_are_listed_and_changed_through_the_tools() {
+    let dir = workdir("callout-parts");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "callout", "rect": [110, 200, 190, 240], "to": [40, 160], "knee": [80, 220], "contents": "Look" }),
+    );
+    let first = |a: &mut Automation| ok(a, "comment_list", json!({ "doc": doc }))["comments"][0].clone();
+    let near = |v: &Value, want: &[f64]| v.as_array().unwrap().iter().zip(want).all(|(x, w)| (x.as_f64().unwrap() - w).abs() < 0.6);
+    let c = first(&mut a);
+    assert!(near(&c["points"][0], &[40.0, 160.0]) && near(&c["points"][1], &[80.0, 220.0]), "{c}");
+    assert!(near(&c["text_box"], &[110.0, 200.0, 190.0, 240.0]), "{c}");
+    let (page, index) = (c["page"].clone(), c["index"].clone());
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "points": [[30, 150], [80, 220]] }));
+    let c = first(&mut a);
+    assert!(near(&c["points"][0], &[30.0, 150.0]) && near(&c["text_box"], &[110.0, 200.0, 190.0, 240.0]), "{c}");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "rect": [110, 200, 230, 260] }));
+    let c = first(&mut a);
+    assert!(near(&c["text_box"], &[110.0, 200.0, 230.0, 260.0]) && near(&c["points"][0], &[30.0, 150.0]), "{c}");
+    // Three points, or none, aren't a callout's.
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "points": [[1, 1], [2, 2], [3, 3]] })),
+        Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
+    ));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "callout.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "callout.pdf" }))["doc"].as_u64().unwrap();
+    let c = ok(&mut a, "comment_list", json!({ "doc": saved }))["comments"][0].clone();
+    assert!(near(&c["points"][0], &[30.0, 150.0]) && near(&c["text_box"], &[110.0, 200.0, 230.0, 260.0]), "after reopening: {c}");
+    // Without a knee, comment_add puts it where Acrobat does: 12 pt out from the middle of the side
+    // facing the point.
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": saved, "page": 1, "type": "callout", "rect": [300, 200, 380, 240], "to": [250, 160], "contents": "Auto" }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": saved }))["comments"].clone();
+    let auto = list.as_array().unwrap().iter().find(|c| c["contents"] == "Auto").unwrap();
+    assert!(near(&auto["points"][1], &[288.0, 220.0]), "{auto}");
+}
+
+/// comment_popup opens, closes and moves a comment's pop-up, comment_list reports it, and each
+/// change is one undo step with its own label.
+#[test]
+fn comment_popups_are_opened_moved_and_listed() {
+    let dir = workdir("popup");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [30.0, 40.0], "contents": "Look here" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let note = &listed["comments"][0];
+    assert_eq!(note["popup"]["open"], json!(false), "{listed}");
+    let id = note["id"].as_str().unwrap().to_string();
+    let opened = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "open": true }));
+    assert_eq!(opened["undo"], json!("Open comment pop-up"), "{opened}");
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(listed["comments"][0]["popup"]["open"], json!(true));
+    let moved = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "rect": [60.0, 60.0, 180.0, 140.0] }));
+    assert_eq!(moved["undo"], json!("Move comment pop-up"));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(listed["comments"][0]["popup"]["rect"], json!([60.0, 60.0, 180.0, 140.0]), "{listed}");
+    let closed = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "open": false }));
+    assert_eq!(closed["undo"], json!("Close comment pop-up"));
+    assert!(matches!(err(&mut a, "comment_popup", json!({ "doc": doc, "id": id })), ToolError::InvalidArgs(_)));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

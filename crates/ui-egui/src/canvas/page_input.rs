@@ -340,6 +340,7 @@ fn tool_input(
         by_line,
         can_crop,
         can_modify,
+        custom_line,
         custom_stamp,
         date_text,
         doc,
@@ -368,7 +369,7 @@ fn tool_input(
     }
     if let Some(cs) = custom_stamp.as_ref()
         && allowed
-        && crate::stamps_ui::place_custom(cx, cs, author, free, view)
+        && crate::stamps_ui::place_custom(cx, cs, custom_line, author, free, view)
     {
         frame.out.stamp_placed = true;
     }
@@ -445,7 +446,7 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
         };
-        comments::context(hits.pcx, comment, view);
+        comments::context(hits.pcx, p, comment, view);
     }
     if let Some(Owner::PrepareField { field, widget }) = context {
         crate::prepare::context(hits.form, field, widget, view);
