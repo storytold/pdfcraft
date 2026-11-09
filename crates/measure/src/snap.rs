@@ -1,7 +1,7 @@
 //! Bounded path extraction and snapping in PDF user space, including nested Form XObjects.
 use crate::{Point, Result, check_points, distance, invalid};
-use pdfcraft_content::Matrix;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_content::{Matrix, ops};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -262,11 +262,19 @@ pub fn constrain(last: Point, point: Point) -> Point {
     let angle = (v[1].atan2(v[0]) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
     [last[0] + length * angle.cos(), last[1] + length * angle.sin()]
 }
+/// Hold a proposed vertex level or plumb with the last vertex, whichever is nearer (a CAD
+/// drawing's ortho mode): the vertex slides onto that axis rather than turning onto it.
+pub fn ortho(last: Point, point: Point) -> Point {
+    let v = sub(point, last);
+    if v[0].abs() >= v[1].abs() { [point[0], last[1]] } else { [last[0], point[1]] }
+}
 struct Walker<'a> {
     doc: &'a Document,
     geometry: Geometry,
     seen: HashSet<ObjRef>,
-    bytes: usize,
+    /// Decoded bytes left for the page: every filter stage's output counts, so a stream that
+    /// expands and then shrinks pays for the expansion each time it is drawn.
+    budget: DecodeBudget,
     streams: usize,
     limits: Limits,
 }
@@ -283,46 +291,44 @@ impl Walker<'_> {
             for part in arr {
                 let s = self.doc.resolve(part);
                 if let Object::Stream(s) = s.as_ref() {
-                    let remaining = self.limits.bytes.saturating_sub(self.bytes).saturating_sub(joined.len());
+                    let remaining = self.budget.remaining();
                     if remaining == 0 {
                         self.geometry.truncated = true;
                         break;
                     }
                     // An undecodable part is skipped; the parts before it still snap.
-                    match s.decoded_within(remaining) {
+                    match self.budget.decode_within(s, remaining) {
                         Ok(data) => {
                             joined.extend(data);
                             // A space, as the renderer joins pieces: a trailing comment runs on.
                             joined.push(b' ');
                         }
-                        Err(_) => self.decode_failed(remaining),
+                        Err(_) => self.decode_failed(),
                     }
                 }
             }
             return self.ops(&joined, resources, initial, depth);
         }
         let Object::Stream(stream) = o.as_ref() else { return Ok(()) };
-        let remaining = self.limits.bytes.saturating_sub(self.bytes);
+        let remaining = self.budget.remaining();
         if remaining == 0 {
             self.geometry.truncated = true;
             return Ok(());
         }
-        match stream.decoded_within(remaining) {
+        match self.budget.decode_within(stream, remaining) {
             Ok(data) => self.ops(&data, resources, initial, depth),
             Err(_) => {
-                self.decode_failed(remaining);
+                self.decode_failed();
                 Ok(())
             }
         }
     }
-    /// A tolerant decode fails on an unsupported filter or once it has produced `remaining` bytes,
-    /// so a failure uses up the byte budget: repeating a failing stream cannot repeat that work.
-    fn decode_failed(&mut self, remaining: usize) {
+    /// A failed decode has paid the budget for what it decoded before failing (all of it, past
+    /// the bound): repeating a failing stream cannot repeat that work for free.
+    fn decode_failed(&mut self) {
         self.geometry.unreadable = self.geometry.unreadable.saturating_add(1);
-        self.bytes = self.bytes.saturating_add(remaining);
     }
     fn ops(&mut self, data: &[u8], resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
-        self.bytes = self.bytes.saturating_add(data.len());
         self.streams = self.streams.saturating_add(1);
         let mut matrix = initial;
         let mut stack = Vec::new();
@@ -336,8 +342,8 @@ impl Walker<'_> {
             let (x, y) = m.apply(x, y);
             [x, y]
         };
-        // One at a time: a heavy page holds gigabytes as a list of operators.
-        for op in pdfcraft_content::ops(data) {
+        // One operator at a time: a stream of millions of short operators is never held whole.
+        for op in ops(data) {
             if self.geometry.segs.len().saturating_add(path.segs.len()) >= self.limits.segments
                 || self.geometry.targets().saturating_add(path.targets()) >= self.limits.targets
             {
@@ -493,6 +499,11 @@ impl Walker<'_> {
                                     self.seen.insert(r);
                                 }
                                 self.walk(o, res, m, depth + 1)?;
+                                // A form that hit a bound ends this walk too: more `Do`s would
+                                // only repeat the work of copying its resources.
+                                if self.geometry.truncated {
+                                    break;
+                                }
                                 if let Some(r) = r {
                                     self.seen.remove(&r);
                                 }
@@ -524,7 +535,14 @@ pub fn geometry_with_limits(doc: &Document, page_index: usize, limits: Limits) -
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));
     let empty = Dict::new();
     let resources = resources.as_ref().and_then(|o| o.as_dict()).unwrap_or(&empty);
-    let mut walker = Walker { doc, geometry: Geometry::with_limits(limits), seen: HashSet::new(), bytes: 0, streams: 0, limits };
+    let mut walker = Walker {
+        doc,
+        geometry: Geometry::with_limits(limits),
+        seen: HashSet::new(),
+        budget: DecodeBudget::new(limits.bytes, usize::MAX),
+        streams: 0,
+        limits,
+    };
     // Extraction is lenient: limits and unreadable streams are reported in the geometry.
     if let Some(contents) = p.dict.get(b"Contents") {
         walker.walk(contents, resources, Matrix::IDENTITY, 0)?;
