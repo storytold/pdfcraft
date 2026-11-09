@@ -1016,6 +1016,51 @@ fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
     }
 }
 
+/// A touch gesture begun with ⌘/Ctrl zooms to its end after the keys are let go, as egui reads
+/// it: its later motion neither scrolls the page as well nor turns the rest of it into scrolling.
+#[test]
+fn a_zoom_gesture_zooms_to_its_end_after_its_keys_are_let_go() {
+    /// The view's zoom and page 1 on screen, settled, after a gesture of six 5-point motions,
+    /// the keys let go after the second one or held throughout.
+    fn zoom_gesture(effects: &'static str, let_go: bool) -> (f32, f32, egui::Rect) {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+        h.state_mut().set_option("animation_effects", effects).unwrap();
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        let before = h.state().views[0].zoom;
+        let touch = |phase, dy, modifiers| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        h.event(touch(TouchPhase::Start, 0.0, Modifiers::COMMAND));
+        h.step();
+        for k in 0..6 {
+            let modifiers = if let_go && k >= 2 { Modifiers::NONE } else { Modifiers::COMMAND };
+            h.event(touch(TouchPhase::Move, 5.0, modifiers));
+            h.step();
+        }
+        h.event(touch(TouchPhase::End, 0.0, Modifiers::NONE));
+        h.run_steps(40);
+        (before, h.state().views[0].zoom, rect(&h, 0).expect("page 1 on screen"))
+    }
+    for effects in ["off", "on"] {
+        let (before, held, held_page) = zoom_gesture(effects, false);
+        assert!(held > before, "{effects}: the gesture zoomed in: {before} to {held}");
+        let (_, let_go, let_go_page) = zoom_gesture(effects, true);
+        assert!((let_go / held - 1.0).abs() < 1e-4, "{effects}: the whole gesture zooms: {let_go}, held throughout {held}");
+        assert!(
+            (let_go_page.min - held_page.min).length() < 0.5,
+            "{effects}: and nothing scrolls: page 1 at {:?}, held throughout {:?}",
+            let_go_page.min,
+            held_page.min
+        );
+    }
+}
+
 #[test]
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);
@@ -1343,6 +1388,68 @@ fn single_page_fit_page_fits_the_shown_page() {
     let r2 = rect(&h, 1).expect("page 2");
     assert!(r2.width() <= vp.width() && r2.height() <= vp.height(), "page 2 fits: {r2:?} in {vp:?}");
     assert_ne!(h.state().views[0].zoom, z1, "the wider page refits instead of keeping page 1's zoom");
+}
+
+#[test]
+fn pages_shorter_than_the_window_sit_in_its_middle() {
+    let centred = |h: &Harness<'static, PdfCraftApp>, r: egui::Rect| {
+        let vp = h.state().views[0].viewport_rect();
+        assert!(r.height() < vp.height(), "{r:?} is shorter than {vp:?}");
+        assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+    };
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    centred(&h, rect(&h, 0).expect("page 1"));
+    assert_eq!(h.state().views[0].current, 0);
+
+    // The page drawn there is the page a click finds: its link still goes to page 3.
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * 0.5, r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].current, 2, "the link is where the page is drawn");
+
+    // Scrolling continuously, the column of pages as a whole.
+    let mut h = harness(&[("layout", "single"), ("continuous", "on"), ("zoom", "25")]);
+    h.run_steps(4);
+    let column = rect(&h, 0).expect("page 1").union(rect(&h, 2).expect("page 3"));
+    centred(&h, column);
+
+    // A page taller than the view starts at its top, as before.
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "250")]);
+    h.run_steps(4);
+    let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    assert!(r.height() > vp.height() && (r.min.y - vp.min.y).abs() < 40.0, "{r:?} in {vp:?}");
+}
+
+/// A page too tall for its margins still fits the window: it shows whole, in the middle.
+#[test]
+fn a_page_that_fits_without_its_margins_shows_whole() {
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    let (half, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    let spare = 20.0;
+    let zoom = (50.0 * (vp.height() - spare) / half.height()).floor();
+    h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+    h.run_steps(4);
+    let r = rect(&h, 0).expect("page 1");
+    assert!(r.height() < vp.height() && r.height() + 2.0 * 28.0 > vp.height(), "{r:?} fits {vp:?} only without its margins");
+    assert!(r.min.y >= vp.min.y && r.max.y <= vp.max.y, "{r:?} shows whole in {vp:?}");
+    assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+}
+
+/// Two pages side by side are placed as the row they make: the taller decides, not the first.
+#[test]
+fn a_row_too_tall_for_the_window_starts_at_its_top_whichever_page_is_shorter() {
+    let h = mixed_harness(&[("layout", "two-page"), ("zoom", "180")]);
+    let vp = h.state().views[0].viewport_rect();
+    let (first, second) = (rect(&h, 0).expect("page 1"), rect(&h, 1).expect("page 2"));
+    assert!(first.height() > vp.height() && second.height() < vp.height(), "{first:?}, {second:?} in {vp:?}");
+    let row = first.union(second);
+    assert!((row.min.y - vp.min.y).abs() < 40.0, "{row:?} starts in {vp:?}");
 }
 
 #[test]

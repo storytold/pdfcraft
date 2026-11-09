@@ -86,7 +86,7 @@ impl Bounds {
 
 /// Every corner of the triangles [`render`] draws: those not fully transparent whose three
 /// corners exist and are finite.
-fn vertices(meshes: &[WorldMesh]) -> impl Iterator<Item = [f64; 3]> + Clone + '_ {
+pub(crate) fn vertices(meshes: &[WorldMesh]) -> impl Iterator<Item = [f64; 3]> + Clone + '_ {
     meshes
         .iter()
         .flat_map(|m| m.mesh.triangles.iter().enumerate().filter(|&(t, _)| !invisible(m, t)).filter_map(|(_, tri)| corners(&m.mesh, tri)).flatten())
