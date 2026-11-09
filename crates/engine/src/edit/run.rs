@@ -134,6 +134,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
+        | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::AutoTagText
@@ -143,6 +144,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
         | Edit::SetDocumentScript { .. }
@@ -605,6 +607,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
+        Edit::FixHairlines { pages, settings } => {
+            let fixed = pdfcraft_edit::fix_hairlines(doc, pages, settings)?;
+            if fixed.lines == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no hairlines found on those pages".into())));
+            }
+        }
         Edit::AddAttachment { name, bytes, description, mime } => {
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
@@ -656,17 +664,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(js) => pdfcraft_forms::set_value_with(doc, name, value, js),
                 None => pdfcraft_forms::set_value(doc, name, value),
             };
-            match set(doc, value) {
-                Ok(()) => {}
-                // A date the field's format doesn't read may be typed by another of an XFA date
-                // field's patterns: it is kept in the first. Only a format refusal is tried
-                // again: it comes before any of the field's scripts run, so they run once.
-                Err(refused @ pdfcraft_forms::FormError::Format(_)) => match xfa::typed_date(doc, cx.xfa.as_deref(), name, value) {
-                    Some(typed) => set(doc, &typed)?,
-                    None => return Err(refused.into()),
-                },
-                Err(refused) => return Err(refused.into()),
-            }
+            // A date typed by another of an XFA date field's patterns is kept in the first, before
+            // the field's format reads it more loosely (`18OCT16` in a `YYYYMMDD|DDMMMYY` field is
+            // the 18th of October 2016, not a day of 2018).
+            let laid_out = pdfcraft_xfa::xfa_shape(doc).is_some_and(|s| s.laid_out);
+            let typed = if laid_out { xfa::typed_date(doc, cx.xfa.as_deref(), name, value) } else { None };
+            set(doc, typed.as_ref().unwrap_or(value))?;
         }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
             Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
@@ -810,6 +813,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::LayoutTableToBlocks { object } => {
+            a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;

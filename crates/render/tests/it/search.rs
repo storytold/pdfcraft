@@ -6,69 +6,254 @@ fn page(parts: &[&str]) -> PageText {
         glyphs: parts.iter().map(|text| TextGlyph { text: (*text).into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] }).collect(),
         line_of: vec![0; parts.len()],
         space_before: vec![false; parts.len()],
+        truncated: false,
     }
 }
 
-// The original straightforward search is an independent oracle for valid page metadata.
+/// The letters of the property test's alphabet that come from scripts written without spaces
+/// between words: 界 (CJK Unified Ideographs, U+4E00..U+9FFF) and ก (Thai, U+0E00..U+0E7F).
+/// 한 (Hangul Syllables) is written with spaces and bounds a word. The reference knows only
+/// these three letters, so it does not share the block table in `text/search.rs`; that table is
+/// checked against `UNSPACED_BLOCK_SAMPLES` instead.
+fn unspaced(c: char) -> bool {
+    matches!(c, '界' | 'ก')
+}
+
+/// Letters at the edges of each block of a script written without spaces (`true`), and letters
+/// just outside them (`false`), named by their block as Unicode's Blocks.txt gives it. Each one is
+/// alphabetic and not a digit, so whether it bounds a whole word depends on the table alone.
+const UNSPACED_BLOCK_SAMPLES: &[(char, bool, &str)] = &[
+    ('\u{0DC6}', false, "Sinhala (0D80..0DFF), before Thai"),
+    ('\u{0E01}', true, "Thai (0E00..0E7F), first letter"),
+    ('\u{0E46}', true, "Thai, MAIYAMOK"),
+    ('\u{0E81}', true, "Lao (0E80..0EFF), first letter"),
+    ('\u{0EDF}', true, "Lao, last letter"),
+    ('\u{0F00}', true, "Tibetan (0F00..0FFF), first letter"),
+    ('\u{0F8C}', true, "Tibetan, last letter"),
+    ('\u{1000}', true, "Myanmar (1000..109F), first letter"),
+    ('\u{108E}', true, "Myanmar, last letter"),
+    ('\u{10A0}', false, "Georgian (10A0..10FF), after Myanmar"),
+    ('\u{1770}', false, "Tagbanwa (1760..177F), before Khmer"),
+    ('\u{1780}', true, "Khmer (1780..17FF), first letter"),
+    ('\u{17DC}', true, "Khmer, last letter"),
+    ('\u{1820}', false, "Mongolian (1800..18AF), after Khmer"),
+    ('\u{3005}', true, "CJK Symbols and Punctuation (3000..303F), ideographic iteration mark"),
+    ('\u{3006}', true, "CJK Symbols and Punctuation, ideographic closing mark"),
+    ('\u{3031}', true, "CJK Symbols and Punctuation, vertical kana repeat mark"),
+    ('\u{3035}', true, "CJK Symbols and Punctuation, vertical kana repeat mark lower half"),
+    ('\u{303B}', true, "CJK Symbols and Punctuation, vertical ideographic iteration mark"),
+    ('\u{303C}', true, "CJK Symbols and Punctuation, masu mark"),
+    ('\u{3041}', true, "Hiragana (3040..309F), first letter"),
+    ('\u{309F}', true, "Hiragana, last letter"),
+    ('\u{30A1}', true, "Katakana (30A0..30FF), first letter"),
+    ('\u{30FF}', true, "Katakana, last letter"),
+    ('\u{3105}', true, "Bopomofo (3100..312F), first letter"),
+    ('\u{312F}', true, "Bopomofo, last letter"),
+    ('\u{3131}', false, "Hangul Compatibility Jamo (3130..318F), after Bopomofo"),
+    ('\u{318E}', false, "Hangul Compatibility Jamo, last letter, before Bopomofo Extended"),
+    ('\u{31A0}', true, "Bopomofo Extended (31A0..31BF), first letter"),
+    ('\u{31BF}', true, "Bopomofo Extended, last letter"),
+    ('\u{31F0}', true, "Katakana Phonetic Extensions (31F0..31FF), first letter"),
+    ('\u{31FF}', true, "Katakana Phonetic Extensions, last letter"),
+    ('\u{3400}', true, "CJK Unified Ideographs Extension A (3400..4DBF), first"),
+    ('\u{4DBF}', true, "CJK Unified Ideographs Extension A, last"),
+    ('\u{4E00}', true, "CJK Unified Ideographs (4E00..9FFF), first"),
+    ('\u{9FFF}', true, "CJK Unified Ideographs, last"),
+    ('\u{A000}', false, "Yi Syllables (A000..A48F), after CJK Unified Ideographs"),
+    ('\u{A9CF}', false, "Javanese (A980..A9DF), before Myanmar Extended-B"),
+    ('\u{A9E0}', true, "Myanmar Extended-B (A9E0..A9FF), first letter"),
+    ('\u{A9FE}', true, "Myanmar Extended-B, last letter"),
+    ('\u{AA00}', false, "Cham (AA00..AA5F), after Myanmar Extended-B"),
+    ('\u{AA4B}', false, "Cham, before Myanmar Extended-A"),
+    ('\u{AA60}', true, "Myanmar Extended-A (AA60..AA7F), first letter"),
+    ('\u{AA7F}', true, "Myanmar Extended-A, last letter"),
+    ('\u{AA80}', false, "Tai Viet (AA80..AADF), after Myanmar Extended-A"),
+    ('\u{D7FB}', false, "Hangul Jamo Extended-B (D7B0..D7FF), before CJK Compatibility Ideographs"),
+    ('\u{F900}', true, "CJK Compatibility Ideographs (F900..FAFF), first"),
+    ('\u{FAD9}', true, "CJK Compatibility Ideographs, last"),
+    ('\u{FB00}', false, "Alphabetic Presentation Forms (FB00..FB4F), after CJK Compatibility Ideographs"),
+    ('\u{FF5A}', false, "Halfwidth and Fullwidth Forms (FF00..FFEF), fullwidth z, before halfwidth katakana"),
+    ('\u{FF66}', true, "Halfwidth and Fullwidth Forms, first halfwidth katakana"),
+    ('\u{FF9F}', true, "Halfwidth and Fullwidth Forms, last halfwidth katakana"),
+    ('\u{FFA1}', false, "Halfwidth and Fullwidth Forms, halfwidth Hangul, after halfwidth katakana"),
+    ('\u{1AFF0}', true, "Kana Extended-B (1AFF0..1AFFF), first letter"),
+    ('\u{1B000}', true, "Kana Supplement (1B000..1B0FF), first letter"),
+    ('\u{1B122}', true, "Kana Extended-A (1B100..1B12F), last letter"),
+    ('\u{1B132}', true, "Small Kana Extension (1B130..1B16F), first letter"),
+    ('\u{1B167}', true, "Small Kana Extension, last letter"),
+    ('\u{1B170}', false, "Nushu (1B170..1B2FF), after Small Kana Extension"),
+    ('\u{20000}', true, "CJK Unified Ideographs Extension B (20000..2A6DF), first"),
+    ('\u{2A6DF}', true, "CJK Unified Ideographs Extension B, last"),
+    ('\u{2F800}', true, "CJK Compatibility Ideographs Supplement (2F800..2FA1F), first"),
+    ('\u{323AF}', true, "CJK Unified Ideographs Extension H (31350..323AF), last"),
+];
+
+// The original straightforward search is an independent oracle for valid page metadata, extended
+// with ligature letters and the three readings of a line-end hyphen between letters: as written,
+// joined (no hyphen, no break) and kept (hyphen, no break).
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
+    let letters = |s: &str| {
+        s.replace('\u{FB00}', "ff")
+            .replace('\u{FB01}', "fi")
+            .replace('\u{FB02}', "fl")
+            .replace('\u{FB03}', "ffi")
+            .replace('\u{FB04}', "ffl")
+            .replace(['\u{FB05}', '\u{FB06}'], "st")
+    };
+    let fold = |s: &str| if sensitive { letters(s) } else { fold_case(&letters(s)) };
     // Soft hyphens and zero width characters draw nothing and are skipped on both sides.
-    let visible =
-        |s: String| s.chars().filter(|c| !matches!(c, '\u{AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')).collect::<String>();
+    let invisible = |c: char| matches!(c, '\u{AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}');
+    let visible = |s: String| s.chars().filter(|&c| !invisible(c)).collect::<String>();
     let needle: Vec<char> = visible(fold(query)).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() || limit == 0 {
         return Vec::new();
     }
-    // Each character, its glyph, and whether a skipped zero width space came right before it.
-    let mut chars: Vec<(char, usize, bool)> = Vec::new();
-    let mut after_zwsp = false;
-    for (i, glyph) in page.glyphs.iter().enumerate() {
-        // A line that ends in a soft hyphen, past any empty or other invisible glyphs and
-        // characters after it on that line, runs on to the next.
-        let ends_in_soft_hyphen = |end: usize| {
-            (0..=end)
-                .rev()
-                .take_while(|&k| page.line_of[k] == page.line_of[end])
-                .flat_map(|k| page.glyphs[k].text.chars().rev())
-                .find(|&c| c == '\u{AD}' || !visible(c.to_string()).is_empty())
-                == Some('\u{AD}')
-        };
-        let line_break = i > 0 && page.line_of[i] != page.line_of[i - 1] && !ends_in_soft_hyphen(i - 1);
-        if i > 0 && (page.space_before[i] || line_break) && chars.last().is_some_and(|&(c, ..)| c != ' ') {
-            chars.push((' ', i, false));
-            after_zwsp = false;
-        }
-        for c in fold(&glyph.text).chars() {
-            after_zwsp |= c == '\u{200B}';
-            if visible(c.to_string()).is_empty() {
-                continue;
-            }
-            let c = if c.is_whitespace() { ' ' } else { c };
-            if c != ' ' || chars.last().is_none_or(|&(last, ..)| last != ' ') {
-                chars.push((c, i, after_zwsp && c != ' '));
+    let texts: Vec<String> = page.glyphs.iter().map(|g| fold(&g.text)).collect();
+    let n = texts.len();
+    let new_line = |i: usize| i > 0 && page.line_of[i] != page.line_of[i - 1];
+    // A line that ends in a soft hyphen, past any empty or other invisible glyphs and characters
+    // after it on that line, runs on to the next.
+    let ends_in_soft_hyphen = |end: usize| {
+        (0..=end)
+            .rev()
+            .take_while(|&k| page.line_of[k] == page.line_of[end])
+            .flat_map(|k| page.glyphs[k].text.chars().rev())
+            .find(|&c| c == '\u{AD}' || !invisible(c))
+            == Some('\u{AD}')
+    };
+    // A visible hyphen between letters at a line end.
+    let hyphen = |c: char| matches!(c, '-' | '\u{2010}');
+    let divided: Vec<bool> = (0..n)
+        .map(|i| {
+            let chars: Vec<char> = visible(texts[i].clone()).chars().collect();
+            let Some(&last) = chars.last() else { return false };
+            let before = if chars.len() >= 2 {
+                Some(chars[chars.len() - 2])
+            } else if i > 0 && !page.space_before[i] && !new_line(i) {
+                visible(texts[i - 1].clone()).chars().last()
+            } else {
+                None
+            };
+            hyphen(last)
+                && before.is_some_and(char::is_alphabetic)
+                && i + 1 < n
+                && new_line(i + 1)
+                && visible(texts[i + 1].clone()).chars().next().is_some_and(char::is_alphabetic)
+        })
+        .collect();
+    let mut all = Vec::new();
+    let readings = if divided.contains(&true) { 3 } else { 1 };
+    for reading in 0..readings {
+        // Each character, its glyph, and whether a skipped zero width space came right before it.
+        let mut chars: Vec<(char, usize, bool)> = Vec::new();
+        let mut after_zwsp = false;
+        for i in 0..n {
+            let joined = reading > 0 && i > 0 && divided[i - 1];
+            let line_break = new_line(i) && !ends_in_soft_hyphen(i - 1) && !joined;
+            if i > 0 && (page.space_before[i] || line_break) && chars.last().is_some_and(|&(c, ..)| c != ' ') {
+                chars.push((' ', i, false));
                 after_zwsp = false;
             }
-        }
-    }
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, ..)| c.is_alphanumeric());
-    // A word ends at a skipped zero width space as it does at a space.
-    let edge = |i: usize| chars.get(i).is_some_and(|&(.., zwsp)| zwsp);
-    let mut hits = Vec::new();
-    let mut start = 0;
-    while start + needle.len() <= chars.len() {
-        let end = start + needle.len();
-        let bounded = (edge(start) || !word(start.checked_sub(1))) && (edge(end) || !word(Some(end)));
-        if (!whole || bounded) && chars[start..end].iter().map(|&(c, ..)| c).eq(needle.iter().copied()) {
-            hits.push(chars[start].1..chars[end - 1].1 + 1);
-            if hits.len() == limit {
-                break;
+            let mut glyph: Vec<char> = texts[i].chars().collect();
+            if reading == 1 && divided[i] {
+                // The hyphen: the last visible character.
+                if let Some(at) = glyph.iter().rposition(|&c| !invisible(c)) {
+                    glyph.remove(at);
+                }
             }
-            start = end;
-        } else {
-            start += 1;
+            for c in glyph {
+                after_zwsp |= c == '\u{200B}';
+                if invisible(c) {
+                    continue;
+                }
+                let c = if c.is_whitespace() { ' ' } else { c };
+                if c != ' ' || chars.last().is_none_or(|&(last, ..)| last != ' ') {
+                    chars.push((c, i, after_zwsp && c != ' '));
+                    after_zwsp = false;
+                }
+            }
+        }
+        // A neighbour bounds a word only in a script written with spaces between words, or when it
+        // is a digit.
+        let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, ..)| c.is_alphanumeric() && (c.is_numeric() || !unspaced(c)));
+        // A word ends at a skipped zero width space as it does at a space.
+        let edge = |i: usize| chars.get(i).is_some_and(|&(.., zwsp)| zwsp);
+        let mut hits = Vec::new();
+        let mut start = 0;
+        while start + needle.len() <= chars.len() {
+            let end = start + needle.len();
+            let bounded = (edge(start) || !word(start.checked_sub(1))) && (edge(end) || !word(Some(end)));
+            if (!whole || bounded) && chars[start..end].iter().map(|&(c, ..)| c).eq(needle.iter().copied()) {
+                hits.push(chars[start].1..chars[end - 1].1 + 1);
+                if hits.len() == limit {
+                    break;
+                }
+                start = end;
+            } else {
+                start += 1;
+            }
+        }
+        all.push(hits);
+    }
+    if readings == 1 {
+        return all.remove(0);
+    }
+    // A hit is left out where it overlaps one kept from another reading; one reading's hits are
+    // all kept, though two can share a glyph.
+    let mut hits: Vec<(Range<usize>, usize)> = all.into_iter().enumerate().flat_map(|(r, hits)| hits.into_iter().map(move |h| (h, r))).collect();
+    hits.sort_by_key(|(h, _)| (h.start, std::cmp::Reverse(h.end)));
+    let mut out: Vec<(Range<usize>, usize)> = Vec::new();
+    for (h, r) in hits {
+        let overlaps = out.iter().any(|(k, kr)| *kr != r && h.start < k.end && k.start < h.end);
+        if !overlaps && out.len() < limit {
+            out.push((h, r));
         }
     }
-    hits
+    out.into_iter().map(|(h, _)| h).collect()
+}
+
+/// One glyph per entry of `text`, each on the line given in `lines`.
+fn lined(text: &[&str], lines: &[u32]) -> PageText {
+    let mut p = page(text);
+    p.line_of = lines.to_vec();
+    p
+}
+
+#[test]
+fn a_ligature_matches_its_letters() {
+    let text = page(&["o", "\u{FB03}", "c", "e", " ", "o", "f", "\u{FB01}", "c", "e"]);
+    assert_eq!(text.find("office"), vec![0..4, 5..10]);
+    assert_eq!(text.find("OFFICE"), vec![0..4, 5..10]);
+    assert_eq!(text.find_opts("office", true, true), vec![0..4, 5..10], "case-sensitive and whole words too");
+    assert_eq!(text.find("o\u{FB03}ce"), vec![0..4, 5..10], "a ligature in the query reads as its letters too");
+    assert_eq!(text.find("fi"), vec![1..2, 7..8], "a match inside a ligature takes its glyph");
+    assert!(text.find("o\u{FB13}").is_empty(), "no other compatibility folding");
+}
+
+#[test]
+fn a_word_divided_by_a_line_end_hyphen_matches_whole_and_as_written() {
+    // "exam-" ends line 0, "ple" starts line 1; the hyphen is its own glyph.
+    let text = lined(&["e", "x", "a", "m", "-", "p", "l", "e"], &[0, 0, 0, 0, 0, 1, 1, 1]);
+    assert_eq!(text.find("example"), vec![0..8], "both parts, and the hyphen between them");
+    assert_eq!(text.find_opts("example", false, true), vec![0..8], "a whole word");
+    assert_eq!(text.find("exam-ple"), vec![0..8], "a query with the hyphen");
+    assert_eq!(text.find("exam- ple"), vec![0..8], "and with the line break as a space");
+    assert_eq!(text.find("exam"), vec![0..4]);
+    // The hyphen in the glyph of the last letter, a soft hyphen and U+2010.
+    for hyphen in ["m-", "m\u{AD}", "m\u{2010}"] {
+        let text = lined(&["e", "x", "a", hyphen, "p", "l", "e"], &[0, 0, 0, 0, 1, 1, 1]);
+        assert_eq!(text.find("example"), vec![0..7], "{hyphen:?}");
+    }
+    // Not divided: a hyphen inside a line, a dash after a word gap, a hyphen between digits.
+    assert!(page(&["e", "x", "a", "m", "-", "p", "l", "e"]).find("example").is_empty(), "inside a line");
+    let mut spaced = lined(&["e", "x", "a", "m", "-", "p", "l", "e"], &[0, 0, 0, 0, 0, 1, 1, 1]);
+    spaced.space_before[4] = true;
+    assert!(spaced.find("example").is_empty(), "a dash after a word gap");
+    assert!(spaced.find("exam ple").is_empty(), "a dash after a word gap is never dropped");
+    assert!(lined(&["1", "0", "-", "2", "0"], &[0, 0, 0, 1, 1]).find("1020").is_empty(), "between digits");
+    assert!(lined(&["a", "-", "2", "0"], &[0, 0, 1, 1]).find("a20").is_empty(), "before a number");
+    assert!(lined(&["1", "0", "-", "a", "b"], &[0, 0, 0, 1, 1]).find("10ab").is_empty(), "after a number");
+    assert!(lined(&["a", "-"], &[0, 0]).find("a-").len() == 1, "at the end of the page");
 }
 
 #[test]
@@ -90,11 +275,32 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
     // Accepted matches still do not overlap, even within one multi-character glyph.
     assert_eq!(page(&["aaaaa"]).find("aaa"), vec![0..1]);
     assert_eq!(page(&["aaaaa"]).find("aa"), vec![0..1, 0..1]);
+    // So does a page with a word divided at a line end, which is searched in three readings.
+    let divided = lined(&["\u{FB03}", " ", "exam", "-", "ple"], &[0, 0, 0, 0, 1]);
+    assert_eq!(divided.find("f"), vec![0..1, 0..1]);
+    assert_eq!(divided.find("example"), vec![2..5]);
+}
+
+/// A letter from a block in `UNSPACED_BLOCK_SAMPLES` next to a whole-word match leaves it standing
+/// when the block's script is written without spaces, and bounds it otherwise, on either side.
+#[test]
+fn whole_words_follow_the_unicode_blocks_of_unspaced_scripts() {
+    for &(c, unspaced, block) in UNSPACED_BLOCK_SAMPLES {
+        let (neighbour, cp) = (c.to_string(), u32::from(c));
+        assert!(c.is_alphanumeric() && !c.is_numeric(), "U+{cp:04X} ({block}) is a letter, so the sample tests the table");
+        // Case-sensitive, so that case folding does not move a neighbour into another block
+        // (Georgian U+10A0 folds to U+2D00).
+        let (before, after) = if unspaced { (Some(1..2), Some(0..1)) } else { (None, None) };
+        assert_eq!(page(&[&neighbour, "PDF"]).find_opts("PDF", true, true), Vec::from_iter(before), "U+{cp:04X} ({block}) before the match");
+        assert_eq!(page(&["PDF", &neighbour]).find_opts("PDF", true, true), Vec::from_iter(after), "U+{cp:04X} ({block}) after the match");
+    }
 }
 
 #[test]
 fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
-    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية", "\u{AD}", "a\u{200B}"];
+    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "ก", "한", "e\u{301}", "العربية", "\u{AD}", "a\u{200B}"];
+    // Ligatures, digits and HYPHEN exercise the readings of a line-end hyphen.
+    let alphabet: Vec<&str> = alphabet.into_iter().chain(["\u{FB01}", "1", "\u{2010}"]).collect();
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

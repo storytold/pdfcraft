@@ -1251,6 +1251,8 @@ mod tests {
             flags: 0,
             max_len: None,
             options: Vec::new(),
+            selected: Vec::new(),
+            single_value_is_array: false,
             da: String::new(),
             quadding: 0,
             tooltip: None,
