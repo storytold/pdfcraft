@@ -441,15 +441,28 @@ impl<'a> Inspector<'a> {
         let value = match d.get(b"V").map(|v| self.resolve(v)) {
             Ok(Object::Name(n)) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
             Ok(Object::String(bytes, _)) => self.field_spend(bytes, text_string),
-            Ok(Object::Array(a)) => Some(
-                a.iter()
-                    .filter_map(|x| match self.resolve(x) {
-                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
+            Ok(Object::Array(a)) => {
+                let mut shown = Vec::new();
+                let mut dropped = false;
+                for x in a {
+                    if let Object::String(bytes, _) = self.resolve(x) {
+                        match self.field_spend(bytes, text_string) {
+                            Some(text) => shown.push(text),
+                            None => dropped = true,
+                        }
+                    }
+                }
+                // A selected value the allowance could not hold shows as an omission rather than
+                // as part of a complete selection.
+                let mut value = shown.join(", ");
+                if dropped {
+                    if !value.is_empty() {
+                        value.push_str(", ");
+                    }
+                    value.push('…');
+                }
+                Some(value)
+            }
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
