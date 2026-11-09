@@ -29,3 +29,33 @@ pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 /// Told every frame whether any tab has unsaved work, or an OCR review is not yet accepted or
 /// rejected, so a host page can warn before leaving.
 pub type HostDirtyFn = Box<dyn FnMut(bool)>;
+
+/// A collaboration session the host page handed over (`pdfcraft:session`): the
+/// socket, the credential, and the role the cabinet believes it assigned. The
+/// token decides the real role (ADR-0008 §7); the server's `welcome` is what the
+/// app shows.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HostSession {
+    pub session_id: String,
+    pub url: String,
+    /// A credential: never logged, never put in a URL or a DOM attribute.
+    pub token: String,
+    pub role: Option<String>,
+}
+
+impl std::fmt::Debug for HostSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostSession")
+            .field("session_id", &self.session_id)
+            .field("url", &self.url)
+            .field("token", &"<redacted>")
+            .field("role", &self.role)
+            .finish()
+    }
+}
+
+/// Sessions the host page handed over, taken once per frame.
+pub type HostSessionInbox = std::sync::Arc<std::sync::Mutex<Vec<HostSession>>>;
+
+/// The cabinet's answers to a commit (`pdfcraft:committed`): `(version, etag)`.
+pub type CommittedInbox = std::sync::Arc<std::sync::Mutex<Vec<(u64, String)>>>;

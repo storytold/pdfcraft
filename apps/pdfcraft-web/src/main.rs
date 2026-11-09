@@ -62,9 +62,23 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(
+                            app.startup_inbox.clone(),
+                            cc.egui_ctx.clone(),
+                            app.host_session_inbox.clone(),
+                            app.host_committed_inbox.clone(),
+                        );
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
+                        #[cfg(feature = "collab")]
+                        {
+                            // Collaboration over the host bridge (INTEGRATION.md §6):
+                            // `pdfcraft:session` in, `session-state`/`presence` out,
+                            // `pdfcraft:commit` when the cabinet owns the commit.
+                            app.host_collab_state = Some(bridge.state_fn());
+                            app.host_collab_presence = Some(bridge.presence_fn());
+                            app.host_commit = Some(bridge.commit_fn());
+                        }
                         bridge.post_ready();
                     } else if query_param("host").as_deref() == Some("parent") {
                         eframe::web_sys::console::warn_1(
@@ -147,11 +161,22 @@ fn app_canvas() -> Option<web_sys::HtmlCanvasElement> {
 ///   the file (and reports its own errors).
 /// - `pdfcraft:dirty` whenever unsaved work appears or goes away, `pdfcraft:failed` when the app
 ///   couldn't start.
+/// - `pdfcraft:session` (from the host) starts a collaboration session: the app connects the
+///   socket itself and never puts the token in a URL or a log. `pdfcraft:session-state` reports
+///   the status and participants, `pdfcraft:presence` the same list coalesced, `pdfcraft:commit`
+///   asks the cabinet to store the session, and `pdfcraft:committed` tells the app the version
+///   the cabinet now holds (INTEGRATION.md §6). Without that message the app stays single-user.
 #[cfg(target_arch = "wasm32")]
 mod host {
+    use std::cell::RefCell;
     use std::rc::Rc;
 
+    #[cfg(feature = "collab")]
+    use craft_web_host::Participant;
     use craft_web_host::web::{FileData, Host, Message};
+    #[cfg(feature = "collab")]
+    use pdfcraft_ui_egui::CollabState;
+    use pdfcraft_ui_egui::{CommittedInbox, HostSession, HostSessionInbox};
 
     /// The app id in the host messages (`pdfcraft:ready`).
     const APP: &str = "pdfcraft";
@@ -165,6 +190,8 @@ mod host {
     #[derive(Clone)]
     pub struct Bridge {
         host: Rc<Host>,
+        /// The session the cabinet started, for `pdfcraft:commit`.
+        session_id: Rc<RefCell<Option<String>>>,
     }
 
     impl Bridge {
@@ -173,7 +200,7 @@ mod host {
         /// another origin (messages only go to this origin, so the browser would drop every save
         /// without an error while the document showed as saved, #2167).
         pub fn connect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-            Some(Self { host: Rc::new(Host::connect(APP, canvas)?) })
+            Some(Self { host: Rc::new(Host::connect(APP, canvas)?), session_id: Rc::new(RefCell::new(None)) })
         }
 
         pub fn post_ready(&self) {
@@ -185,12 +212,27 @@ mod host {
             let _ = self.host.post_failed(error, None);
         }
 
-        /// Hear `pdfcraft:open` and queue the file like a `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
-            self.host.listen(move |message| {
-                if let Message::Open { name, data } = message {
-                    queue_open(&name, &data, &inbox, &ctx);
+        /// Hear `pdfcraft:open` and queue the file like a `?file=` download; hear
+        /// `pdfcraft:session` and `pdfcraft:committed` and queue them for the app
+        /// frame, which owns the document and the socket.
+        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context, sessions: HostSessionInbox, committed: CommittedInbox) {
+            let session_id = self.session_id.clone();
+            self.host.listen(move |message| match message {
+                Message::Open { name, data } => queue_open(&name, &data, &inbox, &ctx),
+                Message::Session { session_id: id, ws_url, token, role } => {
+                    *session_id.borrow_mut() = Some(id.clone());
+                    if let Ok(mut queue) = sessions.lock() {
+                        queue.push(HostSession { session_id: id, url: ws_url, token, role: Some(role).filter(|role| !role.is_empty()) });
+                    }
+                    ctx.request_repaint();
                 }
+                Message::Committed { version, etag } => {
+                    if let Ok(mut queue) = committed.lock() {
+                        queue.push((version, etag));
+                    }
+                    ctx.request_repaint();
+                }
+                _ => {}
             });
         }
 
@@ -210,6 +252,55 @@ mod host {
                 }
             })
         }
+
+        /// `pdfcraft:session-state`: the status line and who is in the session.
+        #[cfg(feature = "collab")]
+        pub fn state_fn(&self) -> pdfcraft_ui_egui::HostCollabStateFn {
+            let host = self.host.clone();
+            Box::new(move |state: &CollabState| {
+                let status = match &state.error {
+                    Some(error) => format!("{}: {error}", state.status),
+                    None => state.status.clone(),
+                };
+                let _ = host.post_session_state(&status, &participants(state));
+            })
+        }
+
+        /// `pdfcraft:presence`: the same participants, coalesced, for the cabinet's markers.
+        #[cfg(feature = "collab")]
+        pub fn presence_fn(&self) -> pdfcraft_ui_egui::HostCollabStateFn {
+            let host = self.host.clone();
+            Box::new(move |state: &CollabState| {
+                let _ = host.post_presence(&participants(state));
+            })
+        }
+
+        /// `pdfcraft:commit`: ask the cabinet to store the session. The cabinet
+        /// assembles the file itself, so no bytes travel.
+        #[cfg(feature = "collab")]
+        pub fn commit_fn(&self) -> pdfcraft_ui_egui::HostCommitFn {
+            let host = self.host.clone();
+            let session = self.session_id.clone();
+            Box::new(move || {
+                if let Some(id) = session.borrow().as_deref() {
+                    let _ = host.post_commit(id, None);
+                }
+            })
+        }
+    }
+
+    /// The participants in the host crate's shape: the actor id, its role and the colour.
+    #[cfg(feature = "collab")]
+    fn participants(state: &CollabState) -> Vec<Participant> {
+        state
+            .participants
+            .iter()
+            .map(|participant| Participant {
+                client_id: participant.client_id.clone(),
+                role: participant.role_label().to_owned(),
+                color: Some(participant.color.clone()),
+            })
+            .collect()
     }
 
     /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` holds a PDF: queue it like a

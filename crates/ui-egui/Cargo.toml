@@ -51,6 +51,12 @@ unicode-bidi = "0.3"
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
 skrifa = "0.44"
+# Collaboration (feature `collab`, off by default): one protocol driver with a transport per
+# platform — a worker thread on the desktop, the page's WebSocket in the browser — and the
+# operation projection.
+pdfcraft-collab-session = { workspace = true, optional = true }
+pdfcraft-collab-client-pdf = { workspace = true, optional = true }
+pdfcraft-collab-proto = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
@@ -60,11 +66,6 @@ getrandom = "0.4"
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
-# Collaboration (feature `collab`, off by default): the session worker and the
-# operation projection. Native-only; the web client uses the host bridge.
-pdfcraft-collab-session = { workspace = true, optional = true }
-pdfcraft-collab-client-pdf = { workspace = true, optional = true }
-pdfcraft-collab-proto = { workspace = true, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.

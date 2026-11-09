@@ -36,7 +36,7 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
-#[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+#[cfg(feature = "collab")]
 mod collab;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
@@ -110,6 +110,8 @@ use canvas::signature_drag;
 use canvas::wheel_boost;
 use canvas::wheel_pager;
 use canvas::zoom_snap;
+#[cfg(feature = "collab")]
+pub use collab::{CollabParticipant, CollabState, HostCollabStateFn, HostCommitFn, SessionParams};
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
@@ -124,7 +126,7 @@ use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
-pub use hooks::{FailedInbox, HostDirtyFn, HostSaveFn, Inbox, OsEvent, OsEventsFn};
+pub use hooks::{CommittedInbox, FailedInbox, HostDirtyFn, HostSaveFn, HostSession, HostSessionInbox, Inbox, OsEvent, OsEventsFn};
 use menus::tab_context;
 use panels::all_tools_ui;
 use panels::comments_panel;
@@ -293,11 +295,24 @@ pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
     /// The open collaboration session, when the feature and the environment ask for one.
-    #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+    #[cfg(feature = "collab")]
     pub(crate) collab: Option<collab::CollabUi>,
     /// A refused token or an unrecoverable session: never retry automatically.
-    #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+    #[cfg(feature = "collab")]
     pub(crate) collab_off: bool,
+    /// Sessions the host page handed over (web, `pdfcraft:session`), taken once a frame.
+    pub host_session_inbox: HostSessionInbox,
+    /// The cabinet's commit answers (web, `pdfcraft:committed`).
+    pub host_committed_inbox: CommittedInbox,
+    /// Told the session state so the host page can show its participants panel (web).
+    #[cfg(feature = "collab")]
+    pub host_collab_state: Option<collab::HostCollabStateFn>,
+    /// Told the participant list, coalesced, for the cabinet's live markers (web).
+    #[cfg(feature = "collab")]
+    pub host_collab_presence: Option<collab::HostCollabStateFn>,
+    /// Asks the host page to commit, when the cabinet owns commit (web).
+    #[cfg(feature = "collab")]
+    pub host_commit: Option<collab::HostCommitFn>,
     pub session: Session,
     /// The interface language signature status captions were last drawn in.
     pub(crate) status_captions_lang: Option<i18n::Lang>,

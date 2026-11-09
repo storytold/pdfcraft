@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-collab-session"
-description = "Background WebSocket driver for one collaborative PDF session"
+description = "One collaborative session: the protocol driver and its native and browser transports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,9 +14,16 @@ pdfcraft-collab-client = { workspace = true }
 pdfcraft-collab-proto = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The monotonic clock: `std::time::Instant::now()` panics on wasm32; on native
+# this is std's.
+web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tungstenite = "0.30"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Event", "EventTarget", "MessageEvent", "CloseEvent", "WebSocket"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 pdfcraft-collab-hub = { workspace = true }
