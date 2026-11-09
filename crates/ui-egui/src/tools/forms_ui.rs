@@ -1404,6 +1404,7 @@ mod tests {
     fn draft(value: &[&str]) -> Focus {
         Focus {
             name: "hint".into(),
+            obj: None,
             widget: 0,
             text: value.first().map(|s| s.to_string()).unwrap_or_default(),
             picked: value.iter().map(|s| s.to_string()).collect(),
@@ -1413,6 +1414,7 @@ mod tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            list: ChoiceList::default(),
             had_focus: false,
         }
     }
