@@ -1403,4 +1403,3 @@ fn texts_read_up_answers_many_pages_from_one_walk() {
     assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
     assert_eq!(up[1], text_reads_up(&doc, 1));
 }
-}

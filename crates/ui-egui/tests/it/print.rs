@@ -1237,13 +1237,12 @@ fn gated_paper_detection_blocks_print_on_printer_switch_reuse_until_resolved() {
             vec![("B-Paper 5x7".into(), (360.0, 504.0))]
         }
     }));
-    h.state_mut().default_paper_source = Some(Arc::new(|p| {
-        if p == "Printer A" {
-            Some(("A-Paper 4x6".into(), (288.0, 432.0)))
-        } else {
-            Some(("B-Paper 5x7".into(), (360.0, 504.0)))
-        }
-    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(
+            |p| {
+                if p == "Printer A" { Some(("A-Paper 4x6".into(), (288.0, 432.0))) } else { Some(("B-Paper 5x7".into(), (360.0, 504.0))) }
+            },
+        ));
 
     // 1. Open print dialog: Printer A is default and starts reading papers
     assert!(h.state_mut().execute("print.dialog"));
