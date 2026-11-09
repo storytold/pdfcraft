@@ -2544,6 +2544,44 @@ fn copies_placed_with_an_offset_move_whole_and_the_text_reports_its_bounds() {
     assert_eq!(summaries(&dst).iter().filter(|s| s.page == 1 && s.subtype == "Text").map(|s| s.rect[0]).next(), Some(b[0]));
 }
 
+/// Preview text follows the same direct character data as import, including text after XML
+/// comments or processing instructions, without changing its geometry, font or blank-text rule.
+#[test]
+fn comment_previews_keep_complete_direct_contents_text() {
+    for (body, expected) in [
+        ("plain text", "plain text"),
+        ("left<!-- ignored -->right", "leftright"),
+        ("<!-- ignored -->after", "after"),
+        ("left<?editor keep?>right", "leftright"),
+        (" Å<![CDATA[<&>]]><!-- ignored -->&amp;Ω ", " Å<&>&Ω "),
+        ("left<unknown>excluded</unknown>right", "leftright"),
+        ("before&#13;&#10;after", "before\nafter"),
+        ("", ""),
+        ("<!-- ignored --><?editor keep?>", ""),
+        (" \t<!-- ignored --> \n ", " \t \n "),
+    ] {
+        for callout in [false, true] {
+            let extra = if callout { r#" callout="1,2,10,20" fringe="1,2,3,4""# } else { "" };
+            let xml = format!(
+                r##"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><freetext page="0" rect="10,20,110,70" color="#FF0000"{extra}><contents>{body}</contents><defaultappearance>0 0.5 1 rg /Helv 14 Tf</defaultappearance></freetext></annots></xfdf>"##
+            );
+            let mut want = vec![Outline::Rect { rect: [10.0, 20.0, 110.0, 70.0], round: false, color: Some([1.0, 0.0, 0.0]) }];
+            if callout {
+                want.push(Outline::Line { points: vec![[1.0, 2.0], [10.0, 20.0]], color: Some([1.0, 0.0, 0.0]) });
+            }
+            if !expected.trim().is_empty() {
+                want.push(Outline::Text {
+                    rect: if callout { [11.0, 22.0, 107.0, 66.0] } else { [10.0, 20.0, 110.0, 70.0] },
+                    text: expected.into(),
+                    size: 14.0,
+                    color: Some([0.0, 0.5, 1.0]),
+                });
+            }
+            assert_eq!(comment_outlines(&xml), want, "body={body:?}, callout={callout}");
+        }
+    }
+}
+
 /// Fill & Sign marks and text boxes copied: the bundle on the pointer shows the tick, cross, dot
 /// and line themselves (not empty boxes) and a text box's text, and the pasted copies are drawn
 /// with their mark.
