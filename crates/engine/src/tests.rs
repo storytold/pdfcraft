@@ -11299,19 +11299,20 @@ fn an_edits_xfa_and_field_scripts_share_the_field_highlight() {
     assert!(!cx.highlight(), "the next XFA script reads the field scripts' change");
 }
 
-/// In a batch of XFA events, a later event's scripts read the field highlight an earlier one's set:
-/// `on`'s click turns it on, and `look`'s click, in the same batch, records what it reads.
+/// In a batch of value edits, a later field's change script reads the field highlight an earlier
+/// one's set: `on`'s change turns it on, and `look`'s, in the same batch, records what it reads.
+/// (A form-script event itself can't be batched.)
 #[test]
-fn a_later_xfa_event_in_a_batch_reads_the_highlight_an_earlier_one_set() {
-    let script = |js: &str| format!(r#"<event activity="click"><script contentType="application/x-javascript">{js}</script></event>"#);
+fn a_later_xfa_edit_in_a_batch_reads_the_highlight_an_earlier_one_set() {
+    let script = |js: &str| format!(r#"<event activity="change"><script contentType="application/x-javascript">{js}</script></event>"#);
     let xdp = format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb">
  <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <field name="on" w="1in" h="0.3in"><ui><button/></ui>{on}</field>
- <field name="look" w="1in" h="0.3in"><ui><button/></ui>{look}</field>
+ <field name="on" w="1in" h="0.3in"><ui><textEdit/></ui>{on}</field>
+ <field name="look" w="1in" h="0.3in"><ui><textEdit/></ui>{look}</field>
  <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui></field>
 </subform>
 </template>
@@ -11322,8 +11323,8 @@ fn a_later_xfa_event_in_a_batch_reads_the_highlight_an_earlier_one_set() {
     );
     let mut s = Session::new();
     let id = s.open("batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
-    let click = |som: &str| Edit::XfaEvent { som: som.into(), activity: "click".into() };
-    s.apply(id, Edit::Batch { edits: vec![click("form[0].on[0]"), click("form[0].look[0]")], label: "Click".into() }).expect("clicks");
+    let type_in = |name: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("x".into()) };
+    s.apply(id, Edit::Batch { edits: vec![type_in("on"), type_in("look")], label: "Type".into() }).expect("types");
     let seen = s.get(id).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
     assert_eq!(seen, vec!["true".to_string()]);
 }
