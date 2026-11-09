@@ -11838,3 +11838,22 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
+
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
+}

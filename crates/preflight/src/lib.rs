@@ -21,6 +21,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod header;
 pub mod icc;
 mod limits;
 mod spot;
@@ -165,6 +166,8 @@ pub const WORDINGS: &[&str] = &[
     "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
     "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
     // The document as a whole.
+    "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line",
+    "The file header isn't followed by a comment of four bytes above 127",
     "The document is encrypted",
     "An integer is outside the 32-bit range",
     "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
@@ -552,6 +555,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
                 issue("6.6.3", "The title in the metadata and the document information differ", None, None, true);
             }
         }
+    }
+    // 6.1.2: the file header.
+    let header = header::check(doc);
+    if header.version {
+        issue("6.1.2", "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line", None, None, true);
+    }
+    if header.comment {
+        issue("6.1.2", "The file header isn't followed by a comment of four bytes above 127", None, None, true);
     }
     // 6.1.3: encryption.
     if doc.trailer().get(b"Encrypt").is_some() {
@@ -1040,6 +1051,8 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         doc.remove_encryption();
         fixed.push("Removed encryption".into());
     }
+    // A full save writes the header afresh, with the version it keeps and a binary comment.
+    fixed.extend(header::rewrite(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);
