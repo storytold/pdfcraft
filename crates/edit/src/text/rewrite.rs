@@ -117,8 +117,16 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             }
         }
     }
-    // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    // Rebuild: the line's first operator becomes the replacement, its others go. Each other
+    // dropped `'` or `"` (a later run, or a copy on the same baseline) leaves its line move and
+    // spacing behind, as the first one does inside the replacement.
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            return (std::mem::take(&mut replacement), false);
+        }
+        let keep = !drops.contains(&i);
+        (dropped_side_effects(&ops, i, keep, None), keep)
+    });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {

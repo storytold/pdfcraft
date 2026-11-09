@@ -8679,6 +8679,41 @@ fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_sp
     }
 }
 
+/// [`text::replace_line`] also drops copies of the line drawn on the same baseline (a fake-bold
+/// overprint). A copy drawn with `'` or `"` must leave that operator's line move and spacing
+/// behind (ISO 32000-2 §9.4.3, Table 107), like the line's own first operator does: text after
+/// it is positioned from that line or uses that spacing. Each copy is tried as the target, so the
+/// one drawn with the quote operator is both the replaced line and the dropped copy.
+#[test]
+fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
+    let cases = [
+        // The copy's `'` moves to the line the footer is placed from.
+        "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        // The copy's `"` sets the spacing the footer inherits in the next text object.
+        "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+    ];
+    for content in cases {
+        let footer = |doc: &Document| {
+            let lines = text::text_lines(doc, 0).unwrap();
+            let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
+            (f.rect, f.ink.clone())
+        };
+        let original = text_page(content);
+        let before = footer(&original);
+        let targets: Vec<usize> =
+            text::text_lines(&original, 0).unwrap().iter().enumerate().filter(|(_, l)| l.text == "Target line here").map(|(i, _)| i).collect();
+        assert_eq!(targets.len(), 2, "{content}");
+        for target in targets {
+            let mut doc = original.clone();
+            text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(footer(&doc), before, "{content} replacing line {target}");
+            let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+            assert!(texts.iter().any(|t| t == "NEW TEXT") && !texts.iter().any(|t| t.contains("Target")), "{content}: {texts:?}");
+        }
+    }
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]
