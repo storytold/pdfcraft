@@ -90,6 +90,13 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
     /// Objects of the file that could not be read, lowest number first, as lines such as
     /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
     /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
@@ -479,7 +486,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };

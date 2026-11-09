@@ -230,6 +230,15 @@ impl Session {
         out
     }
 
+    /// The snapshot [`Self::autosave_snapshots`] handed out for `id` could not be stored: the
+    /// document is due again, so the next autosave tries it again.
+    pub fn autosave_failed(&mut self, id: DocId) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
+            // Any generation but the current one leaves it due.
+            d.snapshot_generation = d.generation.wrapping_sub(1);
+        }
+    }
+
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
     /// `path` (where Save writes), as when the session ended.
     pub fn mark_recovered(&mut self, id: DocId, path: Option<String>) {

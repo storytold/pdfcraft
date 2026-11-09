@@ -14,8 +14,9 @@ use crate::{
     LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart, StatusCaptions, SummarySort,
     TrustStore, XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, carry_verdict_marks, certificate_secured, comment_list, comment_summary,
     decode_text, display_bytes, display_config, guard, info_fields, js, local_utc_offset, note_warnings, open_source, open_source_with, optimize,
-    outline_rows, parse_ymd, plain_copy, print, print_raster, render_threads, scan_colours, set_default_layer_state, shown_under_redactions,
-    signatures_of, source_kind, sync_xfa_state, undrawn_notices, use_layer_choices, working_file, writable, xfa, xfa_sync_datasets,
+    outline_rows, parse_ymd, plain_copy, print, print_layer_states, print_raster, render_threads, scan_colours, set_default_layer_state,
+    shown_under_redactions, signatures_of, source_kind, sync_xfa_state, undrawn_notices, use_layer_choices, working_file, writable, xfa,
+    xfa_sync_datasets,
 };
 
 mod editing;

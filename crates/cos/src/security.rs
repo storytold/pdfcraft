@@ -148,6 +148,46 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     }
 }
 
+/// Whether `d`, an `/Encrypt` dictionary, has crypt filters that encrypt (`/CFM` `V2`, `AESV2` or
+/// `AESV3`), each authorised only when an embedded file is opened (`/AuthEvent /EFOpen`, ISO
+/// 32000-2 §7.6.6, Table 25): what a document asks for its embedded files alone, which it opens
+/// without (§7.6.6: "EFOpen Authorization shall be required when accessing embedded files"). The
+/// files use them through `/EFF` or through a `/Crypt` filter of their own. Its strings and streams
+/// have to be in the clear too, which [`SecurityHandler::without_key`] checks.
+pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
+    let name = |d: &Dict, k: &[u8]| d.get(k).and_then(|v| doc.resolve(v).as_name().map(<[u8]>::to_vec));
+    let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) else { return false };
+    let mut encrypting = Vec::new();
+    for (k, v) in cf.iter() {
+        let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
+        if !matches!(name(&f, b"CFM").as_deref(), Some(b"V2" | b"AESV2" | b"AESV3")) {
+            continue;
+        }
+        if name(&f, b"AuthEvent").as_deref() != Some(b"EFOpen") {
+            return false;
+        }
+        encrypting.push(k.clone());
+    }
+    !encrypting.is_empty()
+}
+
+/// Whether `s`, read from a document whose handler has no file key, holds data that handler would
+/// decrypt, which therefore reads as stored: still encrypted.
+pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &Stream) -> bool {
+    if h.has_key() {
+        return false;
+    }
+    let _scope = FollowScope::enter();
+    let named = named_crypt_filter(doc, &s.dict);
+    let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
+    let kind = match (&named, ty.as_deref().and_then(Object::as_name)) {
+        (Some(n), _) => StreamKind::Named(n),
+        (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
+        _ => StreamKind::Normal,
+    };
+    h.decrypts(kind)
+}
+
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
 fn is_crypt(doc: &Document, f: &Object) -> bool {
     followed(doc, f).as_name() == Some(b"Crypt")
