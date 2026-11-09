@@ -144,6 +144,10 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            deferred_opens: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            password_retry: None,
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
             launch_layout: None,
@@ -520,11 +524,11 @@ impl eframe::App for PdfCraftApp {
         let dropped = self.drop_on_signature_pad(dropped);
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
-                self.drop_into_combine(f, ctx);
-            } else {
+        // Files dropped on the Combine files tab join its list, all at once, instead of opening.
+        if self.combine_showing() && !dropped.is_empty() {
+            self.drop_into_combine(dropped, ctx);
+        } else {
+            for f in dropped {
                 self.open_dropped(f, ctx);
             }
         }
@@ -537,7 +541,7 @@ impl eframe::App for PdfCraftApp {
         // Don't replace a pending prompt or import. A startup file may need its own password
         // prompt, so its bytes stay queued until the current interaction finishes.
         #[cfg(not(target_arch = "wasm32"))]
-        let opening = !self.pending_opens.is_empty();
+        let opening = !self.pending_opens.is_empty() || !self.deferred_opens.is_empty();
         #[cfg(target_arch = "wasm32")]
         let opening = false;
         if !opening
@@ -680,8 +684,14 @@ impl eframe::App for PdfCraftApp {
         self.motion.begin_pass(&ctx, self.animation_effects);
         // One-time 0.36 -> 0.37 panel persistence migration, before any panel stores or reads state.
         migrate_panel_state(ui);
+        // Another tool lets go of a click whose picture is still being found, whether or not its
+        // page is drawn to see the change.
+        let picks = self.quick_tool == QuickTool::Select;
         for view in &mut self.views {
             view.begin_render_frame();
+            if !picks {
+                view.pending_pick = None;
+            }
         }
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on

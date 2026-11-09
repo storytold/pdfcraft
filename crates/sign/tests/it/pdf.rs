@@ -538,6 +538,79 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
 }
 
+/// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;
+/// object 5 is another signature dictionary. `perms` goes into the catalog. The signature itself
+/// is a dummy: which signature certifies is decided before its bytes are checked.
+fn certification_of(perms: &str) -> pdfcraft_sign::SignatureInfo {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> {perms} >>");
+    let bytes = write_pdf(&[
+        catalog.as_bytes(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>",
+        b"<< /FT /Sig /T (Approval) /V 4 0 R >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Reference [<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>] >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>",
+    ]);
+    signatures(&open(&bytes), &bytes, &TrustStore { certs: Vec::new() }).into_iter().find(|s| s.field == "Approval").unwrap()
+}
+
+/// Only the signature the catalog's `/Perms /DocMDP` names certifies the document: a DocMDP
+/// reference in any other signature dictionary leaves it an approval signature, with a note.
+#[test]
+fn only_the_signature_the_catalog_names_certifies() {
+    let note = "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.";
+    let noted = |s: &pdfcraft_sign::SignatureInfo| s.details.iter().filter(|d| d.message == note).count();
+    let named = certification_of("/Perms << /DocMDP 4 0 R >>");
+    assert_eq!((named.certify, noted(&named)), (Some(1), 0), "{:?}", named.details);
+    for perms in ["", "/Perms << /DocMDP 5 0 R >>", "/Perms << /UR3 4 0 R >>"] {
+        let s = certification_of(perms);
+        assert_eq!((s.certify, noted(&s)), (None, 1), "{perms:?}: {:?}", s.details);
+    }
+}
+
+/// [`certified_p1`] with a fraction after its last `/ByteRange` number, signed again over the
+/// edited bytes. The ranges still cover whole bytes, so the signature verifies, but no signature
+/// in the signed revision has a byte range that ends exactly where that revision ends.
+fn certified_p1_with_a_fractional_range() -> (TrustStore, Vec<u8>) {
+    let (id, trust, mut signed) = certified_p1();
+    let prefix = b"/ByteRange [";
+    let at = signed.windows(prefix.len()).position(|w| w == prefix).unwrap() + prefix.len();
+    let end = at + signed[at..].iter().position(|b| *b == b']').unwrap();
+    let text = std::str::from_utf8(&signed[at..end]).unwrap().to_owned();
+    let range: Vec<usize> = text.split_ascii_whitespace().map(|n| n.parse().unwrap()).collect();
+    let mut fractional = format!("{}.5", text.trim_end()).into_bytes();
+    assert!(fractional.len() <= end - at, "no room for the fraction in {text:?}");
+    fractional.resize(end - at, b' ');
+    signed[at..end].copy_from_slice(&fractional);
+    let (start, stop) = (range[1], range[2]);
+    signed[start + 1..stop - 1].fill(b'0');
+    let alg = id.key.preferred_digest();
+    let digest = alg.digest(&[&signed[..start], &signed[stop..]]);
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest).unwrap();
+    let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+    signed[start + 1..start + 1 + hex.len()].copy_from_slice(&hex);
+    (trust, signed)
+}
+
+/// When the signed revision holds no signature whose byte range ends it, nothing signed says
+/// which permissions apply: later changes are not permitted, whatever the latest catalog says.
+#[test]
+fn changes_after_an_unmatched_signed_revision_are_not_permitted() {
+    let (trust, signed) = certified_p1_with_a_fractional_range();
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&signed);
+    assert_eq!((s.status, &s.modification), (Status::Valid, &Modification::None), "{:?}", s.details);
+    let edited = edit_after(&signed, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+        add_comment(doc);
+    });
+    let s = check(&edited);
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::UNREADABLE])));
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
