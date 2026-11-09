@@ -21,6 +21,12 @@ pub enum Handling {
     Label,
 }
 
+/// The percent a custom scale can be (the dialog's field and a saved setting).
+pub const CUSTOM_SCALE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
+
+/// The resolutions the Print dialog offers for Print as image, in dots per inch.
+pub const IMAGE_DPI: [f64; 3] = [150.0, 300.0, 600.0];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
@@ -235,10 +241,15 @@ impl PrintDraft {
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster,
+            raster: self.raster(),
             crops: self.crops.clone(),
             area: None,
         })
+    }
+
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    fn raster(&self) -> Option<print::Raster> {
+        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale })
     }
 
     fn cut_and_stack(&self) -> bool {
@@ -262,7 +273,7 @@ impl PrintDraft {
                 self.duplex
             },
             scaling: spool::Scaling::Exact,
-            grayscale: self.grayscale,
+            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {
