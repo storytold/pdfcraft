@@ -160,12 +160,14 @@ pub enum Edit {
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
     /// and centred in it (#4077).
+    /// `line` is a text line under the picture, already filled in ([`Session::stamp_line`](crate::Session::stamp_line)).
     AddCustomStamp {
         page: usize,
         rect: [f64; 4],
         name: String,
         file: MarkFile,
         author: String,
+        line: Option<String>,
     },
     /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
     /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an
@@ -242,6 +244,14 @@ pub enum Edit {
         page: usize,
         index: usize,
         points: Vec<[f64; 2]>,
+    },
+    /// Open, close or move a comment's pop-up window (`rect` in user space; a comment without a
+    /// pop-up gets one).
+    SetAnnotationPopup {
+        page: usize,
+        index: usize,
+        rect: Option<[f64; 4]>,
+        open: Option<bool>,
     },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
