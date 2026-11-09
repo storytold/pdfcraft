@@ -198,27 +198,28 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages (historical % snapshot vs 2,143 keys, except Vietnamese, Brazilian
-Portuguese and Spanish vs the current union). Detail and script notes: [localization-parity.md](docs/localization-parity.md).
+Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
+`cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
 |---|---|---|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 97.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
-| Spanish | `es` | 100% of current union | partial (dialogs / tooltips; no help) |
-| Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 100% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
-| French | `fr` | 99.3% | partial |
-| Portuguese (Brazil) | `pt-br` | 100% of current union | partial |
-| Indonesian | `id` | 0% | none |
-| Japanese | `ja` | 99.1% | partial |
-| German | `de` | 99.3% | partial |
-| Korean | `ko` | 0% | none |
-| Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
+| Simplified Chinese | `zh-hans` | 88.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
+| Spanish | `es` | 98.4% | partial (dialogs / tooltips; no help) |
+| Hindi | `hi` | 97.5% | partial (Devanagari rendering unqualified) |
+| Arabic | `ar` | 97.9% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
+| French | `fr` | 98.4% | partial |
+| Portuguese (Brazil) | `pt-br` | 98.4% | partial |
+| Indonesian | `id` | 97.5% | partial |
+| Japanese | `ja` | 89.6% | partial |
+| German | `de` | 89.7% | partial |
+| Korean | `ko` | 97.5% | partial (no Hangul UI face) |
+| Vietnamese | `vi` | 98.4% | partial (dialogs / tooltips; no help) |
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
-Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Romanian and Czech: **15 more catalogs**
-(24 interface languages including English).
+Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
+Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
+(35 interface languages including English).
 
 ## Upcoming
 
@@ -252,7 +253,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-03 (community, M7, Thai word breaking):** Thai rows end between words, found with ICU4X's dictionary line segmenter (`icu_segmenter` 2.3, compiled dictionary data, no LSTM model; Unicode-3.0), instead of only at spaces when rewrapping and at any cluster in Add text. A row never starts with a following vowel, tone or other mark, Mai Yamok or Paiyannoi, nor ends with a leading vowel; a word wider than the row still breaks between clusters, and the spaces where an Add text row ends are dropped as in Latin text. Rewrapping existing text works out the breaks once per run of non-space characters. Rewriting a paragraph into Thai still needs a source font with the Thai glyphs (there is no Thai fallback face for it yet). The compiled dictionaries (Thai, Lao, Khmer, Burmese) add about 1.8 MB to a stripped release binary. Estimates unchanged.
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
-- **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
+- **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings in its denominator, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
