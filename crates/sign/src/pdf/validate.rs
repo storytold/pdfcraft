@@ -275,18 +275,37 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         // revision that holds no such signature does not say which permissions apply, so what
         // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        let signed = old.as_ref().and_then(|old| {
-            sig_fields(old).into_iter().find_map(|f| {
-                let v = f.signature(old)?;
-                nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+        // Every field of the signed revision whose signature ends it; the one this signature is
+        // listed under, when it is there, is the one it was made in.
+        let mut ending: Vec<_> = old
+            .as_ref()
+            .map(|old| {
+                sig_fields(old)
+                    .into_iter()
+                    .filter_map(|f| {
+                        let v = f.signature(old)?;
+                        nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+                    })
+                    .collect()
             })
-        });
-        match (old, signed) {
+            .unwrap_or_default();
+        let bound = ending.iter().position(|(f, _)| f.name == info.field);
+        let candidates = match bound {
+            Some(i) => vec![ending.swap_remove(i)],
+            None => std::mem::take(&mut ending),
+        };
+        match (old, candidates.first()) {
             (Some(old), Some((field, v))) => {
-                set_certification(&old, &v, info);
+                set_certification(&old, v, info);
                 // The fields this signature locks, as the signed revision has them, against the
-                // document now (#6757).
-                locks = locked_fields(doc, &old, &field, &v);
+                // document now (#6757). Its locks are its own field's: when that field is not
+                // among those ending the revision, any of them could be it, so a lock on any of
+                // them leaves the check undecided rather than borrowing another field's.
+                locks = match bound {
+                    Some(_) => locked_fields(doc, &old, field, v),
+                    None if candidates.iter().any(|(f, v)| locked_fields(doc, &old, f, v) != Locked::Kept) => Locked::Unchecked,
+                    None => Locked::Kept,
+                };
                 match classify_changes(doc, Some(old), info.certify) {
                     Modification::Allowed(_) if locks == Locked::Changed => Modification::Disallowed(vec![kind::LOCKED_FIELD]),
                     Modification::Disallowed(mut kinds) if locks == Locked::Changed => {

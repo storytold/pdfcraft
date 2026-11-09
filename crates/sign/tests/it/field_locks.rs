@@ -183,3 +183,83 @@ fn removing_or_shadowing_a_locked_field_changes_it() {
     });
     assert_eq!(approval(&shadowed, &trust).status, Status::Invalid);
 }
+
+/// A locked field's value replaced by a cycle of references is compared within a bound: the
+/// signature is not Valid, and validation returns (it overflowed the stack before).
+#[test]
+fn a_reference_cycle_in_a_locked_field_ends() {
+    let (bytes, trust) = signed(INCLUDE_AMOUNT);
+    let cyclic = edit_after(&bytes, |doc| {
+        let (a, b) = (doc.add(Object::Null), doc.add(Object::Null));
+        doc.set(a, Object::Ref(b));
+        doc.set(b, Object::Ref(a));
+        doc.update_dict(r(AMOUNT), |d| d.set(b"V".to_vec(), Object::Ref(a))).unwrap();
+    });
+    assert_ne!(approval(&cyclic, &trust).status, Status::Valid);
+}
+
+/// A lock that covers every field covers the signature's own field: repainting its widget after
+/// signing is a change to a locked field.
+#[test]
+fn an_all_lock_covers_the_signatures_own_widget() {
+    let (bytes, trust) = signed("/Lock << /Type /SigFieldLock /Action /All >>");
+    let repainted = edit_after(&bytes, |doc| {
+        let body = b"0 0 1 rg 0 0 130 50 re f".to_vec();
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(130), Object::Int(50)]));
+        d.set(b"Length".to_vec(), Object::Int(body.len() as i64));
+        let ap = doc.add(Object::Stream(Stream::from_raw(d, body)));
+        let mut n = pdfcraft_cos::Dict::new();
+        n.set(b"N".to_vec(), Object::Ref(ap));
+        doc.update_dict(r(5), |w| w.set(b"AP".to_vec(), Object::Dict(n))).unwrap();
+    });
+    assert_locked(&approval(&repainted, &trust), "the signature's own widget under All");
+}
+
+/// A field added below a locked field changes it: "address" gains "address.postcode".
+#[test]
+fn a_new_field_below_a_locked_one_changes_it() {
+    let (bytes, trust) = signed("/Lock << /Type /SigFieldLock /Action /Include /Fields [(address)] >>");
+    let grown = edit_after(&bytes, |doc| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"T".to_vec(), Object::String(PdfString::text("postcode")));
+        d.set(b"Parent".to_vec(), Object::Ref(r(10)));
+        d.set(b"V".to_vec(), Object::String(PdfString::text("LS1")));
+        let kid = doc.add(Object::Dict(d));
+        doc.update_dict(r(10), |p| {
+            if let Some(Object::Array(kids)) = p.get_mut(b"Kids") {
+                kids.push(Object::Ref(kid));
+            }
+        })
+        .unwrap();
+    });
+    assert_locked(&approval(&grown, &trust), "a kid added under a locked field");
+}
+
+/// A locked field with no appearance of its own is drawn from the form's defaults, so changing
+/// the form's /DA changes how it looks.
+#[test]
+fn the_form_defaults_a_locked_field_is_drawn_with_are_locked_too() {
+    let (bytes, trust) = signed("/Lock << /Type /SigFieldLock /Action /Include /Fields [(note)] >>");
+    let restyled = edit_after(&bytes, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm") {
+                form.set(b"DA".to_vec(), Object::String(PdfString::literal("/Helv 40 Tf 1 0 0 rg")));
+            }
+        })
+        .unwrap();
+    });
+    assert_locked(&approval(&restyled, &trust), "the form's /DA for a field drawn from it");
+}
+
+/// An Include lock whose names can't be read locks an unknown set of fields: a later fill leaves
+/// the signature Unknown, never Valid.
+#[test]
+fn an_unreadable_lock_leaves_a_later_fill_unknown() {
+    let (bytes, trust) = signed("/Lock << /Type /SigFieldLock /Action /Include /Fields (amount) >>");
+    let s = approval(&edit_after(&bytes, fill(AMOUNT, "999999")), &trust);
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+}
