@@ -5310,6 +5310,7 @@ fn sign_prepared_with(
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
     value(&mut v);
+    let certifies = v.get(b"Reference").is_some();
     let sig = doc.add(Object::Dict(v));
     // The field by name, never by number: a full save (encryption, repairs) is
     // free to renumber objects, and a hardcoded reference would stamp the value
@@ -5319,6 +5320,12 @@ fn sign_prepared_with(
     let fields = doc.resolve(&af).as_dict().expect("AcroForm dict").get(b"Fields").cloned().expect("Fields");
     let field = doc.resolve(&fields).as_array().expect("Fields array").iter().filter_map(|o| o.as_ref()).next().expect("signature field");
     doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+    if certifies {
+        // A certification is the signature the catalog's /Perms /DocMDP names (ISO 32000-2, 12.8.2.2).
+        let mut perms = Dict::new();
+        perms.set(b"DocMDP".to_vec(), Object::Ref(sig));
+        doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+    }
     let save = pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(doc, &save).unwrap();
     let mark = format!("0 {} {} {}", LAYERED_BR_MARK[0], LAYERED_BR_MARK[1], LAYERED_BR_MARK[2]);
@@ -9351,8 +9358,9 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
     let others = (words_on(&s, 0), words_on(&s, 2));
     assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")));
     take_full_refreshes();
-    let word = PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0] };
-    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None }]).unwrap(), 1);
+    let word =
+        PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
+    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
     assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
     let after = s.get(id).unwrap();
     assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
