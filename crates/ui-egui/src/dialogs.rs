@@ -11,6 +11,7 @@ pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
+pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
@@ -43,6 +44,7 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -444,6 +446,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.protect_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::FixHairlines => {
+            let (go, cancel) = crate::hairlines_ui::body(ui, app, &t);
+            req.fix_hairlines_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::BookmarksFromTextStyles => {
@@ -1877,6 +1885,15 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+                    view.redactions_applied = view.redactions_applied.saturating_add(1);
+                    // A new step clears the redo history, so the undone saved steps can't come back.
+                    if view.redactions_undone_after_save > 0 || delivered_undone {
+                        view.redactions_undone_after_save = 0;
+                        view.saved_redactions_cut_off = true;
+                    }
+                }
                 if let Some((_, id)) = app.active_ids() {
                     app.renew_recovery(id);
                 }
@@ -1976,6 +1993,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if req.fix_hairlines_now {
+        app.fix_hairlines();
     }
     if req.apply_number
         && let Some(edit) = req.number_now.take()
