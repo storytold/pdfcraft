@@ -56,6 +56,68 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
 }
 
 #[test]
+fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
+    use egui::{Color32, Event, Modifiers, PointerButton, Shape, StrokeKind};
+    use pdfcraft_engine::{Edit, NewField, Session};
+
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open("selection.pdf", None, bytes, None).unwrap();
+    for (name, rect, kind) in [
+        ("first", [40.0, 290.0, 54.0, 304.0], NewField::CheckBox),
+        ("second", [90.0, 290.0, 104.0, 304.0], NewField::CheckBox),
+        ("text", [40.0, 230.0, 230.0, 254.0], NewField::Text { multiline: false }),
+    ] {
+        session.apply(id, Edit::AddField { name: Some(name.into()), page: 0, rect, kind }).unwrap();
+    }
+    let mut h = harness_with("selection.pdf", session.save_bytes(id).unwrap().as_ref().clone());
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    for (x, modifiers) in [(47.0, Modifiers::NONE), (97.0, Modifiers::SHIFT)] {
+        let pos = at(&h, x, 103.0);
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+            h.run_steps(1);
+        }
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.names().len(), 2);
+    let blue = Color32::from_rgb(0x14, 0x73, 0xE6);
+    for (x, y, selected) in [(47.0, 103.0, true), (97.0, 103.0, true), (135.0, 158.0, false)] {
+        let center = at(&h, x, y);
+        let shapes: Vec<_> = h.output().shapes.iter().filter(|s| s.clip_rect.contains(center)).collect();
+        let tag = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.fill == if selected { blue } else { Color32::BLACK })
+        });
+        assert!(tag.is_some(), "widget at {center:?} must have its selection-colored name tag");
+        let outline = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.stroke.color == blue && r.stroke.width == 2.0 && r.stroke_kind == StrokeKind::Outside)
+        });
+        if selected {
+            assert!(outline > tag, "the selected outline must be outside and painted after the tag");
+        } else {
+            assert!(outline.is_none(), "unselected text field has no selection outline");
+        }
+    }
+    assert_eq!(
+        h.output()
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape, Shape::Circle(c)
+        if c.radius == 3.5 && c.stroke.color == blue))
+            .count(),
+        4,
+        "only the primary has resize handles"
+    );
+}
+
+#[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
     let before = names(&h).len();
@@ -154,6 +216,48 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert!(near(back[0], up[0] - 1.0) && near(back[1], up[1] - 1.0), "{up:?} → {back:?}");
     assert!(h.state().views[0].prepare.selected.is_some(), "it stays selected for the next nudge");
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
+}
+
+/// Shift keeps a dragged field on the axis it set off along, even when the drag then turns and
+/// crosses the diagonal: 40 points right and then 60 down still moves it 40 points right and not
+/// at all down, where choosing the axis from the whole drag each frame made it jump to 60 down.
+#[test]
+fn a_shift_drag_keeps_its_axis_when_it_crosses_the_diagonal() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    // The default text field is 144 by 22 points with its top-left at the click.
+    let c = at(&h, 110.0, 261.0);
+    let (right, down) = (at(&h, 150.0, 261.0), at(&h, 150.0, 321.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + (right - c) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    for k in 1..=4 {
+        h.hover_at(right + (down - right) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(down);
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    let after = rect_of(&h, &name);
+    assert!((after[0] - before[0] - 40.0).abs() < 1.5, "40 points right: {before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() < 0.01, "not down: {before:?} → {after:?}");
 }
 
 /// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
@@ -1561,4 +1665,86 @@ fn button_export_properties_apply_cancel_and_undo() {
         let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
         assert_eq!(f.export_of(0), Some(original.as_str()));
     }
+}
+
+/// The screen rectangle of widget 0 of field `name` on the first view.
+fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+    pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+}
+
+/// A right-click while a field is dragged leaves the dragged field selected, so the drag moves it
+/// and not the field right-clicked. The right-click used to select the other field, and the release
+/// moved that one.
+#[test]
+fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let (name, city) = (field_rect(&h, "name"), field_rect(&h, "city"));
+    let a = name.center();
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(a + egui::vec2(0.0, 30.0));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: city.center(), button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(1);
+    let end = a + egui::vec2(0.0, 60.0);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(field_rect(&h, "city"), city, "the field right-clicked stays where it was");
+    assert_ne!(field_rect(&h, "name"), name, "the dragged field moved");
+}
+
+/// With Prepare open, a drag with a shape tool on the page's empty part draws Prepare's selection
+/// rectangle and no comment, as before: Prepare takes the press nobody holds. It used to draw both.
+#[test]
+fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.square"));
+    h.run_steps(3);
+    assert!(h.state().is_preparing(), "picking the tool leaves Prepare open");
+    // Below the fields.
+    let (from, to) = (at(&h, 40.0, 260.0), at(&h, 200.0, 360.0));
+    drag(&mut h, from, to);
+    let s = h.state();
+    let squares = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Square").count();
+    assert_eq!(squares, 0, "no rectangle under Prepare's selection rectangle");
+}
+
+/// With Prepare open, a double-click on a field is the field's (it opens its properties) and leaves
+/// a polygon being clicked out unfinished, as before. It used to finish the polygon too.
+#[test]
+fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.polygon"));
+    h.run_steps(3);
+    // Three points below the fields.
+    for (x, y) in [(40.0, 260.0), (200.0, 260.0), (120.0, 360.0)] {
+        let p = at(&h, x, y);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+    }
+    let on_field = field_rect(&h, "name").center();
+    crate::support::input::double_click(&mut h, on_field);
+    let s = h.state();
+    let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
+    assert_eq!(polygons, 0, "the polygon is not finished");
+    assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
 }
