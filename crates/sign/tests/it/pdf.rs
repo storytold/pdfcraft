@@ -3139,6 +3139,65 @@ fn a_cross_reference_entry_that_misses_its_object_is_not_an_unchanged_object() {
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
 }
 
+/// `signed` with one more revision appended by hand: `bodies` written as they are, then a
+/// cross-reference table section whose subsections `xref` writes, given where each body starts
+/// and where the section's own `xref` keyword is. `trailer_extra` goes into its trailer, which
+/// continues the signed chain.
+fn append_revision(signed: &[u8], bodies: &[&str], trailer_extra: &str, xref: impl Fn(&[usize], usize) -> String) -> Vec<u8> {
+    let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+    let prev: String = signed[at..].iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+    let mut out = signed.to_vec();
+    let mut starts = Vec::new();
+    for body in bodies {
+        starts.push(out.len());
+        out.extend_from_slice(body.as_bytes());
+    }
+    let section = out.len();
+    out.extend_from_slice(
+        format!("xref\n{}trailer\n<< /Size 61 /Root 1 0 R /Prev {prev} {trailer_extra} >>\nstartxref\n{section}\n%%EOF\n", xref(&starts, section))
+            .as_bytes(),
+    );
+    out
+}
+
+/// When an entry it follows leads to no object, the renderer rebuilds its object index from the
+/// `N G obj` headers in the file, and there the last header for a number wins. So a revision
+/// appended after signing can carry a new body for the page's content stream that no section
+/// lists, plus an entry, named from the trailer, that points at no object: the page draws the
+/// unlisted body while every object the signed revision had still reads as signed. Neither is a
+/// permitted change, apart or together, under a certification or an approval signature. An
+/// honest revision that lists what it adds stays permitted.
+#[test]
+fn an_unlisted_object_body_or_an_entry_that_points_at_no_object_is_not_permitted() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let text = "BT /F1 14 Tf 20 250 Td (Forged text) Tj ET";
+    let forged = format!("4 0 obj\n<< /Length {} >>\nstream\n{text}\nendstream\nendobj\n", text.len());
+    let unused = "60 0 obj\n(unused)\nendobj\n";
+    // Object 60's entry points at the section's own `xref` keyword.
+    let nowhere = |_: &[usize], section: usize| format!("60 1\n{}", xref_entry(section));
+    let listed = |starts: &[usize], _: usize| format!("60 1\n{}", xref_entry(*starts.last().unwrap()));
+    for certify in [Some(1), None] {
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+        type Subsections<'a> = &'a dyn Fn(&[usize], usize) -> String;
+        let attacks: [(&str, Vec<&str>, &str, Subsections, &str); 3] = [
+            ("an unlisted body and an entry that points at no object", vec![&forged], "/Info 60 0 R", &nowhere, kind::PAGE_CONTENT),
+            ("an entry that points at no object", vec![], "/Info 60 0 R", &nowhere, kind::OTHER),
+            ("an unlisted body beside a listed one", vec![&forged, unused], "", &listed, kind::PAGE_CONTENT),
+        ];
+        for (name, bodies, trailer, xref, what) in attacks {
+            let edited = append_revision(&signed, &bodies, trailer, xref);
+            let s = check(&edited);
+            assert_eq!(s.status, Status::Invalid, "{certify:?}, {name}: {:?}", s.modification);
+            assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&what)), "{certify:?}, {name}: {:?}", s.modification);
+        }
+        let honest = append_revision(&signed, &[unused], "", listed);
+        let s = check(&honest);
+        assert_eq!(s.status, Status::Valid, "{certify:?}, an honest revision: {:?}", s.modification);
+    }
+}
+
 /// `fixture()` with the page's resources indirect: object 7 is the resources dictionary, 8 its
 /// `/Font` dictionary, 9 an `/ExtGState` the content uses, and 5 the font as before.
 fn fixture_with_indirect_resources() -> Vec<u8> {
