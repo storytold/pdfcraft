@@ -138,7 +138,7 @@ mod tests {
             space_before.push(gap);
             (x, gap) = (x + 6.0, false);
         }
-        PageText { glyphs, line_of, space_before }
+        PageText { glyphs, line_of, space_before, truncated: false }
     }
 
     fn uris(s: &str) -> Vec<String> {
