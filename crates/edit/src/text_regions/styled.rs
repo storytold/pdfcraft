@@ -1779,8 +1779,7 @@ pub(crate) fn rewrite_styled_block(
     block_ops.extend(after.ops());
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.extend(crate::text::reopen_text_object(o.tlm, o.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object

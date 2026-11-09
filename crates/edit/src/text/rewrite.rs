@@ -5,7 +5,8 @@ use super::fallback::{
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
-    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, rewritten_contents, show_side_effects, splice, text_lines,
+    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, reopen_text_object, rewritten_contents, show_side_effects, splice,
+    text_lines,
 };
 use super::{
     Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
@@ -959,12 +960,10 @@ pub(crate) fn rewrite_block_from(
     };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
     let on_top = crate::lift_on_top(over, &mut block_ops);
-    let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.extend(reopen_text_object(emit.tlm, emit.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
     let mut advances = dropped_advances(doc, &ops, &res, &dropped)?;
     let new_data = splice(&pieces, &ops, |i| {

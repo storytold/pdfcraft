@@ -141,6 +141,30 @@ pub(crate) fn dropped_side_effects(ops: &[Op], i: usize, keep: bool, split_at: O
     ops.get(i).map(show_side_effects).unwrap_or_default()
 }
 
+/// For a paragraph or region rewrite that splits a text object: what reopens it after the
+/// rewritten paragraph, so the text after it starts where it did. `tlm` and `tm` are the line and
+/// text matrices where the paragraph began, and `size` and `scale` the font size (`Tf`) and
+/// horizontal scaling (`Tz` / 100) in force there. A `Tm` restores the line matrix, which a later
+/// `Td` or `T*` moves from; a kept run before the paragraph on the same baseline had already
+/// advanced the pen beyond it (ISO 32000-2 §9.4.4), so a numeric `TJ` then moves the text matrix
+/// alone by that advance. Only an advance along a horizontal baseline is expressible that way;
+/// one that isn't (a vertical run's, or one at a zero size) leaves the pen at the line matrix.
+pub(crate) fn reopen_text_object(tlm: [f64; 6], tm: [f64; 6], size: Option<f64>, scale: f64) -> Vec<Op> {
+    let n = pdfcraft_content::num;
+    let mut out = vec![Op::new("BT", vec![]), Op::new("Tm", tlm.iter().map(|v| n(*v)).collect())];
+    // tm = [1 0 0 1 tx ty] x tlm: solve for the advance (tx, ty) in text space.
+    let (dx, dy) = (tm[4] - tlm[4], tm[5] - tlm[5]);
+    let det = tlm[0] * tlm[3] - tlm[1] * tlm[2];
+    let tx = (dx * tlm[3] - dy * tlm[2]) / det;
+    let ty = (dy * tlm[0] - dx * tlm[1]) / det;
+    let denominator = size.unwrap_or(0.0) * scale;
+    let adjustment = -1000.0 * tx / denominator;
+    if tx.is_finite() && ty.is_finite() && tx.abs() > 1e-9 && ty.abs() <= 1e-9 && denominator != 0.0 && adjustment.is_finite() {
+        out.push(Op::new("TJ", vec![Object::Array(vec![n(adjustment)])]));
+    }
+    out
+}
+
 /// For a paragraph or region rewrite: a numeric `TJ` per dropped show operator in `drop`, moving
 /// the text matrix as far as that operator's text did without drawing anything (as
 /// [`super::clear_block`] does). Text shown later in the same text object without its own `Td`

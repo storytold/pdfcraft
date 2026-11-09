@@ -12615,12 +12615,22 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
 /// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
 /// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
 /// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
-/// deleting a paragraph does: the run must not jump onto the new text.
+/// deleting a paragraph does: the run must not jump onto the new text. A kept run before the
+/// paragraph splits the text object, and what reopens it keeps that run's advance too.
 #[test]
 fn rewriting_a_paragraph_keeps_later_runs_on_its_baseline_in_place() {
     let cases = [
         ("BT /F1 12 Tf 72 700 Td (Target words) Tj 1 0 0 rg 3 Ts (Red) Tj ET", "Red"),
         ("BT /F1 12 Tf 72 700 Td (Target words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // Several dropped runs: each one's advance is kept.
+        ("BT /F1 12 Tf 72 700 Td (Target ) Tj (wor) Tj (ds) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // A kept run before the paragraph on its baseline: the text object is split there, and
+        // the pen it had reached is kept as well as the line matrix.
+        ("BT /F1 12 Tf 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        ("BT /F1 12 Tf 72 700 Td (Left) Tj [-20000] TJ (Target ) Tj (words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // The same with horizontal scaling and a later line placed from the line matrix.
+        ("BT /F1 12 Tf 80 Tz 14 TL 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj T* (Next) Tj ET", "Far"),
+        ("BT /F1 12 Tf 80 Tz 14 TL 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj T* (Next) Tj ET", "Next"),
     ];
     for (content, run) in cases {
         let original = text_page(content);
