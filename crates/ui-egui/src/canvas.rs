@@ -2722,9 +2722,10 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
     }
 }
 
-/// Follows the link that was clicked. A link to another file, or to a PDF attached to this one,
-/// comes back, to be opened once the document is no longer borrowed.
-fn follow_link(app: &mut PdfCraftApp, index: usize, target: Option<LinkTarget>) -> Option<LinkOpen> {
+/// Follows the link, or the bookmark's action, that was clicked. A link to another file, or to a
+/// PDF attached to this one, comes back, to be opened once the document is no longer borrowed
+/// ([`open_link`]).
+pub(crate) fn follow_link(app: &mut PdfCraftApp, index: usize, target: Option<LinkTarget>) -> Option<LinkOpen> {
     let view_id = app.views[index].id;
     match target? {
         LinkTarget::Page(p, dest) => {
@@ -3623,15 +3624,21 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
         quick_bar(app, avail, page_left, ui);
     }
-    match link_open {
-        Some(LinkOpen::Remote(source, file, destination)) => app.open_remote_link(source, file, destination),
-        Some(LinkOpen::Embedded(doc, source, destination)) => app.open_embedded_link(doc, source, destination),
-        None => {}
+    if let Some(open) = link_open {
+        open_link(app, open);
     }
 }
 
-/// A clicked link that opens another document once the frame no longer borrows this one.
-enum LinkOpen {
+/// Open the document a followed link or bookmark leads to ([`follow_link`]).
+pub(crate) fn open_link(app: &mut PdfCraftApp, open: LinkOpen) {
+    match open {
+        LinkOpen::Remote(source, file, destination) => app.open_remote_link(source, file, destination),
+        LinkOpen::Embedded(doc, source, destination) => app.open_embedded_link(doc, source, destination),
+    }
+}
+
+/// A clicked link or bookmark that opens another document once the frame no longer borrows this one.
+pub(crate) enum LinkOpen {
     /// A GoToR or Launch link: the document it is in, the file, and where in it to go.
     Remote(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination),
     /// A GoToE link: the document it is in, its attachment, and where in it to go.
