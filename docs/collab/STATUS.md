@@ -634,7 +634,7 @@ collab` is green on it). The branch is 53 commits ahead of `origin/main`
 
 ### Line endings, font size and comment properties — §5 p.2 / limitation 2 (2026-11-09, local; not pushed)
 
-`c400147b3` on `44ff6d3be`. The restyle slice (`ce5c38798`, below) left three
+`c400147b3` on `44ff6d3be`. The restyle slice (`ce5c38798`, above) left three
 gaps: a style edit that carried line endings was refused whole, and the font
 size and the author/subject/note-icon changes (`Edit::FontSizeAnnotation`,
 `Edit::SetAnnotationInfo`) were not shared at all, so Comment Properties ▸ OK
