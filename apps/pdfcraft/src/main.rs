@@ -342,10 +342,17 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 
 /// The window and renderer settings for one run.
 fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+    // A quarter-screen tile on 1920x1080 is 960x540 including the frame. With
+    // server-side decorations (X11/Muffin) the framed window must shrink to
+    // that tile, so the minimum client height must leave room for the frame
+    // inside 540px. The 520px height in MIN_WINDOW_SIZE left only 20px for
+    // the frame, so Muffin rejected corner tiling; 480px client plus the
+    // frame fits the tile. App-drawn (Wayland) windows have no server frame
+    // and fit the same minimum.
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size(pdfcraft_ui_egui::MIN_WINDOW_SIZE)
+        .with_min_inner_size([480.0, 480.0])
         .with_drag_and_drop(true)
         // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
         .with_app_id(APP_ID);
@@ -1000,5 +1007,31 @@ mod x11_decorations_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn framed_minimum_fits_a_quarter_screen_tile() {
+        let source = include_str!("main.rs");
+        // Everything before the top-level test modules is product code.
+        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
+        let pos = product.find("with_min_inner_size");
+        assert!(pos.is_some(), "native_options no longer sets a minimum inner size");
+        let pos = pos.unwrap_or(0);
+        let snippet = &product[pos..];
+        let end = snippet.find(')').unwrap_or(snippet.len());
+        let args = &snippet[..end];
+        let nums: Vec<f32> = args.split(|c: char| !(c.is_ascii_digit() || c == '.')).filter_map(|t| t.parse().ok()).collect();
+        assert_eq!(nums.len(), 2, "minimum inner size should be two literals: {args}");
+        let (min_w, min_h) = (nums[0], nums[1]);
+        // 1920x1080 quarter tile is 960x540 including the frame. A server-side
+        // frame (titlebar plus borders) is under 60px tall and 20px wide, so
+        // the framed window must fit with that allowance inside the tile.
+        assert!(min_w + 20.0 <= 960.0, "minimum width {min_w} plus frame must fit a 960px quarter tile");
+        assert!(min_h + 60.0 <= 540.0, "minimum height {min_h} plus frame must fit a 540px quarter tile");
+        assert!(
+            min_h < pdfcraft_ui_egui::MIN_WINDOW_SIZE[1],
+            "minimum height {min_h} must be below the 520px minimum that left no room for the frame"
+        );
+        assert!(min_h >= 400.0, "minimum height {min_h} must stay usable for the layout");
     }
 }
