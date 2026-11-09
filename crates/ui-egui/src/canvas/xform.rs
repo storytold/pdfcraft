@@ -133,6 +133,19 @@ impl PageXform {
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
     }
 
+    /// Whether the screen point `p` activates link `l` on `page`: inside one of its
+    /// `/QuadPoints` quadrilaterals, or its rectangle when it has none (ISO 32000-2 Table 176).
+    pub fn link_contains(&self, info: &DocInfo, page: usize, l: &pdfcraft_render::Link, p: Pos2) -> bool {
+        if l.quads.is_empty() {
+            return self.user_rect(info, page, l.rect).contains(p);
+        }
+        // The inverse of `user_rect`: screen → the displayed page's fraction → user space.
+        let Some(pg) = info.pages.get(page) else { return false };
+        let (u, v) = self.screen_to_norm(p);
+        let [x, y] = pg.view_to_user(u * pg.width, v * pg.height);
+        l.contains(x, y)
+    }
+
     pub fn user_rect_f64(&self, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
         self.user_rect(info, page, r.map(|v| v as f32))
     }
