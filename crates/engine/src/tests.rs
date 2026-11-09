@@ -9066,6 +9066,45 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
     assert_eq!(Session::content_refresh_lists(None), (true, true), "undo/redo re-read both");
 }
 
+/// Recognized text is an invisible text layer on its page, so applying it refreshes like any
+/// other content edit, not by re-inspecting the whole document (#6310): on a 567-page file with
+/// 60,102 font resources one word took 2.4 s, the full refresh nearly all of it. The page tree,
+/// comments, fields, links and marks stay as they were; the words are on their page, the font
+/// list picks up the OCR font on `refresh_fonts`, undo and redo take the words out and back
+/// without a full refresh either, and a save keeps them.
+#[test]
+fn ocr_words_refresh_only_the_page_content_they_add() {
+    use crate::ocr::{OcrPage, PlacedWord};
+    let (mut s, id) = session_with(3);
+    let words_on = |s: &Session, page: usize| s.get(id).unwrap().text_lines(page).iter().map(|l| l.text.trim().to_string()).collect::<Vec<_>>();
+    let before = s.get(id).unwrap();
+    let view = format!("{:?}", (&before.info.pages, &before.info.annotations, &before.info.fields, &before.links, before.marks()));
+    let others = (words_on(&s, 0), words_on(&s, 2));
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")));
+    take_full_refreshes();
+    let word = PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0] };
+    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None }]).unwrap(), 1);
+    assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
+    let after = s.get(id).unwrap();
+    assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "{:?}", words_on(&s, 1));
+    assert_eq!((words_on(&s, 0), words_on(&s, 2)), others, "the other pages are untouched");
+    s.refresh_fonts(id);
+    let d = s.get(id).unwrap();
+    let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
+    assert_eq!(format!("{:?}", d.info.fonts), format!("{:?}", full.fonts), "the font list is what a full inspection reads");
+    assert_eq!(d.info.file_size, full.file_size);
+    s.undo(id).unwrap();
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")), "undo takes the words out");
+    s.redo(id).unwrap();
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "redo puts them back");
+    assert_eq!(take_full_refreshes(), 0, "undo and redo refresh the content alone too");
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert!(reopened.get(rid).unwrap().text_lines(1).iter().any(|l| l.text.trim() == "HELLO"), "the save keeps the words");
+}
+
 /// A content edit can add a font (Add text in Times); the narrow refresh leaves the font list
 /// as it was, and `refresh_fonts` reads it again before Properties ▸ Fonts or `doc_info` show it.
 #[test]
