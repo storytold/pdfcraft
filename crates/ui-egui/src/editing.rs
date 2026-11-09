@@ -139,11 +139,17 @@ impl PdfCraftApp {
         // for the version they signed, but viewers show that the document was changed after
         // signing, and a certified document may allow only some changes. Once confirmed, the
         // document's later changes are not asked about again. The edit waits for the answer.
-        if !self.signed_edits_confirmed.contains(&id) && self.session.get(id).is_some_and(|d| d.signatures.iter().any(|s| s.signed)) {
+        if self.asks_before_changing(id) {
             self.pending_signed_edit = Some((id, edit));
             self.dialog = Some(crate::Dialog::SignedEdit);
             return false;
         }
+        self.apply_edit_now(i, id, edit)
+    }
+
+    /// [`Self::apply_edit`] once the signed-document question is out of the way: tab `i` shows
+    /// document `id`.
+    fn apply_edit_now(&mut self, i: usize, id: pdfcraft_engine::DocId, edit: Edit) -> bool {
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -258,16 +264,7 @@ impl PdfCraftApp {
                 // own backdrop stays off, or places applied redactions left holding the removed text
                 // (the Apply redactions dialog then says it after its count): said, not silent.
                 // Before the scripts' output, so an alert they raise still shows.
-                if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(match &n {
-                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
-                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
-                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
-                        }
-                    });
-                }
+                self.notify_edit_notice(id);
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
                 true
@@ -293,6 +290,18 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
+        }
+    }
+
+    /// Say the first notice document `id`'s last edit left ([`pdfcraft_engine::EditNotice`]).
+    fn notify_edit_notice(&mut self, id: pdfcraft_engine::DocId) {
+        if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
+            self.notify(match &n {
+                pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                pdfcraft_engine::EditNotice::RedactionIdentification(id) => crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string()),
+            });
         }
     }
 
@@ -807,6 +816,12 @@ impl PdfCraftApp {
             view.forms.focus = Some(draft);
         }
         false
+    }
+
+    /// Whether a change to document `id` asks first (#2168): it is signed, and no change to it has
+    /// been confirmed yet.
+    fn asks_before_changing(&self, id: pdfcraft_engine::DocId) -> bool {
+        !self.signed_edits_confirmed.contains(&id) && self.session.get(id).is_some_and(|d| d.signatures.iter().any(|s| s.signed))
     }
 
     /// Whether document `id`'s change waits on the signed-document question (`Dialog::SignedEdit`).
