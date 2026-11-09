@@ -118,6 +118,16 @@ impl<'a> Inspector<'a> {
         let mut comments_full = false;
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
+            // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
+            // a font or other dictionary a page lists among its annotations isn't one, and neither is
+            // one whose `/Type` isn't a name at all. A null or dangling `/Type` counts as absent
+            // (§7.3.9: a null value is the same as leaving the entry out).
+            if let Ok(t) = d.get(b"Type").map(|t| self.resolve(t))
+                && !matches!(t, Object::Null | Object::Reference(_))
+                && t.as_name().ok() != Some(b"Annot".as_slice())
+            {
+                continue;
+            }
             let Some(subtype) = self.name(d, b"Subtype") else { continue };
             if subtype == "FileAttachment"
                 && let Ok(fs) = d.get(b"FS")
@@ -370,14 +380,14 @@ impl<'a> Inspector<'a> {
         o: &'a Object,
         parent: Option<(&str, Option<String>, Option<i64>)>,
         out: &mut Vec<Field>,
-        seen: &mut HashSet<ObjectId>,
+        walk: &mut FieldWalk,
         depth: u32,
     ) {
         if depth > 32 {
             return;
         }
         if let Object::Reference(id) = o
-            && !seen.insert(*id)
+            && !walk.seen.insert(*id)
         {
             return;
         }
@@ -396,10 +406,16 @@ impl<'a> Inspector<'a> {
             Ok(Object::Array(k)) => k.as_slice(),
             _ => &[],
         };
-        let field_kids: Vec<_> = kids.iter().filter(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok())).collect();
+        let (field_kids, widget_kids): (Vec<&Object>, Vec<&Object>) = kids.iter().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.into_iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
+            let id = if let Object::Reference(id) = o { Some(*id) } else { None };
+            walk.path.extend(id);
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, seen, depth + 1);
+                self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+            }
+            if id.is_some() {
+                walk.path.pop();
             }
             return;
         }
@@ -429,12 +445,65 @@ impl<'a> Inspector<'a> {
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
-        // The widget is either this dict (merged field/widget) or its first kid.
-        let widget = if d.get(b"Rect").is_ok() { Some(d) } else { kids.first().and_then(|k| self.dict(k)) };
-        let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, kids));
+        // The widget is either this dict (merged field/widget) or its first kid. With no widget
+        // among its kids, it is the first page widget naming this field as its `/Parent`: a child
+        // names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and PDFium read it.
+        let merged = d.get(b"Rect").is_ok();
+        let named = if merged || !widget_kids.is_empty() { None } else { self.widget_naming(o) };
+        let widget = if merged {
+            Some(d)
+        } else {
+            widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok()))
+        };
+        let page = widget
+            .and_then(|w| w.get(b"P").ok())
+            .and_then(|p| self.page_of(p))
+            .or_else(|| self.find_widget_page(o, kids))
+            .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
+    }
+
+    /// Whether `k`, listed in the `/Kids` of field `o`, is not a child of `o` after all: `o` itself
+    /// or a field `o` descends from (a loop), or a root field (one `/Fields` lists) that doesn't
+    /// name `o` as its `/Parent`. Root fields have no ancestors (ISO 32000-2 §12.7.3, Table 224),
+    /// and a child names its parent (§12.7.4.1, Table 226).
+    fn not_a_child(&self, walk: &FieldWalk, o: &Object, k: &Object) -> bool {
+        let Object::Reference(k) = k else { return false };
+        let parent = self.dict(&Object::Reference(*k)).and_then(|d| match d.get(b"Parent") {
+            Ok(Object::Reference(p)) => Some(*p),
+            _ => None,
+        });
+        let o = if let Object::Reference(o) = o { Some(*o) } else { None };
+        o == Some(*k) || walk.path.contains(k) || (walk.roots.contains(k) && (o.is_none() || parent != o))
+    }
+
+    /// The first page widget that names field `o` as its `/Parent` and is not a field of its own
+    /// (no `/T`), in page-annotation order.
+    fn widget_naming(&self, o: &Object) -> Option<ObjectId> {
+        let Object::Reference(id) = o else { return None };
+        self.parent_widgets.get_or_init(|| self.parent_widgets()).get(id).copied()
+    }
+
+    /// The first page widget (no `/T`) naming each field as its `/Parent`, in page-annotation order.
+    fn parent_widgets(&self) -> HashMap<ObjectId, ObjectId> {
+        let mut first = HashMap::new();
+        for &pid in &self.page_ids {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                let Object::Reference(id) = a else { continue };
+                let Ok(w) = self.doc.get_dictionary(*id) else { continue };
+                if self.name(w, b"Subtype").as_deref() != Some("Widget") || w.get(b"T").is_ok() {
+                    continue;
+                }
+                if let Ok(Object::Reference(parent)) = w.get(b"Parent") {
+                    first.entry(*parent).or_insert(*id);
+                }
+            }
+        }
+        first
     }
 
     /// The first page whose `/Annots` lists the field or one of its kids.
@@ -458,7 +527,7 @@ impl<'a> Inspector<'a> {
         pages
     }
 
-    /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
+    /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
     /// ancestor is already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
     pub(super) fn unlisted_field(&self, id: ObjectId, seen: &HashSet<ObjectId>) -> Option<ObjectId> {
         let mut top = id;
@@ -466,8 +535,10 @@ impl<'a> Inspector<'a> {
         loop {
             let o = Object::Reference(top);
             let d = self.dict(&o)?;
+            // A `/Parent` naming an object the file doesn't hold, or no dictionary, reads as
+            // `null`, the same as no parent (ISO 32000-2 §7.3.9).
             let parent = match d.get(b"Parent") {
-                Ok(Object::Reference(p)) => Some(*p),
+                Ok(Object::Reference(p)) if self.dict(&Object::Reference(*p)).is_some() => Some(*p),
                 _ => None,
             };
             let Some(p) = parent else {
@@ -482,6 +553,15 @@ impl<'a> Inspector<'a> {
             top = p;
         }
     }
+}
+
+/// What one reading of the form's fields keeps: the fields read, the root fields `/Fields` lists,
+/// and the fields whose `/Kids` are being read, outermost first.
+#[derive(Default)]
+pub(super) struct FieldWalk {
+    pub(super) seen: HashSet<ObjectId>,
+    pub(super) roots: HashSet<ObjectId>,
+    path: Vec<ObjectId>,
 }
 
 /// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a

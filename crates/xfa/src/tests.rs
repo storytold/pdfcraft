@@ -147,6 +147,171 @@ fn horizontally_scaled_text_is_written_with_tz_inside_its_own_graphics_state() {
 /// The sample template parses without warnings into what the layout uses: its page areas,
 /// page-number draws, rich-text title, field font, caption and widget border, check box,
 /// date field, radio group, table columns and page break all come through.
+/// Floating fields (XFA 3.3 p. 1222): the template knows which field ids rich text embeds,
+/// whether in a draw, a field's value or its caption; and a field that shows the sheet number
+/// (`sheet(this)+1`, however spaced) or the sheet count plays the page role, as every page is a
+/// sheet of its own on screen. A script that reads `sheet(this)` alone plays none.
+#[test]
+fn the_template_knows_its_floating_fields_and_sheet_roles() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let rich =
+        |id: &str| format!(r#"<exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {}</p></body></exData>"#, span(id));
+    let ready = |id: &str, script: &str| {
+        format!(
+            r#"<field id="{id}" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">{script}</script></event></field>"#
+        )
+    };
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb"><subform>
+{}{}{}
+<draw w="2in" h="0.3in"><value>{}</value></draw>
+<field name="f" w="2in" h="0.3in"><ui><textEdit/></ui><caption><value>{}</value></caption><value>{}</value></field>
+</subform></subform></template>"#,
+        ready("sheet", "this.rawValue = xfa.layout.sheet(this) + 1"),
+        ready("sheets", "this.rawValue = xfa.layout.sheetCount()"),
+        ready("bare", "this.rawValue = xfa.layout.sheet(this)"),
+        rich("inDraw"),
+        rich("inCaption"),
+        rich("inValue"),
+    );
+    let (tpl, _) = parse(&tpl).unwrap();
+    assert_eq!(tpl.embedded.iter().map(String::as_str).collect::<Vec<_>>(), ["inCaption", "inDraw", "inValue"]);
+    assert_eq!(tpl.page_roles, vec![("sheet".to_string(), PageRole::Number), ("sheets".to_string(), PageRole::Count)]);
+}
+
+/// An embedded sheet number is the page's own on every page, not a constant 1, and the sheet
+/// count is the number of pages.
+#[test]
+fn an_embedded_sheet_number_counts_the_pages() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let ready = |id: &str, script: &str| {
+        format!(
+            r#"<field id="{id}" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">{script}</script></event></field>"#
+        )
+    };
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+ {}{}
+ <draw x="0.5in" y="0.2in" w="4in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Sheet {} of {}</p></body></exData></value></draw>
+</pageArea></pageSet>
+<subform name="one" w="7in" h="6in"><draw w="2in" h="0.3in"><value><text>first</text></value></draw></subform>
+<subform name="two" w="7in" h="6in"><draw w="2in" h="0.3in"><value><text>second</text></value></draw></subform>
+</subform></template>"#,
+        ready("sheet", "this.rawValue = xfa.layout.sheet(this)+1"),
+        ready("sheets", "this.rawValue = xfa.layout.sheetCount()"),
+        span("sheet"),
+        span("sheets")
+    );
+    let form = layout_xml(&tpl).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    for (i, page) in form.pages.iter().enumerate() {
+        let shown = texts(page).join(" ");
+        assert!(shown.contains(&format!("Sheet {} of 2", i + 1)), "page {}: {shown}", i + 1);
+    }
+}
+
+/// A FormCalc script names the field `$`, and a field may have a ready script that does
+/// something else before the one that gives the sheet number: both still play the role.
+#[test]
+fn sheet_roles_are_read_from_formcalc_and_from_any_ready_script() {
+    let tpl = r#"<template><subform name="form" layout="tb">
+<field id="fc" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.sheet($) + 1</script></event></field>
+<field id="fcCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.Sheet($) + 1</script></event></field>
+<field id="jsCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.Sheet(this)+1</script></event></field>
+<field id="fcCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.SheetCount()</script></event></field>
+<field id="jsCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.SheetCount()</script></event></field>
+<field id="second" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui>
+ <event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = 0;</script></event>
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event></field>
+</subform></template>"#;
+    let (tpl, _) = parse(tpl).unwrap();
+    // FormCalc names methods case-insensitively, JavaScript does not.
+    assert_eq!(
+        tpl.page_roles,
+        vec![
+            ("fc".to_string(), PageRole::Number),
+            ("fcCase".to_string(), PageRole::Number),
+            ("fcCount".to_string(), PageRole::Count),
+            ("second".to_string(), PageRole::Number)
+        ]
+    );
+}
+
+/// The data paths of embedded fields are the ones scripts write: a page area's field under the
+/// area, as master pages lay it out; a field in a repeating row by name, whatever its instance.
+#[test]
+fn embedded_fields_are_known_by_the_data_paths_scripts_write() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea w="8in" h="10in"/><medium short="8.5in" long="11in"/>
+ <field name="stamp" id="stamp" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw w="3in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Stamp {}</p></body></exData></value></draw>
+</pageArea></pageSet>
+<subform name="row" layout="tb"><occur min="1" max="-1"/>
+ <field name="amount" id="amount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw w="3in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Amount {}</p></body></exData></value></draw>
+</subform>
+<field name="plain" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+</subform></template>"#,
+        span("stamp"),
+        span("amount")
+    );
+    let (tpl, _) = parse(&tpl).unwrap();
+    let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(tpl.embedded_paths.iter().cloned().collect::<Vec<_>>(), [names(&["form", "row", "amount"]), names(&["front", "stamp"])]);
+    assert!(crate::script::field_is_embedded(&tpl, "front[0].stamp[0]"), "a page area's field");
+    assert!(crate::script::field_is_embedded(&tpl, "form[0].row[3].amount[0]"), "any row");
+    assert!(!crate::script::field_is_embedded(&tpl, "form[0].plain[0]"));
+}
+
+/// Text embedding a field shows the value the data gives it: each row of a repeating subform
+/// its own row's, a page area's field the value scripts write under the area, a multi-select
+/// list its picks, a date in its display picture (XFA 3.3 p. 221) in every row; a row without
+/// data shows the template's default, not the first row's value.
+#[test]
+fn embedded_text_shows_each_instances_data() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let rich = |label: &str, id: &str| {
+        format!(r#"<exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>{label} {}</p></body></exData>"#, span(id))
+    };
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+ <field name="stamp" id="stamp" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw x="0.5in" y="0.2in" w="4in" h="0.3in"><value>{}</value></draw>
+</pageArea></pageSet>
+<subform name="row" layout="tb"><occur min="1" max="-1" initial="3"/>
+ <field name="amount" id="amount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>none</text></value></field>
+ <field name="due" id="due" presence="hidden" w="1in" h="0.2in"><ui><dateTimeEdit/></ui><format><picture>date{{MM/DD/YYYY}}</picture></format></field>
+ <draw w="4in" h="0.3in"><value>{}</value></draw>
+ <draw w="4in" h="0.3in"><value>{}</value></draw>
+</subform>
+<field name="picks" id="picks" presence="hidden" w="1in" h="0.6in"><ui><choiceList open="multiSelect"/></ui><items><text>A</text><text>B</text></items></field>
+<draw w="4in" h="0.6in"><value>{}</value></draw>
+</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data>
+<form><row><amount>10</amount><due>2026-11-04</due></row><row><amount>20</amount><due>2026-12-25</due></row><row/><picks><value>A</value><value>B</value></picks></form>
+<front><stamp>Paid</stamp></front>
+</xfa:data></xfa:datasets></xdp:xdp>"#,
+        rich("Stamp", "stamp"),
+        rich("Amount", "amount"),
+        rich("Due", "due"),
+        rich("Picks", "picks")
+    );
+    let (tpl, _) = parse(&xml).unwrap();
+    let data = parse_datasets(&xml).unwrap();
+    let form = crate::layout::layout(&tpl, Some(&data)).unwrap();
+    let all: Vec<String> = form.pages.iter().flat_map(texts).collect();
+    let joined = all.join(" | ");
+    for want in ["Stamp Paid", "Amount 10", "Amount 20", "Amount none", "Due 11/04/2026", "Due 12/25/2026", "Picks A"] {
+        assert!(joined.contains(want), "{want} in {joined}");
+    }
+    assert!(joined.contains('B'), "both picks: {joined}");
+}
+
 #[test]
 fn the_template_parses_with_fonts_captions_and_rich_text() {
     let (tpl, warnings) = parse(&template(2)).unwrap();
@@ -4700,4 +4865,127 @@ fn a_template_inside_the_data_is_not_the_form() {
     assert!(parse(nested).is_err(), "no template packet");
     let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
     assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
+}
+
+/// A multi-select choice list is bound to a data group of `value` elements, one per pick, and its
+/// value is theirs joined by newlines (XFA 3.3 p. 198). New picks replace the group's `value`
+/// elements, values off the list included, as Acrobat discards them (p. 199): the group was left
+/// as it was, so the old picks came back on reading, in the datasets and in the scripts' data.
+#[test]
+fn a_multi_select_lists_data_group_takes_its_new_picks() {
+    let shell =
+        crate::fixtures::static_shell("<form1><page1><grains><value>rye</value><value>barley</value><value>wheat</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(shell)).unwrap();
+    let path = som_to_path("form1[0].page1[0].grains[0]");
+    assert!(write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written);
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!(data.value_at(&path).as_deref(), Some("wheat\nmillet & oats"));
+    assert_eq!(data.count(&path, "value"), 2, "one value element per pick");
+    assert!(!write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written, "the same picks change nothing");
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some(""), "nothing picked");
+    // Emptied, the group is marked as one (XFA 3.3 p. 150), so it is still written as picks.
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("<grains xfa:dataNode=\"dataGroup\"></grains>"), "{xdp}");
+    assert!(
+        write_data_value(
+            &mut doc,
+            &path,
+            "rye
+millet"
+        )
+        .unwrap()
+        .written
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2, "picks again, not text");
+    // A pick split or led by a comment is read whole: the same pick is no change, and clearing
+    // a pick that reads as empty through its first segment alone still clears it.
+    let commented =
+        crate::fixtures::static_shell("<form1><page1><grains><value><!-- a -->rye</value><value>whe<!-- b -->at</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(commented)).unwrap();
+    assert!(
+        !write_data_value(
+            &mut doc,
+            &path,
+            "rye
+wheat"
+        )
+        .unwrap()
+        .written,
+        "the same picks, read past the comments"
+    );
+    assert_eq!(
+        crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(),
+        Some(
+            "rye
+wheat"
+        ),
+        "and read back without them"
+    );
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written, "cleared");
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 0);
+    // Where `xfa` names another namespace and `pcxfa` is taken too, the marker's prefix is a free
+    // one, declared on the group, so no attribute in scope changes meaning.
+    let shadowed = crate::fixtures::static_shell(
+        "<form1><page1><grains xmlns:xfa=\"urn:other\" xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\"><value>rye</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(shadowed)).unwrap();
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("xmlns:pcxfa1=\"http://www.xfa.org/schema/xfa-data/1.0/\" pcxfa1:dataNode=\"dataGroup\""), "{xdp}");
+    assert!(xdp.contains("xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\""), "the taken prefix keeps its namespace: {xdp}");
+    // With every candidate prefix taken, no marker can be written: the group keeps its pick
+    // and the skip is reported, rather than emptied into what would load as a data value.
+    let taken: String = (0..16).map(|i| if i == 0 { " xmlns:pcxfa=\"urn:t\"".to_string() } else { format!(" xmlns:pcxfa{i}=\"urn:t\"") }).collect();
+    let crowded =
+        crate::fixtures::static_shell(&format!("<form1><page1><grains xmlns:xfa=\"urn:other\"{taken}><value>rye</value></grains></page1></form1>"));
+    let mut doc = Document::open(Arc::new(crowded)).unwrap();
+    let r = write_data_value(&mut doc, &path, "").unwrap();
+    assert!(!r.written && r.warnings.iter().any(|w| w.contains("structured content")), "{:?}", r.warnings);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some("rye"));
+    // One `value` whose text holds a line break is one pick, not the two it would join to.
+    let one = crate::fixtures::static_shell(
+        "<form1><page1><grains><value>one
+two</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(one)).unwrap();
+    assert!(
+        write_data_value(
+            &mut doc, &path, "one
+two"
+        )
+        .unwrap()
+        .written,
+        "two picks replace the one"
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2);
+    // The in-memory data, which scripts read before the packet is written, follows the same rule.
+    let mut tree = crate::script::data_of(
+        &Document::open(Arc::new(crate::fixtures::static_shell("<form1><page1><grains><value>rye</value></grains></page1></form1>"))).unwrap(),
+    )
+    .unwrap();
+    tree.apply(&DataOp::Value { path: path.clone(), text: "millet\nwheat".into() });
+    assert_eq!(tree.value_at(&path).as_deref(), Some("millet\nwheat"));
+    // Emptied in memory, the group still takes picks, not text.
+    tree.apply(&DataOp::Value { path: path.clone(), text: String::new() });
+    assert_eq!((tree.count(&path, "value"), tree.value_at(&path).as_deref()), (0, Some("")));
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!((tree.count(&path, "value"), tree.text_at(&path)), (2, Some("")), "picks again, not text");
+    assert_eq!(tree.value_at(&path).as_deref(), Some("rye\nmillet"));
+    let tree_of = |data: &str| crate::script::data_of(&Document::open(Arc::new(crate::fixtures::static_shell(data))).unwrap()).unwrap();
+    // A group read emptied, as the packet writer marks it, takes picks the same way.
+    let mut tree = tree_of("<form1><page1><grains xfa:dataNode=\"dataGroup\"/></page1></form1>");
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!(tree.count(&path, "value"), 2);
+    // A node holding anything but `value` leaves is not a list's picks: it is left as it was,
+    // as the packet writer leaves it (and reports the skip).
+    for structured in [
+        "<form1><page1><grains><value>rye</value><note>x</note></grains></page1></form1>",
+        "<form1><page1><grains><value><b>rye</b></value></grains></page1></form1>",
+    ] {
+        let mut tree = tree_of(structured);
+        let before = tree.clone();
+        tree.apply(&DataOp::Value { path: path.clone(), text: "millet".into() });
+        assert_eq!(tree, before, "{structured}");
+    }
 }
