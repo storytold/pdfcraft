@@ -81,29 +81,49 @@ fn solve8(mut m: [[f64; 9]; 8]) -> Option<[f64; 8]> {
     Some(out)
 }
 
+/// Axis-aligned `[min_x, min_y, max_x, max_y]` bounding box of finite `points`.
+fn bounds(points: &[Point]) -> Option<[f64; 4]> {
+    let &[first, ref rest @ ..] = points else { return None };
+    if points.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    Some(rest.iter().fold([first[0], first[1], first[0], first[1]], |[x0, y0, x1, y1], &[x, y]| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]))
+}
+
 /// The four corners in reading order for a y-down space (view or raster pixels): top-left,
 /// top-right, bottom-right, bottom-left, whatever order they were given in. `None` unless they
 /// form a convex quadrilateral with a non-negligible area.
 pub fn order_quad(points: [Point; 4]) -> Option<[Point; 4]> {
-    if points.iter().flatten().any(|v| !v.is_finite()) {
+    let [min_x, min_y, max_x, max_y] = bounds(&points)?;
+    let span = max_x - min_x;
+    let rise = max_y - min_y;
+    let size = span.max(rise);
+    if span <= 0.0 || rise <= 0.0 || !size.is_finite() {
         return None;
     }
-    let cx = points.iter().map(|p| p[0]).sum::<f64>() / 4.0;
-    let cy = points.iter().map(|p| p[1]).sum::<f64>() / 4.0;
+    let norm = |p: Point| [(p[0] - min_x) / size, (p[1] - min_y) / size];
+    let cx = points.iter().map(|p| norm(*p)[0]).sum::<f64>() / 4.0;
+    let cy = points.iter().map(|p| norm(*p)[1]).sum::<f64>() / 4.0;
     let mut q = points;
     // Ascending angle about the centre is clockwise on screen (y down): top, right, bottom, left.
-    q.sort_by(|a, b| (a[1] - cy).atan2(a[0] - cx).total_cmp(&(b[1] - cy).atan2(b[0] - cx)));
-    let first = (0..4).min_by(|&a, &b| (q[a][0] + q[a][1]).total_cmp(&(q[b][0] + q[b][1])))?;
+    q.sort_by(|a, b| {
+        let (na, nb) = (norm(*a), norm(*b));
+        (na[1] - cy).atan2(na[0] - cx).total_cmp(&(nb[1] - cy).atan2(nb[0] - cx))
+    });
+    // Score each candidate rotation by its normalised left-edge x and top-edge y.
+    let score = |i: usize| {
+        let (tl, tr, bl) = (q[i], q[(i + 1) % 4], q[(i + 3) % 4]);
+        ((tl[0] - min_x) + (bl[0] - min_x)) / span + ((tl[1] - min_y) + (tr[1] - min_y)) / rise
+    };
+    let first = (0..4).min_by(|&a, &b| score(a).total_cmp(&score(b)))?;
     q.rotate_left(first);
     // Convex, with every turn the same way, and not a sliver.
+    let nq = q.map(norm);
     let cross = |o: Point, a: Point, b: Point| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    let turns: Vec<f64> = (0..4).map(|i| cross(q[i], q[(i + 1) % 4], q[(i + 2) % 4])).collect();
+    let turns: [f64; 4] = std::array::from_fn(|i| cross(nq[i], nq[(i + 1) % 4], nq[(i + 2) % 4]));
     let area = turns.iter().sum::<f64>() / 2.0;
-    let span = q.iter().map(|p| p[0]).fold(f64::MIN, f64::max) - q.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
-    let rise = q.iter().map(|p| p[1]).fold(f64::MIN, f64::max) - q.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-    let size = span.max(rise);
-    let convex = turns.iter().all(|&t| t > 1e-9 * size * size);
-    (convex && area > 1e-6 * size * size).then_some(q)
+    let convex = turns.iter().all(|&t| t > 1e-9);
+    (convex && area > 1e-6).then_some(q)
 }
 
 #[cfg(test)]
@@ -129,6 +149,10 @@ mod tests {
         let r = [[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
         let h = Homography::from_points(r, r).unwrap();
         assert!(close(h.apply([3.0, 7.0]).unwrap(), [3.0, 7.0]));
+
+        let narrow = [[0.0, 0.0], [1e10, 0.0], [1e10, 1.0], [0.0, 1.0]];
+        let h_narrow = Homography::from_points(narrow, narrow).unwrap();
+        assert!(close(h_narrow.apply([5e9, 0.5]).unwrap(), [5e9, 0.5]));
     }
 
     #[test]
@@ -144,6 +168,8 @@ mod tests {
     fn collinear_or_non_finite_points_have_no_transform() {
         let to = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         assert!(Homography::from_points([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0], [3.0, 3.0]], to).is_none());
+        assert!(Homography::from_points(to, [[0.0, 0.0], [1.0, 1.0], [2.75, 2.75], [3.0, 3.0]]).is_none());
+        assert!(Homography::from_points(to, [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0]]).is_none());
         assert!(Homography::from_points([[0.0, 0.0]; 4], to).is_none());
         assert!(Homography::from_points([[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], to).is_none());
         assert!(Homography::from_points([[f64::INFINITY, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], to).is_none());
@@ -155,7 +181,7 @@ mod tests {
         let tr = [200.0, 5.0];
         let br = [210.0, 300.0];
         let bl = [0.0, 290.0];
-        for q in [[br, tl, bl, tr], [bl, br, tr, tl], [tl, tr, br, bl], [tr, bl, tl, br]] {
+        for q in [[br, tl, bl, tr], [bl, br, tr, tl], [tl, tr, br, bl], [tl, bl, br, tr], [tr, bl, tl, br]] {
             assert_eq!(order_quad(q), Some([tl, tr, br, bl]), "{q:?}");
         }
     }
@@ -164,8 +190,33 @@ mod tests {
     fn concave_degenerate_or_non_finite_quads_are_refused() {
         // A dart: one corner inside the triangle of the other three.
         assert_eq!(order_quad([[0.0, 0.0], [100.0, 0.0], [20.0, 20.0], [0.0, 100.0]]), None);
+        assert_eq!(order_quad([[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 100.0]]), None);
+        assert_eq!(order_quad([[0.0, 0.0], [100.0, 0.0], [100.0, 0.0], [0.0, 100.0]]), None);
         assert_eq!(order_quad([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]]), None);
         assert_eq!(order_quad([[5.0, 5.0]; 4]), None);
         assert_eq!(order_quad([[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]), None);
+    }
+
+    #[test]
+    fn foreshortened_tilted_and_large_scale_quads_order_correctly() {
+        // A landscape page photographed from below has a foreshortened top edge where
+        // bl[0] + bl[1] (500) < tl[0] + tl[1] (550), yet tl is still top-left.
+        let (tl, tr, br, bl) = ([250.0, 300.0], [550.0, 300.0], [800.0, 500.0], [0.0, 500.0]);
+        assert_eq!(order_quad([br, tl, bl, tr]), Some([tl, tr, br, bl]));
+
+        // A narrow portrait strip tilted counter-clockwise has tr[0] + tr[1] (90) < tl[0] + tl[1] (120),
+        // yet tl is still top-left.
+        let (tl, tr, br, bl) = ([20.0, 100.0], [80.0, 10.0], [140.0, 400.0], [80.0, 490.0]);
+        assert_eq!(order_quad([tr, bl, tl, br]), Some([tl, tr, br, bl]));
+
+        // A foreshortened portrait quad where bl sits at x = 0 and y = 60 while tl sits at [40, 0]
+        // still orders [40, 0] as top-left.
+        let (tl, tr, br, bl) = ([40.0, 0.0], [100.0, 10.0], [100.0, 200.0], [0.0, 60.0]);
+        assert_eq!(order_quad([bl, br, tr, tl]), Some([tl, tr, br, bl]));
+
+        // Large finite coordinates where `size * size` would overflow f64 still order cleanly.
+        let s = 1e160;
+        let (tl, tr, br, bl) = ([0.0, 0.0], [s, 0.0], [s, s], [0.0, s]);
+        assert_eq!(order_quad([bl, tr, br, tl]), Some([tl, tr, br, bl]));
     }
 }
