@@ -1,5 +1,5 @@
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, nest_rows, security, summary};
+use super::json::{Args, destination, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
 use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
 
@@ -35,6 +35,39 @@ impl Automation {
             .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
         let pages = &self.doc(a)?.info.pages;
         Ok(json!({ "bookmarks": nest_rows(&page.rows, pages), "next": page.next, "truncated": page.truncated }))
+    }
+
+    /// `destination_list`: every named destination, with its 1-based page and where on it it goes.
+    pub(crate) fn destination_listing(&self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let rows = self
+            .session
+            .named_destinations(doc.id)
+            .ok_or_else(|| ToolError::Failed("this document's structure could not be read, so its named destinations cannot be listed".into()))?;
+        let pages = &doc.info.pages;
+        let list: Vec<Value> = rows
+            .iter()
+            .map(|d| {
+                let mut row = json!({ "name": d.name, "page": d.page.map(|p| p.saturating_add(1)) });
+                if let Some(destination) = d.page.and_then(|p| pages.get(p)).and_then(|p| destination(&d.view, p)) {
+                    row["destination"] = destination;
+                }
+                row
+            })
+            .collect();
+        Ok(json!({ "destinations": list }))
+    }
+
+    /// A bookmark's or destination's `left` and `top` arguments (points from the top-left of
+    /// displayed page `page`) as the user-space point it goes to; a coordinate left out stays
+    /// `None`.
+    pub(crate) fn view_point(&self, a: &Args, page: usize) -> Result<(Option<f64>, Option<f64>)> {
+        let (left, top) = (a.bookmark_coordinate("left")?, a.bookmark_coordinate("top")?);
+        let [left, top] = match self.doc(a)?.info.pages.get(page) {
+            Some(p) => p.xyz_for_view(left, top),
+            None => [None, None],
+        };
+        Ok((left.map(f64::from), top.map(f64::from)))
     }
 
     pub(crate) fn doc(&self, a: &Args) -> Result<&Document> {

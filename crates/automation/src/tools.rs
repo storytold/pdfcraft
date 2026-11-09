@@ -42,6 +42,22 @@ fn path(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": format!("{what}: 1-based positions from the top level, e.g. [2, 1] = the first child of the second bookmark.") })
 }
 
+/// A named destination's name, as destination_list gives it.
+fn destination_name(what: &str) -> Value {
+    json!({ "type": "string", "minLength": 1, "maxLength": pdfcraft_organize::MAX_DESTINATION_NAME, "description": format!("{what}: a named destination's name, as destination_list gives it.") })
+}
+
+/// destination_add's and destination_set's arguments: the destination and the place it goes to.
+fn destination_place(what: &str) -> Value {
+    json!({
+        "doc": doc(),
+        "name": destination_name(what),
+        "page": { "type": "integer", "minimum": 1 },
+        "top": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the top of the displayed page." },
+        "left": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the left of the displayed page." }
+    })
+}
+
 fn path_arg() -> Value {
     json!({ "type": "string", "description": "A file path (relative to --root when set)." })
 }
@@ -455,6 +471,38 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("bookmark_set_page", "Set a bookmark's page", "Point a bookmark at another page. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "page": { "type": "integer", "minimum": 1 } }), &["doc", "path", "page"])),
+        t(
+            "destination_list",
+            "List named destinations",
+            "The document's named destinations (Acrobat's Destinations panel; ISO 32000-2 §12.3.2.4), sorted by name: each with its name, the page it goes to (1-based, null when it names no page of this document) and, when it says, where on the page (destination, as bookmark_list reports it). Those of the catalog's PDF 1.1 /Dests dictionary are listed too; a name in both is listed once.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "destination_add",
+            "Add a named destination",
+            "Name a place in the document, as Destinations panel ▸ New Destination does, so links, bookmarks and URLs (file.pdf#nameddest=name) can go to it. It goes to the top of the page, or to a place on it: top and left are points from the top-left of the displayed page, each optional, and a coordinate left out keeps the reader's position that way. The reader's zoom is kept. Refused when a destination already has the name. Undoable.",
+        )
+        .with(schema(destination_place("Its name"), &["doc", "name", "page"])),
+        t(
+            "destination_set",
+            "Set a named destination",
+            "Send a named destination to another place, as Destinations panel ▸ Set Destination does: page, top and left as destination_add takes them. Undoable.",
+        )
+        .with(schema(destination_place("The destination"), &["doc", "name", "page"])),
+        t(
+            "destination_rename",
+            "Rename a named destination",
+            "Give a named destination another name, as Destinations panel ▸ Rename does; where it goes is kept. The document's own links, bookmarks and actions that name it take the new name; links from other files and URLs keep the old one. Refused when another destination has the new name. Undoable.",
+        )
+        .with(schema(json!({ "doc": doc(), "name": destination_name("The destination"), "new_name": destination_name("Its new name") }), &["doc", "name", "new_name"])),
+        t(
+            "destination_delete",
+            "Delete a named destination",
+            "Remove a named destination, as Destinations panel ▸ Delete does. The document's own links, bookmarks and actions that name it go to where it went instead; links from other files and URLs then go nowhere. Undoable.",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": destination_name("The destination") }), &["doc", "name"])),
         t(
             "bookmark_set_style",
             "Set a bookmark's style and colour",
