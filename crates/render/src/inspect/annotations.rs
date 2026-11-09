@@ -406,7 +406,8 @@ impl<'a> Inspector<'a> {
             Ok(Object::Array(k)) => k.clone(),
             _ => Vec::new(),
         };
-        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) = kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
+            kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
         let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
             let here = match o {
