@@ -252,7 +252,7 @@ pub struct ProofOptions {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use pdfcraft_content::parse;
-    use pdfcraft_cos::{Dict, Object, Stream};
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
 
     use super::extract::{carries_glyphs, parse_cmap};
     use super::limits::{MAX_STREAM, MAX_TOTAL_DECODED, MAX_WORK, MIN_STRUCTURED_NEEDLE};
@@ -308,9 +308,9 @@ pub(crate) mod tests_support {
     pub fn decode_budget_runs_out() -> (bool, bool) {
         let ctx = Ctx::new(Default::default());
         let s = Stream::from_raw(Dict::new(), vec![0u8; 100]);
-        let before = ctx.decode(&s).is_ok();
+        let before = ctx.decode(&Document::new_empty(), &s).is_ok();
         let spent = Ctx::with_decode_left(50);
-        (before, spent.decode(&s).is_err())
+        (before, spent.decode(&Document::new_empty(), &s).is_err())
     }
 
     /// Does a decode that fails past the one-stream cap pay for the attempt, so the same bomb
@@ -322,9 +322,9 @@ pub(crate) mod tests_support {
         drop(big);
         let small = Stream::from_raw(Dict::new(), vec![0u8; 100]);
         let ctx = Ctx::with_decode_left(u64::try_from(MAX_STREAM + 50).unwrap_or(u64::MAX));
-        let refused = ctx.decode(&bomb).is_err();
+        let refused = ctx.decode(&Document::new_empty(), &bomb).is_err();
         let charged = ctx.decoded.get() == MAX_TOTAL_DECODED - 50;
-        let gone = ctx.decode(&small).is_err();
+        let gone = ctx.decode(&Document::new_empty(), &small).is_err();
         (refused, charged, gone)
     }
 

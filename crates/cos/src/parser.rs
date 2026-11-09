@@ -502,14 +502,19 @@ fn parse_indirect_in(
             let mut after = Lexer::new(data, end);
             after.eat_keyword(b"endstream")
         };
+        // A /Length that fits in the file, for a stream whose `endstream` is missing or misspelt.
+        let fits = declared.and_then(|l| usize::try_from(l).ok()).filter(|l| start.checked_add(*l).is_some_and(|end| end <= data.len()));
         let len = match declared {
             Some(l) if valid(l) => l as usize,
-            // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery).
-            _ => {
-                find_endstream(data, start, endstreams)
-                    .ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?
-                    - start
-            }
+            // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery). With none
+            // left in the file, a /Length that fits is the stream's extent, "how many bytes of the
+            // PDF file are used for the stream's data" (ISO 32000-2 §7.3.8.2), as other readers
+            // take it: a producer that wrote `endstrea` after every stream lost every font and
+            // every page's content.
+            _ => match find_endstream(data, start, endstreams) {
+                Some(end) => end - start,
+                None => fits.ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?,
+            },
         };
         let range = start..start + len;
         let raw = match shared {
@@ -658,6 +663,24 @@ mod tests {
         let Object::Stream(s) = o else { panic!("stream expected") };
         assert_eq!(&s.raw[..], b"HELLO");
         assert_eq!(s.dict.int(b"Length"), Some(5));
+    }
+
+    /// With no `endstream` left in the file, as a producer that writes `endstrea` leaves every
+    /// stream, a stream is the bytes its /Length gives, "how many bytes of the PDF file are used
+    /// for the stream's data" (ISO 32000-2 §7.3.8.2): it was an error, and the object null, so
+    /// such a file lost every font and page content. A /Length past the file, or none, is still
+    /// no stream.
+    #[test]
+    fn indirect_stream_without_endstream_is_its_length() {
+        for end in [&b"\r\nendstrea\rendobj\r\n"[..], b"\nendobj\n", b""] {
+            let mut data = b"7 0 obj\n<< /Length 5 >>\nstream\r\nHELLO".to_vec();
+            data.extend_from_slice(end);
+            let (_, o) = parse_indirect(&data, 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(&s.raw[..], b"HELLO", "{end:?}");
+        }
+        assert!(parse_indirect(b"7 0 obj\n<< /Length 6 >>\nstream\nHELLO", 0, &|_| None).is_err(), "past the file");
+        assert!(parse_indirect(b"7 0 obj\n<< >>\nstream\nHELLO\nendstrea\nendobj\n", 0, &|_| None).is_err(), "no /Length");
     }
 
     #[test]

@@ -127,6 +127,12 @@ impl PdfCraftApp {
                     "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
+            // Default font sizes of new text boxes and callouts (#5767).
+            "comment_font_sizes": self
+                .comment_prefs
+                .font_sizes()
+                .map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size }))
+                .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -421,6 +427,16 @@ impl PdfCraftApp {
                 }
                 if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
                     self.comment_prefs.set_border_shape(tool, shape);
+                }
+            }
+        }
+        // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
+        // the tool's own.
+        if let Some(sizes) = v["comment_font_sizes"].as_array() {
+            for e in sizes {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(size) = e["font_size"].as_f64() {
+                    self.comment_prefs.set_font_size(tool, size);
                 }
             }
         }
