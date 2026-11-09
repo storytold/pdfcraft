@@ -8814,6 +8814,10 @@ mod icc_profile_cache;
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
+// A TrueType font whose `head.indexToLocFormat` is out of range reads `loca` in the format its
+// length gives (vendored hayro-interpret patch 83).
+mod truetype_loca_format;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
