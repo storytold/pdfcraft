@@ -2091,6 +2091,125 @@ fn rounded_pixel_budget_invalid_requests_never_reach_allocator() {
     }
 }
 
+/// #3962: FrameMaker files distilled with Distiller 3 embed TrueType subsets that are symbolic,
+/// with no `/Encoding` and no `/ToUnicode`, whose codes are glyph positions in the Macintosh
+/// order, 29 below ASCII; the font's own `cmap` maps them to the right glyphs. Read as WinAnsi
+/// the text came out shifted (`Solid` as `6ROLG`), in the editor and in Word export alike. The
+/// `post` table names the glyph each code selects, which gives the text (vendored
+/// hayro-interpret patch 79). A font with an `/Encoding` still reads its codes through it.
+#[test]
+fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
+    use skrifa::MetadataProvider;
+    use skrifa::raw::TableProvider;
+    const TEXT: &str = "Solid state";
+    // Four more codes: 0x3D selects `W.cv07`, a variant whose suffix is dropped (`W`); 0x3E a
+    // glyph named `uniXXXX`, that code point; 0x3F `EMquad`, a name with no text, so the code
+    // reads as WinAnsi (`?`); 0x40 the ligature `less_equal.liga`, two characters (`<=`).
+    const SUFFIXED: u16 = 0x3D;
+    const UNI: u16 = 0x3E;
+    const UNNAMED: u16 = 0x3F;
+    const LIGATURE: u16 = 0x40;
+    // 0x41 selects a glyph whose name is spelt `uni01cd`, lowercase: the glyph list
+    // specification's hex digits are uppercase (ISO 32000-2 §9.10.2), so the name stands for no
+    // text and the code reads as WinAnsi (`A`), not as U+01CD.
+    const LOWERCASE: u16 = 0x41;
+    let font = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+    let face = skrifa::FontRef::new(font).expect("the test font parses");
+    let charmap = face.charmap();
+    let post = face.post().expect("the test font has a post table");
+    let glyphs = face.maxp().expect("the test font has a maxp table").num_glyphs();
+    let named = |name: &str| {
+        (1..glyphs).find(|&g| post.glyph_name(skrifa::raw::types::GlyphId16::new(g)) == Some(name)).expect("the test font has the glyph")
+    };
+    let (uni, uni_char) = (1..glyphs)
+        .find_map(|g| {
+            let name = post.glyph_name(skrifa::raw::types::GlyphId16::new(g))?;
+            let c = char::from_u32(u32::from_str_radix(name.strip_prefix("uni")?, 16).ok()?)?;
+            (!c.is_control()).then_some((g, c))
+        })
+        .expect("the test font names a glyph uniXXXX");
+    // Codes 29 below ASCII, mapped by a (3,0) symbol cmap at 0xF000 + code.
+    let mut map: Vec<(u16, u16)> =
+        TEXT.chars().map(|c| (0xF000 + c as u16 - 29, charmap.map(c).expect("the test font has the letter").to_u32() as u16)).collect();
+    map.push((0xF000 + SUFFIXED, named("W.cv07")));
+    map.push((0xF000 + UNI, uni));
+    map.push((0xF000 + UNNAMED, named("EMquad")));
+    map.push((0xF000 + LIGATURE, named("less_equal.liga")));
+    let lowercase = named("uni01CD");
+    assert_ne!(lowercase, uni, "the lowercased name is not the `uniXXXX` glyph read above");
+    map.push((0xF000 + LOWERCASE, lowercase));
+    map.sort_unstable();
+    map.dedup();
+    // A format 4 subtable: one segment per code, then the closing 0xFFFF segment.
+    let segments: Vec<(u16, u16)> = map.iter().copied().chain([(0xFFFF, 0)]).collect();
+    let n = segments.len() as u16;
+    let mut sub = Vec::new();
+    let words = |v: &mut Vec<u8>, w: &[u16]| w.iter().for_each(|w| v.extend_from_slice(&w.to_be_bytes()));
+    words(&mut sub, &[4, 16 + 8 * n, 0, 2 * n, 2, 0, 2 * n - 2]);
+    words(&mut sub, &segments.iter().map(|s| s.0).collect::<Vec<_>>());
+    words(&mut sub, &[0]);
+    words(&mut sub, &segments.iter().map(|s| s.0).collect::<Vec<_>>());
+    words(&mut sub, &segments.iter().map(|&(code, gid)| if code == 0xFFFF { 1 } else { gid.wrapping_sub(code) }).collect::<Vec<_>>());
+    words(&mut sub, &vec![0; segments.len()]);
+    let mut cmap = Vec::new();
+    words(&mut cmap, &[0, 1, 3, 0]);
+    cmap.extend_from_slice(&12u32.to_be_bytes());
+    cmap.extend(sub);
+    // The new cmap goes at the end; the table directory's `cmap` entry points at it.
+    let mut program = font.to_vec();
+    while !program.len().is_multiple_of(4) {
+        program.push(0);
+    }
+    let at = program.len();
+    program.extend(&cmap);
+    let tables = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let entry = (0..tables).map(|i| 12 + 16 * i).find(|&e| &font[e..e + 4] == b"cmap").expect("the test font has a cmap");
+    program[entry + 8..entry + 12].copy_from_slice(&(at as u32).to_be_bytes());
+    program[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+    // The `post` table's own spelling of the name, a Pascal string, lowercased in place.
+    let spelt = b"\x07uni01CD";
+    let spot = program.windows(spelt.len()).position(|w| w == spelt).expect("the post table spells the name");
+    assert_eq!(program.windows(spelt.len()).filter(|w| w == spelt).count(), 1);
+    program[spot..spot + spelt.len()].copy_from_slice(b"\x07uni01cd");
+
+    let text_of = |encoding: &str| -> String {
+        let codes: String = TEXT.chars().map(|c| format!("{:02X}", c as u8 - 29)).collect::<String>()
+            + &format!("{SUFFIXED:02X}{UNI:02X}{UNNAMED:02X}{LIGATURE:02X}{LOWERCASE:02X}");
+        let content = format!("BT /F1 14 Tf 10 40 Td <{codes}> Tj ET");
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+            format!("<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+JetBrainsMono-Regular /FirstChar 0 /LastChar 255 /Widths [{}] /FontDescriptor 6 0 R {encoding}>>", vec!["600"; 256].join(" ")).into_bytes(),
+            b"<< /Type /FontDescriptor /FontName /ABCDEF+JetBrainsMono-Regular /Flags 4 /FontBBox [-500 -300 1200 1000] /ItalicAngle 0 /Ascent 1020 /Descent -300 /CapHeight 730 /StemV 80 /FontFile2 7 0 R >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", program.len()).into_bytes(), program.clone(), b"\nendstream".to_vec()].concat(),
+        ];
+        let mut pdf = b"%PDF-1.3\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            pdf.extend(object);
+            pdf.extend(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for offset in offsets {
+            pdf.extend(format!("{offset:010} 00000 n \n").into_bytes());
+        }
+        pdf.extend(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).into_bytes());
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.filtered_text(0, crate::text::TextFilter::default()).expect("the page has text");
+        page.glyphs.iter().map(|g| g.text.as_str()).collect()
+    };
+    assert_eq!(text_of(""), format!("Solid stateW{uni_char}?<=A"));
+    // An encoding says what the codes are, so they read through it.
+    assert_eq!(text_of("/Encoding /WinAnsiEncoding "), "6ROLGVWDWH=>?@A");
+    // `/Differences` still names its code: 0x36 reads `A`, not the glyph's `S`.
+    assert_eq!(text_of("/Encoding << /Differences [54 /A] >> "), format!("Aolid stateW{uni_char}?<=A"));
+}
+
 /// Issue #102: an A4 page (595.28×841.89 pt) rendered 595×841 at 72 dpi, dropping the last
 /// partial row and column. Like pdftoppm it is now 596×842, the edge pixels partly covered.
 #[test]
@@ -2767,6 +2886,126 @@ trailer << /Root 1 0 R >>
     assert_eq!(px(RenderConfig::default()), vec![255, 0, 0, 255], "layer is on by default");
     let off = RenderConfig { layers: Arc::new(vec![(5, 0, false)]), ..Default::default() };
     assert_eq!(px(off), vec![255, 255, 255, 255], "toggled-off layer must not draw");
+}
+
+/// A page whose red square is in group 5 0 R (`ocg` its dictionary), under the default
+/// configuration `config`; `extra` adds objects from number 8.
+fn auto_state_pdf(ocg: &str, config: &str, extra: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> >> endobj
+4 0 obj << /Length 44 >> stream
+/OC /L1 BDC 1 0 0 rg 0 0 100 100 re f EMC
+endstream endobj
+5 0 obj {ocg} endobj
+{extra}
+trailer << /Root 1 0 R >>
+%%EOF"
+    )
+    .into_bytes()
+}
+
+/// Whether the red square in group 5 0 R draws.
+fn auto_state_red(pdf: Vec<u8>, config: RenderConfig) -> bool {
+    let mut r = PageRenderer::new(Arc::new(pdf), config);
+    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() });
+    p.rgba.get(..4) == Some(&[255, 0, 0, 255][..])
+}
+
+const VIEW_OFF: &str = "<< /Type /OCG /Name (A) /Usage << /View << /ViewState /OFF >> >> >>";
+const VIEW_ON: &str = "<< /Type /OCG /Name (A) /Usage << /View << /ViewState /ON >> >> >>";
+const AS_VIEW: &str = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R] >>]";
+
+/// ISO 32000-2 §8.11.4.4: the configuration's auto state (`/AS`) sets a group's state for
+/// the View event from its usage, over `/BaseState`, `/ON` and `/OFF`. It was ignored, so a
+/// group whose `/ViewState` is OFF still drew on screen.
+#[test]
+fn the_view_auto_state_sets_a_groups_state_on_screen() {
+    let shown = |ocg: &str, config: &str| auto_state_red(auto_state_pdf(ocg, config, ""), RenderConfig::default());
+    assert!(!shown(VIEW_OFF, &format!("<< {AS_VIEW} >>")), "ViewState OFF, managed: hidden");
+    assert!(shown(VIEW_OFF, "<< >>"), "no /AS: the usage alone changes nothing");
+    assert!(shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/View] /OCGs [] >>] >>"), "not listed in /OCGs");
+    assert!(shown(VIEW_ON, &format!("<< /OFF [5 0 R] {AS_VIEW} >>")), "ViewState ON wins over /OFF");
+    assert!(shown(VIEW_ON, &format!("<< /BaseState /OFF {AS_VIEW} >>")), "and over /BaseState /OFF");
+    assert!(!shown(VIEW_ON, "<< /OFF [5 0 R] >>"), "without /AS, /OFF decides");
+    // The View event only, and the View category only.
+    assert!(shown(VIEW_OFF, "<< /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R] >>] >>"), "Print event: not on screen");
+    assert!(shown(VIEW_OFF, "<< /AS [<< /Event /Export /Category [/View] /OCGs [5 0 R] >>] >>"), "Export event: not on screen");
+    assert!(shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/Print] /OCGs [5 0 R] >>] >>"), "a category without a View entry");
+    // A category it cannot evaluate gives no recommendation; the View one still applies.
+    assert!(!shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/Zoom /View] /OCGs [5 0 R] >>] >>"), "Zoom alongside View");
+    let zoomed = "<< /Type /OCG /Name (A) /Usage << /Zoom << /min 4 >> >> >>";
+    assert!(shown(zoomed, "<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), "Zoom alone: unchanged");
+    // Indirect applications, arrays and usage dictionaries are followed.
+    let indirect = "<< /Type /OCG /Name (A) /Usage 10 0 R >>";
+    let extra = "8 0 obj [9 0 R] endobj\n9 0 obj << /Event /View /Category [/View] /OCGs 11 0 R >> endobj\n10 0 obj << /View << /ViewState /OFF >> >> endobj\n11 0 obj [5 0 R] endobj";
+    assert!(!auto_state_red(auto_state_pdf(indirect, "<< /AS 8 0 R >>", extra), RenderConfig::default()), "indirect");
+}
+
+/// The Layers panel's toggles still decide over the auto state, and a render for printing
+/// does not apply it (printing is not the View event).
+#[test]
+fn layer_toggles_and_print_renders_are_not_the_view_auto_state() {
+    let pdf = auto_state_pdf(VIEW_OFF, &format!("<< {AS_VIEW} >>"), "");
+    let on = RenderConfig { layers: Arc::new(vec![(5, 0, true)]), ..Default::default() };
+    assert!(auto_state_red(pdf.clone(), on), "toggled on in the Layers panel");
+    assert!(auto_state_red(pdf.clone(), RenderConfig { for_print: true, ..Default::default() }), "printed: its configured state");
+    assert!(!auto_state_red(pdf, RenderConfig::default()), "on screen: hidden");
+}
+
+/// A print preview ([`PRINT_TAG`], with or without the canvas's scale and grayscale bits)
+/// shows what prints, so the View auto state is not applied to it either.
+#[test]
+fn print_previews_are_not_the_view_auto_state() {
+    let pdf = Arc::new(auto_state_pdf(VIEW_OFF, &format!("<< {AS_VIEW} >>"), ""));
+    let mut r = PageRenderer::new(pdf, RenderConfig::default());
+    for tag in [PRINT_TAG, PRINT_TAG | 1 << 59 | 7] {
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag, ..Default::default() });
+        assert_eq!(p.rgba.get(..4), Some(&[255, 0, 0, 255][..]), "tag {tag:#x}: printed state");
+    }
+    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 7, ..Default::default() });
+    assert_ne!(p.rgba.get(..4), Some(&[255, 0, 0, 255][..]), "on screen: hidden");
+}
+
+/// Malformed auto state is ignored without a panic, and the walk is bounded.
+#[test]
+fn malformed_view_auto_state_is_ignored() {
+    let shown = |config: &str, extra: &str| auto_state_red(auto_state_pdf(VIEW_OFF, config, extra), RenderConfig::default());
+    for config in [
+        "<< /AS 5 >>",
+        "<< /AS << /Event /View /Category [/View] /OCGs [5 0 R] >> >>",
+        "<< /AS [1 null /x (s) [5 0 R]] >>",
+        "<< /AS [<< /Event /View /Category [/View] >>] >>",
+        "<< /AS [<< /Event /View /OCGs [5 0 R] >>] >>",
+        "<< /AS [<< /Category [/View] /OCGs [5 0 R] >>] >>",
+        "<< /AS [<< /Event (View) /Category [/View] /OCGs [5 0 R] >>] >>",
+        "<< /AS [<< /Event /View /Category /View /OCGs [5 0 R] >>] >>",
+        "<< /AS [<< /Event /View /Category [/View] /OCGs 5 0 R >>] >>",
+        "<< /AS [<< /Event /View /Category [/View] /OCGs [(5) 5 /OCG] >>] >>",
+    ] {
+        assert!(shown(config, ""), "{config}: ignored");
+    }
+    let bad_state = |s: &str| {
+        let ocg = format!("<< /Type /OCG /Name (A) /Usage << /View << /ViewState {s} >> >> >>");
+        auto_state_red(auto_state_pdf(&ocg, &format!("<< {AS_VIEW} >>"), ""), RenderConfig::default())
+    };
+    for s in ["/Off", "(OFF)", "0", "null", "[/OFF]"] {
+        assert!(bad_state(s), "ViewState {s}: no recommendation");
+    }
+    // Cyclic references: an /AS, an application and a usage that refer to themselves.
+    assert!(shown("<< /AS 8 0 R >>", "8 0 obj 8 0 R endobj"), "self-referencing /AS");
+    assert!(shown("<< /AS [8 0 R] >>", "8 0 obj 8 0 R endobj"), "self-referencing application");
+    let cyclic = "<< /Type /OCG /Name (A) /Usage 8 0 R >>";
+    assert!(auto_state_red(auto_state_pdf(cyclic, &format!("<< {AS_VIEW} >>"), "8 0 obj 8 0 R endobj"), RenderConfig::default()));
+    // Huge arrays: the group listed after 4096 other entries is past the cap.
+    let many = format!("<< /AS [<< /Event /View /Category [/View] /OCGs [{}5 0 R] >>] >>", "9 0 R ".repeat(4096));
+    assert!(shown(&many, "9 0 obj << /Type /OCG /Name (B) >> endobj"), "past the cap: unchanged");
+    let within = format!("<< /AS [<< /Event /View /Category [/View] /OCGs [{}5 0 R] >>] >>", "9 0 R ".repeat(4095));
+    assert!(!shown(&within, "9 0 obj << /Type /OCG /Name (B) >> endobj"), "within the cap: applied");
+    let apps = format!("<< /AS [{}<< /Event /View /Category [/View] /OCGs [5 0 R] >>] >>", "<< /Event /Print >> ".repeat(256));
+    assert!(shown(&apps, ""), "past the application cap: unchanged");
 }
 
 /// #2986: an optional content membership dictionary with a visibility expression (`/VE`,
@@ -9223,6 +9462,10 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
 
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
 mod icc_profile_cache;
+
+// An Indexed resource named by many inline images reads its lookup once (vendored
+// hayro-interpret patch 80).
+mod indexed_lookup_cache;
 
 // A Type 3 glyph shown again decodes its procedure once (vendored hayro-interpret patch 87).
 mod type3_proc_cache;
