@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (gaps 2, 6, 7, 8, 10, 11, 14, 16, 19 and 24 brought up to date on main `25025fa2`; earlier header notes moved into the revision history; hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (gaps 2, 6, 7, 8, 10, 11, 14, 16, 19 and 24 brought up to date at v0.20.0, cut from `main` `9ee213ef`; earlier header notes moved into the revision history; hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -419,7 +419,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-09 | minor | Brought up to date on `main` at 25025fa2: gap 2 (renderer patch counts; #841 still open), 5 (catalog share), 6 (1,774 open issues, 74 critical; estimate due), 7 (Tesseract, web OCR shipped, deskew and rotation partial), 8 (PowerPoint export partial), 10 (smart cards through the macOS Keychain), 11 (summary title matches the section), 14 (Hindi, Indonesian and Korean catalogs ship), 16 (quick tools partial), 19 (Preferences). Hours not re-judged. Earlier header notes moved into this table. |
+| 2026-11-09 | minor | Brought up to date at v0.20.0 (`main` at 9ee213ef): gap 2 (renderer patch counts; #841 still open), 5 (catalog share), 6 (1,774 open issues, 74 critical; estimate due), 7 (Tesseract, web OCR shipped, deskew and rotation partial), 8 (PowerPoint export partial), 10 (smart cards through the macOS Keychain), 11 (summary title matches the section), 14 (Hindi, Indonesian and Korean catalogs ship), 16 (quick tools partial), 19 (Preferences). Hours not re-judged. Earlier header notes moved into this table. |
 | 2026-10-28 | minor | M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-22 | minor | gap 3: #2517 a partial rewrite inside one text object keeps the next paragraph; estimates unchanged. |

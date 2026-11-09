@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (measured numbers refreshed on main `25025fa2`: checklist, issues, releases and code size; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (measured numbers refreshed at v0.20.0, cut from `main` `9ee213ef`: checklist and code size, with issues and releases as of 2026-11-09; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -29,7 +29,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 72%** tier-weighted (62.3% unweighted: 460 shipped + 118 partial of 833; P0 94.6%) | measured 2026-11-09, `cargo xtask parity` |
+| **Feature breadth** | **≈ 72%** tier-weighted (62.8% unweighted: 464 shipped + 119 partial of 834; P0 94.6%) | measured at v0.20.0 (2026-11-09), `cargo xtask parity` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured 2026-10-26, not recomputed ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -78,20 +78,20 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 ## Features
 
-| Area | Breadth (measured 2026-11-09) | Ready (estimated 2026-10-10) | Remaining (h) |
+| Area | Breadth (measured at v0.20.0, 2026-11-09) | Ready (estimated 2026-10-10) | Remaining (h) |
 |---|---|---|---|
 | A Core model and fidelity | 78.8% | 70% | 25–45 |
-| B View and navigation | 65.3% | 55% | 110–190 |
+| B View and navigation | 66.7% | 55% | 110–190 |
 | C Content editing | 61.1% | 30% | 100–180 |
 | D Organize pages | 71.9% | 70% | 12–25 |
 | E Comments and review | 82.4% | 70% | 12–25 |
-| F Forms and JavaScript | 80.4% | 65% | 40–75 |
+| F Forms and JavaScript | 81.0% | 65% | 40–75 |
 | G Protect, redact, sanitize | 60.5% | 55% | 15–30 |
 | H Digital signatures | 62.2% | 45% | 40–70 |
 | I Scan and OCR | 44.2% | 15% | 40–75 |
 | J Create and export | 41.4% | 25% | 55–100 |
-| K Optimize and standards | 39.7% | 20% | 65–115 |
-| L Print | 43.6% | 35% | 30–55 |
+| K Optimize and standards | 41.4% | 20% | 65–115 |
+| L Print | 46.2% | 35% | 30–55 |
 | M Accessibility | 72.1% | 30% | 40–70 |
 | N Automation, preferences, misc | 34.2% | 35% | 25–45 |
 
@@ -142,7 +142,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
-- **2026-11-09 (status docs):** Measured numbers refreshed with `cargo xtask parity` on `main` at `25025fa2`: 833 counted features, 460 shipped and 118 partial, 62.3% unweighted and ≈ 72% tier-weighted (57.0% and ≈ 67% on 2026-10-10), P0 94.6%. GitHub on the same day: 1,774 open and 1,202 closed issues (74 `priority: critical`), 20.1k stars, latest release v0.20.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line; docs/roadmap.md has one row per milestone again. Estimated readiness and hours not re-judged; the monthly full re-measure is due.
+- **2026-11-09 (status docs):** Measured numbers refreshed as `cargo xtask parity` counts them, at v0.20.0 (`main` at `9ee213ef`): 834 counted features, 464 shipped and 119 partial, 62.8% unweighted and ≈ 72% tier-weighted (57.0% and ≈ 67% on 2026-10-10), P0 94.6%. GitHub on the same day: 1,774 open and 1,202 closed issues (74 `priority: critical`), 20.1k stars, latest release v0.20.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line; docs/roadmap.md has one row per milestone again. Estimated readiness and hours not re-judged; the monthly full re-measure is due.
 - **2026-11-08 (M5, comment exchange):** Comments keep their formatting and appearance through XFDF and FDF. XFDF export and import carry rich text, default style, border width, style and dash pattern, rotation, justification, fringe, line leaders and captions, the caret symbol and redaction overlay text as XFDF 3.0 (ISO 19444-1) names them, and a stamp's appearance as `<appearance>` (the DICT/STREAM/DATA encoding, bounded); copy and paste carries every comment's appearance. FDF export keeps a stamp's /AP with its forms and images, as XFDF does, and FDF import keeps any /AP the file carries (ISO 32000-2 §12.7.8.3.4). The intent goes out as both `intent` and `IT`. An unreadable XFDF appearance is left out, said in the import report and the repair log, and the comment is drawn by PdfCraft; an FDF past the import budget is refused whole. A redaction mark is always drawn by PdfCraft.
 - **2026-11-07 (M2, #6449):** A non-embedded Times New Roman set as a TrueType CID font (`TimesNewRoman,Bold`, `TimesNewRomanPSMT` and the other faces) draws the glyphs its codes name, as the non-embedded Arial does: its first 258 glyphs follow the same standard Macintosh order, which the embedded Times New Roman subsets of a public French form confirm in 941 of 942 `/ToUnicode` entries (vendored hayro-interpret patch 88). That form drew "Salarié(e) du régime général" as "Salari²*g+f w't²i lo g'ì²p²tcn" and "changement" as "ej angement". Times and Times New Roman MT Std are not read this way.
 - **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
@@ -657,7 +657,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-09 | minor | Measured numbers refreshed on `main` at 25025fa2 (breadth ≈ 72% tier-weighted, 62.3% unweighted; areas; 1,774 open issues; 20.1k stars; v0.20.0); the stacked header notes moved into this table, the progress log sorted newest first and its strays folded in. Estimated readiness and hours not re-judged. |
+| 2026-11-09 | minor | Measured numbers refreshed at v0.20.0, `main` at 9ee213ef (breadth ≈ 72% tier-weighted, 62.8% unweighted; areas; 1,774 open issues; 20.1k stars; v0.20.0); the stacked header notes moved into this table, the progress log sorted newest first and its strays folded in. Estimated readiness and hours not re-judged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
 | 2026-11-07 | patch | M10 #6514: load Windows PDF print jobs on demand through a read-only file stream, avoiding StorageFile access denial, whole-file buffering and per-chunk async waits; approved dependencies retain the #5006 crash fix. Regression tests pass; physical output remains unqualified; estimates unchanged. |
