@@ -129,6 +129,9 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     app.updates.updater.dismiss_status();
                 }
                 CheckResultResponse::CheckAgain => app.updates.check_requested = true,
+                CheckResultResponse::RestartToUpdate => {
+                    app.updates.updater.restart_to_update();
+                }
             }
         }
     }

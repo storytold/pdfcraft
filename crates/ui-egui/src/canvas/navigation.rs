@@ -108,6 +108,16 @@ impl DocView {
         self.current = page;
     }
 
+    /// The end of the document (End): the last page, scrolled to its bottom as far as the view
+    /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
+    /// page's top.
+    pub fn go_to_end(&mut self) {
+        self.go_to_page(usize::MAX);
+        // A fraction past a page's top scrolls as far as the content allows (`goto`, clamped when
+        // applied), so the whole page down to its bottom edge.
+        self.goto = Some((self.current, 1.0));
+    }
+
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
@@ -432,11 +442,24 @@ fn view_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::Pa
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434), taken so that the arrows and
+    // Page Up / Page Down below don't act on them too.
+    let (mut first, mut last) = (false, false);
+    keys.take_presses(ctx, |k, m| {
+        let shift_cmd = m.matches_logically(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        match k {
+            Key::ArrowUp | Key::PageUp if shift_cmd => first = true,
+            Key::ArrowDown | Key::PageDown if shift_cmd => last = true,
+            _ => return false,
+        }
+        true
+    });
+    if key(Key::Home) || first {
         view.go_to_page(0);
     }
-    if key(Key::End) {
-        view.go_to_page(usize::MAX);
+    if key(Key::End) || last {
+        view.go_to_end();
     }
     // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
     // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).

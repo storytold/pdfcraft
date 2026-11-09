@@ -56,6 +56,68 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
 }
 
 #[test]
+fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
+    use egui::{Color32, Event, Modifiers, PointerButton, Shape, StrokeKind};
+    use pdfcraft_engine::{Edit, NewField, Session};
+
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open("selection.pdf", None, bytes, None).unwrap();
+    for (name, rect, kind) in [
+        ("first", [40.0, 290.0, 54.0, 304.0], NewField::CheckBox),
+        ("second", [90.0, 290.0, 104.0, 304.0], NewField::CheckBox),
+        ("text", [40.0, 230.0, 230.0, 254.0], NewField::Text { multiline: false }),
+    ] {
+        session.apply(id, Edit::AddField { name: Some(name.into()), page: 0, rect, kind }).unwrap();
+    }
+    let mut h = harness_with("selection.pdf", session.save_bytes(id).unwrap().as_ref().clone());
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    for (x, modifiers) in [(47.0, Modifiers::NONE), (97.0, Modifiers::SHIFT)] {
+        let pos = at(&h, x, 103.0);
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+            h.run_steps(1);
+        }
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.names().len(), 2);
+    let blue = Color32::from_rgb(0x14, 0x73, 0xE6);
+    for (x, y, selected) in [(47.0, 103.0, true), (97.0, 103.0, true), (135.0, 158.0, false)] {
+        let center = at(&h, x, y);
+        let shapes: Vec<_> = h.output().shapes.iter().filter(|s| s.clip_rect.contains(center)).collect();
+        let tag = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.fill == if selected { blue } else { Color32::BLACK })
+        });
+        assert!(tag.is_some(), "widget at {center:?} must have its selection-colored name tag");
+        let outline = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.stroke.color == blue && r.stroke.width == 2.0 && r.stroke_kind == StrokeKind::Outside)
+        });
+        if selected {
+            assert!(outline > tag, "the selected outline must be outside and painted after the tag");
+        } else {
+            assert!(outline.is_none(), "unselected text field has no selection outline");
+        }
+    }
+    assert_eq!(
+        h.output()
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape, Shape::Circle(c)
+        if c.radius == 3.5 && c.stroke.color == blue))
+            .count(),
+        4,
+        "only the primary has resize handles"
+    );
+}
+
+#[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
     let before = names(&h).len();
@@ -154,6 +216,48 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert!(near(back[0], up[0] - 1.0) && near(back[1], up[1] - 1.0), "{up:?} → {back:?}");
     assert!(h.state().views[0].prepare.selected.is_some(), "it stays selected for the next nudge");
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
+}
+
+/// Shift keeps a dragged field on the axis it set off along, even when the drag then turns and
+/// crosses the diagonal: 40 points right and then 60 down still moves it 40 points right and not
+/// at all down, where choosing the axis from the whole drag each frame made it jump to 60 down.
+#[test]
+fn a_shift_drag_keeps_its_axis_when_it_crosses_the_diagonal() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    // The default text field is 144 by 22 points with its top-left at the click.
+    let c = at(&h, 110.0, 261.0);
+    let (right, down) = (at(&h, 150.0, 261.0), at(&h, 150.0, 321.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + (right - c) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    for k in 1..=4 {
+        h.hover_at(right + (down - right) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(down);
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    let after = rect_of(&h, &name);
+    assert!((after[0] - before[0] - 40.0).abs() < 1.5, "40 points right: {before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() < 0.01, "not down: {before:?} → {after:?}");
 }
 
 /// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
