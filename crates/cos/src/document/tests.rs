@@ -30,6 +30,33 @@ fn what_a_scan_of_the_file_did_not_find_is_remembered() {
     assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "a clone has the same file");
 }
 
+/// An object found by a scan of the file, because its cross-reference offset is wrong, has its
+/// indirect `/Length` resolved as at the right offset. Unresolved, a stream ending in a misspelt
+/// `endstream` (`endstrea`) was searched on into a later object's `endstream`, and took that
+/// object's header and data as its own.
+#[test]
+fn a_scanned_stream_resolves_its_indirect_length() {
+    let mut out = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Length 4 0 R >>\nstream\nHELLO\nendstrea",
+            "5",
+            "<< /Length 5 >>\nstream\nWORLD\nendstream",
+        ],
+        "/Root 1 0 R",
+    );
+    // Point object 3's entry at the catalog, so only the scan finds it.
+    let at = |needle: &[u8], out: &[u8]| out.windows(needle.len()).position(|w| w == needle).unwrap();
+    let catalog = format!("{:010} 00000 n ", at(b"1 0 obj", &out));
+    let entry = at(format!("{:010} 00000 n ", at(b"3 0 obj", &out)).as_bytes(), &out);
+    out.splice(entry..entry + catalog.len(), catalog.bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let stream = doc.try_get(3).unwrap();
+    let Object::Stream(s) = &*stream else { panic!("stream expected: {stream:?}") };
+    assert_eq!(&s.raw[..], b"HELLO");
+}
+
 /// An object can be nothing but a reference to another. A chain of them is followed, and one that
 /// goes round ends in what isn't a dictionary or a name, without hanging.
 #[test]

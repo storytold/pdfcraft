@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, note_overlay_read, objstm_member, overlay_reads,
+    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member, overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -705,23 +705,7 @@ impl Document {
         match self.entries.lookup(num, &self.data) {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
-                let resolve = |r: ObjRef| {
-                    if self.overlay.contains_key(&r.num) {
-                        note_overlay_read();
-                    }
-                    // A length resolved through this document's edits counts as an edit read
-                    // on every reuse.
-                    if let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
-                        if edits {
-                            note_overlay_read();
-                        }
-                        return known;
-                    }
-                    let edits_read = overlay_reads();
-                    let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
-                    LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
-                    length
-                };
+                let resolve = |r: ObjRef| self.stream_length(r);
                 let off = offset as usize;
                 let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
@@ -795,6 +779,29 @@ impl Document {
         Ok(stm)
     }
 
+    /// An indirect stream `/Length`, read through the loader's guard against cycles. Kept in
+    /// [`LENGTHS`] only during a load, which clears it when it ends: a scan of the file from
+    /// [`Self::objstm`] can come here without one.
+    fn stream_length(&self, r: ObjRef) -> Option<i64> {
+        if self.overlay.contains_key(&r.num) {
+            note_overlay_read();
+        }
+        let cached = loading();
+        // A length resolved through this document's edits counts as an edit read on every reuse.
+        if cached && let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
+            if edits {
+                note_overlay_read();
+            }
+            return known;
+        }
+        let edits_read = overlay_reads();
+        let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
+        if cached {
+            LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
+        }
+        length
+    }
+
     /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
     /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
@@ -812,7 +819,10 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
+            // An indirect `/Length` is resolved, as at the object's offset, or a stream that ends
+            // in a misspelt `endstream` is searched on into a later object's. A header that parses
+            // as far as the `/Length` starts with `num` itself, after white space.
+            if let Ok((id, o)) = parse_indirect_shared(data, p, &|r| self.stream_length(r), &self.endstreams)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition

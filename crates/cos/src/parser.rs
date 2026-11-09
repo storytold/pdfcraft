@@ -506,7 +506,7 @@ fn parse_indirect_in(
             // §7.3.8.2), as other readers take it. A producer that wrote `endstrea` after every
             // stream lost every font and every page's content, and searching on would run into a
             // later object's `endstream`.
-            Some(l) if after(l).is_empty() || after(l).starts_with(b"endstrea") || after(l).starts_with(b"endobj") => l,
+            Some(l) if at_stream_end(after(l)) => l,
             // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery). With none
             // left in the file, a /Length that fits is still the stream's extent.
             _ => match find_endstream(data, start, endstreams) {
@@ -525,6 +525,17 @@ fn parse_indirect_in(
         return Ok((id, Object::Stream(Stream { dict, raw })));
     }
     Ok((id, obj))
+}
+
+/// Whether `rest`, what follows a stream's /Length bytes with white space skipped, is where the
+/// stream ends: the end of the data, or a whole `endstream`, `endstrea` or `endobj` token. A token
+/// must end there (ISO 32000-2 §7.2.3), so payload bytes such as `endobject` or `endstreak`,
+/// where a wrong /Length stops, are not taken for one and the search for `endstream` runs instead.
+fn at_stream_end(rest: &[u8]) -> bool {
+    rest.is_empty()
+        || [&b"endstream"[..], b"endstrea", b"endobj"]
+            .iter()
+            .any(|kw| rest.strip_prefix(*kw).is_some_and(|tail| tail.first().is_none_or(|b| !is_regular(*b))))
 }
 
 /// Offset where stream data ends (before the EOL preceding "endstream").
@@ -698,6 +709,36 @@ mod tests {
         let (_, o) = parse_indirect_in(data, None, 0, &|_| None, Some(&index)).unwrap();
         let Object::Stream(s) = o else { panic!("stream expected") };
         assert_eq!(&s.raw[..], b"HELLO");
+    }
+
+    /// The same for a stream whose `endstream` is left out before `endobj`: the later object's
+    /// `endstream` is not this stream's end.
+    #[test]
+    fn a_stream_ending_at_endobj_is_not_read_into_a_later_one() {
+        let data = b"7 0 obj\n<< /Length 5 >>\nstream\nHELLO\nendobj\n8 0 obj\n<< /Length 5 >>\nstream\nWORLD\nendstream\nendobj\n";
+        let (_, o) = parse_indirect(data, 0, &|_| None).unwrap();
+        let Object::Stream(s) = o else { panic!("stream expected") };
+        assert_eq!(&s.raw[..], b"HELLO");
+    }
+
+    /// A wrong /Length that stops before payload bytes beginning like an end marker (`endobject`,
+    /// `endstreak`) is not taken for the stream's end: a token runs on through regular
+    /// characters (ISO 32000-2 §7.2.3), so the search for `endstream` finds the whole payload.
+    #[test]
+    fn a_length_ending_inside_a_longer_word_is_not_an_end_marker() {
+        for word in ["endobject", "endstreak"] {
+            let pdf = format!("7 0 obj\n<< /Length 5 >>\nstream\nHELLO {word} more\nendstream\nendobj\n");
+            let (_, o) = parse_indirect(pdf.as_bytes(), 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(s.raw[..], *format!("HELLO {word} more").as_bytes(), "{word}");
+        }
+        // Whole markers still end it, followed by white space, a delimiter or the end of the data.
+        for tail in ["endobj\n", "endstrea%", "endobj"] {
+            let pdf = format!("7 0 obj\n<< /Length 5 >>\nstream\nHELLO\n{tail}");
+            let (_, o) = parse_indirect(pdf.as_bytes(), 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(&s.raw[..], b"HELLO", "{tail:?}");
+        }
     }
 
     /// Without an `endstream`, the /Length is trusted as written when it fits, also when it is

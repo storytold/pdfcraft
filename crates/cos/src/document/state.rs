@@ -42,6 +42,12 @@ impl LoadGuard {
     }
 }
 
+/// Whether an object is being loaded on this thread: [`LENGTHS`] holds only while one is, since
+/// it is cleared when the outermost load ends.
+pub(super) fn loading() -> bool {
+    LOADING.with(|l| !l.borrow().is_empty())
+}
+
 /// What loading a file object gave, kept in the document's cache either way.
 pub(super) type Loaded = Result<Arc<Object>, CosError>;
 

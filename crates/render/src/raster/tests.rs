@@ -10288,6 +10288,42 @@ fn a_content_stream_without_endstream_is_drawn_to_its_length() {
     assert_eq!(pixels(&object_4("", "endstrea"), "%%EOF")[0], WHITE, "no /Length");
 }
 
+/// The raw bytes hayro-syntax reads for object 4 of a file whose objects are `objects`.
+fn hayro_stream_4(objects: &str) -> Vec<u8> {
+    use hayro_syntax::object::{ObjectIdentifier, Stream};
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+         {objects}trailer << /Root 1 0 R >>\n%%EOF"
+    );
+    let parsed = hayro_syntax::Pdf::new(pdf.into_bytes()).unwrap();
+    let stream = parsed.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).expect("object 4 is a stream");
+    stream.raw_data().to_vec()
+}
+
+/// A stream whose `endstream` is misspelt (`endstrea`) or left out before `endobj` is its
+/// `/Length` in hayro-syntax too, not the bytes up to a later object's `endstream` (vendored
+/// hayro-syntax patch 36).
+#[test]
+fn hayro_reads_a_stream_without_endstream_to_its_length_before_a_later_one() {
+    for end in ["endstrea\nendobj", "endobj"] {
+        let objects = format!("4 0 obj << /Length 5 >> stream\nHELLO\n{end}\n5 0 obj << /Length 5 >> stream\nWORLD\nendstream\nendobj\n");
+        assert_eq!(hayro_stream_4(&objects), b"HELLO", "{end:?}");
+    }
+}
+
+/// A wrong `/Length` that stops before payload bytes beginning like an end marker (`endobject`,
+/// `endstreak`) does not end the stream there: a token runs on through regular characters (ISO
+/// 32000-2 7.2.3), and the search for `endstream` finds the whole payload.
+#[test]
+fn hayro_does_not_end_a_stream_inside_a_longer_word() {
+    for word in ["endobject", "endstreak"] {
+        let objects = format!("4 0 obj << /Length 5 >> stream\nHELLO {word} more\nendstream\nendobj\n");
+        assert_eq!(hayro_stream_4(&objects), format!("HELLO {word} more").as_bytes(), "{word}");
+    }
+}
+
 /// A stream ending in `endstrea` is its `/Length` even when a later object has an `endstream`:
 /// the search for one ran on into that object. Here the content is ASCIIHex-encoded without its
 /// `>` end marker, so reading on took the next object's header as hex data, which it isn't, and

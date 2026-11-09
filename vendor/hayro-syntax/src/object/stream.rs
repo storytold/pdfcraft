@@ -10,7 +10,7 @@ use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::trivia::is_white_space_character;
+use crate::trivia::{is_regular_character, is_white_space_character};
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
@@ -452,8 +452,8 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
 /// was lost and its pages drew blank. Only a `/Length` the data holds is read.
 ///
 /// With `at_an_end`, tried before [`parse_fallback`], the `/Length` must also end where the
-/// stream would: before a misspelt `endstream` (`endstrea`), before `endobj`, or at the end of
-/// the data. Otherwise the search for `endstream` would run on into a later object and take its
+/// stream would: before a whole `endstream`, a misspelt one (`endstrea`) or `endobj`, or at the
+/// end of the data. Otherwise the search for `endstream` would run on into a later object and take its
 /// header and data as this stream's. Without it, tried last, after the search found no
 /// `endstream` in the rest of the data, so it doesn't search again.
 fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> Option<Stream<'a>> {
@@ -466,7 +466,12 @@ fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> O
     if at_an_end {
         r.skip_white_spaces_and_comments();
         let rest = r.tail().unwrap_or_default();
-        if !(rest.is_empty() || rest.starts_with(b"endstrea") || rest.starts_with(b"endobj")) {
+        // A whole token (ISO 32000-2 7.2.3): payload bytes such as `endobject`, where a wrong
+        // `/Length` stops, are not one.
+        let ends = [&b"endstream"[..], b"endstrea", b"endobj"]
+            .iter()
+            .any(|kw| rest.strip_prefix(*kw).is_some_and(|tail| tail.first().is_none_or(|b| !is_regular_character(*b))));
+        if !(rest.is_empty() || ends) {
             return None;
         }
     }
