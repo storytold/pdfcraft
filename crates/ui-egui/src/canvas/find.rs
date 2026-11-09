@@ -208,11 +208,19 @@ impl DocView {
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        self.find_hold = None;
         // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
         // /FitR destination's rectangle is: a page wider or taller than the window no longer
         // leaves it off to one side or near an edge.
-        if let Some([fx, fy]) = self.match_centre() {
+        // Finite only: a hostile page's glyphs can span -inf..inf, and NaN survives `clamp`.
+        if let Some([fx, fy]) = self.match_centre().filter(|c| c.iter().all(|v| v.is_finite())) {
             self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+            // The point alone, both axes in one frame. A pending zoom anchor would hold the old
+            // place for that frame and put `goto` off to the next, where its page-top offset
+            // undid the centring; a zoom after the step anchors on the match instead.
+            self.goto = None;
+            self.zoom_anchor = None;
+            self.find_hold = Some((page, fx, fy));
         }
         self.current = page;
         self.reset_coarse_state();

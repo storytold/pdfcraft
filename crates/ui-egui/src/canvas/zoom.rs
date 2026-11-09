@@ -215,15 +215,18 @@ impl DocView {
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
+        // Just after a find step, around the match at the window's centre (#3530).
+        let held = self.find_hold.map(|(p, fx, fy)| (p, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
         // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
         // Fractions outside 0..1 preserve the pointer's position outside the page as well.
-        let anchor =
+        let anchor = held.or_else(|| {
             self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
                 |(p, r)| {
                     let f = (screen_pos - r.min) / r.size();
                     (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
                 },
-            );
+            )
+        });
         self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {
