@@ -109,6 +109,10 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Print production ▸ Add printer marks.
+    PrinterMarks,
+    /// Print production ▸ Convert colours.
+    ConvertColours,
     /// Print production ▸ Fix hairlines.
     FixHairlines,
     /// Organize pages ▸ Page properties (the tab order of the selected pages).
@@ -127,6 +131,8 @@ pub enum Dialog {
     Signature,
     /// Comment Properties.
     CommentProps,
+    /// Edit the description of an embedded document attachment.
+    AttachmentDescription,
     /// Replace Pages (after choosing the file).
     ReplacePages,
     /// Prepare a form ▸ Field Properties.
@@ -144,6 +150,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
+    /// first? (#2149)
+    LockSignatures,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -372,6 +381,7 @@ pub struct UnlockPrompt {
 }
 
 impl UnlockPrompt {
+    /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
