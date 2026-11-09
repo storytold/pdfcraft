@@ -3114,7 +3114,11 @@ fn refused_extraction_writes_no_split_or_page_output() {
         let pages = b.call("page_extract", &json!({ "doc": restricted, "pages": [1, 2], "separate": true, "out_dir": extract_dir }));
         if extract {
             assert!(split.is_ok() && dir.join(&split_dir).exists(), "{changes}, copy {copy}");
-            assert_eq!(pages.map(|r| r["files"].as_array().map(Vec::len)).ok().flatten(), Some(2), "{changes}, copy {copy}");
+            let files = match pages.as_deref() {
+                Ok([Content::Json(v), ..]) => v["files"].as_array().map(Vec::len),
+                other => panic!("{changes}, copy {copy}: page_extract: {other:?}"),
+            };
+            assert_eq!(files, Some(2), "{changes}, copy {copy}");
         } else {
             assert!(matches!(split, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
             assert!(!dir.join(&split_dir).exists(), "refused split creates no output directory");
