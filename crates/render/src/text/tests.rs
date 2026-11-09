@@ -663,10 +663,12 @@ fn the_annex_d2_alias_codes_read_as_an_ordinary_hyphen_and_space() {
 
 /// #3169, #3170: glyph names outside the Adobe Glyph List still read as text. Ligature
 /// (`f_i`) and suffixed (`hyphen.case`) names go by the glyph list specification's full
-/// mapping. A name that only numbers the glyph (`c251` small caps, `C39`, `C174`, `C39.sc`)
-/// reads as nothing, not as a guess from the code (review on #3239: with `/C1` at 233,
-/// StandardEncoding's 233 would read `Ø` for a glyph drawn as `é`), and so do a ZapfDingbats
-/// name (`a12`) and a name with no meaning left (`foo`).
+/// mapping. A name that only numbers the glyph reads as nothing, not as a guess from the code
+/// (review on #3239: with `/C1` at 233, StandardEncoding's 233 would read `Ø` for a glyph drawn
+/// as `é`). `C39` at 39 and `C174` at 174 name their own codes, but this font's other numbered
+/// names (`c251` at 97, `C39.sc` at 61, `C1` at 233, `a12` at 88) don't, so they read as
+/// nothing too (see `numbered_glyph_names_read_as_their_own_code`). A name with no meaning
+/// left (`foo`) reads as nothing.
 #[test]
 fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     use lopdf::{Object, dictionary};
@@ -693,6 +695,140 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     assert_eq!(lines, ["fi", "fl", "-", "fi"], "{text:?}");
+}
+
+/// A glyph name that only numbers its glyph, with no `/ToUnicode` (ISO 32000-2 §9.10.2 has no
+/// route for it), reads as its code's Latin-1 character when the number is that very code, in
+/// decimal (`C70` at 70, `C0071` at 71, `MT72` at 72, `C39` at 39, `C174` at 174) or
+/// hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as pdftotext, PDFium and MuPDF read
+/// it: Windows printer drivers and typesetters name subset glyphs so. Only in a font where every
+/// numbered name names its own code: one more name numbering another code (`/C1` at 233, review
+/// on #3239) turns the whole font back to nothing, and so does a font whose names number
+/// something else, where a name can match its code by coincidence (`/MT40` at 0x40). A subset
+/// that counts its glyphs in order of first use from code 1 (`/Differences [1 /C1 /C2 … /C80]`)
+/// names its own codes too, but `/C65` there is the 65th glyph used, not `A`: a numbered name at
+/// a control code (`C1` at 1, `C9` at 9) gives the counter away and the font reads nothing.
+/// Code 32 is the first code a numbered name may name: `C32` at 32 reads as a space.
+#[test]
+fn numbered_glyph_names_read_as_their_own_code() {
+    use lopdf::{Object, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let encoding = |differences: Vec<Object>| Object::Dictionary(dictionary! { "Type" => "Encoding", "Differences" => differences });
+    // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+    let one_per_line = |codes: &[u8]| {
+        let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+        for code in codes {
+            content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+        }
+        content.extend_from_slice(b" ET");
+        content
+    };
+    let own = encoding(vec![
+        Object::Integer(70),
+        name("C70"),
+        name("C0071"),
+        name("MT72"),
+        name("G49"),
+        Object::Integer(233),
+        name("GE9"),
+        Object::Integer(39),
+        name("C39"),
+        Object::Integer(174),
+        name("C174"),
+    ]);
+    let one_other = encoding(vec![Object::Integer(70), name("C70"), Object::Integer(233), name("C1")]);
+    let numbered_otherwise = encoding(vec![Object::Integer(1), name("C70"), name("C105"), Object::Integer(64), name("MT40")]);
+    let counter = encoding(std::iter::once(Object::Integer(1)).chain((1..=80).map(|n| name(&format!("C{n}")))).collect());
+    let own_and_a_control = encoding(vec![Object::Integer(9), name("C9"), Object::Integer(70), name("C70"), name("C0071")]);
+    // Code 32 is the first code a numbered name may name: `/C32` at 32 is a space, not a counter.
+    let own_from_32 = encoding(vec![Object::Integer(32), name("C32"), Object::Integer(70), name("C70"), name("C0071")]);
+    let pages = [
+        one_per_line(b"FGHI\xe9'\xae"),
+        one_per_line(b"F\xe9"),
+        one_per_line(b"\x01\x02@"),
+        one_per_line(b"\x01\x20\x41\x42\x50"),
+        one_per_line(b"\x09FG"),
+        b"BT /F1 20 Tf 20 290 Td <462047> Tj ET".to_vec(),
+    ];
+    let pdf = encoded_pages(&[
+        (own, &pages[0][..]),
+        (one_other, &pages[1][..]),
+        (numbered_otherwise, &pages[2][..]),
+        (counter, &pages[3][..]),
+        (own_and_a_control, &pages[4][..]),
+        (own_from_32, &pages[5][..]),
+    ]);
+    let lines = |page| {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(lines(0), ["F", "G", "H", "I", "\u{e9}", "'", "\u{ae}"]);
+    assert!(lines(1).is_empty(), "/C1 at 233 beside /C70 at 70: {:?}", lines(1));
+    assert!(lines(2).is_empty(), "/MT40 at 0x40 among names numbering other codes: {:?}", lines(2));
+    assert!(lines(3).is_empty(), "a first-use counter /C1 … /C80 from code 1: {:?}", lines(3));
+    assert!(lines(4).is_empty(), "/C9 at 9 beside /C70 at 70: {:?}", lines(4));
+    let page5 = extract_page(&pdf, 5, &InterpreterSettings::default()).unwrap().plain_text();
+    assert_eq!(page5.trim_matches('\n'), "F G", "/C32 at 32 beside /C70 at 70 reads as a space");
+}
+
+/// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
+/// 32-126 by the code: above 126, `C174` at 174, `C176` at 176 and `GE9` at 0xE9 read as the
+/// code's Latin-1 character, unless one numbered name in the font numbers another code
+/// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does.
+#[test]
+fn numbered_type3_glyph_names_read_as_their_own_code() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    // Each font's /Differences as (code, glyph name) pairs, and the codes its page shows.
+    type Names<'a> = &'a [(i64, &'a str)];
+    let fonts: [(Names, &[u8]); 3] = [
+        (&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")], b"F\xae\xb0\xe9"),
+        (&[(174, "C174"), (176, "C176"), (233, "C1")], b"\xae\xb0\xe9"),
+        (&[(1, "C1"), (2, "C2"), (174, "C174"), (176, "C176")], b"\xae\xb0"),
+    ];
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (names, codes) in fonts {
+        let glyph = doc.add_object(Stream::new(dictionary! {}, b"600 0 0 0 500 700 d1 0 0 500 700 re f".to_vec()));
+        let mut differences = Vec::new();
+        let mut procs = lopdf::Dictionary::new();
+        for &(code, glyph_name) in names {
+            differences.extend([Object::Integer(code), name(glyph_name)]);
+            procs.set(glyph_name, glyph);
+        }
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type3",
+            "FontBBox" => vec![0.into(), 0.into(), 1000.into(), 1000.into()],
+            "FontMatrix" => vec![0.001.into(), 0.into(), 0.into(), 0.001.into(), 0.into(), 0.into()],
+            "CharProcs" => procs,
+            "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences },
+            "FirstChar" => 0, "LastChar" => 255, "Widths" => vec![Object::Integer(600); 256],
+        });
+        // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+        let mut content = b"BT /T3 20 Tf 20 290 Td".to_vec();
+        for code in codes {
+            content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+        }
+        content.extend_from_slice(b" ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, content));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 300.into(), 300.into()], "Resources" => dictionary! {"Font" => dictionary! {"T3" => font}}, "Contents" => content });
+        kids.push(Object::Reference(page));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(pages_id, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let lines = |page| {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(lines(0), ["F", "\u{ae}", "\u{b0}", "\u{e9}"]);
+    assert!(lines(1).is_empty(), "/C1 at 233 beside /C174 at 174: {:?}", lines(1));
+    assert!(lines(2).is_empty(), "a counter's /C1 at 1 beside /C174 at 174: {:?}", lines(2));
 }
 
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex

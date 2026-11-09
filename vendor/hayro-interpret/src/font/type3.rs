@@ -5,7 +5,10 @@ use crate::context::{
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
 use crate::font::true_type::{Width, read_encoding, read_widths};
-use crate::font::{Encoding, Glyph, Type3Glyph, UNITS_PER_EM, read_to_unicode};
+use crate::font::{
+    Encoding, Glyph, Type3Glyph, UNITS_PER_EM, numbered_glyph_name_at_its_code,
+    numbered_names_name_their_codes, read_to_unicode,
+};
 use crate::interpret::state::TextState;
 use crate::soft_mask::SoftMask;
 use crate::util::RectExt;
@@ -24,6 +27,7 @@ use skrifa::GlyphId;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
@@ -46,6 +50,9 @@ pub(crate) struct Type3<'a> {
     /// [`MAX_CACHED_PROC`] bytes are kept, and the fonts of one interpreter cache keep at most
     /// `context::MAX_CACHED_TYPE3_PROCS` bytes together.
     decoded_procs: RefCell<HashMap<String, Rc<[u8]>>>,
+    /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
+    /// (`numbered_names_name_their_codes`), worked out on first use.
+    own_code_names: OnceLock<bool>,
 }
 
 /// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
@@ -96,6 +103,7 @@ impl<'a> Type3<'a> {
             dict: dict.clone(),
             to_unicode,
             decoded_procs: RefCell::new(HashMap::new()),
+            own_code_names: OnceLock::new(),
         })
     }
 
@@ -217,7 +225,28 @@ impl<'a> Type3<'a> {
                 name.and_then(crate::font::glyph_name_to_unicode)
                     .or_else(|| (0x20..0x7f).contains(&code).then_some(code as char))
                     .map(BfString::Char)
+                    // PdfCraft patch (100): above 126, a name that only numbers its glyph reads
+                    // as the code's Latin-1 character when the number is that code and every
+                    // numbered name in the font names its own code (`C174` at 174 reads `®`),
+                    // as in a Type 1 font.
+                    .or_else(|| {
+                        let own_codes = *self.own_code_names.get_or_init(|| {
+                            numbered_names_name_their_codes(
+                                (0..=u8::MAX).filter_map(|c| Some((c, self.code_to_name(c)?))),
+                            )
+                        });
+                        name.filter(|_| own_codes)
+                            .and_then(|name| numbered_glyph_name_at_its_code(name, code))
+                    })
             })
+    }
+
+    /// PdfCraft patch: the glyph name `/Encoding` gives a code, as `map_code` reads it.
+    fn code_to_name(&self, code: u8) -> Option<&str> {
+        self.encodings
+            .get(&code)
+            .map(String::as_str)
+            .or_else(|| self.encoding.map_code(code))
     }
 
     pub(crate) fn render_glyph(
