@@ -15,6 +15,13 @@ thiserror = { workspace = true }
 # PDF date strings (`pdf_date`) go through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
 
+# On the web, a rewrite's fresh file identifier takes its entropy from the browser
+# (`crypto.getRandomValues`). Both crates are already in the dependency tree of the web shell
+# (`js-sys` 0.3 / `wasm-bindgen` 0.2); native builds compile neither.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
 [dev-dependencies]
 pdfcraft-oracle = { workspace = true }
 pdfcraft-testkit = { workspace = true }

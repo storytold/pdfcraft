@@ -144,24 +144,194 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Synthetic seeds, so fuzzing works without the corpus: plain, object-stream and encrypted
-/// shapes, nested page trees, annotations, forms and inline images.
+/// A classic-xref PDF whose objects are numbered 1.. in order. ASCII object text only, so the
+/// byte offsets are the string offsets.
+fn build(objs: &[&str], trailer: &str) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} {trailer} >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// An uncompressed stream object body (`Filter`-free, so the seed stays plain text).
+fn stream(dict: &str, data: &str) -> String {
+    format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
+}
+
+/// Every feature the engine reads on a page: fonts (Type 1 and Type 3), form fields with
+/// actions, the annotation kinds, page labels, names, optional content, a structure tree,
+/// shading, a form XObject, an image with a soft mask, a colour space and a graphics state.
+fn feature_rich_seed() -> Vec<u8> {
+    let content = stream(
+        "",
+        "q /G1 gs BT /F1 18 Tf 10 250 Td (Hello) Tj /T3 12 Tf 0 -20 Td (aaa) Tj ET Q /Sh1 sh \
+         q 50 0 0 50 100 20 cm /Fm1 Do Q q 40 0 0 40 20 20 cm /Im1 Do Q \
+         /OC /OC1 BDC 1 0 0 rg 0 0 20 20 re f EMC /CS1 cs 1 sc 150 10 30 30 re f",
+    );
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 50 50]", "0 1 0 rg 0 0 50 50 re f");
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 24 0 R",
+        "\u{0}\u{40}\u{7f}\u{20}",
+    );
+    let charproc = stream("", "10 0 0 0 10 10 d1 0 0 10 10 re f");
+    let appearance = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", "0 0 1 1 re f");
+    let mask = stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8", "\u{7f}\u{7f}\u{20}\u{0}");
+    build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Lang (en) /MarkInfo << /Marked true >> /StructTreeRoot 13 0 R \
+             /AcroForm << /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> \
+             /PageLabels << /Nums [0 << /S /D /St 1 >>] >> /Names << /JavaScript << /Names [(init) 11 0 R] >> >> \
+             /OCProperties << /OCGs [12 0 R] /D << /Order [12 0 R] /ON [12 0 R] >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /StructParents 0 /Annots [8 0 R 9 0 R 10 0 R 17 0 R 18 0 R 19 0 R 20 0 R] \
+             /Resources << /Font << /F1 5 0 R /T3 7 0 R >> /Shading << /Sh1 14 0 R >> /XObject << /Fm1 15 0 R /Im1 16 0 R >> \
+             /ExtGState << /G1 << /ca 0.5 /BM /Multiply >> >> /Properties << /OC1 12 0 R >> \
+             /ColorSpace << /CS1 [/Indexed /DeviceRGB 1 <ff000000ff00>] >> >> >>",
+            &content,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /sq 21 0 R >> \
+             /Encoding << /Type /Encoding /Differences [97 /sq] >> /FirstChar 97 /LastChar 97 /Widths [10] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (t) /V (v) /Rect [10 10 90 30] /P 3 0 R \
+             /AA << /K << /S /JavaScript /JS (AFNumber_Keystroke\\(2,0,0,0,\"\",true\\);) >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /T (c) /V /Yes /AS /Yes /Rect [10 40 30 60] /P 3 0 R \
+             /AP << /N << /Yes 22 0 R /Off 22 0 R >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (d) /Opt [(a) (b)] /V (a) /Rect [10 70 90 90] /P 3 0 R >>",
+            "<< /S /JavaScript /JS (var x = 1;) >>",
+            "<< /Type /OCG /Name (Layer) >>",
+            "<< /Type /StructTreeRoot /K 23 0 R /ParentTree << /Nums [0 [23 0 R]] >> >>",
+            "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [true true] >>",
+            &form,
+            &image,
+            "<< /Type /Annot /Subtype /Link /Rect [10 120 90 140] /Border [0 0 0] /A << /S /URI /URI (http://example.com) >> >>",
+            "<< /Type /Annot /Subtype /Highlight /Rect [10 80 90 100] /QuadPoints [10 100 90 100 10 80 90 80] /C [1 1 0] \
+             /Contents (note) /Popup 25 0 R >>",
+            "<< /Type /Annot /Subtype /Ink /Rect [10 10 40 30] /InkList [[10 10 20 30 40 20]] /C [1 0 0] >>",
+            "<< /Type /Annot /Subtype /FreeText /Rect [100 200 190 240] /DA (/Helv 12 Tf 0 g) /Contents (text) >>",
+            &charproc,
+            &appearance,
+            "<< /Type /StructElem /S /P /P 13 0 R /Pg 3 0 R /K 0 >>",
+            &mask,
+            "<< /Type /Annot /Subtype /Popup /Rect [100 100 150 150] /Parent 18 0 R >>",
+        ],
+        "/Root 1 0 R /Info << /Title (Rich) >>",
+    )
+}
+
+/// The same small document stored the modern way: an uncompressed object stream and a
+/// cross-reference stream, so the tolerant and the strict readers both walk the compressed-object
+/// and `/Index` paths.
+fn object_stream_seed() -> Vec<u8> {
+    let bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    ];
+    let nums = [1u32, 2, 3, 5];
+    let mut header = String::new();
+    let mut body = String::new();
+    for (n, b) in nums.iter().zip(bodies) {
+        header.push_str(&format!("{n} {} ", body.len()));
+        body.push_str(b);
+        body.push('\n');
+    }
+    let objstm_data = format!("{header}{body}");
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let content_off = out.len();
+    out.extend_from_slice(format!("4 0 obj\n{}\nendobj\n", stream("", "BT /F1 14 Tf 10 100 Td (Object stream) Tj ET")).as_bytes());
+    let objstm_off = out.len();
+    let dict = format!("/Type /ObjStm /N {} /First {}", nums.len(), header.len());
+    out.extend_from_slice(format!("6 0 obj\n{}\nendobj\n", stream(&dict, &objstm_data)).as_bytes());
+    let xref_off = out.len();
+    // /W [1 3 1]: type, offset (or object-stream number), generation (or index in the stream).
+    let entry = |t: u8, f: usize, g: u8| [t, (f >> 16) as u8, (f >> 8) as u8, f as u8, g];
+    let rows = [
+        entry(0, 0, 255),
+        entry(2, 6, 0),
+        entry(2, 6, 1),
+        entry(2, 6, 2),
+        entry(1, content_off, 0),
+        entry(2, 6, 3),
+        entry(1, objstm_off, 0),
+        entry(1, xref_off, 0),
+    ];
+    out.extend_from_slice(
+        format!("7 0 obj\n<< /Type /XRef /Size 8 /W [1 3 1] /Index [0 8] /Root 1 0 R /Length {} >>\nstream\n", rows.len() * 5).as_bytes(),
+    );
+    for r in rows {
+        out.extend_from_slice(&r);
+    }
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_off}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// A tiny document plus an incremental update (a new annotation and a rewritten page) chained
+/// by `/Prev`, so mutations reach the revision walker and the incremental save path.
+fn incremental_update_seed() -> Vec<u8> {
+    let mut out = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ],
+        "/Root 1 0 R",
+    );
+    let prev = out.windows(10).rposition(|w| w == b"startxref\n").and_then(|i| {
+        let tail = String::from_utf8_lossy(&out[i + 10..]).into_owned();
+        tail.lines().next().and_then(|l| l.trim().parse::<usize>().ok())
+    });
+    let prev = prev.unwrap_or(0);
+    let page_off = out.len();
+    out.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>\nendobj\n");
+    let annot_off = out.len();
+    out.extend_from_slice(b"4 0 obj\n<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [0 0 1] /Contents (update) >>\nendobj\n");
+    let x = out.len();
+    out.extend_from_slice(
+        format!(
+            "xref\n3 2\n{page_off:010} 00000 n \n{annot_off:010} 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R /Prev {prev} >>\nstartxref\n{x}\n%%EOF\n"
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// A file that opens, whose graphs loop: a page whose annotation array holds the page, a form
+/// XObject that draws itself and an outline item that is its own sibling. Every walker needs a
+/// depth limit or a seen-set; these are what they meet. The page tree stays sound on purpose: a
+/// kid that lists its own parent makes the whole document refuse to open ("no pages"), and a seed
+/// refused at open only reaches the error path.
+fn cyclic_seed() -> Vec<u8> {
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /Fm1 4 0 R >> >>", "/Fm1 Do 0 0 10 10 re f");
+    build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /Fm1 4 0 R >> >> /Annots [3 0 R] >>",
+            &form,
+            "<< /Type /Outlines /First 6 0 R /Last 6 0 R /Count 1 >>",
+            "<< /Title (Loop) /Parent 5 0 R /Next 6 0 R /Prev 6 0 R /Dest [3 0 R /Fit] >>",
+        ],
+        "/Root 1 0 R",
+    )
+}
+
+/// Synthetic seeds, so fuzzing works without the corpus: a small mixed document, a minimal one,
+/// a feature-rich page, an object-stream file with a cross-reference stream, an incremental
+/// update and looping object graphs. There is no encrypted seed yet: `xtask` does not depend on
+/// the crypt crate, and a hand-rolled encryptor here would be a second implementation to keep
+/// right.
 fn synthetic_seeds() -> Vec<Vec<u8>> {
-    let build = |objs: &[&str], trailer: &str| {
-        let mut out = b"%PDF-1.7\n".to_vec();
-        let mut offs = Vec::new();
-        for (i, o) in objs.iter().enumerate() {
-            offs.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-        }
-        let x = out.len();
-        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-        for o in offs {
-            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-        }
-        out.extend_from_slice(format!("trailer\n<< /Size {} {trailer} >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
-        out
-    };
     let content = "BT /F1 24 Tf 20 150 Td (Hello) Tj ET 0 0 1 rg 10 10 50 50 re f q 20 0 0 20 100 100 cm BI /W 2 /H 2 /BPC 8 /CS /G ID \u{0}\u{ff}\u{ff}\u{0} EI Q";
     let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
     vec![
@@ -188,6 +358,10 @@ fn synthetic_seeds() -> Vec<Vec<u8>> {
             ],
             "/Root 1 0 R",
         ),
+        feature_rich_seed(),
+        object_stream_seed(),
+        incremental_update_seed(),
+        cyclic_seed(),
     ]
 }
 
@@ -424,4 +598,59 @@ pub fn run(args: &[String]) -> Result<()> {
 
 fn fxhash(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| (h ^ u64::from(*x)).wrapping_mul(0x100_0000_01b3))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The offset after the last `startxref`, if the file has a well-formed one.
+    fn startxref(pdf: &[u8]) -> Option<usize> {
+        let i = pdf.windows(10).rposition(|w| w == b"startxref\n")?;
+        String::from_utf8_lossy(pdf.get(i + 10..)?).lines().next()?.trim().parse().ok()
+    }
+
+    /// A seed whose offsets are wrong would only exercise the reconstruction path, which hides the
+    /// readers the seed is there to reach.
+    #[test]
+    fn every_synthetic_seed_points_startxref_at_its_cross_reference() {
+        let seeds = synthetic_seeds();
+        assert_eq!(seeds.len(), 6, "update this count and the doc comment together with the seeds");
+        for (n, pdf) in seeds.iter().enumerate() {
+            assert!(pdf.starts_with(b"%PDF-"), "seed {n}: header");
+            assert!(pdf.ends_with(b"%%EOF\n"), "seed {n}: trailer");
+            let at = startxref(pdf).unwrap_or_else(|| panic!("seed {n}: no startxref"));
+            let target = pdf.get(at..).unwrap_or_default();
+            let table = target.starts_with(b"xref\n");
+            let xref_stream = find(target.get(..40).unwrap_or(target), b"0 obj").is_some() && find(target, b"/Type /XRef").is_some();
+            assert!(table || xref_stream, "seed {n}: startxref {at} does not reach a cross-reference");
+        }
+    }
+
+    /// The incremental-update seed must chain to the first section, or it is not an update.
+    #[test]
+    fn the_incremental_seed_chains_to_the_first_cross_reference() {
+        let pdf = incremental_update_seed();
+        let at = startxref(&pdf).unwrap_or(0);
+        let tail = String::from_utf8_lossy(pdf.get(at..).unwrap_or_default()).into_owned();
+        let prev: usize = tail.split("/Prev ").nth(1).and_then(|s| s.split_whitespace().next()).and_then(|s| s.parse().ok()).unwrap_or(0);
+        assert!(prev > 0 && prev < at, "/Prev {prev} must point at the earlier section (startxref {at})");
+        assert!(pdf.get(prev..).unwrap_or_default().starts_with(b"xref\n"));
+    }
+
+    /// Every cross-reference entry of the classic seeds points at its own object.
+    #[test]
+    fn classic_seed_entries_point_at_their_objects() {
+        for (n, pdf) in [synthetic_seeds().remove(0), feature_rich_seed(), cyclic_seed()].iter().enumerate() {
+            let at = startxref(pdf).unwrap_or(0);
+            let text = String::from_utf8_lossy(pdf.get(at..).unwrap_or_default()).into_owned();
+            for (num, line) in text.lines().skip(2).take_while(|l| !l.starts_with("trailer")).enumerate() {
+                if line.ends_with(" n ") {
+                    let off: usize = line.get(..10).and_then(|o| o.parse().ok()).unwrap_or(usize::MAX);
+                    let want = format!("{num} 0 obj");
+                    assert!(pdf.get(off..).unwrap_or_default().starts_with(want.as_bytes()), "seed {n}: entry {num} does not reach `{want}`");
+                }
+            }
+        }
+    }
 }
