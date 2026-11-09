@@ -632,6 +632,10 @@ impl Rule for NumberedLatin1Names {
 ///   names nothing, and its glyphs a few places off still read as text. The rule only fills,
 ///   so the glyphs the map names keep their strict text, and reads such a font's glyph ids
 ///   below 130 only (`MAC_RELAXED_LIMIT`).
+/// - **A CID-keyed CFF program whose CIDs are glyph ids in the order** (a TrueType font
+///   converted to CFF that kept its glyph ids as CIDs), with nothing naming its glyphs: its
+///   charset's CIDs must read as text and the glyph widths must prove the order; only CIDs
+///   below 130 are read, and only to fill ([`cid_cff_in_mac_order`]).
 /// - **Glyph names that only number the glyph id** (`/g55`, as converters write for TrueType
 ///   outlines) in a simple font: every numbered name is `g` and a decimal number, and the
 ///   glyphs they name read as text. These only fill.
