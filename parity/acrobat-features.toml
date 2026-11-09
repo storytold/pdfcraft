@@ -9637,8 +9637,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = ["doc_info", "page_render", "text_extract"]
-evidence = ["crates/automation/tests/it/automation.rs::open_inspect_render_and_find"]
-notes = ""
+evidence = ["crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "apps/pdfcraft-cli/tests/it/info_repairs.rs::info_lists_a_page_tree_the_app_rebuilt_by_scanning"]
+notes = "`info` lists the repair notes the app shows in Document Properties (`repairs`)."
 
 [[feature]]
 id = "misc.cli-edit"
