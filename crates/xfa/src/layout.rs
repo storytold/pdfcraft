@@ -1,7 +1,8 @@
 //! The layout engine: places a template's subforms, draws and fields on pages (XFA 3.3 part 2,
 //! "Layout"). Supports positioned, top-to-bottom, left-to-right and table/row layouts, page
-//! masters with content areas, `breakBefore`/`breakAfter`, and overflow leaders (header rows
-//! repeated after a page break). Repeating subforms get their initial instances.
+//! masters with content areas, `breakBefore`/`breakAfter` (including a named `pageArea`
+//! target), overflow onto a named master, and overflow leaders (header rows repeated after a
+//! page break). Repeating subforms get their initial instances.
 //!
 //! Output is a list of pages of resolution-independent items; `pdf` turns them into PDF.
 
@@ -28,9 +29,9 @@ mod items;
 mod measure;
 mod pages;
 
-use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
+use common::{clamp_opt, collect_values};
 pub(crate) use items::UNDERLINE_DROP;
 pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
@@ -119,6 +120,9 @@ struct Frame {
     w: f64,
     margin: Margin,
     border: Option<Border>,
+    /// Width-less sections adapt to a new content area, using their original constraints.
+    /// A fixed width keeps its position.
+    width_limits: Option<(Option<f64>, Option<f64>)>,
     part: FlowMark,
     parts: Vec<(usize, usize, Rect)>,
     /// Something inside didn't fit its content area: an item cut across areas, or one placed past
@@ -129,6 +133,19 @@ struct Frame {
     /// drew anything there (a widget with no border or fill draws nothing below the break): the
     /// part counts as holding something, as one that got items does.
     held: bool,
+}
+
+impl Frame {
+    fn fit_width(&mut self, (x, w): (f64, f64)) {
+        if let Some((min, max)) = self.width_limits {
+            self.x = x;
+            self.w = clamp_opt(w, min, max).min(w.max(1.0));
+        }
+    }
+
+    fn inner_width(&self) -> (f64, f64) {
+        (self.x + self.margin.left, (self.w - self.margin.horizontal()).max(1.0))
+    }
 }
 
 struct Cursor {
@@ -158,6 +175,10 @@ struct Layouter<'t> {
     pages: Vec<Page>,
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
+    /// State before the current master was drawn, for replacing an otherwise empty page.
+    page_fields: usize,
+    /// Only names touched on this page, including reservations that emitted no widget.
+    page_names: HashMap<String, Option<usize>>,
     /// Field values by `id`, for embedded fields in rich text.
     values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
@@ -183,6 +204,12 @@ struct Layouter<'t> {
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
+    /// The `pageArea` index used for an untargeted new page. Explicit break targets stick.
+    /// An `overflow` target is installed only while its subform is laid out, then the previous
+    /// selection returns unless a later explicit break replaced it (`preferred_epoch`).
+    preferred_area: Option<usize>,
+    /// Bumped when an explicit break selects [`Self::preferred_area`].
+    preferred_epoch: u64,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -199,6 +226,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
             name: None,
+            id: None,
             width: 612.0,
             height: 792.0,
             content: vec![Rect::new(36.0, 36.0, 540.0, 720.0)],
@@ -218,6 +246,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         pages: Vec::new(),
         cur: None,
         names: HashMap::new(),
+        page_fields: 0,
+        page_names: HashMap::new(),
         values,
         warnings: Vec::new(),
         warned: HashSet::new(),
@@ -231,6 +261,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         splitting: None,
         field_border: None,
         frames: Vec::new(),
+        preferred_area: None,
+        preferred_epoch: 0,
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;

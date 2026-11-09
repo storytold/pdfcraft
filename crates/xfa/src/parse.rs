@@ -635,7 +635,16 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
         let (occur_min, occur_max) = occur.map_or((0, None), |o| (o.min, o.max));
-        areas.push(PageArea { name: pa.attribute("name").map(str::to_string), width, height, content, items, occur_max, occur_min });
+        areas.push(PageArea {
+            name: pa.attribute("name").map(str::to_string),
+            id: pa.attribute("id").map(str::to_string),
+            width,
+            height,
+            content,
+            items,
+            occur_max,
+            occur_min,
+        });
     }
     // Nested page sets: take their areas too.
     for ps in children(n, "pageSet") {
@@ -662,9 +671,22 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
+    let is_page_target = |t: Option<&str>| t.is_none_or(|v| v == "pageArea" || v == "contentArea");
     // A break to a page or content area. With no targetType, the default is `auto`: "layout
     // continues using the current layout container" (XFA 3.3 p. 638), so no break.
     let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
+    let non_empty = |s: Option<&str>| s.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let break_target = |name: &str, break_attr: &str, target_attr: &str| -> Option<String> {
+        children(n, name)
+            .filter(|b| is_page_target(b.attribute("targetType")))
+            .find_map(|b| non_empty(b.attribute("target")))
+            .or_else(|| child(n, "break").filter(|b| is_page_target(b.attribute(break_attr))).and_then(|b| non_empty(b.attribute(target_attr))))
+    };
+    let break_before_target = break_target("breakBefore", "before", "beforeTarget");
+    let break_after_target = break_target("breakAfter", "after", "afterTarget");
+    let overflow_target = child(n, "overflow")
+        .and_then(|o| non_empty(o.attribute("target")))
+        .or_else(|| child(n, "break").and_then(|b| non_empty(b.attribute("overflowTarget"))));
     Subform {
         common,
         layout: Layout::parse(n.attribute("layout")),
@@ -673,8 +695,14 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         page_set,
         occur: parse_occur(child(n, "occur")),
         break_before_page: break_to_page("breakBefore")
+            || break_before_target.is_some()
             || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
-        break_after_page: break_to_page("breakAfter"),
+        break_after_page: break_to_page("breakAfter")
+            || break_after_target.is_some()
+            || child(n, "break").is_some_and(|b| b.attribute("after").is_some_and(|v| v == "pageArea" || v == "contentArea")),
+        break_before_target,
+        break_after_target,
+        overflow_target,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
     }
