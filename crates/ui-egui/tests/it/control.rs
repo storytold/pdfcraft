@@ -141,6 +141,22 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn form_tab_numbers_can_be_shown_and_captured_through_the_control_channel() {
+    let (mut h, c) = harness();
+    h.state_mut().open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(3);
+    ok(&mut h, &c, "ui.command", json!({"id": "form.prepare"}));
+    let control = ok(&mut h, &c, "ui.inspect", json!({"query": "Show tab numbers"}));
+    assert!(control["widgets"].as_array().unwrap().iter().any(|widget| widget["label"] == "Show tab numbers"));
+    ok(&mut h, &c, "ui.click", json!({"label": "Show tab numbers"}));
+    h.run_steps(2);
+    assert!(h.state().views[h.state().active.unwrap()].prepare.show_tab_numbers);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][1]["dirty"], false);
+    let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
+    assert!(shot["png_base64"].as_str().is_some_and(|png| !png.is_empty()), "the control channel returns a nonempty screenshot");
+}
+
+#[test]
 fn page_shadows_are_an_observable_app_wide_preference() {
     let (mut h, c) = harness();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
@@ -665,13 +681,21 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 60.0], "steps": 12, "button": "middle" }));
     h.run_steps(2);
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
-    assert!(h.state().views[0].auto_scrolling(), "release keeps scrolling toggled on even after movement");
+    assert!(!h.state().views[0].auto_scrolling(), "releasing after holding and scrolling turns auto-scroll off");
     let released = h.state().views[0].page_screen_rect(0).unwrap().top();
     h.run_steps(8);
-    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), released, "no drift after releasing a held middle drag");
     assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     assert!(h.state().dialog.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+
+    // Small movement within the dead zone before release still latches auto-scroll on.
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 10.0], "steps": 4, "button": "middle" }));
+    assert!(h.state().views[0].auto_scrolling(), "release within the dead zone keeps scrolling toggled on");
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 60.0 }));
+    h.run_steps(8);
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y + 60.0, "button": "middle" }));
     assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
 }
@@ -886,7 +910,8 @@ fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     assert!(h.state().views[0].selected.is_empty());
     assert!(h.state().views[0].org_drag.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    assert!(h.state().views[0].auto_scrolling(), "releasing the wheel leaves the grid scrolling on");
+    assert!(!h.state().views[0].auto_scrolling(), "releasing a held wheel stops the grid scrolling");
+    start_autoscroll(&mut h, &c);
     h.state_mut().views[0].organize = false;
     h.run_steps(2);
     assert!(!h.state().views[0].auto_scrolling(), "changing canvas mode cancels the gesture");
@@ -1449,6 +1474,10 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
 #[test]
 fn screenshots_of_window_and_region() {
     let (mut h, c) = harness();
+    // The harness makes its GPU renderer on the first render. The app has one before the control
+    // channel answers anything, so make it here, outside the screenshot's 5 s deadline: with 16
+    // tests at once on Windows, making it took up to 6 s and every copy of this test failed.
+    h.render().expect("the test renderer draws");
     let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
     let ppp = shot["pixels_per_point"].as_f64().unwrap();
     assert_eq!(shot["width"].as_f64().unwrap(), (1400.0 * ppp).round());
@@ -2161,6 +2190,47 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
+}
+
+/// CodeRabbit on #5341: the control channel folds a pinned folder on Home down to its heading
+/// and opens it again, as its chevron does, and `ui.state` says which are folded. Folders that
+/// aren't pinned, and states other than on and off, are refused with the reason.
+#[test]
+fn control_collapses_and_expands_a_pinned_folder() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-fold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inside.pdf"), fixture(1)).unwrap();
+    let folder = dir.to_string_lossy().into_owned();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let (s, pin) = (slot.clone(), folder.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.pin_folder(&pin);
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+    let folded = |h: &mut Harness<'static, PdfCraftApp>| ok(h, &c, "ui.state", json!({}))["pinned_folders"].clone();
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=on") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]));
+    assert!(h.query_by_label("inside.pdf").is_none(), "a collapsed folder lists nothing");
+    let unpinned = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": "/not/pinned=on" })).unwrap_err();
+    assert!(unpinned.contains("not a pinned folder"), "{unpinned}");
+    let bad = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=yes") })).unwrap_err();
+    assert!(bad.contains("=on or"), "{bad}");
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]), "refusals change nothing");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=off") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

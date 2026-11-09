@@ -14,6 +14,7 @@ mod netcheck;
 mod parity;
 mod screenshots;
 mod version;
+mod web;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
 
@@ -55,6 +56,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    (
+        "web-worker-link",
+        "Hash the web build's OCR worker files and name the worker in index.html (a Trunk post-build hook runs it)",
+        web::worker_link,
+    ),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {
