@@ -549,7 +549,7 @@ fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
-fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
+fn flattening_draws_cloudy_squares_and_keeps_one_it_cannot_draw() {
     let page = stream("", " ");
     let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
     let case = |extra: &str, drawn: usize, left: bool| {
@@ -571,10 +571,13 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
             assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
         }
     };
-    case("/BE << /S /C /I 2 >>", 0, true);
+    // A cloudy square is drawn (ISO 32000-2 Table 169); one whose /RD leaves no square inside
+    // its /Rect (Table 180: the sums "shall be less than" the width and height) cannot be, and stays.
+    case("/BE << /S /C /I 2 >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30]", 0, true);
     case("/BE << /S /S >>", 1, false);
-    case("/BE << /S /C /I 2 >> /F 2", 0, true);
-    case("/BE << /S /C /I 2 >> /AP << /N 6 0 R >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /F 2", 0, true);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /AP << /N 6 0 R >>", 1, false);
 }
 
 /// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
@@ -802,10 +805,12 @@ fn flattening_keeps_a_widget_whose_value_is_past_the_parent_limit() {
     assert_eq!(annots, Some(1), "the widget stays");
 }
 
-/// #1794: a reply this builder cannot draw stays on the page even when the comment it replies to
-/// is flattened; the comment's pop-up still goes with it.
+/// #1794, #5631: a reply this builder cannot draw goes with the comment it replies to, as its
+/// pop-up does. A reply of type R is not shown on the page (ISO 32000-2 Table 172), so it has no
+/// ink of its own to keep; before #5631 it stayed, the orphan of a comment that was gone. (A
+/// `/RT /Group` member that cannot be drawn still stays: it is drawn on the page.)
 #[test]
-fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
+fn flattening_takes_an_undrawable_reply_with_its_comment() {
     let page = stream("", " ");
     let mut doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -813,15 +818,212 @@ fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
         &page,
         "<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /Contents (Synthetic comment) /AP << /N 8 0 R >> /Popup 7 0 R >>",
-        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /RD [60 30 60 30] /IRT 5 0 R >>",
         "<< /Type /Annot /Subtype /Popup /Rect [300 600 400 700] /Parent 5 0 R >>",
         "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream",
     ]);
-    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the cloudy reply cannot be");
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the comment is drawn; the reply is not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the comment, its reply and its pop-up are gone");
+}
+
+/// #5631: flattening draws no reply of type R into the page, whatever its appearance, and builds
+/// none for one without (a note reply would get an icon); every reply goes with its comment, a
+/// reply to a reply too, even listed before the reply it answers. A `/RT /Group` member is
+/// drawn as any annotation.
+#[test]
+fn flattening_draws_no_reply_and_takes_the_thread_with_its_comment() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        // The reply to the reply (8) is listed before the reply it answers (6).
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 8 0 R 6 0 R 7 0 R 9 0 R] >>",
+        &page,
+        // The comment (blue), its reply (red), its pop-up, a reply to the reply with no
+        // appearance, and a member of its group (green).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 10 0 R >> /Popup 7 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Popup /Rect [300 500 400 600] /Parent 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply to the reply) /IRT 6 0 R /RT /R >>",
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    let n = flatten(&mut doc, &[0], true, false).unwrap();
+    assert_eq!(n, 2, "the comment and the group member are drawn; the replies are not");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the whole thread, its pop-up and the group member are gone");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [10, 12], "the comment's and the member's appearances; not the reply's, and none built for the other");
+}
+
+/// #5632 review: a reply's text never blocks flattening (a reply is not drawn into the page, so
+/// it can't bake in a `?`), and a `/RT /Group` member that flattening skipped (Hidden here)
+/// stays when its primary is flattened: only replies go with what they answer.
+#[test]
+fn flattening_skips_replies_in_the_question_mark_check_and_keeps_skipped_group_members() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 60 40] /F 4 /AP << /N 8 0 R >> >>",
+        // A text-box reply whose text Helvetica can't draw, with no appearance.
+        "<< /Type /Annot /Subtype /FreeText /Rect [10 50 150 80] /DA (0 g /Helv 12 Tf) /Contents <FEFF6B228FCE> /F 4 /IRT 5 0 R >>",
+        // A hidden member of the square's group.
+        "<< /Type /Annot /Subtype /Circle /Rect [70 10 100 40] /F 6 /IRT 5 0 R /RT /Group /AP << /N 8 0 R >> >>",
+        &stream("/Type /XObject /Subtype /Form /BBox [0 0 50 30]", "0 0 1 rg 0 0 50 30 re f"),
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "flattened, the square drawn");
     let doc = reopen(&doc);
     let p = &pdfcraft_model::pages(&doc)[0];
     let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
-    assert_eq!(left, [6], "the undrawn reply stays; the comment and its pop-up are gone");
+    assert_eq!(left, [7], "the reply went with the square; the hidden group member stays");
+}
+
+/// #5632 review: a thread three replies deep, listed in `/Annots` in reverse (the deepest reply
+/// first, the comment last), goes whole with its comment, none of the replies drawn; a reply to a
+/// `/RT /Group` member goes with that member, which is drawn.
+#[test]
+fn flattening_takes_a_thread_three_deep_in_reverse_order_and_a_group_members_reply() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [8 0 R 7 0 R 6 0 R 5 0 R 9 0 R 10 0 R] >>",
+        &page,
+        // The comment (blue), and three replies, each to the one before, all with appearances (red).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply 1) /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply 2) /IRT 6 0 R /RT /R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [115 485 135 503] /Contents (Reply 3) /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A member of the comment's group (green), and a reply to the member.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 13 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /Contents (Reply to the member) /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 2, "the comment and the group member are drawn; no reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the three replies and the member's reply go with what they answer");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [11, 13], "the comment's and the member's appearances, not the replies'");
+}
+
+/// #5632 review: `/Annots` should hold references (ISO 32000-2 Table 31), but a reply or pop-up
+/// written inline in it still goes with the comment it points at, as a referenced one does. One
+/// pointing at a comment that stays, stays.
+#[test]
+fn flattening_takes_inline_replies_and_popups_with_their_comment() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Inline reply) /IRT 5 0 R >> \
+         << /Type /Annot /Subtype /Popup /Rect [200 400 300 500] /Parent 5 0 R >> \
+         << /Type /Annot /Subtype /Text /F 28 /Rect [105 395 125 413] /Contents (Reply to a hidden note) /IRT 6 0 R >> 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 7 0 R >> >>",
+        // Hidden: not flattened, so it stays, and so does its inline reply.
+        "<< /Type /Annot /Subtype /Text /F 30 /Rect [100 400 120 418] /Contents (Hidden note) /AP << /N 7 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(p.dict.get(b"Annots").unwrap());
+    let left: Vec<String> = annots
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| doc.resolve(a).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string().map(|s| s.to_text())).unwrap_or_default())
+        .collect();
+    assert_eq!(left, ["Reply to a hidden note", "Hidden note"], "the inline reply and pop-up went with the comment");
+}
+
+/// #5632 review: replies whose `/IRT` runs in a loop (two replying to each other, one replying to
+/// itself, and a square and a note each answering the other) end the flattening. None of them is
+/// drawn: each is a reply. Those that answer nothing flattened stay; the comment beside them is
+/// flattened and its reply goes with it.
+#[test]
+fn flattening_ends_on_replies_whose_irt_loops() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >>",
+        &page,
+        // A comment and its reply.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [100 500 120 518] /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        // Two replies to each other.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [200 500 220 518] /IRT 8 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A reply to itself.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [300 500 320 518] /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        // A square and a note each answering the other: both are replies.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [400 500 420 518] /IRT 11 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [405 495 425 513] /IRT 10 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
+    assert_eq!(left, [7, 8, 9, 10, 11], "the comment's reply went with it; the looping replies stay");
+}
+
+/// #5632 review: an `/RT` that isn't `/Group` reads as the default R, as the comment list and the
+/// page read it, so replies with an unknown name or a string there are neither drawn nor kept
+/// once their comment is flattened. A form field with a stray `/IRT` is no reply: it is flattened
+/// as a field.
+#[test]
+fn flattening_reads_an_unknown_or_malformed_rt_as_a_reply_and_a_widget_with_irt_as_a_field() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 9 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /RT /Answer /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply) /IRT 5 0 R /RT (Group) /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /F 4 /Rect [200 500 220 518] /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, true).unwrap(), 2, "the comment and the field are drawn; neither reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "both replies went with the comment, and the field was flattened");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, not the replies'");
 }
 
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
@@ -1702,6 +1904,30 @@ fn tracked_text_preserves_larger_word_gaps() {
         let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
         assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "TEST WORD", "{show}");
     }
+}
+
+/// LibreOffice stretches a justified line on both sides of each space glyph, so a gap that reads
+/// as a space comes right before the space glyph it widens: one space, not two. A gap after the
+/// space glyph, a space glyph with no gap before it, and two space glyphs after a gap read as
+/// before.
+#[test]
+fn a_gap_before_a_space_glyph_reads_as_one_space() {
+    for show in ["[(Word) -250 ( next) -250 ( last)] TJ", "[(Word ) -250 (next ) -250 (last)] TJ", "[(Word) -250 (next) 0 ( last)] TJ"] {
+        let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last", "{show}");
+    }
+    // Only the first space glyph after the gap is the gap's: two real spaces stay two.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // The same line split over operators: the gap ends one run, its space glyph starts the next.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250] TJ [( next) -250] TJ ( last) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last");
+    // Space glyphs on both sides of a break between runs, with no gap, are two spaces.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (Word ) Tj ( next) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // Down a vertical column the same.
+    let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");
 }
 
 #[test]
@@ -3012,6 +3238,175 @@ fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
     assert!(r.substituted.as_deref().is_none_or(|s| !s.contains("Type3")), "{:?}", r.substituted);
     let lines = text::text_lines(&reopen(&doc), 0).unwrap();
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
+}
+
+/// #2378: a word the line's subset can't show goes to Helvetica, and only that word. The words
+/// it can show keep the source font (here `F2`, a subset of `a` and `b` without a space glyph),
+/// one font per word, and the line reads back whole and in place: one line, in its own font, so
+/// editing it again replaces all of it (review on #2955), also when it starts with a substitute
+/// word.
+#[test]
+fn only_the_words_a_subset_cannot_show_are_substituted() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_line(&mut doc, 0, 0, "ab ba cab ba").unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
+    let mut doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/F2") && content.contains("/PCEdHelvetica"), "both fonts are used: {content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+    assert_eq!(read, [("ab ba cab ba", "F2")]);
+    // Each word where its font puts it, the substituted `cab` included: no gap or overlap opens
+    // where the font changes (review on #2955).
+    let starts: Vec<f64> = lines[0].ink.iter().map(|b| b[0]).collect();
+    assert_eq!(starts.len(), 4, "{:?}", lines[0].ink);
+    for (got, want) in starts.iter().zip([72.0, 85.5, 98.48, 117.9]) {
+        assert!((got - want).abs() < 0.01, "word starts {starts:?}, want {want} among them");
+    }
+    assert!(lines[0].ink.windows(2).all(|w| w[0][2] < w[1][0]), "no word box overlaps the next: {:?}", lines[0].ink);
+    for (text, first) in [("cab ab", "PCEdHelvetica"), ("ba cab", "F2")] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+        assert_eq!(read, [(text, "F2")], "after replacing with {text:?} (starting with {first})");
+    }
+}
+
+/// Review on #2955: replacing a line written in two fonts again replaces its `/PCEdLine`
+/// sequence too. Kept, each edit nested one more, and its `EMC`s outnumbered what the reader
+/// counts once 256 deep, closing the sequence around the line (here a `/Span`). The content
+/// doesn't grow from one edit to the next.
+#[test]
+fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
+    let mut doc = text_page("/Span BMC BT /F2 10 Tf 72 600 Td (ab) Tj ET EMC BT /F2 10 Tf 72 500 Td (ba) Tj ET");
+    let count = |content: &str, op: &str| content.split_whitespace().filter(|w| *w == op).count();
+    let mut sizes = Vec::new();
+    for text in ["ab ba cab ba", "cab ab", "ab cab", "ab cab", "ab ba", "ba ab"] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        let mixed = text.contains('c');
+        assert_eq!(content.matches("/PCEdLine").count(), usize::from(mixed), "after {text:?}: {content}");
+        assert_eq!((count(&content, "BMC"), count(&content, "EMC")), (1 + usize::from(mixed), 1 + usize::from(mixed)), "after {text:?}: {content}");
+        assert_eq!(count(&content, "Tf"), 2 + if mixed { 4 } else { 1 }, "after {text:?}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<&str> = lines.iter().map(|l| l.text.trim()).collect();
+        assert_eq!(read, [text, "ba"], "after {text:?}");
+        assert_eq!(lines[0].baseline(), [72.0, 600.0], "after {text:?}: in place");
+        sizes.push(content.split_whitespace().count());
+    }
+    assert_eq!(sizes[2], sizes[3], "the same text again, the same content");
+    // A sequence holding marked content of its own goes whole, and what follows it keeps its
+    // font and size unless the replacement sets the same again.
+    for (after, font, size) in [("/F1 12 Tf", "F1", 12.0), ("/F2 12 Tf", "F2", 12.0), ("/F1 10 Tf", "F1", 10.0)] {
+        let mut doc = text_page(&format!(
+            "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf /Span <<>> BDC (ab) Tj EMC /F1 10 Tf ( cab) Tj EMC {after} 0 -20 Td (ba) Tj ET"
+        ));
+        text::replace_line(&mut doc, 0, 0, "ab ab").unwrap();
+        let doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 0, 0), "{after}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str, f64)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str(), l.size)).collect();
+        assert_eq!(read, [("ab ab", "F2", 10.0), ("ba", font, size)], "{after}: {content}");
+    }
+}
+
+/// Review on #2955: a leading space is not a word the line's font shows. " cab" (no word the
+/// subset can show) was split into an empty source-font run and a substitute run, so it was
+/// written as a two-font `/PCEdLine` with an empty `Tj` in the line's font; read back, the line
+/// was the substitute's alone, and the next edit took Helvetica for the line's own font. It is
+/// substituted as a whole instead, as a line with no word in the source font always was.
+#[test]
+fn a_leading_space_does_not_make_a_source_font_run() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    // With a word in the source font after it, the line is still written in both.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " ab cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab cab", "F2")]);
+    // The spaces the subset has no glyph for are moves, each one kept: the leading one before
+    // the first word, two between words as two.
+    let flat = |doc: &Document| String::from_utf8_lossy(&page_content_bytes(doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat(&doc).contains("/F2 10 Tf [-330] TJ (ab) Tj"), "{}", flat(&doc));
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "ab  ba cab").unwrap();
+    let doc = reopen(&doc);
+    assert!(flat(&doc).contains("(ab) Tj [-330] TJ [-330] TJ (ba) Tj"), "{}", flat(&doc));
+    // Before a substitute word, the leading spaces are the substitute's to show, all of them.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("(  cab) Tj"), "{content}");
+}
+
+/// Review on #2955: a paragraph rewrite keeps the `/PCEdLine` delimiters of a line an earlier
+/// replacement wrote in two fonts, so a rewritten paragraph's rows can end up inside one. A
+/// later replacement of one of those rows must not take the sequence's other rows with it.
+#[test]
+fn replacing_one_row_of_a_sequence_keeps_the_other_rows() {
+    let content = "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj 0 -20 Td /F2 10 Tf (ba) Tj EMC ET";
+    let rows = text::text_lines(&text_page(content), 0).unwrap();
+    assert_eq!(rows.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab", "ba"]);
+    for (row, text, other) in [(0, "ab ab", "ba"), (1, "ab", "ab cab")] {
+        let mut doc = text_page(content);
+        text::replace_line(&mut doc, 0, row, text).unwrap();
+        let doc = reopen(&doc);
+        let after: Vec<String> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.trim().to_string()).collect();
+        assert!(after.iter().any(|t| t == text) && after.iter().any(|t| t == other), "replacing row {row}: {after:?}");
+    }
+}
+
+/// Review on #2955: a row inside a shared `/PCEdLine` sequence that starts with a substitute run
+/// has the substitute's font in effect at its first operator. Replaced by text the row's own font
+/// shows, it must set that font again, or the new text is drawn in the substitute.
+#[test]
+fn a_row_replaced_inside_a_shared_sequence_starts_in_its_own_font() {
+    // A real two-font line, starting with the substitute run, then a second row put inside its
+    // sequence, as a paragraph rewrite that keeps the delimiters can leave it.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && content.contains("(  cab) Tj"), "{content}");
+    let mut doc = doc;
+    let shared = content.replacen("EMC", "0 -20 Td (ba) Tj EMC", 1);
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), shared.into_bytes()))));
+    set_page_contents(&mut doc, stream, None);
+    let rows = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(rows.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("cab ab", "F2"), ("ba", "F2")]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab", "F2"), ("ba", "F2")]);
+}
+
+/// Review on #2955: a sequence holding one row can also hold that row's positioning and text
+/// state, as a paragraph rewrite writes it inside kept delimiters. Replacing the row drops the
+/// delimiters, fonts and text, not the `Tm` that places it.
+#[test]
+fn replacing_the_only_row_of_a_sequence_keeps_its_position() {
+    let content = "BT /F2 10 Tf /PCEdLine BMC 1 0 0 1 72 600 Tm /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj EMC ET";
+    let mut doc = text_page(content);
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab"]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("PCEdLine") && !content.contains("cab"), "{content}");
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "{content}");
+    let (was, now) = (before[0].rect, after[0].rect);
+    assert!((was[0] - now[0]).abs() < 0.01 && (was[1] - now[1]).abs() < 0.01, "moved from {was:?} to {now:?}: {content}");
 }
 
 #[test]
@@ -5559,6 +5954,20 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
         }
         assert_eq!(listed(&duplicate), ["ALPHA"]);
     }
+}
+
+#[test]
+fn text_blocks_split_at_headings_and_blank_lines() {
+    let page = |size: u32, gap: u32, words: &[&str], top: u32| -> String {
+        words.iter().enumerate().map(|(i, w)| format!("BT /F1 {size} Tf 40 {} Td ({w}) Tj ET\n", top - i as u32 * gap)).collect()
+    };
+    let count = |content: String| text::text_blocks(&text_page(&content), 0).unwrap().len();
+    let heading = page(12, 14, &["First line of text", "second line here", "third line ends"], 340)
+        + &page(12, 14, &["HEADING"], 340 - 28 - 24)
+        + &page(12, 14, &["Next paragraph one", "next two", "next three"], 340 - 28 - 24 - 24);
+    assert_eq!(count(heading), 3);
+    assert_eq!(count(page(12, 14, &["Para one a", "para one b"], 340) + &page(12, 14, &["Para two a", "para two b"], 340 - 42)), 2);
+    assert_eq!(count(page(24, 29, &["VISIBLE", "HIDDEN"], 340)), 1);
 }
 
 #[test]
@@ -9360,7 +9769,7 @@ fn vertical_page(content: &str) -> Document {
     ]);
     let unicode = doc.add(Object::Stream(Stream::flate(
         Dict::new(),
-        b"1 begincodespacerange <0000> <ffff> endcodespacerange 6 beginbfchar <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 7 beginbfchar <0020> <0020> <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
     )));
     font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
     font.set(
@@ -11026,8 +11435,140 @@ fn carriage_returns_break_rows_on_the_styled_path() {
 fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
-    let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
+    let reopened = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "ab  ba   ab");
+}
+
+/// Spaces drawn as TJ gaps in a subset without a space glyph are wrapped in `/ActualText`, so
+/// repeated spaces and leading indents read back through `text_lines`, `editor_text`, and text
+/// extraction, and survive a second edit without shifting the line or miscalibrating its scale
+/// (#4229).
+#[test]
+fn spaces_and_indents_in_a_subset_without_a_space_glyph_round_trip_across_edits() {
+    for paragraph in [true, false] {
+        for typed in ["  ab  ba", "ab  ba   ab", "  ab  ba   ab  "] {
+            let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+            let edit = if paragraph { text::replace_block(&mut doc, 0, 0, typed) } else { text::replace_line(&mut doc, 0, 0, typed) };
+            assert_eq!(edit.unwrap().substituted, None, "{typed:?}");
+            let mut doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), 1, "{typed:?}: {lines:?}");
+            assert_eq!(lines[0].text, typed, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks[0].editor_text, typed, "{typed:?}");
+
+            // Re-edit the reopened document and verify the origin, gap count, and scale stay exact.
+            let next = "   ba  ab";
+            let edit2 = if paragraph { text::replace_block(&mut doc, 0, 0, next) } else { text::replace_line(&mut doc, 0, 0, next) };
+            assert_eq!(edit2.unwrap().substituted, None, "{typed:?}");
+            let doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines[0].text, next, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+            assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+        }
+    }
+
+    // Styled multi-row path: untouched calibration and row breaks keep 100 Tz and every space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba   ab").unwrap().substituted, None);
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba   ab");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba  ab").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  ab  ba", "ba  ab"]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba  ab");
+
+    // Two subsets of the same face (/F2 holds 'a' only, /F3 holds 'b' only, neither has ' '):
+    // spaces adopt their neighbour's subset on the row so no space is stranded in a glyph-less run.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (a) Tj /F1 12 Tf ( ) Tj /F3 12 Tf (b) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(97));
+        f.set(b"LastChar".to_vec(), Object::Int(97));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500)]));
+    })
+    .unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(98));
+        f.set(b"LastChar".to_vec(), Object::Int(98));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(520)]));
+    })
+    .unwrap();
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  b  a  \n  a  b  ").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  b  a  ", "  a  b  "]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  b  a  \n  a  b  ");
+
+    // A RangeStyle covering only spaces in a subset without a space glyph joins an adjacent
+    // glyph-bearing segment so its space count survives save/reopen.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab   ba");
+}
+
+/// A space that joins a neighbour's subset for `/ActualText` keeps the underline of its own
+/// style, not the neighbour's, and still reads back as that space.
+#[test]
+fn a_reassigned_subset_space_keeps_its_own_underline() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let line = text::text_lines(&doc, 0).unwrap().into_iter().next().expect("a line");
+    assert_eq!(line.text, "ab   ba");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let mut widths = Vec::new();
+    let mut from = None;
+    for row in content.lines() {
+        if let Some(rest) = row.strip_suffix(" m") {
+            from = rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
+        } else if let Some(rest) = row.strip_suffix(" l")
+            && let (Some(x0), Some(x1)) = (from.take(), rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()))
+        {
+            widths.push((x1 - x0).abs());
+        }
+    }
+    let text_width = line.rect[2] - line.rect[0];
+    assert!(widths.iter().any(|w| *w > 1.0), "the spaces lost their underline: {widths:?}\n{content}");
+    assert!(
+        widths.iter().all(|w| *w < text_width * 0.6),
+        "the space underline covered the neighbouring glyphs ({text_width}): {widths:?}\n{content}"
+    );
 }
 
 /// #6131: a subset that writes width 0 for its unused space (pdfTeX does) has no space glyph. A word added to
