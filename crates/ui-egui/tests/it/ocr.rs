@@ -465,3 +465,34 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
     assert!(moved, "Ctrl+Tab moves the focus");
     assert_eq!(h.state().ocr_verify.focus, start, "the ring returns after the four panes");
 }
+
+/// #6599: in a short window (a small screen, or a large display scale) the dialog's settings
+/// scroll, and Cancel and Recognize text stay on screen below them instead of running off it.
+#[test]
+fn recognize_text_keeps_its_buttons_in_a_short_window() {
+    use egui::accesskit::Role;
+    for height in [400.0, 480.0, 560.0, 700.0] {
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, height)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("scan.pdf", None, scan()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("ocr.recognize"));
+        h.run_steps(6);
+        let on_screen = |r: egui::Rect| r.min.y >= 0.0 && r.max.y <= height;
+        let title = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Recognize Text")).rect();
+        let run = h.get_by_role_and_label(Role::Button, "Recognize text").rect();
+        let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+        assert!(on_screen(title), "{height}: the title at {title:?} is off the window");
+        assert!(on_screen(run), "{height}: Recognize text at {run:?} is off the window");
+        assert!(on_screen(cancel), "{height}: Cancel at {cancel:?} is off the window");
+        // The last group scrolls in between the title and the buttons, which do not move.
+        h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).scroll_to_me();
+        h.run_steps(4);
+        let last = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).rect();
+        assert!(last.min.y >= title.max.y && last.max.y <= run.min.y, "{height}: Output folder {last:?} between {title:?} and {run:?}");
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Recognize text").rect(), run, "{height}: the buttons stay put");
+    }
+}
