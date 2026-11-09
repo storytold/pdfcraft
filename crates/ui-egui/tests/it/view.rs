@@ -2976,7 +2976,7 @@ fn full_screen_press_made_during_a_transition_opens_nothing_when_released() {
     assert!(!h.ctx.egui_wants_keyboard_input(), "released on the field once page 2 is in: nothing opens");
 }
 
-/// In full screen a double-click on a note opens it to edit, and turns no page: the pointer stays
+/// In full screen a double-click on a note opens its pop-up, and turns no page: the pointer stays
 /// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65).
 #[test]
 fn full_screen_double_click_on_a_note_opens_it_and_turns_no_page() {
@@ -3009,7 +3009,10 @@ trailer << /Root 1 0 R >>
     // Past the double-click time, when a turn would have come.
     h.run_steps(30);
     assert_eq!(h.state().views[n].current, 0, "no page turned");
-    assert!(h.ctx.egui_wants_keyboard_input(), "the note is open to edit");
+    // A double-click on a note opens its pop-up window, as in Acrobat (comment.popups).
+    let note =
+        h.state().session.get(h.state().views[n].id).unwrap().info.annotations.iter().find(|a| a.subtype == "Text").cloned().expect("the note");
+    assert_eq!(note.popup.map(|w| w.open), Some(true), "the note's pop-up is open");
 }
 
 /// With Animation effects following the system and the system asking for no animations (Windows'
