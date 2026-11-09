@@ -156,7 +156,7 @@ impl PdfCraftApp {
         let mut queue = std::mem::take(&mut self.deferred_opens);
         while self.deferred_opens.is_empty() && self.pending_opens.len() < self.open_slots() {
             let Some(next) = queue.pop_front() else { break };
-            self.open_path_request(&next.path, next.then, next.display_override);
+            self.open_file_request(&next.path, next.after_open, next.then, next.display_override);
         }
         // A file put back (the queue filled again) stays ahead of the ones behind it.
         self.deferred_opens.append(&mut queue);
@@ -780,11 +780,22 @@ impl PdfCraftApp {
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
-        let parameters = pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file());
-        let (path, after_open) = match &parameters {
-            Some((file, destination)) => (file.as_str(), Some(destination.clone())),
-            None => (path, None),
-        };
+        match pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file()) {
+            Some((file, destination)) => self.open_file_request(&file, Some(destination), then, display_override),
+            None => self.open_file_request(path, None, then, display_override),
+        }
+    }
+
+    /// Open the file `path`, shown at `after_open` once open. A file that waits for room in the
+    /// worker's queue keeps its destination with it, as its path is the file alone (#3425).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_file_request(
+        &mut self,
+        path: &str,
+        after_open: Option<pdfcraft_render::RemoteDestination>,
+        then: Option<&'static str>,
+        display_override: Option<(canvas::PageLayout, bool)>,
+    ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
@@ -815,10 +826,14 @@ impl PdfCraftApp {
             return OpenOutcome::Pending;
         }
         // The same file named again while its password is being asked for joins that prompt
-        // instead of queuing a second one; a display override or a tool it brings is kept.
+        // instead of queuing a second one; a display override, a place to open at or a tool it
+        // brings is kept.
         if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 prompt.display_override = display_override;
+            }
+            if after_open.is_some() {
+                prompt.after_open = after_open;
             }
             if then.is_some() {
                 prompt.then = then;
@@ -828,6 +843,9 @@ impl PdfCraftApp {
         if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
             if display_override.is_some() {
                 deferred.display_override = display_override;
+            }
+            if after_open.is_some() {
+                deferred.after_open = after_open;
             }
             if then.is_some() {
                 deferred.then = then;
@@ -892,7 +910,7 @@ impl PdfCraftApp {
             // The worker queue is bounded. A long file list (a launch behind a password prompt,
             // or many files at once) waits here, in order, and is submitted as opens finish.
             if self.pending_opens.len() >= self.open_slots() || !self.deferred_opens.is_empty() {
-                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
+                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), after_open, then, display_override });
                 return OpenOutcome::Pending;
             }
             match self.schedule_open(OpenRequest {

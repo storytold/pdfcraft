@@ -277,6 +277,7 @@ struct PendingOpen {
 #[cfg(not(target_arch = "wasm32"))]
 struct DeferredOpen {
     path: String,
+    after_open: Option<pdfcraft_render::RemoteDestination>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
