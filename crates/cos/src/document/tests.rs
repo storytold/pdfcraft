@@ -276,6 +276,10 @@ fn fax_images_decode_with_their_parameters() {
     let mut understated = parms.clone();
     understated.set(b"Rows".to_vec(), Object::Int(1));
     assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+    // More /Rows than /Height (PDFBOX-771: 1,084,975,104), as the renderer reads it too.
+    let mut overstated = parms.clone();
+    overstated.set(b"Rows".to_vec(), Object::Int(1_000_000_000));
+    assert_eq!(image(&doc, Some(Object::Dict(overstated)), 10, 3).unwrap(), bits, "/Height rows, not /Rows past it");
     // The parameters as the file gives them, /Rows included, and Table 11's defaults.
     let mut d = Dict::new();
     d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
