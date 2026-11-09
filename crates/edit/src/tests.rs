@@ -8328,11 +8328,10 @@ fn a_mark_drawn_as_its_own_run_off_the_row_stays_on_its_letter() {
     // Typed "سمُسس": the run سم (drawn م س), the damma 6 pt low over م, then the run سس.
     let content = "BT /F1 12 Tf 1 0 0 1 78 700 Tm (BA) Tj ET BT /F1 12 Tf 1 0 0 1 78.5 694 Tm (D) Tj ET \
                    BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
-    // Typed "سم سس": Word draws a space among the marks 5 pt below the row, and the run after
-    // it is still on the row.
-    let space = "BT /F1 12 Tf 1 0 0 1 81 700 Tm (BA) Tj ET BT /F1 12 Tf 1 0 0 1 78 695 Tm ( ) Tj ET \
-                 BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
-    for (content, expected) in [(content, "سمُسس"), (space, "سم سس")] {
+    // Typed "سمُ سس", as Word draws a vowelled word after a space: the damma over م, then the
+    // word space 5 pt below the row, then the letters م س, all in one text object; سس before it.
+    let space = "BT /F1 12 Tf 1 0 0 1 81.6 702 Tm (D) Tj 1 0 0 1 81.2 695 Tm ( ) Tj 1 0 0 1 81 700 Tm (BA) Tj ET                  BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
+    for (content, expected) in [(content, "سمُسس"), (space, "سمُ سس")] {
         let doc = arabic_marks_page(content);
         for doc in [&doc, &reopen(&doc)] {
             let lines = text::text_lines(doc, 0).unwrap();
@@ -8341,6 +8340,32 @@ fn a_mark_drawn_as_its_own_run_off_the_row_stays_on_its_letter() {
             assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), [expected]);
         }
     }
+}
+
+/// A space beside a raised superscript (a browser prints "2^30" in an Arabic row that way) is on
+/// the body's row: read with the looser tolerance of a space Word draws after a mark, it joined
+/// the superscript and split the row into two paragraphs.
+#[test]
+fn a_space_beside_a_superscript_stays_on_the_body_row() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <20> <0020> <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    // Drawn left to right: سس, the superscript 30 raised 3 pt, a space on the row, then سم.
+    let content = "BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET BT /F2 8 Tf 1 0 0 1 78 703 Tm (30) Tj ET                    BT /F1 12 Tf 1 0 0 1 87 700 Tm ( ) Tj ET BT /F1 12 Tf 1 0 0 1 90 700 Tm (BA) Tj ET";
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream("", content),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 7 0 R >>",
+            widths.join(" ")
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &stream("", cmap),
+    ]);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let texts: Vec<_> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(texts.contains(&"30"), "the superscript is a line of its own, without the space: {texts:?}");
 }
 
 #[test]

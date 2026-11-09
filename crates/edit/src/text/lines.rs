@@ -479,9 +479,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             s.logical_order = false;
         }
         // Word draws a large mark (Traditional Arabic's) on its own, raised or lowered by half an
-        // em from the row it sits on, and some spaces among the marks the same way.
+        // em from the row it sits on, and a space right after such a mark the same way. (Other
+        // spaces keep the usual tolerance: a space beside a superscript is on the body's row.)
         let only_marks = !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark);
-        let drift = if cluster || only_marks || s.text.chars().all(char::is_whitespace) { 0.6 } else { 0.3 };
+        let space_after_mark = marks.is_some() && s.text.chars().all(char::is_whitespace);
+        let drift = if cluster || only_marks || space_after_mark { 0.6 } else { 0.3 };
         // A line belongs to one stream piece. Within it, PDF producers often put every word
         // in its own BT/ET: geometry and text state, not object boundaries, define a line.
         let si = ops.get(s.op).map_or(0, |op| pieces.pieces_of(op).0);
@@ -514,14 +516,26 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             // Marks drawn just before this run's first letter, over it, follow that letter instead.
             let held = marks.filter(|m| !spaced && m.sit_on(&s)).map_or(0, |m| m.len);
             let at = l.text.len().saturating_sub(held);
-            match (held > 0 && l.text.is_char_boundary(at)).then(|| l.text.split_off(at)) {
-                Some(held) => {
-                    let first = first_cluster_len(&s.text);
-                    l.text.push_str(s.text.get(..first).unwrap_or(&s.text));
-                    l.text.push_str(&held);
-                    l.text.push_str(s.text.get(first..).unwrap_or_default());
+            // A space Word draws right after the marks, before their letter, is the word space
+            // before that letter: it goes before the marks, which still wait for the letter.
+            let waiting = if space_after_mark { marks.map_or(0, |m| m.len) } else { 0 };
+            let cut = l.text.len().saturating_sub(waiting);
+            if waiting > 0 && l.text.is_char_boundary(cut) {
+                let held = l.text.split_off(cut);
+                if !l.text.ends_with(char::is_whitespace) {
+                    l.text.push_str(&s.text);
                 }
-                None => l.text.push_str(&s.text),
+                l.text.push_str(&held);
+            } else {
+                match (held > 0 && l.text.is_char_boundary(at)).then(|| l.text.split_off(at)) {
+                    Some(held) => {
+                        let first = first_cluster_len(&s.text);
+                        l.text.push_str(s.text.get(..first).unwrap_or(&s.text));
+                        l.text.push_str(&held);
+                        l.text.push_str(s.text.get(first..).unwrap_or_default());
+                    }
+                    None => l.text.push_str(&s.text),
+                }
             }
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
@@ -581,7 +595,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         // does a run of marks or spaces alone (Word raises a space it draws among the marks).
         let mut pen = Pen::after(&s);
         if joins
-            && (cluster || only_marks || s.text.chars().all(char::is_whitespace))
+            && (cluster || only_marks || space_after_mark)
             && let Some((_, before)) = last
         {
             pen.across = before.across;
@@ -599,7 +613,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 Some(m) if joins => MarkFirst { len: m.len.saturating_add(s.text.len()), ..m },
                 _ => MarkFirst { len: s.text.len(), at: start, size: s.size, before: last_letter },
             });
-        } else {
+        } else if !(joins && space_after_mark) {
             marks = None;
             if s.text.chars().any(|c| !c.is_whitespace()) {
                 // The start of the run's last letter: a mark after the run is placed from it.
@@ -716,15 +730,15 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
             && sb > sa - size * 0.3
             && sb < ea.min(sa + size)
     };
-    // A run of spaces alone, which Word may draw off the row among the marks.
+    // A run of spaces alone, which Word may draw off the row right after a run of marks.
     let only_spaces =
         |run: &std::ops::Range<usize>| shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| s.text.chars().all(char::is_whitespace)));
-    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
+    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>, after_marks: bool| {
         let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent(a), extent(b)) else { return false };
         let (da, _, _, xa) = fa.span();
         let (db, _, _, xb) = fb.span();
         let size = fa.size.max(1.0);
-        let drift = if only_spaces(a) || only_spaces(b) { 0.6 } else { 0.3 };
+        let drift = if only_spaces(b) && after_marks { 0.6 } else { 0.3 };
         fa.font == fb.font
             && (fa.size - fb.size).abs() < 0.01
             && (da.0 - db.0).abs() < 1e-3
@@ -739,14 +753,17 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
     while i < runs.len() {
         let mut j = i.saturating_add(1);
         // The chain's last run of letters: a run of marks alone sits over it (or over the run
-        // after it) rather than left of it, and the next run continues from it.
+        // after it) rather than left of it.
         let mut anchor = i;
         while let (Some(a), Some(b)) = (runs.get(anchor), runs.get(j)) {
             let over = only_marks(b) && sits_over(a, b);
-            if !over && !leftward(a, b) {
+            // A run of spaces Word drew off the row right after a run of marks.
+            let after_marks = runs.get(j.saturating_sub(1)).is_some_and(only_marks);
+            if !over && !leftward(a, b, after_marks) {
                 break;
             }
-            if !over {
+            // The next run continues from the last run of letters, not from marks or spaces.
+            if !over && !only_spaces(b) {
                 anchor = j;
             }
             j = j.saturating_add(1);
