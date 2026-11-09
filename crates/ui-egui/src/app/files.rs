@@ -851,6 +851,7 @@ impl PdfCraftApp {
                 }
                 self.closed_tabs.push(path);
             }
+            self.placed_signatures.remove(&id);
             self.forget_recovery(id);
             self.session.close(id);
         }
