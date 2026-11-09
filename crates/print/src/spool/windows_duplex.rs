@@ -43,11 +43,7 @@ fn driver_default(result: Result<Option<Duplex>, PrintError>) -> Option<Duplex> 
 /// explicit two-sided settings (#5772). Unknown capabilities also keep the driver's default:
 /// turning a best-effort preference into a strict request could otherwise refuse a working job.
 fn supported_default(value: Option<Duplex>, support: impl FnOnce() -> Option<bool>) -> Option<Duplex> {
-    if matches!(value, Some(Duplex::LongEdge | Duplex::ShortEdge)) && support() != Some(true) {
-        None
-    } else {
-        value
-    }
+    if matches!(value, Some(Duplex::LongEdge | Duplex::ShortEdge)) && support() != Some(true) { None } else { value }
 }
 
 /// DEVMODEW's public dmFields (offset 72) marks dmDuplex (offset 94) as valid with

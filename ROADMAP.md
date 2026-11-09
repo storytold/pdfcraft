@@ -1,7 +1,7 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; refresh shared spooler; estimates unchanged)
-
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
@@ -240,7 +240,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
-- **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Estimates unchanged.
+- **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
