@@ -3198,6 +3198,113 @@ fn an_unlisted_object_body_or_an_entry_that_points_at_no_object_is_not_permitted
     }
 }
 
+/// `signed` (one page, object 3) with a revision appended by hand that signs it again, as many
+/// writers do: it adds signature field 61, listed in the catalog's `/Fields` and on page 3, whose
+/// value 62 is a signature dictionary over that revision, and ends with a cross-reference stream,
+/// object `xref_num`, that lists 1, 3, 61 and 62 but has no row for itself. ISO 32000-2 §7.5.8.3
+/// asks for that row; readers do without it. `annot_extra` is listed on page 3 as well.
+fn append_signature_with_unlisted_xref_stream(signed: &[u8], xref_num: u32, annot_extra: Option<u32>) -> Vec<u8> {
+    let doc = open(signed);
+    let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+    let prev: i64 = std::str::from_utf8(&signed[at..]).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+    let r = |num: u32| ObjRef { num, generation: 0 };
+    let mut catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    if let Some(Object::Dict(form)) = catalog.get_mut(b"AcroForm")
+        && let Some(Object::Array(fields)) = form.get_mut(b"Fields")
+    {
+        fields.push(Object::Ref(r(61)));
+    }
+    let mut page = doc.get(r(3)).as_dict().cloned().unwrap();
+    let mut annots = page.get(b"Annots").and_then(Object::as_array).cloned().unwrap();
+    annots.push(Object::Ref(r(61)));
+    annots.extend(annot_extra.map(|n| Object::Ref(r(n))));
+    page.set(b"Annots".to_vec(), Object::Array(annots));
+    let placeholder = "0 0000000000 0000000000 0000000000";
+    let bodies: [(u32, Vec<u8>); 4] = [
+        (1, {
+            let mut b = Vec::new();
+            pdfcraft_cos::serialize(&Object::Dict(catalog), &mut b);
+            b
+        }),
+        (3, {
+            let mut b = Vec::new();
+            pdfcraft_cos::serialize(&Object::Dict(page), &mut b);
+            b
+        }),
+        (61, b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Later) /Rect [0 0 0 0] /F 132 /P 3 0 R /V 62 0 R >>".to_vec()),
+        (
+            62,
+            format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [{placeholder}] /Contents <00> >>").into_bytes(),
+        ),
+    ];
+    let mut out = signed.to_vec();
+    let mut rows = Vec::new();
+    for (num, body) in &bodies {
+        rows.push((*num, out.len()));
+        out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    // Rows of type 1: four bytes of offset, two of generation.
+    let mut data = Vec::new();
+    for (_, offset) in &rows {
+        data.push(1u8);
+        data.extend_from_slice(&u32::try_from(*offset).unwrap().to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+    }
+    let mut dict = doc.trailer().clone();
+    let plumbing: [&[u8]; 7] = [b"Prev", b"XRefStm", b"Index", b"W", b"Filter", b"DecodeParms", b"Length"];
+    for key in plumbing {
+        dict.remove(key);
+    }
+    dict.set(b"Type".to_vec(), Object::name("XRef"));
+    dict.set(b"Size".to_vec(), Object::Int(64));
+    dict.set(b"Prev".to_vec(), Object::Int(prev));
+    dict.set(b"W".to_vec(), Object::Array([1, 4, 2].map(Object::Int).to_vec()));
+    dict.set(b"Index".to_vec(), Object::Array([1, 1, 3, 1, 61, 2].map(Object::Int).to_vec()));
+    dict.set(b"Length".to_vec(), Object::Int(i64::try_from(data.len()).unwrap()));
+    let section = out.len();
+    out.extend_from_slice(format!("{xref_num} 0 obj\n").as_bytes());
+    pdfcraft_cos::serialize(&Object::Dict(dict), &mut out);
+    out.extend_from_slice(b"\nstream\n");
+    out.extend_from_slice(&data);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{section}\n%%EOF\n").as_bytes());
+    // The value signs the revision: its range runs to the end, around /Contents.
+    let contents = out.windows(4).rposition(|w| w == b"<00>").unwrap();
+    let range = format!("0 {contents:010} {:010} {:010}", contents + 4, out.len() - contents - 4);
+    let at = out.windows(placeholder.len()).rposition(|w| w == placeholder.as_bytes()).unwrap();
+    out[at..at + placeholder.len()].copy_from_slice(range.as_bytes());
+    out
+}
+
+/// Many writers append a cross-reference stream with no row for itself. Its header sits in the
+/// appended bytes where no entry points, but it is the section the reader followed, and nothing
+/// refers to it: a later signature written that way stays a permitted change. The exemption
+/// holds only for that: the same stream numbered as the signed page's content, or listed on the
+/// page as an annotation, is refused.
+#[test]
+fn a_cross_reference_stream_without_a_row_for_itself_is_no_unlisted_body() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in [Some(2), None] {
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+        let resigned = append_signature_with_unlisted_xref_stream(&signed, 63, None);
+        let doc = open(&resigned);
+        assert!(doc.revisions().iter().any(|r| r.is_stream) && doc.xref_entry(63).is_none() && doc.xref_entry(62).is_some());
+        let s = check(&resigned);
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?}", s.modification);
+        assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{certify:?}");
+        for (what, xref_num, annot_extra, kind) in
+            [("numbered as the signed page content", 4, None, kind::PAGE_CONTENT), ("listed on the page", 63, Some(63), kind::OTHER)]
+        {
+            let s = check(&append_signature_with_unlisted_xref_stream(&signed, xref_num, annot_extra));
+            assert_eq!(s.status, Status::Invalid, "{certify:?}, {what}: {:?}", s.modification);
+            assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{certify:?}, {what}: {:?}", s.modification);
+        }
+    }
+}
+
 /// `fixture()` with the page's resources indirect: object 7 is the resources dictionary, 8 its
 /// `/Font` dictionary, 9 an `/ExtGState` the content uses, and 5 the font as before.
 fn fixture_with_indirect_resources() -> Vec<u8> {

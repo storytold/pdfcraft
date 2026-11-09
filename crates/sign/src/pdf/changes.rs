@@ -700,10 +700,24 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
         let Ok(offset) = usize::try_from(offset) else { return Vec::new() };
         [Some(offset), offset.checked_add(doc.header_offset())].into_iter().flatten().filter_map(skip).collect()
     };
+    // A revision's own cross-reference stream with no row for itself, as many writers leave it
+    // (ISO 32000-2 §7.5.8.3 asks for one; readers do without): the section this reader followed
+    // from `startxref` or `/Prev`, so the object there is that stream. Exempt only at exactly
+    // where such a section starts, and only under a number that names nothing else: the signed
+    // revision has no entry for it, this one lists none, and nothing refers to it. A stream
+    // numbered as a signed object, or one a page lists as an annotation, is judged as any body.
+    let sections = xref_stream_sections(doc);
+    let referenced = OnceCell::new();
+    let own_section = |num: u32, at: usize| {
+        sections.contains(&at)
+            && old.xref_entry(num).is_none()
+            && referenced.get_or_init(|| references(doc)).as_ref().is_some_and(|found: &HashSet<ObjRef>| !found.iter().any(|r| r.num == num))
+    };
     let mut unlisted: Vec<u32> = last
         .into_iter()
         .filter(|((num, generation), at)| match doc.xref_entry(*num) {
             Some(pdfcraft_cos::XrefEntry::InFile { offset, generation: g }) => g != *generation || !header_at(offset).contains(at),
+            None => !own_section(*num, *at),
             _ => true,
         })
         .map(|((num, _), _)| num)
@@ -711,6 +725,22 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
     unlisted.sort_unstable();
     unlisted.dedup();
     Some(unlisted)
+}
+
+/// Where each of `doc`'s cross-reference stream sections starts in the file: the header of the
+/// stream object the reader followed from `startxref` or a `/Prev`, past any white space before it.
+fn xref_stream_sections(doc: &Document) -> Vec<usize> {
+    let data = doc.bytes();
+    doc.revisions()
+        .iter()
+        .filter(|r| r.is_stream)
+        .filter_map(|r| {
+            let offset = usize::try_from(r.xref_offset).ok()?;
+            // An offset may count from a `%PDF-` header that does not start the file.
+            let offset = if r.header_relative { offset.checked_add(doc.header_offset())? } else { offset };
+            data.get(offset..).map(|rest| offset.saturating_add(rest.iter().take_while(|b| is_white_space(**b)).count()))
+        })
+        .collect()
 }
 
 /// PDF white space (ISO 32000-2 §7.2.3, Table 1).
