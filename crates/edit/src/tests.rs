@@ -9748,6 +9748,20 @@ fn added_text_is_wrapped_once_per_write() {
     assert!(calls <= 4, "the text was wrapped {calls} times for 40 lines");
 }
 
+/// Negative character spacing keeps a line from ever filling its box. Wrapping then holds every
+/// word on one line, appended and measured once each rather than copied and measured again for
+/// each word (which took minutes for this text); the widths still decide the breaks.
+#[test]
+fn added_text_that_never_fills_its_line_wraps_in_linear_time() {
+    let words = vec!["word"; 200_000].join(" ");
+    let packed = AddedText { rect: [0.0, 0.0, 100.0, 100.0], text: words.clone(), char_spacing: -10.0, ..AddedText::default() };
+    let start = std::time::Instant::now();
+    assert_eq!(added::lines(&packed), [words]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let plain = AddedText { rect: [0.0, 0.0, 60.0, 100.0], text: "one two three four".into(), size: 10.0, ..AddedText::default() };
+    assert_eq!(added::lines(&plain), ["one two", "three four"]);
+}
+
 /// Character spacing on added text (#4245) is the PDF's `Tc`, kept in `/PCAdded` so the item
 /// reopens with it; an item written without it reads 0.
 #[test]
