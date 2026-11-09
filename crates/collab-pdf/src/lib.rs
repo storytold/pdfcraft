@@ -41,7 +41,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_annot::{AnnotationInput, ReviewStateWire, StyleUpdate, WireError};
+use pdfcraft_collab_annot::{AnnotationInput, FontSizeUpdate, InfoUpdate, ReviewStateWire, StyleUpdate, WireError};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
 use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldConflicts, FieldValue, FormFieldKind, Session};
@@ -350,7 +350,8 @@ impl PdfAdapter {
     }
 
     /// Restyle the comment `/NM` as one all-or-nothing edit: colour, opacity,
-    /// line width, fill and border, the final look of the comment (RFC §3.1.2).
+    /// line width, line endings, fill and border, the final look of the comment
+    /// (RFC §3.1.2).
     ///
     /// The address is checked before anything changes: a comment that is gone,
     /// locked, or has no such property is refused, never half-applied. The
@@ -378,6 +379,71 @@ impl PdfAdapter {
             map.remove("expect");
         }
         payload["style"] = update.to_value();
+        payload["before"] = before.to_value();
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Set the final font size of a text box, typewriter text or callout
+    /// (RFC §3.1.3): one addressable operation over `Edit::FontSizeAnnotation`.
+    ///
+    /// The accepted operation carries the size it replaced (`before`), so an
+    /// undo is a normal operation every replica and the journal can replay.
+    fn update_font_size(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = FontSizeUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        // An undo names the size it left: if someone resized the text since,
+        // putting the old size back would overwrite their edit (ADR-0010 §3).
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = FontSizeUpdate::from_expect(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the text was resized since; the undo would overwrite it", false));
+            }
+        }
+        let before = update.before(&props);
+        self.apply_edit(Edit::FontSizeAnnotation { page, index, size: update.size })?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["size"] = json!(update.size);
+        if let Some(before) = before {
+            payload["before"] = json!(before);
+        }
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Set the final author, subject and note icon of a comment (RFC §3.1.3):
+    /// one addressable operation over `Edit::SetAnnotationInfo`.
+    ///
+    /// `null` in `info` takes a property away (what the undo of a comment that
+    /// had none says); an empty string is refused, so a request never wipes a
+    /// name by accident. The accepted operation carries the properties it
+    /// replaced (`before`), so the undo is a normal operation.
+    fn update_info(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = InfoUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = InfoUpdate::from_value(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment was changed since; the undo would overwrite it", false));
+            }
+        }
+        let before = update.before(&props);
+        let (author, subject, icon) = update.apply_to();
+        self.apply_edit(Edit::SetAnnotationInfo { page, index, author, subject, icon })?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["info"] = update.to_value();
         payload["before"] = before.to_value();
         Ok(json!({ "nm": name }))
     }
@@ -696,6 +762,16 @@ impl Adapter for PdfAdapter {
                 let (page, name) = annotation_target(&effective)?;
                 let page = self.page_index(page)?;
                 self.update_annotation(page, &name, &mut effective.payload)?
+            }
+            ("annotation.font_size", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_font_size(page, &name, &mut effective.payload)?
+            }
+            ("annotation.info", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_info(page, &name, &mut effective.payload)?
             }
             ("annotation.reply", ConflictClass::Merge) => {
                 let (page, name) = annotation_target(&effective)?;
@@ -1755,6 +1831,266 @@ mod tests {
         )?;
         room.apply(&editor, &undo, 0)?;
         assert!(near(style_of(room.adapter(), "r1")?.color, [0.0, 1.0, 0.0]), "the look the update replaced is back");
+        Ok(())
+    }
+
+    /// Line endings travel in the style object of `annotation.update`: one
+    /// operation sets a line's two ends, the accepted operation records the pair
+    /// it replaced, and a fresh replica replaying it draws the same line.
+    #[test]
+    fn an_update_sets_line_endings_with_the_rest_of_the_look() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let add = op(
+            "add-line",
+            ConflictClass::Merge,
+            Target::Page(page),
+            0,
+            0,
+            json!({"action": "annotation.add", "nm": "l1",
+                   "shape": {"kind": "line", "from": [10.0, 10.0], "to": [90.0, 60.0],
+                             "start": "none", "end": "open_arrow"},
+                   "style": {"color": [1.0, 0.0, 0.0], "opacity": 1.0, "width": 1.0},
+                   "contents": "", "author": DEFAULT_AUTHOR}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+
+        let update = op(
+            "style-endings",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            1,
+            0,
+            json!({"action": "annotation.update", "style": {"endings": ["square", "closed_arrow"]}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!(applied.op.payload["style"]["endings"], json!(["square", "closed_arrow"]));
+        assert_eq!(applied.op.payload["before"]["endings"], json!(["none", "open_arrow"]), "the pair it replaced");
+        let props = style_of(room.adapter(), "l1")?;
+        assert_eq!(props.endings, Some(vec![pdfcraft_engine::LineEnding::Square, pdfcraft_engine::LineEnding::ClosedArrow]));
+
+        // The undo names the pair it left and only applies while it is there.
+        let before = applied.op.payload["before"].clone();
+        let style = applied.op.payload["style"].clone();
+        let theirs = op(
+            "style-endings-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            2,
+            0,
+            json!({"action": "annotation.update", "style": {"endings": ["butt", "butt"]}}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let undo = op(
+            "undo-endings",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            3,
+            0,
+            json!({"action": "annotation.update", "style": before, "expect": style}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another pair of endings")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(style_of(room.adapter(), "l1")?.endings, Some(vec![pdfcraft_engine::LineEnding::Butt, pdfcraft_engine::LineEnding::Butt]));
+
+        // Replay: the accepted operation on a fresh replica yields the same line.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &add)?;
+        fresh.apply(&editor, &applied.op)?;
+        assert_eq!(style_of(&fresh, "l1")?.endings, Some(vec![pdfcraft_engine::LineEnding::Square, pdfcraft_engine::LineEnding::ClosedArrow]));
+        Ok(())
+    }
+
+    /// A sticky note has no endings: the whole style update is refused before the
+    /// document changes, and the version does not move.
+    #[test]
+    fn endings_on_a_comment_that_has_none_change_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let version = room.version();
+        let update = op(
+            "style-endings-note",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            version,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.0, 0.0, 1.0], "endings": ["square", "slash"]}}),
+        )?;
+        let refused = room.apply(&editor, &update, 0).err().ok_or("endings on a note were accepted")?;
+        assert_eq!(refused.code, ErrorCode::Invalid, "{}", refused.message);
+        assert_eq!(room.version(), version, "a refused operation does not move the version");
+        let props = style_of(room.adapter(), "n1")?;
+        assert_eq!(props.endings, None);
+        assert!(!near(props.color, [0.0, 0.0, 1.0]), "the colour did not change either");
+        Ok(())
+    }
+
+    /// The font size of a text box is one addressable operation: the accepted
+    /// operation carries the size it replaced, a fresh replica replays it, and an
+    /// undo is refused when someone resized the text since — without a change.
+    #[test]
+    fn a_font_size_update_resizes_text_and_undoes_as_one_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let add = op(
+            "add-box",
+            ConflictClass::Merge,
+            Target::Page(page),
+            0,
+            0,
+            json!({"action": "annotation.add", "nm": "t1",
+                   "shape": {"kind": "text_box", "rect": [10.0, 100.0, 180.0, 160.0], "font_size": 10.0},
+                   "style": {"color": [0.0, 0.0, 0.0], "opacity": 1.0, "width": 1.0},
+                   "contents": "Some text", "author": DEFAULT_AUTHOR}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+        let props = style_of(room.adapter(), "t1")?;
+        assert_eq!(props.font_size, Some(10.0));
+
+        let resize = op(
+            "size-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            1,
+            0,
+            json!({"action": "annotation.font_size", "size": 18.0}),
+        )?;
+        let applied = room.apply(&editor, &resize, 0)?;
+        assert_eq!(applied.op.payload["size"], json!(18.0));
+        assert_eq!(applied.op.payload["before"], json!(10.0), "the size it replaced");
+        assert_eq!(style_of(room.adapter(), "t1")?.font_size, Some(18.0));
+
+        // Replay on a fresh replica.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &add)?;
+        fresh.apply(&editor, &applied.op)?;
+        assert_eq!(style_of(&fresh, "t1")?.font_size, Some(18.0));
+
+        // Someone resizes it first: the undo's compare-and-set fails and their size stays.
+        let theirs = op(
+            "size-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            2,
+            0,
+            json!({"action": "annotation.font_size", "size": 22.0}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let version = room.version();
+        let undo = op(
+            "undo-size",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            version,
+            0,
+            json!({"action": "annotation.font_size", "size": 10.0, "expect": 18.0}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another size")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(room.version(), version);
+        assert_eq!(style_of(room.adapter(), "t1")?.font_size, Some(22.0));
+
+        // With the size in place, the undo puts the old one back.
+        let current = room.version();
+        let undo = op(
+            "undo-size-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            current,
+            0,
+            json!({"action": "annotation.font_size", "size": 10.0, "expect": 22.0}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert_eq!(style_of(room.adapter(), "t1")?.font_size, Some(10.0));
+        Ok(())
+    }
+
+    /// A note's icon and any comment's author and subject are one addressable
+    /// operation; an empty subject is refused before the document changes and the
+    /// version stays put.
+    #[test]
+    fn an_info_update_sets_the_note_icon_and_the_names_or_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+
+        let update = op(
+            "info-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.info", "info": {"author": "ada", "subject": "Review", "icon": "help"}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!(applied.op.payload["info"], json!({"author": "ada", "subject": "Review", "icon": "help"}));
+        let before = applied.op.payload["before"].clone();
+        assert_eq!(before["author"], json!("editor"), "the author it replaced (the token's actor)");
+        assert_eq!(before["subject"], json!("Sticky Note"), "the note's own subject");
+        assert_eq!(before["icon"], json!("comment"), "the icon the note drew");
+        let props = style_of(room.adapter(), "n1")?;
+        assert_eq!(props.author, "ada");
+        assert_eq!(props.subject, "Review");
+        assert_eq!(props.icon, Some(pdfcraft_engine::NoteIcon::Help));
+
+        // An empty subject and an icon on a comment that is not a note are refused whole.
+        let version = room.version();
+        let empty = op(
+            "info-empty",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            version,
+            0,
+            json!({"action": "annotation.info", "info": {"author": "bo", "subject": ""}}),
+        )?;
+        let refused = room.apply(&editor, &empty, 0).err().ok_or("an empty subject was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Invalid, "{}", refused.message);
+        assert_eq!(room.version(), version);
+        assert_eq!(style_of(room.adapter(), "n1")?.author, "ada", "the author did not change either");
+
+        room.apply(&editor, &rectangle("r1", room.version())?, 0)?;
+        let version = room.version();
+        let icon = op(
+            "info-icon",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            version,
+            0,
+            json!({"action": "annotation.info", "info": {"icon": "star"}}),
+        )?;
+        let refused = room.apply(&editor, &icon, 0).err().ok_or("an icon on a rectangle was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Invalid);
+
+        // The undo names what it replaced (`null` removes the subject again).
+        let current = room.version();
+        let undo = op(
+            "undo-info",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            current,
+            0,
+            json!({"action": "annotation.info", "info": before, "expect": {"author": "ada", "subject": "Review", "icon": "help"}}),
+        )?;
+        let applied = room.apply(&editor, &undo, 0)?;
+        let props = style_of(room.adapter(), "n1")?;
+        assert_eq!(props.author, "editor", "the author the update replaced is back");
+        assert_eq!(props.subject, "Sticky Note", "the note's own subject is back");
+        assert_eq!(props.icon, Some(pdfcraft_engine::NoteIcon::Comment));
+        assert_eq!(applied.op.payload["info"]["subject"], json!("Sticky Note"));
+
+        // Replay: the same accepted operations on a fresh replica.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &note("n1", "hello", 0)?)?;
+        fresh.apply(&editor, &update)?;
+        fresh.apply(&editor, &applied.op)?;
+        let replayed = style_of(&fresh, "n1")?;
+        assert_eq!(replayed.author, "editor");
+        assert_eq!(replayed.subject, "Sticky Note");
         Ok(())
     }
 

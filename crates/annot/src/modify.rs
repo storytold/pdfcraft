@@ -864,14 +864,20 @@ pub fn restyle(doc: &mut Document, page: usize, index: usize, change: Restyle, m
     if change.border_shape.is_some() && (!free_text || callout) {
         return Err(AnnotError::Invalid("only text boxes and typewriter text have a border shape".into()));
     }
-    let redraw = change.color.is_some() || change.opacity.is_some() || change.width.is_some();
+    if let Some(ends) = &change.endings {
+        let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
+        if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
+            return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
+        }
+    }
+    let redraw = change.color.is_some() || change.opacity.is_some() || change.width.is_some() || change.endings.is_some();
     // What a failed restyle puts back: the comment and the other members of a Replace Text
     // proposal it is restyled with (`set_style` changes those too).
     let partners = if redraw { replace_text_partners(doc, page, r)? } else { Vec::new() };
     let before: Vec<(ObjRef, Dict)> = std::iter::once(r).chain(partners).map(|o| (o, annot_dict(doc, o))).collect();
     let result = (|| -> Result<(), AnnotError> {
         if redraw {
-            let style = StyleChange { color: change.color, opacity: change.opacity, width: change.width, endings: None };
+            let style = StyleChange { color: change.color, opacity: change.opacity, width: change.width, endings: change.endings.clone() };
             set_style(doc, page, index, style, meta)?;
         }
         if let Some(fill) = change.fill {

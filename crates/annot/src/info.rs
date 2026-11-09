@@ -271,24 +271,40 @@ pub fn set_info(
 ) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let is_note = annot_dict(doc, r).name(b"Subtype") == Some(b"Text");
+    let before = annot_dict(doc, r);
+    let is_note = before.name(b"Subtype") == Some(b"Text");
     if icon.is_some() && !is_note {
         return Err(AnnotError::Invalid("only sticky notes have an icon".into()));
     }
     doc.update_dict(r, |d| {
+        // An empty name removes the property (the wire's `null`): a comment that
+        // had no author gets "no author" back, not an empty `/T`.
         if let Some(a) = author {
-            d.set(b"T".to_vec(), PdfString::text(a));
+            if a.is_empty() {
+                d.remove(b"T");
+            } else {
+                d.set(b"T".to_vec(), PdfString::text(a));
+            }
         }
         if let Some(s) = subject {
-            d.set(b"Subj".to_vec(), PdfString::text(s));
+            if s.is_empty() {
+                d.remove(b"Subj");
+            } else {
+                d.set(b"Subj".to_vec(), PdfString::text(s));
+            }
         }
         if let Some(i) = icon {
             d.set(b"Name".to_vec(), Object::name(i.name()));
         }
         touch(d, meta);
     })?;
-    if icon.is_some() {
-        set_appearance(doc, r)?;
+    // A note whose appearance cannot be redrawn keeps the properties it had: the
+    // shared operation is all-or-nothing, like `restyle`.
+    if icon.is_some()
+        && let Err(error) = set_appearance(doc, r)
+    {
+        doc.set(r, Object::Dict(before));
+        return Err(error);
     }
     Ok(())
 }

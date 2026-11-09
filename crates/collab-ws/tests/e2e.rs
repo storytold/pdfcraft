@@ -1030,6 +1030,232 @@ fn two_clients_restyle_a_comment_and_undo_it() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+fn add_shape_on_both(
+    ada: &mut Peer,
+    bo: &mut Peer,
+    doc: &DocKey,
+    shape: pdfcraft_engine::Shape,
+    name: &str,
+    op_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: "text".into(), author: "ada".into() };
+    let add = merge_op(doc.clone(), OpId::new(op_id)?, ada.version, 0, page(0, 0), add_annotation_payload(&new, name)?);
+    ada.send(add)?;
+    for peer in [&mut *ada, &mut *bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    Ok(())
+}
+
+/// Send `op` from `sender`; both replicas apply the accepted operation, which is
+/// returned (it carries what the undo needs).
+fn apply_on_both(sender: &mut Peer, other: &mut Peer, op: Op) -> Result<pdfcraft_collab_proto::Applied, Box<dyn std::error::Error>> {
+    sender.send(op)?;
+    let applied = match sender.settle()? {
+        ServerMessage::Applied(applied) => applied,
+        other => return Err(format!("expected an applied operation, got {other:?}").into()),
+    };
+    match other.settle()? {
+        ServerMessage::Applied(_) => {}
+        other => return Err(format!("expected the accepted operation on the second replica, got {other:?}").into()),
+    }
+    Ok(applied)
+}
+
+/// A line's endings are part of its look: both replicas see the new pair, and the
+/// undo from the accepted operation puts the old one back — one operation each.
+#[test]
+fn two_clients_change_line_endings_and_undo_them() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let line = pdfcraft_engine::Shape::Line {
+        from: [20.0, 20.0],
+        to: [150.0, 100.0],
+        start: pdfcraft_engine::LineEnding::None,
+        end: pdfcraft_engine::LineEnding::OpenArrow,
+    };
+    add_shape_on_both(&mut ada, &mut bo, &doc, line, "ada-line", "op-add-line")?;
+
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-endings")?,
+            base,
+            0,
+            annotation("ada-line", 0),
+            json!({"action": "annotation.update", "style": {"endings": ["square", "closed_arrow"]}}),
+        ),
+    )?;
+    for peer in [&ada, &bo] {
+        assert_eq!(
+            style_of(peer, "ada-line")?.endings,
+            Some(vec![pdfcraft_engine::LineEnding::Square, pdfcraft_engine::LineEnding::ClosedArrow]),
+            "the endings are on every replica"
+        );
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the endings have no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.update");
+    assert_eq!(undo.payload["style"]["endings"], json!(["none", "open_arrow"]));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-endings")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        assert_eq!(
+            style_of(peer, "ada-line")?.endings,
+            Some(vec![pdfcraft_engine::LineEnding::None, pdfcraft_engine::LineEnding::OpenArrow]),
+            "the old endings are back on every replica"
+        );
+    }
+    Ok(())
+}
+
+/// A text box's font size is one addressable operation with a compare-and-set
+/// undo, and a note's author/subject/icon is another; both replicas converge on
+/// each and the undo restores the previous properties.
+#[test]
+fn two_clients_resize_text_and_rename_a_note_and_undo_them() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let box_ = pdfcraft_engine::Shape::TextBox { rect: [20.0, 120.0, 180.0, 170.0], font_size: 10.0 };
+    let note = pdfcraft_engine::Shape::Note { at: [60.0, 240.0], icon: pdfcraft_engine::NoteIcon::Comment };
+    add_shape_on_both(&mut ada, &mut bo, &doc, box_, "ada-box", "op-add-box")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, note, "ada-note", "op-add-note")?;
+
+    // The font size.
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(doc.clone(), OpId::new("op-size")?, base, 0, annotation("ada-box", 0), json!({"action": "annotation.font_size", "size": 16.0})),
+    )?;
+    for peer in [&ada, &bo] {
+        assert_eq!(style_of(peer, "ada-box")?.font_size, Some(16.0), "the size is on every replica");
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the font size has no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.font_size");
+    assert_eq!(undo.payload["size"], json!(10.0));
+    assert_eq!(undo.payload["expect"], json!(16.0));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-size")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        assert_eq!(style_of(peer, "ada-box")?.font_size, Some(10.0), "the old size is back on every replica");
+    }
+
+    // The note's author, subject and icon, in one operation.
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-info")?,
+            base,
+            0,
+            annotation("ada-note", 0),
+            json!({"action": "annotation.info", "info": {"author": "bo", "subject": "Review", "icon": "help"}}),
+        ),
+    )?;
+    for peer in [&ada, &bo] {
+        let props = style_of(peer, "ada-note")?;
+        assert_eq!(props.author, "bo", "the author is on every replica");
+        assert_eq!(props.subject, "Review");
+        assert_eq!(props.icon, Some(pdfcraft_engine::NoteIcon::Help));
+    }
+    assert_eq!(applied.op.payload["before"]["author"], json!("ada"));
+    assert_eq!(applied.op.payload["before"]["subject"], json!("Sticky Note"), "the note's own subject");
+    assert_eq!(applied.op.payload["before"]["icon"], json!("comment"));
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the info change has no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.info");
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-info")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let props = style_of(peer, "ada-note")?;
+        assert_eq!(props.author, "ada", "the old author is back on every replica");
+        assert_eq!(props.subject, "Sticky Note");
+        assert_eq!(props.icon, Some(pdfcraft_engine::NoteIcon::Comment));
+    }
+    Ok(())
+}
+
+/// A style detail the comment cannot carry is refused before the document
+/// changes, and an undo whose value someone else replaced is a conflict: neither
+/// moves the version and both replicas keep the other user's change.
+#[test]
+fn a_refused_style_detail_and_a_stale_undo_change_nothing() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let note = pdfcraft_engine::Shape::Note { at: [60.0, 240.0], icon: pdfcraft_engine::NoteIcon::Comment };
+    let rect = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] };
+    let box_ = pdfcraft_engine::Shape::TextBox { rect: [20.0, 120.0, 180.0, 170.0], font_size: 10.0 };
+    add_shape_on_both(&mut ada, &mut bo, &doc, note, "ada-note", "op-add-note")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, rect, "ada-rect", "op-add-rect")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, box_, "ada-box", "op-add-box")?;
+
+    // Each refusal is answered to its sender only; nothing is broadcast and the
+    // version stays where it was.
+    let version = ada.version;
+    for (id, target, payload, why) in [
+        (
+            "op-bad-endings",
+            annotation("ada-note", 0),
+            json!({"action": "annotation.update", "style": {"endings": ["slash", "butt"]}}),
+            "a note has no endings",
+        ),
+        ("op-bad-size", annotation("ada-rect", 0), json!({"action": "annotation.font_size", "size": 14.0}), "a rectangle has no font size"),
+        ("op-bad-icon", annotation("ada-rect", 0), json!({"action": "annotation.info", "info": {"icon": "star"}}), "a rectangle has no icon"),
+        ("op-bad-subject", annotation("ada-note", 0), json!({"action": "annotation.info", "info": {"subject": ""}}), "an empty subject is refused"),
+    ] {
+        ada.send(merge_op(doc.clone(), OpId::new(id)?, version, 0, target, payload))?;
+        match ada.settle()? {
+            ServerMessage::Rejected(rejected) => {
+                assert_eq!(rejected.code, ErrorCode::Invalid, "{why}: {}", rejected.message);
+                assert!(!rejected.retryable);
+            }
+            other => return Err(format!("expected a rejection for {id}, got {other:?}").into()),
+        }
+        assert_eq!(ada.version, version, "a refusal does not move the version");
+    }
+
+    // Bo resizes the text; Ada's undo names the size it left (16) and is refused
+    // after Bo's second resize: his size stays on both replicas.
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(doc.clone(), OpId::new("op-size-1")?, base, 0, annotation("ada-box", 0), json!({"action": "annotation.font_size", "size": 16.0})),
+    )?;
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the font size has no inverse")?;
+    let base = bo.version;
+    apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(doc.clone(), OpId::new("op-size-2")?, base, 0, annotation("ada-box", 0), json!({"action": "annotation.font_size", "size": 22.0})),
+    )?;
+    let version = ada.version;
+    ada.send(Op { op_id: OpId::new("op-undo-size-late")?, ..undo })?;
+    match ada.settle()? {
+        ServerMessage::Rejected(rejected) => {
+            assert_eq!(rejected.code, ErrorCode::Conflict);
+            assert!(!rejected.retryable);
+        }
+        other => return Err(format!("expected a refused undo, got {other:?}").into()),
+    }
+    assert_eq!(ada.version, version, "a refused undo does not move the version");
+    for peer in [&ada, &bo] {
+        assert_eq!(style_of(peer, "ada-box")?.font_size, Some(22.0), "the other user's size is kept");
+    }
+    Ok(())
+}
+
 /// A reply that sets the review status is a named reply with `/State`; it
 /// survives the delete/restore copy, and a reply addressed to a comment that is
 /// gone is refused before anything is added.

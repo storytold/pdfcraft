@@ -627,6 +627,8 @@ pub struct Restyle {
     pub color: Option<Rgb>,
     pub opacity: Option<f64>,
     pub width: Option<f64>,
+    /// `/LE`: two endings for a line or polyline, one for a callout.
+    pub endings: Option<Vec<LineEnding>>,
     pub fill: Option<Option<Rgb>>,
     pub border_color: Option<Option<Rgb>>,
     pub border_shape: Option<BorderShape>,
@@ -638,6 +640,7 @@ impl Restyle {
         self.color.is_none()
             && self.opacity.is_none()
             && self.width.is_none()
+            && self.endings.is_none()
             && self.fill.is_none()
             && self.border_color.is_none()
             && self.border_shape.is_none()

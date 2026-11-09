@@ -49,6 +49,10 @@ pub const MAX_TOTAL_POINTS: usize = 4096;
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 /// Longest author line (bytes) one operation carries.
 pub const MAX_AUTHOR_BYTES: usize = 256;
+/// Smallest font size (pt) a text box, typewriter text or callout may have.
+pub const MIN_FONT_SIZE: f64 = 1.0;
+/// Largest font size (pt) the engine draws text at.
+pub const MAX_FONT_SIZE: f64 = 400.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WireError {
@@ -313,6 +317,8 @@ pub struct StyleUpdate {
     pub color: Option<[f64; 3]>,
     pub opacity: Option<f64>,
     pub width: Option<f64>,
+    /// `/LE`: two endings for a line or polyline, one for a callout.
+    pub endings: Option<Vec<EndingWire>>,
     /// `Some(None)` takes the fill away; `Some(Some(colour))` sets it.
     pub fill: Option<Option<[f64; 3]>>,
     /// `Some(None)` puts the border back to the text's colour.
@@ -326,6 +332,7 @@ impl StyleUpdate {
         self.color.is_none()
             && self.opacity.is_none()
             && self.width.is_none()
+            && self.endings.is_none()
             && self.fill.is_none()
             && self.border_color.is_none()
             && self.border_shape.is_none()
@@ -348,6 +355,9 @@ impl StyleUpdate {
         }
         if let Some(width) = self.width {
             object.insert("width".into(), json!(width));
+        }
+        if let Some(endings) = &self.endings {
+            object.insert("endings".into(), json!(endings));
         }
         if let Some(fill) = self.fill {
             object.insert("fill".into(), fill.map_or(Value::Null, |color| json!(color)));
@@ -376,6 +386,7 @@ impl StyleUpdate {
                 "color" => update.color = Some(color_field(field, "color")?),
                 "opacity" => update.opacity = Some(unit_field(field, "opacity")?),
                 "width" => update.width = Some(width_field(field)?),
+                "endings" => update.endings = Some(endings_field(field)?),
                 "fill" => update.fill = Some(optional_color_field(field, "fill")?),
                 "border_color" => update.border_color = Some(optional_color_field(field, "border colour")?),
                 "border_shape" => {
@@ -399,12 +410,20 @@ impl StyleUpdate {
         if props.locked {
             return Err(WireError::NotRestylable("a locked comment"));
         }
-        let redraw = self.color.is_some() || self.opacity.is_some() || self.width.is_some();
+        let redraw = self.color.is_some() || self.opacity.is_some() || self.width.is_some() || self.endings.is_some();
         if redraw && !props.restylable {
             return Err(WireError::NotRestylable("this comment's appearance"));
         }
         if self.width.is_some() && props.width.is_none() {
             return Err(WireError::Invalid { field: "width", why: "this comment has no line width".into() });
+        }
+        if let Some(endings) = &self.endings {
+            let Some(own) = props.endings.as_ref() else {
+                return Err(WireError::Invalid { field: "endings", why: "this comment has no line endings".into() });
+            };
+            if own.len() != endings.len() {
+                return Err(WireError::Invalid { field: "endings", why: format!("this comment has {} ending(s)", own.len()) });
+            }
         }
         if self.fill.is_some() && !props.fillable {
             return Err(WireError::Invalid { field: "fill", why: "this comment has no fill".into() });
@@ -428,6 +447,7 @@ impl StyleUpdate {
             color: self.color.map(|_| props.color.unwrap_or([0.0, 0.0, 0.0])),
             opacity: self.opacity.map(|_| props.opacity),
             width: self.width.and(props.width),
+            endings: self.endings.as_ref().map(|_| props.endings.iter().flatten().copied().map(EndingWire::from).collect()),
             fill: self.fill.map(|_| props.fill),
             border_color: self.border_color.map(|_| props.border_color),
             border_shape: self.border_shape.and(props.border_shape.map(BorderShapeWire::from)),
@@ -455,6 +475,12 @@ impl StyleUpdate {
         if self.width.is_some_and(|value| props.width.is_none_or(|current| (value - current).abs() > STYLE_EPSILON)) {
             return false;
         }
+        if let Some(value) = &self.endings {
+            let current: Option<Vec<EndingWire>> = props.endings.as_ref().map(|ends| ends.iter().copied().map(EndingWire::from).collect());
+            if current.as_ref() != Some(value) {
+                return false;
+            }
+        }
         if self.fill.is_some_and(|value| !same_optional(value, props.fill)) {
             return false;
         }
@@ -473,6 +499,7 @@ impl StyleUpdate {
             color: self.color,
             opacity: self.opacity,
             width: self.width,
+            endings: self.endings.as_ref().map(|ends| ends.iter().copied().map(Into::into).collect()),
             fill: self.fill,
             border_color: self.border_color,
             border_shape: self.border_shape.map(Into::into),
@@ -482,6 +509,224 @@ impl StyleUpdate {
 
 fn finite_field(value: &Value, field: &'static str) -> Result<f64, WireError> {
     value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| WireError::Invalid { field, why: "expected a finite number".into() })
+}
+
+fn font_size_field(value: &Value) -> Result<f64, WireError> {
+    let number = finite_field(value, "font size")?;
+    if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&number) {
+        Ok(number)
+    } else {
+        Err(WireError::Invalid { field: "font size", why: format!("must be {MIN_FONT_SIZE}\u{2013}{MAX_FONT_SIZE} pt") })
+    }
+}
+
+fn endings_field(value: &Value) -> Result<Vec<EndingWire>, WireError> {
+    let entries = value.as_array().ok_or_else(|| WireError::Invalid { field: "endings", why: "expected a list of ending names".into() })?;
+    if entries.len() != 1 && entries.len() != 2 {
+        return Err(WireError::Invalid { field: "endings", why: "one ending (a callout) or two (a line)".into() });
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let name = entry.as_str().ok_or_else(|| WireError::Invalid { field: "endings", why: "each ending is a name".into() })?;
+            EndingWire::parse(name)
+        })
+        .collect()
+}
+
+fn nullable_text_field(value: &Value, field: &'static str, max: usize) -> Result<Option<String>, WireError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let text = value.as_str().ok_or_else(|| WireError::Invalid { field, why: "expected a string or null".into() })?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(WireError::Invalid { field, why: "must not be empty (use null to take it away)".into() });
+    }
+    if text.len() > max {
+        return Err(WireError::Invalid { field, why: format!("at most {max} bytes") });
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
+/// The final font size of a text box, typewriter text or callout, as
+/// `annotation.font_size` sets it (RFC §3.1.3).
+///
+/// One number, one version, one undo step: the engine's
+/// `Edit::FontSizeAnnotation` regrows the box for the wrapped text, and the
+/// accepted operation carries the size it replaced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontSizeUpdate {
+    pub size: f64,
+}
+
+impl FontSizeUpdate {
+    /// The body of an `annotation.font_size`: `{"action": …, "size": …}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.font_size", "size": self.size })
+    }
+
+    /// Read the body of an `annotation.font_size`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let size = payload.get("size").ok_or_else(|| WireError::Malformed("the update names no font size".into()))?;
+        Ok(Self { size: font_size_field(size)? })
+    }
+
+    /// Read the `expect` of an `annotation.font_size`: the size the undo left.
+    pub fn from_expect(value: &Value) -> Result<Self, WireError> {
+        Ok(Self { size: font_size_field(value)? })
+    }
+
+    /// Refuse a comment that has no font of its own, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        if props.font_size.is_none() {
+            return Err(WireError::Invalid { field: "font size", why: "only text boxes, typewriter text and callouts have one".into() });
+        }
+        Ok(())
+    }
+
+    /// The size the comment had — what the accepted operation carries as
+    /// `before` and what an undo sets again.
+    pub fn before(&self, props: &Props) -> Option<f64> {
+        props.font_size
+    }
+
+    /// Whether the comment's font is still the one `expect` names.
+    pub fn still_matches(&self, props: &Props) -> bool {
+        props.font_size.is_some_and(|current| (self.size - current).abs() <= STYLE_EPSILON)
+    }
+}
+
+/// The final author, subject and note icon of an existing comment, as
+/// `annotation.info` sets them (RFC §3.1.3).
+///
+/// `None` leaves a property as it is; naming a property with an empty value is
+/// refused, so an operation never wipes an author or a subject by accident. The
+/// engine's `Edit::SetAnnotationInfo` writes `/T`, `/Subj` and, for a sticky
+/// note, `/Name` (redrawing the icon), all-or-nothing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InfoUpdate {
+    /// `Some(None)` takes the author away; `Some(Some(name))` sets it.
+    pub author: Option<Option<String>>,
+    /// `Some(None)` takes the subject away.
+    pub subject: Option<Option<String>>,
+    pub icon: Option<IconWire>,
+}
+
+impl InfoUpdate {
+    /// Whether the update names no property at all.
+    pub fn is_empty(&self) -> bool {
+        self.author.is_none() && self.subject.is_none() && self.icon.is_none()
+    }
+
+    /// The body of an `annotation.info`: `{"action": …, "info": {…}}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.info", "info": self.to_value() })
+    }
+
+    /// The `info` object on its own, as the accepted operation's `info` and
+    /// `before` write it: `null` is a property the comment did not have.
+    pub fn to_value(&self) -> Value {
+        let mut object = Map::new();
+        if let Some(author) = &self.author {
+            object.insert("author".into(), author.as_ref().map_or(Value::Null, |author| json!(author)));
+        }
+        if let Some(subject) = &self.subject {
+            object.insert("subject".into(), subject.as_ref().map_or(Value::Null, |subject| json!(subject)));
+        }
+        if let Some(icon) = self.icon {
+            object.insert("icon".into(), json!(icon.name()));
+        }
+        Value::Object(object)
+    }
+
+    /// Read the `info` object of an `annotation.info`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let info = payload.get("info").filter(|value| !value.is_null()).ok_or_else(|| WireError::Malformed("the update names no info".into()))?;
+        Self::from_value(info)
+    }
+
+    /// Read an info object: the properties present are the ones the update sets
+    /// — a string sets it, `null` takes it away. An empty string is refused, so
+    /// a request never wipes an author or a subject by accident; only an explicit
+    /// `null` (the undo of a property the comment did not have) does.
+    pub fn from_value(info: &Value) -> Result<Self, WireError> {
+        let object = info.as_object().ok_or_else(|| WireError::Malformed("the info must be an object".into()))?;
+        let mut update = Self::default();
+        for (key, field) in object {
+            match key.as_str() {
+                "author" => update.author = Some(nullable_text_field(field, "author", MAX_AUTHOR_BYTES)?),
+                "subject" => update.subject = Some(nullable_text_field(field, "subject", MAX_AUTHOR_BYTES)?),
+                "icon" => {
+                    let name = field.as_str().ok_or_else(|| WireError::Invalid { field: "icon", why: "expected a name".into() })?;
+                    update.icon = Some(IconWire::parse(name)?);
+                }
+                other => return Err(WireError::Invalid { field: "info", why: format!("{other:?} is not a comment property") }),
+            }
+        }
+        if update.is_empty() {
+            return Err(WireError::Malformed("the info names no property".into()));
+        }
+        Ok(update)
+    }
+
+    /// Refuse properties the comment does not have, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        if self.icon.is_some() && props.icon.is_none() {
+            return Err(WireError::Invalid { field: "icon", why: "only sticky notes have an icon".into() });
+        }
+        Ok(())
+    }
+
+    /// The properties the comment had for exactly the ones this update sets —
+    /// what the accepted operation carries as `before` and what an undo sets
+    /// back. A comment without `/T` records `null`, so the undo removes the name
+    /// again; a note without `/Name` reads the icon it draws (`Note`).
+    pub fn before(&self, props: &Props) -> Self {
+        let value = |current: &str, change: bool| {
+            change.then(|| {
+                let current = current.trim();
+                (!current.is_empty()).then(|| current.to_owned())
+            })
+        };
+        Self {
+            author: value(&props.author, self.author.is_some()),
+            subject: value(&props.subject, self.subject.is_some()),
+            icon: self.icon.map(|_| IconWire::from(props.icon.unwrap_or(NoteIcon::Note))),
+        }
+    }
+
+    /// Whether the comment still has the properties `expect` names: an undo is
+    /// a compare-and-set, so a later edit by someone else is a conflict.
+    pub fn still_matches(&self, props: &Props) -> bool {
+        let matches = |wanted: &Option<String>, current: &str| match wanted {
+            Some(name) => name == current.trim(),
+            None => current.trim().is_empty(),
+        };
+        if self.author.as_ref().is_some_and(|wanted| !matches(wanted, &props.author)) {
+            return false;
+        }
+        if self.subject.as_ref().is_some_and(|wanted| !matches(wanted, &props.subject)) {
+            return false;
+        }
+        if let Some(icon) = self.icon {
+            return props.icon.is_some_and(|current| IconWire::from(current) == icon);
+        }
+        true
+    }
+
+    /// What the engine writes: `/T`, `/Subj` (an empty name removes the entry)
+    /// and a note's `/Name`.
+    pub fn apply_to(&self) -> (Option<String>, Option<String>, Option<NoteIcon>) {
+        let name = |value: &Option<Option<String>>| value.clone().map(|name| name.unwrap_or_default());
+        (name(&self.author), name(&self.subject), self.icon.map(Into::into))
+    }
 }
 
 fn unit_field(value: &Value, field: &'static str) -> Result<f64, WireError> {
@@ -709,6 +954,41 @@ pub enum EndingWire {
     Slash,
 }
 
+impl EndingWire {
+    /// The wire name, as `#[serde(rename_all = "snake_case")]` writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Square => "square",
+            Self::Circle => "circle",
+            Self::Diamond => "diamond",
+            Self::OpenArrow => "open_arrow",
+            Self::ClosedArrow => "closed_arrow",
+            Self::Butt => "butt",
+            Self::ROpenArrow => "r_open_arrow",
+            Self::RClosedArrow => "r_closed_arrow",
+            Self::Slash => "slash",
+        }
+    }
+
+    /// Read the wire name; anything else is refused rather than guessed.
+    pub fn parse(name: &str) -> Result<Self, WireError> {
+        match name {
+            "none" => Ok(Self::None),
+            "square" => Ok(Self::Square),
+            "circle" => Ok(Self::Circle),
+            "diamond" => Ok(Self::Diamond),
+            "open_arrow" => Ok(Self::OpenArrow),
+            "closed_arrow" => Ok(Self::ClosedArrow),
+            "butt" => Ok(Self::Butt),
+            "r_open_arrow" => Ok(Self::ROpenArrow),
+            "r_closed_arrow" => Ok(Self::RClosedArrow),
+            "slash" => Ok(Self::Slash),
+            other => Err(WireError::Invalid { field: "endings", why: format!("{other:?} is not a line ending") }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkWire {
@@ -827,6 +1107,49 @@ pub enum IconWire {
     Star,
     RightArrow,
     UpArrow,
+}
+
+impl IconWire {
+    /// The wire name, as `#[serde(rename_all = "snake_case")]` writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Note => "note",
+            Self::Help => "help",
+            Self::Insert => "insert",
+            Self::Key => "key",
+            Self::NewParagraph => "new_paragraph",
+            Self::Paragraph => "paragraph",
+            Self::Check => "check",
+            Self::Circle => "circle",
+            Self::Cross => "cross",
+            Self::CrossHairs => "cross_hairs",
+            Self::Star => "star",
+            Self::RightArrow => "right_arrow",
+            Self::UpArrow => "up_arrow",
+        }
+    }
+
+    /// Read the wire name; anything else is refused rather than guessed.
+    pub fn parse(name: &str) -> Result<Self, WireError> {
+        match name {
+            "comment" => Ok(Self::Comment),
+            "note" => Ok(Self::Note),
+            "help" => Ok(Self::Help),
+            "insert" => Ok(Self::Insert),
+            "key" => Ok(Self::Key),
+            "new_paragraph" => Ok(Self::NewParagraph),
+            "paragraph" => Ok(Self::Paragraph),
+            "check" => Ok(Self::Check),
+            "circle" => Ok(Self::Circle),
+            "cross" => Ok(Self::Cross),
+            "cross_hairs" => Ok(Self::CrossHairs),
+            "star" => Ok(Self::Star),
+            "right_arrow" => Ok(Self::RightArrow),
+            "up_arrow" => Ok(Self::UpArrow),
+            other => Err(WireError::Invalid { field: "icon", why: format!("{other:?} is not a note icon") }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

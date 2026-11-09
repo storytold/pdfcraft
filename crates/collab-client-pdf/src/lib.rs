@@ -12,7 +12,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_annot::{AnnotationInput, BorderShapeWire, ReviewStateWire, StyleUpdate, WireError};
+use pdfcraft_collab_annot::{
+    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, IconWire, InfoUpdate, ReviewStateWire, StyleUpdate, WireError,
+};
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
 use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
 use serde_json::{Value, json};
@@ -121,6 +123,30 @@ pub fn style_restore_payload(style: &StyleUpdate, expect: &StyleUpdate) -> Value
     json!({"action": "annotation.update", "style": style.to_value(), "expect": expect.to_value()})
 }
 
+/// The body of an `annotation.font_size`: the final size of a text box,
+/// typewriter text or callout, named by the operation's target.
+pub fn font_size_payload(size: f64) -> Value {
+    FontSizeUpdate { size }.to_payload()
+}
+
+/// The update that undoes a font size: the size it replaced, applied only if the
+/// comment still has the one the operation left.
+pub fn font_size_restore_payload(size: f64, expect: f64) -> Value {
+    json!({"action": "annotation.font_size", "size": size, "expect": expect})
+}
+
+/// The body of an `annotation.info`: the author, subject and note icon of an
+/// existing comment, named by the operation's target.
+pub fn info_payload(update: &InfoUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The update that undoes one: the properties `info` puts back, applied only if
+/// the comment still has the ones `expect` names.
+pub fn info_restore_payload(info: &InfoUpdate, expect: &InfoUpdate) -> Value {
+    json!({"action": "annotation.info", "info": info.to_value(), "expect": expect.to_value()})
+}
+
 /// One style update for a group of interactive style edits on the same comment.
 ///
 /// The interface sends a colour, a width and a border as separate edits in one
@@ -144,11 +170,6 @@ pub fn style_update_for_edits(edits: &[Edit]) -> Option<(usize, usize, StyleUpda
         }
         match edit {
             Edit::StyleAnnotation { color, opacity, width, endings, .. } => {
-                // Line endings are a style of their own (a line's or a callout's)
-                // and do not travel yet: refuse the whole step rather than most of it.
-                if endings.is_some() {
-                    return None;
-                }
                 if let Some(color) = color {
                     update.color = Some(*color);
                 }
@@ -157,6 +178,11 @@ pub fn style_update_for_edits(edits: &[Edit]) -> Option<(usize, usize, StyleUpda
                 }
                 if let Some(width) = width {
                     update.width = Some(*width);
+                }
+                // A line's or a callout's endings travel in the same style object,
+                // so one choice of the dialog is still one operation.
+                if let Some(endings) = endings {
+                    update.endings = Some(endings.iter().copied().map(EndingWire::from).collect());
                 }
             }
             Edit::FillAnnotation { fill, .. } => update.fill = Some(*fill),
@@ -238,6 +264,28 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
             update.check_for(&props)?;
             Ok(Edit::RestyleAnnotation { page, index, style: update.to_restyle() })
+        }
+        ("annotation.font_size", ConflictClass::Merge) => {
+            // The final font size of an existing text box, typewriter text or
+            // callout, addressed by its `/NM`.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = FontSizeUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            Ok(Edit::FontSizeAnnotation { page, index, size: update.size })
+        }
+        ("annotation.info", ConflictClass::Merge) => {
+            // The final author, subject and note icon of an existing comment.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = InfoUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            let (author, subject, icon) = update.apply_to();
+            Ok(Edit::SetAnnotationInfo { page, index, author, subject, icon })
         }
         ("annotation.reply", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
@@ -525,11 +573,46 @@ pub fn ops_for_edit(
                 style_update_for_edits(std::slice::from_ref(edit)).ok_or_else(|| ProjectionError::Unsupported(edit.label().to_string()))?;
             Ok(vec![style_op(document, doc, client_id, base_version, epoch, counter, page, index, update)?])
         }
+        Edit::FontSizeAnnotation { page, index, size } => {
+            let nm = name_at(document, *page, *index)?;
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            FontSizeUpdate { size: *size }.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                font_size_payload(*size),
+            )])
+        }
+        Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
+            let nm = name_at(document, *page, *index)?;
+            // `None` leaves a property as it is; the interface's empty field is a
+            // value of its own, refused by the wire (a name is never wiped by
+            // accident; an undo that removes one says `null`).
+            let update = InfoUpdate { author: author.clone().map(Some), subject: subject.clone().map(Some), icon: icon.map(Into::into) };
+            if update.is_empty() {
+                return Err(ProjectionError::Unsupported(edit.label().to_string()));
+            }
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                info_payload(&update),
+            )])
+        }
         Edit::Batch { label, edits } => {
-            // One undo step of the interface (Comment Properties ▸ OK) is one
-            // operation when every edit in it restyles the same comment.
-            let (page, index, update) = style_update_for_edits(edits).ok_or_else(|| ProjectionError::Unsupported(label.clone()))?;
-            Ok(vec![style_op(document, doc, client_id, base_version, epoch, counter, page, index, update)?])
+            // One undo step of the interface (Comment Properties ▸ OK) may
+            // restyle a comment, resize its text and change its author, subject
+            // and icon: each kind is its own addressable operation, and the
+            // group still undoes as one step.
+            Ok(annotation_property_ops(document, edits, doc, client_id, base_version, epoch, counter)?
+                .ok_or_else(|| ProjectionError::Unsupported(label.clone()))?)
         }
         Edit::SetFieldValue { name, value } => {
             let target = Target::Field { name: name.clone() };
@@ -653,6 +736,74 @@ fn style_op(
     Ok(merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, update.to_payload()))
 }
 
+/// The operations one `Edit::Batch` from Comment Properties becomes: the style
+/// (`annotation.update`), the font size (`annotation.font_size`) and the
+/// author/subject/icon (`annotation.info`) of one comment, in that order. Each
+/// is its own addressable operation; the caller's history group undoes them as
+/// one step. `None` when the batch is not all property edits on one comment.
+fn annotation_property_ops(
+    document: &Document,
+    edits: &[Edit],
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+) -> Result<Option<Vec<Op>>, ProjectionError> {
+    let mut target: Option<(usize, usize)> = None;
+    let mut style: Vec<Edit> = Vec::new();
+    let mut size = None;
+    let mut info = InfoUpdate::default();
+    for edit in edits {
+        let (page, index) = match edit {
+            Edit::StyleAnnotation { page, index, .. }
+            | Edit::FillAnnotation { page, index, .. }
+            | Edit::BorderColorAnnotation { page, index, .. }
+            | Edit::BorderShapeAnnotation { page, index, .. }
+            | Edit::FontSizeAnnotation { page, index, .. }
+            | Edit::SetAnnotationInfo { page, index, .. } => (*page, *index),
+            _ => return Ok(None),
+        };
+        if target.get_or_insert((page, index)) != &(page, index) {
+            return Ok(None);
+        }
+        match edit {
+            Edit::FontSizeAnnotation { size: named, .. } => size = Some(*named),
+            Edit::SetAnnotationInfo { author, subject, icon, .. } => {
+                if let Some(author) = author {
+                    info.author = Some(Some(author.clone()));
+                }
+                if let Some(subject) = subject {
+                    info.subject = Some(Some(subject.clone()));
+                }
+                if let Some(icon) = icon {
+                    info.icon = Some(IconWire::from(*icon));
+                }
+            }
+            other => style.push(other.clone()),
+        }
+    }
+    let Some((page, index)) = target else { return Ok(None) };
+    let nm = name_at(document, page, index)?;
+    let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page))?;
+    let address = Target::Annotation { page: PageRef { index: page as u32, epoch }, nm };
+    let mut ops = Vec::new();
+    if !style.is_empty() {
+        let (_, _, update) = style_update_for_edits(&style).ok_or_else(|| ProjectionError::Unsupported("a style edit".into()))?;
+        update.check_for(&props)?;
+        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), update.to_payload()));
+    }
+    if let Some(size) = size {
+        FontSizeUpdate { size }.check_for(&props)?;
+        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), font_size_payload(size)));
+    }
+    if !info.is_empty() {
+        info.check_for(&props)?;
+        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address, info_payload(&info)));
+    }
+    Ok((!ops.is_empty()).then_some(ops))
+}
+
 /// The operation that undoes `op`, built from the document as it was *before*
 /// applying it. Undo is a normal operation (ADR-0010), so a conflict with
 /// someone else's later edit is reported, not forced: each inverse names the
@@ -702,6 +853,31 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
                 return Ok(None);
             }
             merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, style_restore_payload(&before, &update))
+        }
+        "annotation.font_size" => {
+            // The undo puts the size the operation replaced back, and only if the
+            // comment still has the one it left (`expect`).
+            let (page, nm) = annotation_target(op)?;
+            let index = annotation_index(document, page.index as usize, &nm)?;
+            let props =
+                document.comment_props(page.index as usize, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+            let size = FontSizeUpdate::from_payload(&op.payload)?.size;
+            let Some(before) = (FontSizeUpdate { size }).before(&props) else { return Ok(None) };
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, font_size_restore_payload(before, size))
+        }
+        "annotation.info" => {
+            // The undo puts the author, subject and icon the operation replaced
+            // back, and only if the comment still has the ones it left.
+            let (page, nm) = annotation_target(op)?;
+            let index = annotation_index(document, page.index as usize, &nm)?;
+            let props =
+                document.comment_props(page.index as usize, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+            let update = InfoUpdate::from_payload(&op.payload)?;
+            let before = update.before(&props);
+            if before.is_empty() {
+                return Ok(None);
+            }
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, info_restore_payload(&before, &update))
         }
         "annotation.delete" => return Ok(None),
         "field.set_value" => {
@@ -763,6 +939,25 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let Target::Annotation { page, nm } = &op.target else { return None };
         let target = Target::Annotation { page: *page, nm: nm.clone() };
         return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, style_restore_payload(&before, &style)));
+    }
+    // A font size and a comment's author/subject/icon are undone the same way:
+    // from the value the server says it replaced (`before`).
+    if action == "annotation.font_size" {
+        let size = FontSizeUpdate::from_payload(&op.payload).ok()?.size;
+        let before = op.payload.get("before").and_then(Value::as_f64)?;
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, font_size_restore_payload(before, size)));
+    }
+    if action == "annotation.info" {
+        let info = InfoUpdate::from_value(op.payload.get("info")?).ok()?;
+        let before = InfoUpdate::from_value(op.payload.get("before")?).ok()?;
+        if before.is_empty() {
+            return None;
+        }
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, info_restore_payload(&before, &info)));
     }
     let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     match action {
@@ -1375,10 +1570,10 @@ mod tests {
         Ok(())
     }
 
-    /// A line ending is a style the wire does not carry yet: the step is refused
-    /// whole rather than half-applied.
+    /// A style edit the comment cannot carry is refused here too, before an
+    /// operation is built: a sticky note has no line endings to change.
     #[test]
-    fn a_style_edit_the_wire_cannot_carry_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_style_edit_the_comment_cannot_carry_is_refused_on_this_side_too() -> Result<(), Box<dyn std::error::Error>> {
         let (mut session, id) = open()?;
         apply(
             &mut session,
@@ -1403,7 +1598,167 @@ mod tests {
             endings: Some(vec![pdfcraft_engine::LineEnding::OpenArrow, pdfcraft_engine::LineEnding::None]),
         };
         let mut counter = 0;
-        assert!(matches!(super::ops_for_edit(document, &edit, doc()?, "ada", 0, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
+        assert!(matches!(super::ops_for_edit(document, &edit, doc()?, "ada", 0, 0, &mut counter), Err(ProjectionError::Invalid(_))));
+        Ok(())
+    }
+
+    /// A line's endings travel inside the style object of `annotation.update`;
+    /// the inverse names the pair the update replaced, and the accepted operation
+    /// draws the same line on the other replica.
+    #[test]
+    fn line_endings_travel_with_the_style_and_their_undo_names_the_pair() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_engine as engine;
+        let (mut session, id) = open()?;
+        let (mut other, other_id) = open()?;
+        let shape =
+            engine::Shape::Line { from: [20.0, 20.0], to: [150.0, 100.0], start: engine::LineEnding::None, end: engine::LineEnding::OpenArrow };
+        let new = engine::NewAnnotation {
+            page: 0,
+            shape: shape.clone(),
+            style: engine::Style::default_for(&shape),
+            contents: String::new(),
+            author: "Ada".into(),
+        };
+        let add =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&new, "line-1")?);
+        apply(&mut session, id, &add)?;
+        apply(&mut other, other_id, &add)?;
+
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("line-1")).ok_or("the line is missing")?;
+        let edit = engine::Edit::StyleAnnotation {
+            page: 0,
+            index,
+            color: None,
+            opacity: None,
+            width: None,
+            endings: Some(vec![engine::LineEnding::Square, engine::LineEnding::ClosedArrow]),
+        };
+        let mut counter = 0;
+        let ops = super::ops_for_edit(document, &edit, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1, "one choice of the dialog is one operation");
+        assert_eq!(ops[0].payload["action"], "annotation.update");
+        assert_eq!(ops[0].payload["style"]["endings"], serde_json::json!(["square", "closed_arrow"]));
+
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("i1")?)?.ok_or("endings can be undone")?;
+        assert_eq!(inverse.payload["style"]["endings"], serde_json::json!(["none", "open_arrow"]), "the pair it replaced");
+        assert_eq!(inverse.payload["expect"]["endings"], serde_json::json!(["square", "closed_arrow"]));
+
+        // The accepted operation is the same body; the other replica applies it.
+        let accepted = merge_op(doc()?, OpId::new("style-1")?, 1, 0, ops[0].target.clone(), ops[0].payload.clone());
+        let edit = super::edit_for(other.get(other_id).ok_or("gone")?, &accepted)?;
+        assert!(matches!(edit, engine::Edit::RestyleAnnotation { .. }));
+        other.apply_remote(other_id, edit)?;
+        let props = other.get(other_id).ok_or("gone")?.comment_props(0, 0).ok_or("no properties")?;
+        assert_eq!(props.endings, Some(vec![engine::LineEnding::Square, engine::LineEnding::ClosedArrow]));
+        Ok(())
+    }
+
+    /// A font size and a comment's author/subject/icon are their own addressable
+    /// operations; the inverse of each names what it left, and the accepted
+    /// operation is replayed as the engine edit it came from.
+    #[test]
+    fn a_font_size_and_an_info_change_become_operations_with_cas_inverses() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_engine as engine;
+        let (mut session, id) = open()?;
+        let (mut other, other_id) = open()?;
+        let shape = engine::Shape::TextBox { rect: [10.0, 100.0, 180.0, 160.0], font_size: 10.0 };
+        let new = engine::NewAnnotation {
+            page: 0,
+            shape: shape.clone(),
+            style: engine::Style::default_for(&shape),
+            contents: "Box".into(),
+            author: "Ada".into(),
+        };
+        let add =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&new, "box-1")?);
+        apply(&mut session, id, &add)?;
+        apply(&mut other, other_id, &add)?;
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("box-1")).ok_or("the box is missing")?;
+        let mut counter = 0;
+
+        let size = engine::Edit::FontSizeAnnotation { page: 0, index, size: 16.0 };
+        let ops = super::ops_for_edit(document, &size, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "annotation.font_size");
+        assert_eq!(ops[0].payload["size"], serde_json::json!(16.0));
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("i-size")?)?.ok_or("a size can be undone")?;
+        assert_eq!(inverse.payload["size"], serde_json::json!(10.0));
+        assert_eq!(inverse.payload["expect"], serde_json::json!(16.0));
+        let accepted = merge_op(doc()?, OpId::new("size-1")?, 1, 0, ops[0].target.clone(), ops[0].payload.clone());
+        let edit = super::edit_for(other.get(other_id).ok_or("gone")?, &accepted)?;
+        assert!(matches!(edit, engine::Edit::FontSizeAnnotation { size, .. } if (size - 16.0).abs() < 1e-9));
+        other.apply_remote(other_id, edit)?;
+        assert_eq!(other.get(other_id).ok_or("gone")?.comment_props(0, 0).ok_or("no properties")?.font_size, Some(16.0));
+
+        // The author, subject and icon of the same comment are one `annotation.info`.
+        let document = session.get(id).ok_or("gone")?;
+        let info = engine::Edit::SetAnnotationInfo { page: 0, index, author: Some("Bo".into()), subject: Some("Review".into()), icon: None };
+        let ops = super::ops_for_edit(document, &info, doc()?, "ada", 2, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "annotation.info");
+        assert_eq!(ops[0].payload["info"], serde_json::json!({"author": "Bo", "subject": "Review"}));
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("i-info")?)?.ok_or("info can be undone")?;
+        assert_eq!(inverse.payload["info"], serde_json::json!({"author": "Ada", "subject": "Text Box"}), "the text box's own subject comes back");
+        assert_eq!(inverse.payload["expect"], serde_json::json!({"author": "Bo", "subject": "Review"}));
+        let accepted = merge_op(doc()?, OpId::new("info-1")?, 2, 0, ops[0].target.clone(), ops[0].payload.clone());
+        let edit = super::edit_for(other.get(other_id).ok_or("gone")?, &accepted)?;
+        assert!(matches!(edit, engine::Edit::SetAnnotationInfo { author: Some(ref a), .. } if a == "Bo"));
+        other.apply_remote(other_id, edit)?;
+        let props = other.get(other_id).ok_or("gone")?.comment_props(0, 0).ok_or("no properties")?;
+        assert_eq!(props.author, "Bo");
+        assert_eq!(props.subject, "Review");
+        Ok(())
+    }
+
+    /// One undo step of Comment Properties stays one step: a batch that restyles
+    /// a comment, resizes its text and renames its author becomes three
+    /// addressable operations, in that order, and refuses as a whole if any part
+    /// is not an annotation property edit.
+    #[test]
+    fn a_mixed_properties_batch_becomes_one_operation_per_kind() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_engine as engine;
+        let (mut session, id) = open()?;
+        let shape = engine::Shape::TextBox { rect: [10.0, 100.0, 180.0, 160.0], font_size: 10.0 };
+        let new = engine::NewAnnotation {
+            page: 0,
+            shape: shape.clone(),
+            style: engine::Style::default_for(&shape),
+            contents: "Box".into(),
+            author: "Ada".into(),
+        };
+        apply(
+            &mut session,
+            id,
+            &merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&new, "box-1")?),
+        )?;
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("box-1")).ok_or("the box is missing")?;
+        let batch = engine::Edit::Batch {
+            label: "Change comment properties".into(),
+            edits: vec![
+                engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None },
+                engine::Edit::FontSizeAnnotation { page: 0, index, size: 14.0 },
+                engine::Edit::SetAnnotationInfo { page: 0, index, author: Some("Bo".into()), subject: None, icon: None },
+            ],
+        };
+        let mut counter = 0;
+        let ops = super::ops_for_edit(document, &batch, doc()?, "ada", 1, 0, &mut counter)?;
+        let actions: Vec<String> = ops.iter().map(|op| op.payload["action"].as_str().unwrap_or_default().to_owned()).collect();
+        assert_eq!(actions, ["annotation.update", "annotation.font_size", "annotation.info"]);
+        assert!(ops.iter().all(|op| op.target == ops[0].target), "every operation addresses the same comment");
+
+        // A batch with an edit the wire does not carry is refused whole.
+        let mixed = engine::Edit::Batch {
+            label: "Change comment properties".into(),
+            edits: vec![
+                engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None },
+                engine::Edit::MoveAnnotation { page: 0, index, dx: 5.0, dy: 5.0 },
+            ],
+        };
+        let document = session.get(id).ok_or("gone")?;
+        assert!(matches!(super::ops_for_edit(document, &mixed, doc()?, "ada", 1, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
         Ok(())
     }
 

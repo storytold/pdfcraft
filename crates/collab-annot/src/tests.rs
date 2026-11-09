@@ -1,6 +1,6 @@
 use super::{
-    AnnotationInput, BorderShapeWire, EndingWire, IconWire, MAX_STROKE_POINTS, MAX_STROKES, MarkWire, MarkupWire, ReviewStateWire, ShapeWire,
-    StampWire, StyleFields, StyleUpdate, StyleWire, WireError,
+    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, IconWire, InfoUpdate, MAX_STROKE_POINTS, MAX_STROKES, MarkWire, MarkupWire,
+    ReviewStateWire, ShapeWire, StampWire, StyleFields, StyleUpdate, StyleWire, WireError,
 };
 use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NoteIcon, ReviewState, Shape, StampKind, Style};
 use serde_json::json;
@@ -209,6 +209,7 @@ fn a_style_update_round_trips_and_says_what_it_clears() -> Result<(), BoxError> 
         color: Some([0.0, 0.0, 1.0]),
         opacity: Some(0.5),
         width: Some(2.5),
+        endings: Some(vec![EndingWire::OpenArrow, EndingWire::Slash]),
         fill: Some(None),
         border_color: Some(Some([0.25, 0.5, 0.75])),
         border_shape: Some(BorderShapeWire::Oval),
@@ -216,10 +217,12 @@ fn a_style_update_round_trips_and_says_what_it_clears() -> Result<(), BoxError> 
     let payload = update.to_payload();
     assert_eq!(payload["action"], "annotation.update");
     assert_eq!(payload["style"]["fill"], serde_json::Value::Null, "a null fill takes the fill away");
+    assert_eq!(payload["style"]["endings"], json!(["open_arrow", "slash"]));
     assert_eq!(StyleUpdate::from_payload(&payload)?, update);
 
     let restyle = update.to_restyle();
     assert_eq!(restyle.color, Some([0.0, 0.0, 1.0]));
+    assert_eq!(restyle.endings, Some(vec![LineEnding::OpenArrow, LineEnding::Slash]));
     assert_eq!(restyle.fill, Some(None));
     assert_eq!(restyle.border_shape, Some(BorderShape::Oval));
     Ok(())
@@ -239,6 +242,18 @@ fn a_style_update_needs_a_property_and_names_no_unknown_one() {
     // A comment that has the property reads back what it wrote.
     let update = StyleUpdate::from_value(&json!({"color": [0.5, 0.5, 0.5], "fill": [0.0, 1.0, 0.0]})).expect("a valid update");
     assert_eq!(update.fill, Some(Some([0.0, 1.0, 0.0])));
+}
+
+#[test]
+fn line_endings_are_named_and_counted() {
+    assert!(StyleUpdate::from_value(&json!({"endings": ["open_arrow"]})).is_ok(), "a callout has one ending");
+    assert!(StyleUpdate::from_value(&json!({"endings": ["square", "closed_arrow"]})).is_ok(), "a line has two");
+    for bad in [json!({"endings": "open_arrow"}), json!({"endings": []}), json!({"endings": ["open_arrow", "slash", "butt"]})] {
+        assert!(matches!(StyleUpdate::from_value(&bad), Err(WireError::Invalid { field: "endings", .. })), "{bad}");
+    }
+    for bad in [json!({"endings": ["arrow"]}), json!({"endings": [1]})] {
+        assert!(matches!(StyleUpdate::from_value(&bad), Err(WireError::Invalid { field: "endings", .. })), "{bad}");
+    }
 }
 
 #[test]
@@ -268,6 +283,28 @@ fn a_style_update_refuses_a_property_the_comment_does_not_have() {
     // What the comment has, it takes: a width, a fill and a colour.
     let update = StyleUpdate { color: Some([0.0, 0.0, 1.0]), width: Some(3.0), fill: Some(Some([0.0, 1.0, 0.0])), ..StyleUpdate::default() };
     assert!(update.check_for(&square()).is_ok());
+
+    // A line has two endings, a callout one; a note has none to change.
+    let mut line = square();
+    line.subtype = "Line".into();
+    line.endings = Some(vec![LineEnding::None, LineEnding::OpenArrow]);
+    assert!(StyleUpdate { endings: Some(vec![EndingWire::Slash, EndingWire::Square]), ..StyleUpdate::default() }.check_for(&line).is_ok());
+    assert!(matches!(
+        StyleUpdate { endings: Some(vec![EndingWire::Slash]), ..StyleUpdate::default() }.check_for(&line),
+        Err(WireError::Invalid { field: "endings", .. })
+    ));
+    assert!(matches!(
+        StyleUpdate { endings: Some(vec![EndingWire::Slash]), ..StyleUpdate::default() }.check_for(&note),
+        Err(WireError::Invalid { field: "endings", .. })
+    ));
+    let mut callout = square();
+    callout.subtype = "FreeText".into();
+    callout.endings = Some(vec![LineEnding::OpenArrow]);
+    assert!(StyleUpdate { endings: Some(vec![EndingWire::ClosedArrow]), ..StyleUpdate::default() }.check_for(&callout).is_ok());
+    assert!(matches!(
+        StyleUpdate { endings: Some(vec![EndingWire::Slash, EndingWire::Butt]), ..StyleUpdate::default() }.check_for(&callout),
+        Err(WireError::Invalid { field: "endings", .. })
+    ));
 }
 
 #[test]
@@ -286,6 +323,108 @@ fn before_records_only_what_the_update_names_and_the_undo_checks_it() {
     assert!(update.still_matches(&restyled), "an unnamed property does not make the undo a conflict");
     restyled.color = Some([0.0, 1.0, 0.0]);
     assert!(!update.still_matches(&restyled), "someone restyled the same comment");
+
+    // Line endings are recorded and compared the same way.
+    let mut line = square();
+    line.subtype = "Line".into();
+    line.endings = Some(vec![LineEnding::None, LineEnding::OpenArrow]);
+    let update = StyleUpdate { endings: Some(vec![EndingWire::Butt, EndingWire::Slash]), ..StyleUpdate::default() };
+    assert_eq!(update.before(&line).endings, Some(vec![EndingWire::None, EndingWire::OpenArrow]));
+    assert!(!update.still_matches(&line), "the endings the update sets are not there yet");
+    let mut redrawn = line.clone();
+    redrawn.endings = Some(vec![LineEnding::Butt, LineEnding::Slash]);
+    assert!(update.still_matches(&redrawn));
+    let mut theirs = redrawn;
+    theirs.endings = Some(vec![LineEnding::None, LineEnding::None]);
+    assert!(!update.still_matches(&theirs), "someone changed the endings since");
+}
+
+#[test]
+fn a_font_size_update_round_trips_and_is_bounded() -> Result<(), BoxError> {
+    let update = FontSizeUpdate { size: 14.5 };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.font_size");
+    assert_eq!(payload["size"], json!(14.5));
+    assert_eq!(FontSizeUpdate::from_payload(&payload)?, update);
+    assert_eq!(FontSizeUpdate::from_expect(&json!(14.5))?, update);
+
+    // A size is a number of points in the range the engine draws.
+    assert!(matches!(FontSizeUpdate::from_payload(&json!({"action": "annotation.font_size"})), Err(WireError::Malformed(_))));
+    for bad in [json!("12"), json!(0.0), json!(401.0), json!(-3.0)] {
+        assert!(matches!(FontSizeUpdate::from_expect(&bad), Err(WireError::Invalid { field: "font size", .. })), "{bad}");
+    }
+
+    // Only text boxes, typewriter text and callouts have a font of their own.
+    let mut box_ = square();
+    box_.subtype = "FreeText".into();
+    box_.font_size = Some(10.0);
+    assert!(update.check_for(&box_).is_ok());
+    assert_eq!(update.before(&box_), Some(10.0));
+    assert!(!update.still_matches(&box_));
+    box_.font_size = Some(14.5);
+    assert!(update.still_matches(&box_));
+    assert!(matches!(update.check_for(&square()), Err(WireError::Invalid { field: "font size", .. })));
+
+    let mut locked = box_.clone();
+    locked.locked = true;
+    assert!(matches!(update.check_for(&locked), Err(WireError::NotRestylable(_))));
+    Ok(())
+}
+
+#[test]
+fn an_info_update_round_trips_and_refuses_an_empty_name() -> Result<(), BoxError> {
+    let update = InfoUpdate { author: Some(Some("ada".into())), subject: Some(Some("Review".into())), icon: Some(IconWire::Help) };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.info");
+    assert_eq!(payload["info"], json!({"author": "ada", "subject": "Review", "icon": "help"}));
+    assert_eq!(InfoUpdate::from_payload(&payload)?, update);
+
+    // `null` takes a property away — what the undo of a comment that had none says.
+    let clear = InfoUpdate::from_value(&json!({"author": null})).expect("a valid clear");
+    assert_eq!(clear.author, Some(None));
+    assert_eq!(clear.to_value(), json!({"author": null}));
+
+    // An empty string is a mistake, not a clear; an unknown property or icon is refused.
+    assert!(matches!(InfoUpdate::from_value(&json!({"subject": ""})), Err(WireError::Invalid { field: "subject", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({"subject": "   "})), Err(WireError::Invalid { field: "subject", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({"author": ""})), Err(WireError::Invalid { field: "author", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({"icon": "smiley"})), Err(WireError::Invalid { field: "icon", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({"icon": 7})), Err(WireError::Invalid { field: "icon", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({"colour": "red"})), Err(WireError::Invalid { field: "info", .. })));
+    assert!(matches!(InfoUpdate::from_value(&json!({})), Err(WireError::Malformed(_))));
+    assert!(matches!(InfoUpdate::from_payload(&json!({"action": "annotation.info"})), Err(WireError::Malformed(_))));
+
+    // An icon belongs to a sticky note; author and subject belong to any comment.
+    let mut note = square();
+    note.subtype = "Text".into();
+    note.icon = Some(NoteIcon::Note);
+    note.author = "bo".into();
+    note.subject = String::new();
+    assert!(update.check_for(&note).is_ok());
+    assert_eq!(update.before(&note), InfoUpdate { author: Some(Some("bo".into())), subject: Some(None), icon: Some(IconWire::Note) });
+    assert!(matches!(
+        InfoUpdate { icon: Some(IconWire::Star), ..InfoUpdate::default() }.check_for(&square()),
+        Err(WireError::Invalid { field: "icon", .. })
+    ));
+    assert!(InfoUpdate { author: Some(Some("ada".into())), ..InfoUpdate::default() }.check_for(&square()).is_ok());
+
+    // The compare-and-set sees a change to any property it names, and only those.
+    let mut changed = note.clone();
+    changed.author = "ada".into();
+    changed.subject = "Review".into();
+    changed.icon = Some(NoteIcon::Help);
+    assert!(update.still_matches(&changed));
+    changed.subject = "Other".into();
+    assert!(!update.still_matches(&changed), "someone changed the subject since");
+    assert!(
+        clear.still_matches(&{
+            let mut empty = changed.clone();
+            empty.author = String::new();
+            empty
+        }),
+        "a comment without an author matches `null`"
+    );
+    Ok(())
 }
 
 #[test]
