@@ -1995,6 +1995,30 @@ fn a_size_through_another_generation_isnt_the_one_its_own_reference_reads() {
     assert!(matches!(result, Err(RedactError::SharedJbig2Globals(1))), "{result:?}");
 }
 
+/// An image whose cross-reference row and object header give different generations is read through
+/// either (#1143), and page 2 names it by the header's. Stored again without the dictionary, it keeps
+/// both, so that page still draws it, in the document and in a full save.
+#[test]
+fn an_image_stored_again_keeps_the_generation_its_header_gives() {
+    let scan = shared_scan();
+    let bytes = SharedPages::new(&scan).build(&scan).bytes().to_vec();
+    let patch = |bytes: Vec<u8>, from: &[u8], to: &[u8]| {
+        let at = bytes.windows(from.len()).position(|w| w == from).unwrap();
+        assert_eq!(bytes.windows(from.len()).filter(|w| *w == from).count(), 1);
+        [&bytes[..at], to, &bytes[at + from.len()..]].concat()
+    };
+    let bytes = patch(patch(bytes, b"\n8 0 obj", b"\n8 1 obj"), b"/Im 8 0 R", b"/Im 8 1 R");
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(drawn_samples(&doc, 1), scan.bits, "the second page reads its image through the header's generation");
+    mark(&mut doc, 0, &[COVERS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1);
+    assert_eq!(drawn_samples(&doc, 1), scan.bits, "the image stored again is still drawn");
+    let full = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!full.windows(12).any(|w| w == b"LEAK_GLOBALS"), "the dictionary left the full save");
+    assert_eq!(drawn_samples(&Document::open(Arc::new(full)).unwrap(), 1), scan.bits, "and is drawn after it");
+    assert_gone(&doc, b"LEAK_GLOBALS");
+}
+
 /// However the image that stays names the dictionary, it comes out without it: its parameters by
 /// reference, behind another filter, or a copy of the dictionary, as a file put back together from
 /// pages split apart has, each page with its own. It is also read when its size or filter is given

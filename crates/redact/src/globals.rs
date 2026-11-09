@@ -617,7 +617,9 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut Im
         let Object::Stream(s) = &*object else { continue };
         match without_dictionary(&mut run, doc, s, images)? {
             Some(stored) => {
-                doc.set(r, Object::Stream(stored));
+                // In place, with both generations of a slot whose cross-reference row and object
+                // header disagree, which cos reads either way (#1143): `set` would keep only `r`'s.
+                doc.set_existing(r, Object::Stream(stored))?;
                 stored_again += 1;
             }
             // A dictionary that names itself isn't something that uses one.
