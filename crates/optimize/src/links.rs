@@ -95,7 +95,7 @@ fn destination(doc: &Document, d: &Dict) -> Option<Object> {
         return Some(resolve(doc, dest));
     }
     let a = d.get(b"A").and_then(|a| resolve(doc, a).as_dict().cloned())?;
-    (dict_name(doc, &a, b"S").as_deref() == Some(b"GoTo")).then(|| a.get(b"D").map_or(Object::Null, |x| resolve(doc, x)))
+    (dict_name(doc, &a, b"S").as_deref() == Some(b"GoTo")).then(|| a.get(b"D").map(|x| resolve(doc, x))).flatten()
 }
 
 /// The name a destination refers to, if it is a named one.
@@ -417,12 +417,13 @@ mod tests {
         valid_link.set(b"A".to_vec(), Object::Dict(valid_action));
         let valid_link = doc.add(Object::Dict(valid_link));
 
-        // 2. Broken GoTo link with indirect /Subtype /Link and missing /D.
-        let mut empty_goto = Dict::new();
-        empty_goto.set(b"S".to_vec(), Object::Ref(goto_name));
+        // 2. Broken GoTo link with indirect /Subtype /Link and a missing destination name.
+        let mut bad_goto = Dict::new();
+        bad_goto.set(b"S".to_vec(), Object::Ref(goto_name));
+        bad_goto.set(b"D".to_vec(), s("missing_dest"));
         let mut broken_link = Dict::new();
         broken_link.set(b"Subtype".to_vec(), Object::Ref(link_sub));
-        broken_link.set(b"A".to_vec(), Object::Dict(empty_goto));
+        broken_link.set(b"A".to_vec(), Object::Dict(bad_goto));
         let broken_link = doc.add(Object::Dict(broken_link));
 
         // 3. Orphaned link object (not in /Annots) pointing to "orphan_only".
