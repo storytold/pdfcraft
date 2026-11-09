@@ -11870,6 +11870,71 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
+/// A comment imported or pasted without the appearance its file carried (unreadable there) is
+/// said in the repair log, which the interface shows and the tools return.
+#[test]
+fn a_comment_imported_without_its_appearance_is_said_in_the_repair_log() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><stamp page="0" name="st" rect="10,10,110,60" icon="Draft"><appearance>@@@not base 64@@@</appearance></stamp></annots></xfdf>"#;
+    let said = |s: &Session, id: DocId| {
+        s.get(id)
+            .unwrap()
+            .repair_log()
+            .iter()
+            .filter(|l| l.contains("imported 1 comment without the appearance") && l.contains("st: the appearance is not base 64"))
+            .count()
+    };
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::ImportData { name: "notes.xfdf".into(), bytes: Arc::new(xfdf.as_bytes().to_vec()) }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::PasteComments { xfdf: xfdf.into(), page: 0, offset: None }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+}
+
+/// Six comments without their appearances: one line naming five and counting the sixth, a name
+/// holding a line break stays on that line, and a long name is cut short.
+#[test]
+fn many_comments_imported_without_their_appearances_are_summed_up_in_one_line() {
+    let long = "L".repeat(1000);
+    let names = ["a&#10;imported 9 comments", "b", "c", "d", long.as_str(), "f"];
+    let stamps: String = names
+        .iter()
+        .map(|nm| format!(r#"<stamp page="0" name="{nm}" rect="10,10,110,60" icon="Draft"><appearance>@@@</appearance></stamp>"#))
+        .collect();
+    let xfdf = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().repair_log().len();
+    s.apply(id, Edit::PasteComments { xfdf, page: 0, offset: None }).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    let added = log.get(before..).unwrap_or_default();
+    assert_eq!(added.len(), 1, "{added:?}");
+    let line = &added[0];
+    assert!(line.starts_with("imported 6 comments without the appearance"), "{line}");
+    assert!(line.ends_with("; and 1 more"), "{line}");
+    assert!(!line.contains('\n') && line.contains(r"a\nimported 9 comments: "), "{line}");
+    assert!(line.contains(&format!("{}…", "L".repeat(200))) && !line.contains(&"L".repeat(201)), "{line}");
+    assert_eq!(line.matches(": the appearance").count(), 4, "five named, the long one cut before its reason: {line}");
+}
+
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
+}
+
 /// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
 /// authorised when one is opened (`/AuthEvent /EFOpen`), opens without a password, lists its
 /// attachment, and saves with the attachment still encrypted.

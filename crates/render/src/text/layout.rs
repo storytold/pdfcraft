@@ -1,5 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
-use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl};
+use super::order::{
+    NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, measure_cluster_gaps, place_glyphs, redraws, restarts_run, reverse_rtl,
+};
 use super::{HashMap, PageText, TextGlyph};
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
@@ -97,9 +99,58 @@ pub(super) fn is_rtl(c: char) -> bool {
 }
 
 /// Scripts written with explicit spaces whose combining signs can sit apart from their base
-/// (Indic, Thai, Lao, Myanmar, Khmer): never infer a space inside a tight cluster.
+/// (Indic, Thai, Lao, Myanmar, Khmer): never infer a space next to such a sign in a tight cluster.
 fn is_complex(c: char) -> bool {
     matches!(c as u32, 0x0300..=0x036F | 0x0900..=0x0DFF | 0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF)
+}
+
+/// Whether `text` is only combining marks (Unicode Mn and Me, which take bidi class NSM) of a
+/// left-to-right script: Thai tone marks and above or below vowels, Indic signs such as virama,
+/// Latin combining accents. Right-to-left marks are ordered with their script by [`reverse_rtl`].
+fn is_mark(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM && !is_rtl(c))
+}
+
+/// How far from the glyph before it, as a fraction of its height, a combining mark may start and
+/// still ride on it. A zero-advance mark starts at the pen after its base, give or take a small
+/// mark-positioning offset, and its ink is drawn back over the base.
+const MARK_REACH: f32 = 0.3;
+
+/// Whether glyph `m`, drawn right after `p` in one run, is a combining mark on `p`: ISO 32000-2
+/// §9.10 leaves extraction to the processor, and Unicode stores a mark after its base, as the
+/// content stream draws it here. The mark then stays after `p` in reading order however far its
+/// own box sits along the line; sorting by x alone moved a Thai tone mark that starts a hair past
+/// its base's advance after the next letter (#6517).
+fn rides_on(p: &TextGlyph, m: &TextGlyph) -> bool {
+    let reach = MARK_REACH * (m.rect[3] - m.rect[1]).max(0.1);
+    is_mark(&m.text)
+        && p.text.chars().any(|c| !c.is_whitespace())
+        && !p.text.chars().any(is_rtl)
+        && m.rect[0] >= p.rect[0] - reach
+        && m.rect[0] <= p.rect[2] + reach
+}
+
+/// How far, as a fraction of its letter's height, a combining mark's em box may sit above or below the letter's and
+/// still ride on it. A tone mark lifted over an upper vowel can be drawn more than half an em higher, past where a
+/// glyph of its own would start a new line.
+const MARK_RISE: f32 = 1.0;
+
+/// Whether glyph `m`, drawn right after glyph `p` (a letter, or a mark riding on letter `a`), rides on that cluster:
+/// on `p` itself, or, for a mark stacked on another one, on its letter `a`.
+fn rides_on_cluster(glyphs: &[&TextGlyph], p: usize, a: usize, m: &TextGlyph) -> bool {
+    glyphs.get(p).is_some_and(|pg| rides_on(pg, m)) || (a != p && glyphs.get(a).is_some_and(|ag| rides_on(ag, m)))
+}
+
+/// Glyph `i` continues the run of glyph `i - 1`: when it is a combining mark on that glyph's cluster, it joins it.
+fn attach_mark(glyphs: &[&TextGlyph], anchor: &mut [usize], i: usize) {
+    let Some(p) = i.checked_sub(1) else { return };
+    let Some(&a) = anchor.get(p) else { return };
+    if let Some(mg) = glyphs.get(i)
+        && rides_on_cluster(glyphs, p, a, mg)
+        && let Some(slot) = anchor.get_mut(i)
+    {
+        *slot = a;
+    }
 }
 
 fn is_cjk(c: char) -> bool {
@@ -173,13 +224,21 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
 
     // 1. Segments in content order. Every run is a range of consecutive glyphs.
     let mut segs: Vec<Seg> = Vec::new();
+    // `anchor[i]`: the glyph a combining mark rides on (the first glyph of its cluster), or `i`.
+    let mut anchor: Vec<usize> = (0..n).collect();
     let mut run_start_x = 0.0;
     let mut furthest_progress = 0.0;
     for i in 0..n {
         let g = glyphs[i].rect;
         let hi = height(i);
         let cont = segs.last().is_some_and(|s| {
-            let Some(p) = s.first.end.checked_sub(1) else { return false };
+            let Some(last) = s.first.end.checked_sub(1) else { return false };
+            // A glyph after a combining mark continues from the mark's letter, and a mark on that letter's cluster
+            // stays on its line even when drawn raised or lowered by up to an em (`MARK_RISE`).
+            let p = anchor.get(last).copied().unwrap_or(last);
+            if rides_on_cluster(&glyphs, last, p, glyphs[i]) && (cy(i) - cy(p)).abs() < height(p) * MARK_RISE {
+                return true;
+            }
             let ph = height(p).min(hi);
             let sh = s.h.min(hi);
             let gap = g[0] - glyphs[p].rect[2];
@@ -196,6 +255,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             && !reset
             && let Some(s) = segs.last_mut()
         {
+            attach_mark(&glyphs, &mut anchor, i);
             s.first.end = i + 1;
             s.extend_box(&g, hi);
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
@@ -392,7 +452,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut line_of: Vec<u32> = Vec::with_capacity(n);
     let mut space_before: Vec<bool> = Vec::with_capacity(n);
     let mut line = 0u32;
-    let mut sc = Scratch::default();
+    let mut sc = Scratch { anchor, ..Default::default() };
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
     let mut spaces: Vec<bool> = Vec::new();
@@ -400,12 +460,16 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         for &si in &blocks[b].0 {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
             let h = segs[si].h;
+            measure_cluster_gaps(&glyphs, &mut sc);
+            // The text of the cluster that glyph `i` belongs to: its base's.
+            let cluster_text = |i: usize| sc.anchor.get(i).and_then(|&a| glyphs.get(a)).map_or("", |g| g.text.as_str());
             // Word gaps relative to this line's typical letter gap (handles tracking).
             // Long runs of repeated punctuation belong to leaders, not letter tracking: a TOC leader
             // must not raise the threshold above the word gaps in its title (#3086).
             sc.gaps.clear();
             sc.gaps.extend(sc.placed.windows(2).enumerate().filter_map(|(w, pair)| {
                 let &[p, c] = pair else { return None };
+                let gap = (*sc.cluster_gap.get(w + 1)?)?;
                 let (p, c) = (glyphs.get(p)?, glyphs.get(c)?);
                 if p.text == c.text && p.text.chars().all(|ch| !ch.is_alphanumeric() && !ch.is_whitespace()) {
                     // Keep short tracked punctuation, including an ellipsis with a final period.
@@ -418,7 +482,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                         return None;
                     }
                 }
-                Some(c.rect[0] - p.rect[2])
+                Some(gap)
             }));
             sc.gaps.sort_by(f32::total_cmp);
             let typical = sc.gaps.get(sc.gaps.len() / 3).copied().unwrap_or(0.0).max(0.0);
@@ -427,10 +491,14 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             spaces.resize(sc.placed.len(), false);
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
-                let gap = glyphs[c].rect[0] - glyphs[p].rect[2];
-                let (pt, ct) = (&glyphs[p].text, &glyphs[c].text);
+                let Some(&Some(gap)) = sc.cluster_gap.get(w + 1) else { continue };
+                let (pt, ct) = (cluster_text(p), cluster_text(c));
                 let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < h * 0.5;
-                let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < h * 0.6;
+                // A combining sign that rides on no glyph before it (drawn apart from its base, or in a run of its own)
+                // may sit anywhere over its base, so it never takes a space next to it. Two base letters of these
+                // scripts are measured like any others: a Thai or Indic word gap is narrower than half an em.
+                let loose_sign = |t: &str| is_mark(t) && t.chars().any(is_complex);
+                let tight_cluster = (loose_sign(pt) || loose_sign(ct)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
                     *space = (gap > threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
@@ -441,7 +509,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             if has_rtl {
                 sc.logical.clear();
                 sc.logical.extend_from_slice(&sc.placed);
-                reverse_rtl(&glyphs, &mut sc.logical, &mut spaces);
+                reverse_rtl(&glyphs, &sc.anchor, &mut sc.logical, &mut spaces);
             }
             let idx: &[usize] = if has_rtl { &sc.logical } else { &sc.placed };
             order.extend_from_slice(idx);
