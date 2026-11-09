@@ -336,6 +336,79 @@ fn format_validate_and_calculate_tabs() {
     assert_eq!(f.actions.calculate, Calculate::Notation("name".into()));
 }
 
+/// A field whose calculation is a script of its own shows it on the Calculate tab as a custom
+/// calculation script, not as "Value is not calculated" (#6630). OK without a change keeps it,
+/// an edit writes the new script, and "Value is not calculated" removes it. A script too long to
+/// edit is described and kept.
+#[test]
+fn the_calculate_tab_shows_and_edits_a_custom_calculation_script() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    use pdfcraft_engine::Edit;
+    use pdfcraft_engine::form_scripts::Calculate;
+    let js = "event.value = \"*\" + this.getField(\"name\").value + \"*\";";
+    let mut h = harness();
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "city".into(), event: "calculate".into(), script: Some(js.into()) });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("city", 0);
+        h.run_steps(2);
+        h.get_by_label("Calculate").click();
+        h.run_steps(2);
+    };
+    let ok = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+    };
+    let on = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
+    let script = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().clone();
+        (f.actions.calculate, f.actions.scripts.calculate)
+    };
+    open(&mut h);
+    assert!(on(&h, "Custom calculation script:"), "the script is the field's calculation");
+    assert!(!on(&h, "Value is not calculated"));
+    h.get_by_value(js);
+    // Another choice and back: the field's own script returns, and nothing is changed.
+    h.get_by_label("Simplified field notation:").click();
+    h.run_steps(2);
+    assert!(h.query_by_value(js).is_none());
+    h.get_by_label("Custom calculation script:").click();
+    h.run_steps(2);
+    h.get_by_value(js);
+    assert_eq!(h.state().field_props.as_ref().and_then(|d| d.props()), None, "an untouched tab changes nothing");
+    ok(&mut h);
+    assert_eq!(script(&h), (Calculate::None, Some(js.to_owned())));
+    // Edited, the new script is written as typed.
+    open(&mut h);
+    let edited = "event.value = this.getField(\"name\").value;";
+    h.get_by_value(js).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_value(js).type_text(edited);
+    h.run_steps(2);
+    ok(&mut h);
+    assert_eq!(script(&h), (Calculate::None, Some(edited.to_owned())));
+    // "Value is not calculated" removes it.
+    open(&mut h);
+    h.get_by_label("Value is not calculated").click();
+    h.run_steps(2);
+    ok(&mut h);
+    assert_eq!(script(&h), (Calculate::None, None));
+    // A script too long to edit is described in place of the box, and kept.
+    let long = format!("event.value = 1; /*{}*/", "x".repeat(300 * 1024));
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "city".into(), event: "calculate".into(), script: Some(long.clone()) });
+    h.run_steps(2);
+    open(&mut h);
+    assert!(on(&h, "Custom calculation script:"));
+    assert!(h.query_by_label("This script is too long to edit here (300 KiB). It is kept as it is.").is_some());
+    assert!(h.query_by_value(&long).is_none(), "no text box lays it out");
+    ok(&mut h);
+    assert_eq!(script(&h), (Calculate::None, Some(long)));
+}
+
 /// Renaming a field in Field Properties renames it in the formulas that read it, in the same undo
 /// step, and says how many changed.
 #[test]

@@ -486,3 +486,17 @@ fn destructured_for_of_targets_keep_regex_iterables_opaque() {
         }
     }
 }
+
+/// A custom calculation script (#6630) is written as given, a blank one as no script; it reads the
+/// fields it names, and running it is the JavaScript engine's, not the AF calculator's.
+#[test]
+fn a_custom_calculation_script_is_kept_as_written() {
+    let js = "event.value = this.getField(\"a\").value * getField(\"b\").value; // getField(\"c\")";
+    let c = Calculate::Custom(js.into());
+    assert_eq!(calculate_js(&c).as_deref(), Some(js));
+    for blank in ["", " \r\n\t"] {
+        assert_eq!(calculate_js(&Calculate::Custom(blank.into())), None, "{blank:?}");
+    }
+    assert_eq!(c.reads(), ["a", "b"]);
+    assert_eq!(calculate(&c, &|_| vec!["2".into()]), None);
+}

@@ -325,17 +325,30 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
     });
 }
 
+/// The longest custom calculation script the Calculate tab offers to edit. A file can carry far
+/// more (forms read up to 64 MiB of script), and laying that out in a text box every frame would
+/// hang the dialog; a longer one is described instead and kept as it is unless another
+/// calculation is chosen. The JavaScript engine runs no script past 256 KiB either.
+const MAX_EDITED_SCRIPT: usize = 256 * 1024;
+
 pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {
         None,
         Simple,
         Notation,
+        Custom,
     }
+    // Choosing Custom again brings back the script the field had, not an empty box.
+    let custom = |d: &FieldDraft| match d.original.as_ref().as_ref().map(|o| &o.calculate) {
+        Some(Calculate::Custom(js)) => Calculate::Custom(js.clone()),
+        _ => Calculate::Custom(String::new()),
+    };
     let mode = match d.calculate {
         Calculate::None => Mode::None,
         Calculate::Simple { .. } => Mode::Simple,
         Calculate::Notation(_) => Mode::Notation,
+        Calculate::Custom(_) => Mode::Custom,
     };
     let mut m = mode;
     widgets::radio_value(ui, &mut m, Mode::None, tl!("Value is not calculated"));
@@ -345,6 +358,7 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
             Mode::None => Calculate::None,
             Mode::Simple => Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() },
             Mode::Notation => Calculate::Notation(String::new()),
+            Mode::Custom => custom(d),
         };
     }
     if let Calculate::Simple { op, fields } = &mut d.calculate {
@@ -382,5 +396,23 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
     if let Calculate::Notation(expr) = &mut d.calculate {
         ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
         ui.label(egui::RichText::new(tl!("Field names with + - * / and parentheses; put \\ before spaces in names.")).small().color(t.text_faint));
+    }
+    let mut m3 = match d.calculate {
+        Calculate::Custom(_) => Mode::Custom,
+        _ => m2,
+    };
+    if widgets::radio_value(ui, &mut m3, Mode::Custom, tl!("Custom calculation script:")).clicked() && !matches!(d.calculate, Calculate::Custom(_)) {
+        d.calculate = custom(d);
+    }
+    if let Calculate::Custom(js) = &mut d.calculate {
+        if js.len() > MAX_EDITED_SCRIPT {
+            let kib = (js.len() / 1024).to_string();
+            let note = crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB). It is kept as it is."), &[("kib", &kib)]);
+            ui.label(egui::RichText::new(note).small().color(t.text_faint));
+        } else {
+            egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0).show(ui, |ui| {
+                ui.add(crate::widgets::block(js).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0));
+            });
+        }
     }
 }

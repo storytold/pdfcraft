@@ -98,6 +98,12 @@ pub enum Calculate {
     Simple { op: CalcOp, fields: Vec<String> },
     /// Simplified field notation, e.g. `Price * Quantity`.
     Notation(String),
+    /// A custom calculation script, written as given (Field Properties ▸ Calculate ▸ Custom
+    /// calculation script). Reading a field never gives this: a script that isn't one of the
+    /// forms above stays in [`Actions::unsupported`] and [`Scripts::calculate`], where the
+    /// JavaScript engine runs it. Authoring writes it back byte for byte; a blank one writes no
+    /// script.
+    Custom(String),
 }
 
 /// A field's recognised scripts.

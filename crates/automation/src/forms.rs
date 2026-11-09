@@ -176,7 +176,7 @@ fn calculate_json(f: &FormField) -> Option<Value> {
     match (&f.actions.calculate, &f.actions.scripts.calculate) {
         (Calculate::Simple { op, fields }, _) => Some(json!({ "op": op_name(*op), "fields": fields })),
         (Calculate::Notation(n), _) => Some(json!({ "notation": n })),
-        (Calculate::None, Some(js)) => Some(json!({ "script": js })),
+        (Calculate::Custom(js), _) | (Calculate::None, Some(js)) => Some(json!({ "script": js })),
         (Calculate::None, None) => None,
     }
 }

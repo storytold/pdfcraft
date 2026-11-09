@@ -1701,6 +1701,47 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
 }
 
+/// Field Properties ▸ Calculate ▸ Custom calculation script (#6630): the script is written as
+/// given, as a text string, and reads back as the field's custom script, in the calculation
+/// order; a blank one removes the script and the field's place in the order.
+#[test]
+fn a_custom_calculation_script_is_written_as_given_and_a_blank_one_removes_it() {
+    use crate::af::Calculate;
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("codice")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("barcode")).unwrap();
+    let js = "// Code 39: tra asterischi, così\r\nevent.value = \"*\" + this.getField(\"codice\").value + \"*\";";
+    let custom = |js: &str| FieldProps { calculate: Some(Calculate::Custom(js.into())), ..FieldProps::default() };
+    set_props(&mut doc, "barcode", &custom(js)).unwrap();
+    let raw_c = |doc: &Document| {
+        let f = field(&fields(doc), "barcode").obj;
+        let aa = doc.get(f).as_dict().and_then(|d| d.get(b"AA").cloned()).map(|a| doc.resolve(&a));
+        aa.and_then(|aa| aa.as_dict().and_then(|aa| aa.get(b"C").cloned())).map(|c| doc.resolve(&c))
+    };
+    for doc in [doc.clone(), reopen(&doc)] {
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, Some(js)), "read back as a script");
+        assert!(actions.unsupported.contains(&"calculate"));
+        let c = raw_c(&doc).expect("an /AA /C action");
+        let stored = c.as_dict().and_then(|c| c.get(b"JS")).and_then(|s| s.as_string()).expect("/JS is a string").clone();
+        assert_eq!(stored.bytes, pdfcraft_cos::PdfString::text(js).bytes, "a text string, so ì isn't UTF-8 bytes another viewer reads as ì's pieces");
+        let order = calculation_order(&doc, &all);
+        assert_eq!(order.fields.iter().map(|f| (f.name.as_str(), f.listed)).collect::<Vec<_>>(), [("barcode", true)]);
+        assert_eq!(order.fields[0].reads, ["codice"]);
+    }
+    for blank in ["", " \n\t"] {
+        let mut doc = doc.clone();
+        set_props(&mut doc, "barcode", &custom(blank)).unwrap();
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, None), "{blank:?}");
+        assert!(raw_c(&doc).is_none(), "{blank:?} writes no /C");
+        assert!(calculation_order(&doc, &all).fields.is_empty(), "{blank:?} leaves the calculation order");
+    }
+}
+
 /// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
 #[test]
 fn unsupported_first_validation_call_preserves_custom_script_dispatch() {

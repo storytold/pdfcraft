@@ -210,7 +210,12 @@ impl FieldDraft {
             check_style: None,
             format: f.actions.format.clone(),
             validate: f.actions.validate.clone(),
-            calculate: f.actions.calculate.clone(),
+            calculate: match (&f.actions.calculate, &f.actions.scripts.calculate) {
+                // A script that is no sum or notation is the field's custom calculation script:
+                // shown as one, and written back only when it is changed (#6630).
+                (Calculate::None, Some(js)) => Calculate::Custom(js.clone()),
+                (c, _) => c.clone(),
+            },
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
