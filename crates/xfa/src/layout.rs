@@ -43,6 +43,15 @@ const MAX_DEPTH: usize = 64;
 /// Most size measurements of one layout. Measurements of containers are memoized, so a real
 /// form stays far below this; it bounds the work a hostile template can cause.
 const MAX_MEASURES: usize = 2_000_000;
+/// Most characters the draw phase lays out in one layout, each pass counted. A draw re-measures
+/// overflowing text up to six times to shrink it, and a repeating subform draws its text once
+/// per instance, so large text drawn many times would otherwise cost seconds; a real form's
+/// draws stay far below this. Reduced under test so the guard is exercised without laying out
+/// hundreds of megabytes of text.
+#[cfg(not(test))]
+const MAX_DRAW_CHARS: usize = 256 << 20;
+#[cfg(test)]
+const MAX_DRAW_CHARS: usize = 1 << 20;
 /// Most initial instances of one repeating subform.
 const MAX_INSTANCES: usize = 50;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
@@ -149,6 +158,8 @@ struct Layouter<'t> {
     measured: RefCell<HashMap<MeasureKey, Measured>>,
     /// Measurements made so far (see [`MAX_MEASURES`]).
     measures: Cell<usize>,
+    /// Characters the draw phase has laid out, each pass counted (see [`MAX_DRAW_CHARS`]).
+    drawn_chars: Cell<usize>,
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
@@ -198,6 +209,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         image_bytes: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
+        drawn_chars: Cell::new(0),
         leaves: Vec::new(),
         frames: Vec::new(),
     };
