@@ -68,9 +68,10 @@ Op {
 - `structural` — операция над страницами/деревом.
 
 Реализованные действия v1: `annotation.add` (типизированная форма, см. §3.1.1),
-`annotation.set_contents`, `annotation.reply`, `annotation.delete`, `field.set_value`,
-`page.rotate`, `page.move`, `page.delete`. Остальные правки в общей сессии отклоняются
-как `unsupported`, а не применяются только локально.
+`annotation.set_contents`, `annotation.reply`, `annotation.delete`,
+`annotation.restore`, `field.set_value`, `page.rotate`, `page.move`,
+`page.delete`, `page.restore`, `page.insert`, `page.duplicate`. Остальные правки
+в общей сессии отклоняются как `unsupported`, а не применяются только локально.
 
 #### 3.1.1 Схема `annotation.add`
 
@@ -270,6 +271,14 @@ backpressure — drop-stale, TTL 30 с. На wasm рендер идёт в UI-п
 - `page.delete` снимает одностраничный PDF страницы **до** удаления.
   `page.restore` вставляет его `InsertPagesFrom` по прежнему индексу; операция
   несёт страницу в `payload.bytes` (base64), чтобы обойтись без второго канала.
+- `page.insert` и `page.duplicate` устроены так же: операция несёт
+  одностраничный PDF (`payload.bytes`) и позицию (`payload.at`), адрес —
+  `Target::Page` в текущем epoch (`page.insert` — позиция вставки, `index` может
+  равняться числу страниц; `page.duplicate` — исходная страница, копия идёт на
+  `at`). Обе поднимают epoch, поэтому операция с чужим epoch — `stale`
+  (retryable). Undo вставки — `page.delete` по `at`. Страница больше
+  `MAX_RESTORE_PAGE_BYTES` отклоняется как `limit` **до** изменения документа и
+  локально не применяется.
 - Копии живут в памяти адаптера, ограничены (64 копии / 64 МиБ, старые
   вытесняются) и не пишутся на диск: `replay` заново применяет удаления в
   порядке журнала и восстанавливает те же токены. Нет копии — нет undo:
