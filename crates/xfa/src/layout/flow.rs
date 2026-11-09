@@ -190,32 +190,13 @@ impl Layouter<'_> {
                     f.lost = true;
                 }
             }
-            let mut cut = limit;
-            if rect.h < 1.0 {
+            let cut = if rect.h < 1.0 {
                 // No room to split into: leave the rest here.
-                cut = f64::INFINITY;
+                f64::INFINITY
             } else {
-                // The lowest break at or above the bottom that crosses no solid item: going
-                // through them from the lowest top up, a break moved to an item's top can't
-                // cross one already passed.
-                let mut solid: Vec<(f64, f64)> = rest
-                    .iter()
-                    .filter(|(item, _)| !loose(item))
-                    .filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)))
-                    .filter(|e| e.0 < limit - 0.01)
-                    .collect();
-                solid.sort_by(|a, b| b.0.total_cmp(&a.0));
-                for (t, b) in solid {
-                    if t < cut - 0.01 && b > cut + 0.01 {
-                        cut = t;
-                    }
-                }
-                if cut <= seg_top + 0.01 {
-                    // An item taller than what is left. Start it in a fresh area if this one
-                    // already holds something; otherwise cut through it.
-                    cut = if first_segment && placed && seg_top > rect.y + 0.01 { seg_top } else { limit };
-                }
-            }
+                let solid = rest.iter().filter(|(item, _)| !loose(item)).filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)));
+                lowest_break(solid, limit, seg_top, first_segment && placed && seg_top > rect.y + 0.01)
+            };
             let mut here = Vec::new();
             let mut below = Vec::new();
             // The rest of the split widget's box: a piece down to this break, closed on every
@@ -522,5 +503,28 @@ impl Layouter<'_> {
             format!("; {MAX_INSTANCES} is the most one repeating subform lays out")
         };
         self.warn_once(format!("{name}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those){why}"));
+    }
+}
+
+/// The lowest break at or above `limit` that crosses none of the `solid` items' extents: going
+/// through them from the lowest top up, a break moved to an item's top can't cross one already
+/// passed. When that leaves nothing below `seg_top` (an item taller than what is left), the
+/// item starts in a fresh area if this one already holds something (`fresh`); otherwise the
+/// break cuts through it at `limit`.
+fn lowest_break(solid: impl Iterator<Item = (f64, f64)>, limit: f64, seg_top: f64, fresh: bool) -> f64 {
+    let mut solid: Vec<(f64, f64)> = solid.filter(|e| e.0 < limit - 0.01).collect();
+    solid.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut cut = limit;
+    for (t, b) in solid {
+        if t < cut - 0.01 && b > cut + 0.01 {
+            cut = t;
+        }
+    }
+    if cut > seg_top + 0.01 {
+        cut
+    } else if fresh {
+        seg_top
+    } else {
+        limit
     }
 }
