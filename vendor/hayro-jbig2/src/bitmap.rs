@@ -357,3 +357,35 @@ impl Bitmap {
         Ok(area)
     }
 }
+
+#[cfg(test)]
+mod pdfcraft_limit_tests {
+    use super::*;
+    use crate::error::DecodeError;
+
+    /// PdfCraft patch: a bitmap past the bound on a side or on pixels is refused by a limit.
+    #[test]
+    fn a_bitmap_past_its_bounds_is_refused_by_a_limit() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(
+            Bitmap::new(MAX_DIMENSION + 1, 1).map(|_| ()),
+            limit,
+            "a side"
+        );
+        assert_eq!(
+            Bitmap::new(1, MAX_DIMENSION + 1).map(|_| ()),
+            limit,
+            "the other"
+        );
+        // 2^28 + 2^14 pixels, each side within its bound.
+        assert_eq!(
+            Bitmap::new(1 << 14, (1 << 14) + 1).map(|_| ()),
+            limit,
+            "the pixels"
+        );
+        assert!(
+            Bitmap::new(1 << 14, 1 << 14).is_ok(),
+            "2^28 pixels are within it"
+        );
+    }
+}

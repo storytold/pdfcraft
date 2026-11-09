@@ -339,6 +339,37 @@ impl DecodeError {
     }
 }
 
+#[cfg(test)]
+mod pdfcraft_limit_tests {
+    use super::*;
+
+    /// PdfCraft patch: the decoder's own limits are limits, and arithmetic that overflows,
+    /// damage, is not.
+    #[test]
+    fn the_decoders_limits_are_limits_and_overflowing_arithmetic_is_not() {
+        let limits = [
+            DecodeError::Overflow(OverflowError::BitmapLimit),
+            DecodeError::Overflow(OverflowError::GridDimension),
+            DecodeError::Overflow(OverflowError::SymbolCount),
+            DecodeError::Overflow(OverflowError::RetainedBitmaps),
+            DecodeError::Overflow(OverflowError::SegmentCount),
+            DecodeError::Overflow(OverflowError::DecodingWork),
+            DecodeError::Symbol(SymbolError::TooManyInstances),
+        ];
+        for limit in limits {
+            assert!(limit.is_limit(), "{limit:?} is a limit");
+        }
+        let damage = [
+            DecodeError::Overflow(OverflowError::BitmapDimension),
+            DecodeError::Overflow(OverflowError::PlacementCoordinate),
+            DecodeError::Symbol(SymbolError::TooManySymbols),
+        ];
+        for damage in damage {
+            assert!(!damage.is_limit(), "{damage:?} is damage");
+        }
+    }
+}
+
 /// Result type for JBIG2 decoding operations.
 pub type Result<T> = core::result::Result<T, DecodeError>;
 

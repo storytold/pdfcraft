@@ -75,7 +75,9 @@ pub fn clear_jbig2_limited() {}
 #[cfg(feature = "std")]
 fn note_limited(error: Option<&hayro_jbig2::DecodeError>) {
     let refused = match error {
-        Some(hayro_jbig2::DecodeError::Overflow(hayro_jbig2::OverflowError::DecodingWork)) => WORK_LIMIT,
+        Some(hayro_jbig2::DecodeError::Overflow(hayro_jbig2::OverflowError::DecodingWork)) => {
+            WORK_LIMIT
+        }
         Some(e) if e.is_limit() => STREAM_LIMIT,
         _ => 0,
     };

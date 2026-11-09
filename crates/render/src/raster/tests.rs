@@ -4579,6 +4579,103 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
     // hostile size, and leaving the picture out is the safe side.
     let disagreeing = black_jbig2_page_of(65535, 65535);
     assert_eq!(draws("/SMask", (16, 2), &disagreeing), out, "a size damaged past a limit is taken for one");
+
+    // A stencil mask a limit refused is drawn on its own: it takes nothing else out, and is a
+    // failed image, not content left out (`a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image`).
+    // Nor does it leave anything behind for the next picture: one whose mask is never decoded (it
+    // has no /Width) is drawn whole, as upstream draws it.
+    let content = b"q 4 0 0 4 30 30 cm /St Do Q q 20 0 0 20 5 5 cm /Im1 Do Q";
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R /St 7 0 R >> >> >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /SMask 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n");
+    let mask = black_jbig2_page();
+    pdf.extend_from_slice(format!("6 0 obj << /Type /XObject /Subtype /Image /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", mask.len()).as_bytes());
+    pdf.extend_from_slice(&mask);
+    pdf.extend_from_slice(format!("\nendstream endobj\n7 0 obj << /Type /XObject /Subtype /Image /Width 65536 /Height 2 /ImageMask true /Filter /JBIG2Decode /Length {} >> stream\n", wide.len()).as_bytes());
+    pdf.extend_from_slice(&wide);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    let page = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], [0, 0, 0, 255], "the picture after the stencil is drawn whole");
+    assert!(page.warnings.is_empty(), "the stencil left nothing out: {:?}", page.warnings);
+}
+
+/// A JBIG2 image drawn on its own that a limit refuses, a stencil mask included, takes nothing else
+/// out, so it is a failed image, as it was before #6722: only a picture's mask refused by a limit
+/// is reported as content left out, with the picture it takes along (patch 73). Refused by the
+/// decoder's bound on a side or by the renderer's bound on pixels, each image's `/Width` and
+/// `/Height` those of its JBIG2 page.
+#[test]
+fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Asks each image for its pixels, which decodes it, and draws nothing.
+    struct Pixels;
+    impl<'a> Device<'a> for Pixels {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'a, '_>, _: Affine) {
+            match image {
+                Image::Raster(r) => r.with_rgba(|_, _| {}, Some((20, 20))),
+                Image::Stencil(s) => s.with_stencil(|_, _| {}, Some((20, 20))),
+            }
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    // The warnings drawing one image reports.
+    let warnings = |kind: &str, (width, height): (u32, u32)| {
+        let stream = black_jbig2_page_of(width, height);
+        let content = "q 20 0 0 20 5 5 cm /Im Do Q";
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} {kind} /Filter /JBIG2Decode /Length {} >> stream\n",
+            content.len(),
+            stream.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(&stream);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let pdf = Pdf::new(Arc::new(pdf)).expect("parses");
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let settings = InterpreterSettings {
+            warning_sink: {
+                let reported = reported.clone();
+                Arc::new(move |warning| reported.lock().unwrap().push(format!("{warning:?}")))
+            },
+            ..InterpreterSettings::default()
+        };
+        let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+        interpret_page(page, &mut ctx, &mut Pixels);
+        reported.lock().unwrap().clone()
+    };
+    let stencil = "/ImageMask true";
+    let raster = "/BitsPerComponent 1 /ColorSpace /DeviceGray";
+    let failed = ["ImageDecodeFailure"];
+    assert_eq!(warnings(stencil, (65536, 2)), failed, "a stencil mask past the decoder's bound on a side");
+    assert_eq!(warnings(stencil, (65535, 65535)), failed, "a stencil mask past the renderer's bound on pixels");
+    assert_eq!(warnings(raster, (65536, 2)), failed, "an image past the decoder's bound on a side");
+    assert_eq!(warnings(raster, (65535, 65535)), failed, "an image past the renderer's bound on pixels");
 }
 
 /// What refused one image says nothing of the next: after a picture one of the decoder's limits

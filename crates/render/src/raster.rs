@@ -269,7 +269,9 @@ pub struct RenderedPage {
 /// A non-fatal condition reported while interpreting a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderWarning {
-    /// Content was skipped after the per-page decoded-content budget was exhausted.
+    /// Content was left out at one of the renderer's limits: content past the page's
+    /// decoded-content budget or its JBIG2 allowance, or a picture whose JBIG2 mask is past a
+    /// decoder limit.
     ContentTruncated,
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.

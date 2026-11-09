@@ -497,6 +497,12 @@ pub(crate) struct ImageXObject<'a> {
     interpolate: bool,
     is_mask: bool,
     is_stencil_mask: bool,
+    /// PdfCraft patch (73): whether this is a picture's soft mask or `/Mask`, not an image drawn
+    /// on its own, by `Do` or inline, a stencil mask included. Only a picture's mask refused by a
+    /// limit takes something out with it, and is reported so. A picture's mask is cached only
+    /// averaged down (`shrunk_to`), which an image drawn on its own never is, so the two never
+    /// share an entry and its warnings.
+    masks_picture: bool,
     stream: Stream<'a>,
     transfer_function: Option<ActiveTransferFunction>,
     warning_sink: WarningSinkFn,
@@ -525,6 +531,7 @@ impl<'a> ImageXObject<'a> {
             .get::<bool>(IM)
             .or_else(|| dict.get::<bool>(IMAGE_MASK))
             .unwrap_or(false);
+        let masks_picture = is_mask;
         is_mask |= is_stencil_mask;
 
         let mut default_space = None;
@@ -609,6 +616,7 @@ impl<'a> ImageXObject<'a> {
             stream: stream.clone(),
             is_mask,
             is_stencil_mask,
+            masks_picture,
             default_space,
         })
     }
@@ -941,9 +949,10 @@ fn decode_context<'a>(
     // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
     // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
     if !image_size_ok(obj.width, obj.height) {
-        // PdfCraft patch (73): a JBIG2 mask of a size this bound refuses is one a limit refused,
-        // as when the decoder refuses it (below), and its size is the stream's own.
-        let limited = obj.is_mask && obj.width > 0 && obj.height > 0 && uses_jbig2(&obj.stream);
+        // PdfCraft patch (73): a picture's JBIG2 mask of a size this bound refuses is one a limit
+        // refused, as when the decoder refuses it (below), and its size is the stream's own.
+        // `ImageXObject::new` refuses a size of 0, so this is past the bound.
+        let limited = obj.masks_picture && uses_jbig2(&obj.stream);
         crate::cache::note_stream_limited(limited);
         (obj.warning_sink)(if limited {
             InterpreterWarning::ContentTruncated
@@ -976,13 +985,17 @@ fn decode_context<'a>(
         .decoded_image(&decode_params)
         .map_err(|_| {
             // PdfCraft patch (73): left out for the page's allowance, it is content the page's
-            // budget skipped, which is reported, and no failure of this image. So is a mask one of
-            // the decoder's limits refused, which takes its image with it (`decode_raster`).
+            // budget skipped, which is reported, and no failure of this image. So is a picture's
+            // mask one of the decoder's limits refused, which takes the picture with it
+            // (`decode_raster`).
             // Reported so, the decoded-image cache (patch 91) keeps the failure only when the
             // limit is one the stream reaches by itself, whatever the page had left.
-            let limited = obj.is_mask && hayro_syntax::jbig2_limited();
-            let left_out = (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream);
-            crate::cache::note_stream_limited(left_out && obj.is_mask && hayro_syntax::jbig2_limited_by_stream());
+            let limited = obj.masks_picture && hayro_syntax::jbig2_limited();
+            let left_out =
+                (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream);
+            crate::cache::note_stream_limited(
+                left_out && obj.masks_picture && hayro_syntax::jbig2_limited_by_stream(),
+            );
             (obj.warning_sink)(if left_out {
                 InterpreterWarning::ContentTruncated
             } else {

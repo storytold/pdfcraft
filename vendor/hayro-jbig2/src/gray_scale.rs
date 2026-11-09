@@ -289,3 +289,34 @@ fn extract_bits<S: Simd>(
         }
     }
 }
+
+#[cfg(test)]
+mod pdfcraft_limit_tests {
+    use super::*;
+    use crate::error::DecodeError;
+
+    /// PdfCraft patch: a gray-scale image past the bound on a side or on cells is refused by a
+    /// limit, before anything is decoded. A halftone region refuses such a grid first, so this is
+    /// reached only by calling it.
+    #[test]
+    fn a_gray_scale_image_past_its_bounds_is_refused_by_a_limit() {
+        let decode = |width, height| {
+            let params = GrayScaleParams {
+                use_mmr: false,
+                bits_per_pixel: 1,
+                width,
+                height,
+                template: Template::Template0,
+                skip_mask: None,
+            };
+            decode_gray_scale_image(&[], &params, &mut ScratchBuffers::default()).map(|_| ())
+        };
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(decode(MAX_DIMENSION + 1, 1), limit, "a side");
+        assert_eq!(
+            decode(1 << 13, (1 << 12) + 1),
+            limit,
+            "the cells, each side within its bound"
+        );
+    }
+}
