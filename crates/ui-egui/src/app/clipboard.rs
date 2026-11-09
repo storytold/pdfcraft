@@ -479,13 +479,14 @@ mod review_tests {
 mod own_clipboard_tests {
     use super::*;
 
-    /// A frame that copies `copy` through egui (if any), with the window focused or not.
+    /// A frame that copies `copy` through egui (if any), with the window focused or not, ended
+    /// as production ends it.
     fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool, copy: Option<&str>) {
         ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| {
             if let Some(text) = copy {
                 ui.ctx().copy_text(text.to_owned());
             }
-            app.note_own_clipboard(ui.ctx());
+            app.finish_render_frame(ui.ctx());
         })
         .drop_without_applying_deltas();
     }
