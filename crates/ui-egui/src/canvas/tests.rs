@@ -83,7 +83,24 @@ fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64
         timestamp_time: None,
         status: pdfcraft_engine::SignatureStatus::Valid,
         modification: pdfcraft_engine::sign::Modification::None,
+        verdict_shown: false,
         details: Vec::new(),
+    }
+}
+
+#[test]
+fn signature_states_change_with_a_verdict_or_what_draws_it() {
+    let shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+    let before = vec![shown.clone()];
+    assert!(!signature_states_changed(&before, &before), "identical lists report no change");
+    let mut invalid = shown.clone();
+    invalid.status = pdfcraft_engine::SignatureStatus::Invalid;
+    let mut drawn = shown.clone();
+    drawn.verdict_shown = true;
+    let mut other = shown.clone();
+    other.field = "Signature2".into();
+    for (after, why) in [(vec![invalid], "verdict"), (vec![drawn], "drawn"), (vec![other], "field"), (Vec::new(), "count")] {
+        assert!(signature_states_changed(&before, &after), "{why}");
     }
 }
 
@@ -123,6 +140,132 @@ fn signature_badges_skip_rectangles_that_cannot_reach_the_screen() {
     let signatures: Vec<_> = hostile.into_iter().map(|rect| signature(true, true, Some(0), Some(rect))).collect();
     let badges = signature_badges(&signatures, 0);
     assert_eq!(badges.len(), 1);
+}
+
+#[test]
+fn signature_badges_keep_every_verdict_the_appearance_shows() {
+    // Whether the redrawn layers are visible (not clipped or painted over) is not known, so a
+    // valid verdict keeps its badge as well.
+    use pdfcraft_engine::SignatureStatus::{Invalid, Unknown, Valid};
+    for status in [Valid, Unknown, Invalid] {
+        let mut shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+        (shown.verdict_shown, shown.status) = (true, status);
+        assert_eq!(signature_badges(&[shown.clone()], 0).len(), 1, "{status:?}");
+        shown.verdict_shown = false;
+        assert_eq!(signature_badges(&[shown], 0).len(), 1, "{status:?}");
+    }
+}
+
+#[test]
+fn the_verdict_mark_takes_the_corner_nearest_its_anchor() {
+    let widget = Rect::from_min_max(pos2(40.0, 60.0), pos2(540.0, 760.0));
+    let centre = widget.center();
+    for anchor in [widget.left_top(), widget.right_top(), widget.right_bottom(), widget.left_bottom()] {
+        let mark = verdict_mark_rect(widget, Rect::EVERYTHING, anchor).expect("a widget this size carries a mark");
+        assert!(widget.contains_rect(mark), "{mark:?} in {widget:?}");
+        assert!(!mark.contains(centre), "the mark covers the artwork it annotates: {mark:?}");
+        let (right, below) = (mark.center().x > centre.x, mark.center().y > centre.y);
+        assert_eq!((right, below), (anchor.x > centre.x, anchor.y > centre.y), "{mark:?} for {anchor:?}");
+    }
+    // Without a usable anchor it sits bottom-right.
+    let mark = verdict_mark_rect(widget, Rect::EVERYTHING, pos2(f32::NAN, f32::NAN)).unwrap();
+    assert!(mark.min.x > centre.x && mark.min.y > centre.y, "{mark:?}");
+}
+
+#[test]
+fn the_verdict_mark_turns_with_the_page_and_the_view() {
+    // A named-layer caption runs across the widget's top on the page; the mark takes the
+    // opposite corner however the page's /Rotate and the view turn the two.
+    let rect = [100.0, 100.0, 300.0, 220.0];
+    for page_turn in [0_u16, 90, 180, 270] {
+        for view_turn in [0_u16, 90, 180, 270] {
+            let page =
+                pdfcraft_render::PageInfo { width: 612.0, height: 792.0, label: "1".into(), crop: [0.0, 0.0, 612.0, 792.0], rotation: page_turn };
+            let info = DocInfo { pages: vec![page], ..Default::default() };
+            let xf = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0)), rot: view_turn, pw: 612.0, ph: 792.0 };
+            let widget = xf.user_rect(&info, 0, rect.map(|v: f64| v as f32));
+            let mark = verdict_mark_rect(widget, xf.rect, mark_anchor(&xf, &info, 0, rect)).expect("a widget this size carries a mark");
+            let (right, below) = (mark.center().x > widget.center().x, mark.center().y > widget.center().y);
+            let expected = match (page_turn + view_turn) % 360 {
+                0 => (true, true),
+                90 => (false, true),
+                180 => (false, false),
+                _ => (true, false),
+            };
+            assert_eq!((right, below), expected, "page /Rotate {page_turn}, view {view_turn}");
+        }
+    }
+}
+
+#[test]
+fn the_verdict_mark_scales_with_the_widget_until_the_cap() {
+    let side_of = |shorter: f32| {
+        let widget = Rect::from_min_max(pos2(0.0, 0.0), pos2(shorter, shorter * 2.0));
+        verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()).expect("a widget this size carries a mark").width()
+    };
+    // Literal values, not the constants, so a change to the share or the cap fails here.
+    assert!((side_of(96.0) - 24.0).abs() < 1e-3, "under the cap the mark is a quarter of the widget");
+    assert!((side_of(384.0) - 48.0).abs() <= 1e-3, "the mark stops at the 48pt the documentation promises");
+}
+
+#[test]
+fn the_legible_floor_is_the_exact_shortest_side_that_still_holds_a_mark() {
+    // The sweep below skips widgets without a mark, so the floor is pinned from both sides
+    // here.
+    let at_floor = MARK_SIDE_MIN / MARK_SIDE_SHARE;
+    let widget = |shorter: f32| Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + shorter, 70.0));
+    let mark =
+        verdict_mark_rect(widget(at_floor), Rect::EVERYTHING, widget(at_floor).right_bottom()).expect("a widget exactly at the floor holds a mark");
+    assert!((mark.width() - MARK_SIDE_MIN).abs() < 1e-3, "the mark at the floor is the floor, not less: {mark:?}");
+    assert_eq!(verdict_mark_rect(widget(at_floor - 0.5), Rect::EVERYTHING, pos2(0.0, 0.0)), None, "a notch under the floor is not legible");
+}
+
+#[test]
+fn the_verdict_mark_is_none_for_a_rectangle_the_screen_cannot_hold() {
+    // Each of these leaves the shorter side finite (`f32::min` returns the other operand for
+    // NaN), so only the `is_finite` check refuses them; one per coordinate.
+    let unplaceable = [
+        Rect { min: pos2(f32::NAN, 0.0), max: pos2(400.0, 200.0) },
+        Rect { min: pos2(0.0, 0.0), max: pos2(40.0, f32::NAN) },
+        Rect { min: pos2(0.0, f32::NEG_INFINITY), max: pos2(40.0, 100.0) },
+        Rect { min: pos2(0.0, 0.0), max: pos2(f32::INFINITY, 100.0) },
+    ];
+    for widget in unplaceable {
+        assert_eq!(verdict_mark_rect(widget, Rect::EVERYTHING, pos2(0.0, 0.0)), None, "{widget:?} has no place to sit at");
+    }
+}
+
+#[test]
+fn the_verdict_mark_stays_inside_its_widget_at_every_finite_size() {
+    // 50 and 56 are where a mark always taking the 48pt cap would no longer fit.
+    let sizes = [0.5, 3.0, 6.0, 12.0, 20.0, 32.0, 40.0, 50.0, 56.0, 90.0, 200.0, 500.0, 5_000.0];
+    for &w in &sizes {
+        for &h in &sizes {
+            let widget = Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + w, 10.0 + h));
+            for anchor in [widget.left_top(), widget.right_bottom()] {
+                let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, anchor) else { continue };
+                assert!(widget.contains_rect(mark), "{mark:?} is not inside {widget:?} for a {w}x{h} widget");
+            }
+            let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()) else { continue };
+            // A quarter of the shorter side each way: at most 6.25% of a square widget.
+            let share = mark.width() * mark.height() / (widget.width() * widget.height());
+            assert!(share <= MARK_SIDE_SHARE * MARK_SIDE_SHARE * 1.0001, "the mark covers {:.2}% of a {w}x{h} widget", share * 100.0);
+        }
+    }
+}
+
+#[test]
+fn the_verdict_mark_stays_on_the_page_when_its_widget_crosses_the_edge() {
+    let page = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 300.0));
+    let widget = Rect::from_min_max(pos2(200.0, 150.0), pos2(600.0, 450.0));
+    let mark = verdict_mark_rect(widget, page, widget.right_bottom()).expect("the part on the page holds a mark");
+    assert!(page.contains_rect(mark), "{mark:?} is off {page:?}");
+    assert!(mark.max.x > 350.0 && mark.max.y > 250.0, "the corner of the part on the page nearest the anchor: {mark:?}");
+    // Wholly off the page, or a sliver on it too thin for a legible mark: none.
+    let off = widget.translate(vec2(400.0, 0.0));
+    assert_eq!(verdict_mark_rect(off, page, off.right_bottom()), None);
+    let sliver = Rect::from_min_max(pos2(390.0, 0.0), pos2(600.0, 300.0));
+    assert_eq!(verdict_mark_rect(sliver, page, sliver.right_bottom()), None);
 }
 
 #[test]
@@ -2416,4 +2559,24 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     app.poll_scan_clean();
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}
+
+/// #5708 review: a page that fits is centred with nothing to scroll, so only pixel snapping may
+/// pass for fitting. A page half a pixel or more too tall scrolls, or its ends would be cut off.
+#[test]
+fn only_pixel_snapping_passes_for_fitting_the_view() {
+    let page = |height: f32| [Rect::from_min_size(pos2(0.0, MARGIN), vec2(300.0, height))];
+    for ppp in [1.0, 2.0] {
+        let slack = 0.5 / ppp;
+        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, ppp);
+        assert_eq!(content, 600.0, "at {ppp}x, snapping's half pixel still fits");
+        for over in [slack + 0.1, 1.0] {
+            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, ppp);
+            assert_eq!((shift, content), (0.0, 600.0 + over + 2.0 * MARGIN), "at {ppp}x, {over} pt too tall scrolls");
+        }
+    }
+    // A scale that isn't one has no slack and never panics.
+    for ppp in [0.0, f32::NAN, f32::INFINITY] {
+        assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
+    }
 }
