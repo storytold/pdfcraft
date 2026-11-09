@@ -40,6 +40,10 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
+    /// The form's fields nest deeper than the action walk goes, so an `/A` below could be left in
+    /// the file while the removal reported success. Nothing is changed.
+    #[error("the form's fields are nested too deeply to remove their actions, so nothing was changed")]
+    FieldDepth,
     /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
     /// Skipping them would leave the text under them in the file while the others report success.
     #[error(

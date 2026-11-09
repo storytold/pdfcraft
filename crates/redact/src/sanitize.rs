@@ -356,7 +356,7 @@ fn strip_field_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactE
     if let Some(fields_obj) = acro.get(b"Fields").cloned() {
         let fields_ref = fields_obj.as_ref();
         let mut fields = (*doc.resolve(&fields_obj)).clone();
-        strip_field_array(doc, &mut fields, 0)?;
+        strip_field_array(doc, &mut fields, 0, &mut std::collections::HashSet::new())?;
         match fields_ref {
             Some(r) => doc.set(r, fields),
             None => acro.set(b"Fields".to_vec(), fields),
@@ -371,12 +371,20 @@ fn strip_field_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactE
     Ok(())
 }
 
-fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize) -> Result<(), RedactError> {
+fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize, seen: &mut std::collections::HashSet<ObjRef>) -> Result<(), RedactError> {
+    // Past the limit a deeper `/A` would stay in the file while the removal reported success.
     if depth > MAX_DIRECT_DEPTH {
-        return Ok(());
+        return Err(RedactError::FieldDepth);
     }
     let Object::Array(items) = array else { return Ok(()) };
     for item in items.iter_mut() {
+        // A child listed under two `/Kids` arrays is stripped once: revisiting its subtree for
+        // every occurrence is exponential in a small, crafted field graph.
+        if let Some(r) = item.as_ref()
+            && !seen.insert(r)
+        {
+            continue;
+        }
         let Some(mut field) = doc.resolve(item).as_dict().cloned() else { continue };
         field.remove(b"A");
         if let Some(kids) = field.get(b"Kids").cloned() {
@@ -384,7 +392,7 @@ fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize) -> Re
             // would stay in the file while the walk reported them removed.
             let kids_ref = kids.as_ref();
             let mut list = (*doc.resolve(&kids)).clone();
-            strip_field_array(doc, &mut list, depth + 1)?;
+            strip_field_array(doc, &mut list, depth + 1, seen)?;
             match kids_ref {
                 Some(r) => doc.set(r, list),
                 None => field.set(b"Kids".to_vec(), list),
