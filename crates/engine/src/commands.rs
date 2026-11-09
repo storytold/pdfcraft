@@ -231,6 +231,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
     // a tab's right-click menu also splits right or down with any tab.
     c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.

@@ -334,6 +334,7 @@ impl PdfCraftApp {
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.split" => self.toggle_split(),
+            crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -830,6 +831,11 @@ impl PdfCraftApp {
             let Some(s) = spec.shortcut else { continue };
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
+                continue;
+            }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
                 continue;
             }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
