@@ -11,6 +11,7 @@ pub mod data;
 pub mod fixtures;
 pub mod image;
 pub mod layout;
+pub mod linked_images;
 pub mod model;
 pub mod packets;
 pub mod parse;
@@ -159,7 +160,8 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if packets.xdp.trim().is_empty() {
         return Err(XfaError::Malformed("the XFA packets hold no template".into()));
     }
-    let (tpl, parse_warnings) = parse(&packets.xdp)?;
+    let (mut tpl, mut parse_warnings) = parse(&packets.xdp)?;
+    parse_warnings.extend(linked_images::resolve(&mut tpl, doc));
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(&tpl, &ov);
