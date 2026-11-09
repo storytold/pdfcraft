@@ -217,8 +217,9 @@ impl PdfCraftApp {
     }
 
     /// Keeps [`Self::own_clipboard_text`] up to date at the end of a frame: the text this frame
-    /// copied through egui (the last copy wins). [`Self::forget_own_clipboard_on_focus_loss`]
-    /// forgets it.
+    /// copied through egui (the last copy wins), while the window has focus. A copy made without
+    /// focus may not take (Wayland refuses the claim) and is not remembered. A focus loss forgets
+    /// it ([`Self::forget_own_clipboard_on_focus_loss`]).
     pub(crate) fn note_own_clipboard(&mut self, ctx: &egui::Context) {
         let copied = ctx.output(|o| {
             o.commands.iter().rev().find_map(|c| match c {
@@ -227,7 +228,8 @@ impl PdfCraftApp {
             })
         });
         if let Some(text) = copied {
-            self.own_clipboard_text = Some(text).filter(|t| !t.is_empty());
+            let focused = ctx.input(|i| i.focused);
+            self.own_clipboard_text = Some(text).filter(|t| focused && !t.is_empty());
         }
     }
 
@@ -556,5 +558,18 @@ mod own_clipboard_tests {
             egui::RawInput { focused: true, events: vec![egui::Event::WindowFocused(false), egui::Event::WindowFocused(true)], ..Default::default() };
         app.prepare_raw_input(&ctx, &mut raw);
         assert_eq!(app.own_clipboard_text, None, "forgotten before the pass reads its input");
+    }
+
+    /// A copy made while the window doesn't have focus, such as a whole-document copy finishing
+    /// after the user switched away, may not reach the clipboard (Wayland refuses the claim), and
+    /// another app may replace it before the window is back: it isn't remembered.
+    #[test]
+    fn a_copy_made_without_focus_is_not_remembered() {
+        let mut app = PdfCraftApp::new();
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, false, Some("late words"));
+        assert_eq!(app.own_clipboard_text, None);
+        frame(&mut app, &ctx, true, None);
+        assert_eq!(app.own_clipboard_text, None, "nor once the window is back");
     }
 }
