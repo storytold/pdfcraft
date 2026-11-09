@@ -50,6 +50,9 @@ pub struct XfaNode {
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;
     /// `None` when the picture doesn't change it (the raw value is read then).
     pub formatted: Option<String>,
+    /// The template's attributes and property elements of the object (border, ui, validate, …),
+    /// shared: snapshots taken for each script point at the same tree.
+    pub props: std::sync::Arc<super::XfaProps>,
 }
 
 /// The event a script runs for.
@@ -73,6 +76,8 @@ pub struct XfaDoc {
     /// The document's form fields, each named by the SOM expression of the XFA field it shows
     /// (`form1[0].page1[0].total[0]`), as `event.target.getField(…)` finds them.
     pub fields: std::sync::Arc<Vec<crate::FieldState>>,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
 }
 
 /// Something a script changed or asked for.
@@ -118,6 +123,8 @@ pub enum XfaEffect {
     Recalculate,
     /// `xfa.form.remerge()`, `xfa.layout.relayout()`.
     Relayout,
+    /// `app.runtimeHighlight = on`.
+    Highlight(bool),
 }
 
 /// What running a script did.
@@ -222,7 +229,13 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
         XfaEffect::MessageBox(m) => m.bytes(),
         XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-        XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
+        XfaEffect::Print
+        | XfaEffect::SaveAs
+        | XfaEffect::Beep
+        | XfaEffect::Recalculate
+        | XfaEffect::Relayout
+        | XfaEffect::Highlight(_)
+        | XfaEffect::ShowPanel(_) => 0,
     }
 }
 

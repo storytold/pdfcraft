@@ -91,9 +91,17 @@ impl PdfCraftApp {
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
+                    // The focus goes with them, running no exit: a script changing the document
+                    // just reverted would only make it unsaved again.
+                    view.forms.focused = None;
                     view.forms.committed = None;
                     view.forms.unbaked.clear();
                     view.pending_edit = None;
+                    // The redactions applied since the last save are discarded too. Those in the
+                    // last web download stay, so later downloads keep the `_Redacted` name.
+                    view.redactions_applied = view.redactions_downloaded;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
                 self.notify_tr("Reverted to the last saved version");
             }

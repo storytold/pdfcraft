@@ -1,10 +1,10 @@
 use super::host::{FieldNode, host};
 use super::instances::instance_manager;
-use super::model::{MAX_DEPTH, MAX_NODES, XfaDoc, XfaEffect, XfaEvent, XfaKind, clip, reset_names};
+use super::model::{MAX_DEPTH, MAX_NODES, XfaDoc, XfaEffect, XfaEvent, XfaKind, clip, payload, reset_names};
 use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
 use super::{
-    Attribute, Context, HashSet, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, error, js_string, platform,
-    printd, printf, printx, s, scand, text,
+    Attribute, Context, HashSet, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, error, function, js_string,
+    platform, printd, printf, printx, s, scand, text,
 };
 
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
@@ -44,7 +44,7 @@ fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
         Some(_) => Ok(crate::document::field_object(ctx, &name).into()),
         None => {
             let h = host(ctx)?.borrow();
-            let subform = h.nodes.iter().enumerate().any(|(i, n)| n.som == name && n.kind == XfaKind::Subform && h.is_live(i));
+            let subform = h.nodes.iter().enumerate().any(|(i, n)| *n.som == *name && n.kind == XfaKind::Subform && h.is_live(i));
             drop(h);
             Ok(if subform {
                 ObjectInitializer::new(ctx).property(js_string!("name"), s(&name), Attribute::READONLY).build().into()
@@ -180,6 +180,25 @@ fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    let e = XfaEffect::Highlight(on);
+    // Changed only when the request is kept: past the effect cap the script goes on reading the
+    // setting the viewer has.
+    if h.doc.highlight != on && h.reserve(&e, payload(&e)) {
+        h.doc.highlight = on;
+        h.record(e);
+    }
+    Ok(JsValue::undefined())
+}
+
 /// The value document field `f` has when its XFA field or exclusion group holds `text`, as the
 /// engine gives a field the value a script set: a check box is on when `text` is its on value
 /// (or, when it has none, anything but an off value), a radio group holds the selected value, a
@@ -303,13 +322,13 @@ fn set_focus(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     let som = match target.as_object() {
         Some(_) if node_index(&target, ctx).is_ok() => {
             let i = node_index(&target, ctx)?;
-            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.clone()).unwrap_or_default()
+            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.to_string()).unwrap_or_default()
         }
         _ => {
             let expr = text(&target, ctx)?;
             let h = host(ctx)?.borrow();
             let found = resolve_som(&h, h.current, &expr);
-            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.clone()).unwrap_or(expr)
+            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.to_string()).unwrap_or(expr)
         }
     };
     effect(ctx, XfaEffect::SetFocus(som))?;
@@ -485,7 +504,10 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     ctx.register_global_property(js_string!("xfa"), xfa, rw)?;
     ctx.register_global_property(js_string!("event"), acrobat_ev, rw)?;
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
@@ -593,7 +615,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
             let h = host(ctx)?.borrow();
             h.nodes
                 .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.clone(), k.repeatable && !k.gone))).collect())
+                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
                 .unwrap_or_default()
         };
         for (c, name, repeatable) in kids {

@@ -42,6 +42,7 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
@@ -717,6 +718,24 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
+    /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
+    /// above `redactions_downloaded`, Save asks where.
+    /// Undo of an Apply redactions step takes one off and Redo adds it back. Reload and a desktop
+    /// save set it to 0, and Revert sets it to `redactions_downloaded`; after a desktop save the document has the name it was saved
+    /// under. A web download keeps it, so later downloads carry the `_Redacted` name.
+    pub redactions_applied: usize,
+    /// How many Apply redactions steps saved into the document's file are undone in this view.
+    /// While it is above 0, Save asks where, so the restored content is not written over the
+    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    pub redactions_undone_after_save: usize,
+    /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
+    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    pub saved_redactions_cut_off: bool,
+    /// `redactions_applied` at the last web download, which Revert restores. While
+    /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
+    /// save leaves it at 0.
+    pub redactions_downloaded: usize,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -1133,6 +1152,10 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redactions_applied: 0,
+            redactions_undone_after_save: 0,
+            saved_redactions_cut_off: false,
+            redactions_downloaded: 0,
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -1302,6 +1325,8 @@ struct PageEnv<'a> {
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
+    /// The custom stamp's line, filled in now (#1741).
+    custom_line: &'a Option<String>,
     custom_stamp: &'a Option<crate::stamps_ui::CustomStamp>,
     date_text: &'a Result<String, String>,
     doc: &'a pdfcraft_engine::Document,
@@ -1720,6 +1745,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
             area_tool: false,
             hover: None,
             released_over: false,
+            sign_tabs: Vec::new(),
         }
     } else {
         page_tool_input(ui, view, frame, &slot)
@@ -2720,7 +2746,8 @@ fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, allowed, author, avail, can_modify, comments_hidden, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } =
+        *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2738,6 +2765,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
+    }
+    if let Some(e) = comments::popups(ui.ctx(), view, info, prefs, comments_hidden, allowed) {
+        // A click on the composer's Post also takes the focus from a pop-up's box, saving what
+        // was typed there: both edits land in this frame, so both are kept, in one batch.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
+            None => e,
+        });
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
@@ -3029,7 +3064,8 @@ fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
+/// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
+/// signature badges and sign tabs) and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");
@@ -3192,6 +3228,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let custom_line = custom_stamp.as_ref().and_then(|cs| cs.line.as_deref()).map(|t| app.session.stamp_line(t, &author));
     let mut open_props: Option<(usize, usize)> = None;
     let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     // The table being set up in its window, shown on its own document's page.
@@ -3234,6 +3271,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         comments_hidden,
         content_h,
         content_w,
+        custom_line: &custom_line,
         custom_stamp: &custom_stamp,
         date_text: &date_text,
         doc,
@@ -3611,7 +3649,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                 Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
         }
         Some(PageMenuAction::FlattenComments) => {
-            app.views[index].comments.selected = None;
+            app.views[index].comments.select(None);
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
         Some(PageMenuAction::AddBookmark) => {
@@ -3703,5 +3741,7 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+#[cfg(test)]
+mod sign_tab_tests;
 #[cfg(test)]
 mod tests;

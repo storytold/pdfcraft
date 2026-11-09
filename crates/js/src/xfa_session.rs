@@ -36,8 +36,10 @@ pub struct Script {
     pub source: String,
     pub formcalc: bool,
     pub event: XfaEvent,
-    /// The form as the caller holds it now.
-    pub root: XfaNode,
+    /// The form as the caller holds it now. Send the same `Arc` while the form is unchanged:
+    /// the next script then starts from the copy the last one was given, without flattening the
+    /// form again.
+    pub root: std::sync::Arc<XfaNode>,
     pub limits: Limits,
     pub timeout: std::time::Duration,
     /// The document's form fields as they are now ([`XfaDoc::fields`]), in place of the
@@ -62,7 +64,7 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
     if s.formcalc {
         // FormCalc has no engine to start: its time (and its own deadline) begins at once.
         started();
-        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, s.limits, Some(s.timeout));
+        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, true, s.limits, Some(s.timeout));
     }
     if let Some(why) = crate::refuse(&s.source) {
         started();
@@ -71,9 +73,9 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
     match s.fields {
         Some(fields) => {
             let doc = XfaDoc { fields, ..doc.clone() };
-            crate::xfa::run_here(&s.source, &s.event, &doc, s.root, s.limits, started)
+            crate::xfa::run_here(&s.source, &s.event, &doc, s.root, true, s.limits, started)
         }
-        None => crate::xfa::run_here(&s.source, &s.event, doc, s.root, s.limits, started),
+        None => crate::xfa::run_here(&s.source, &s.event, doc, s.root, true, s.limits, started),
     }
 }
 
@@ -244,6 +246,14 @@ mod native {
 
         pub fn run(&mut self, script: Script) -> XfaOutcome {
             run_script(script, &self.doc, &|| {})
+        }
+    }
+
+    impl Drop for XfaSession {
+        /// The scripts ran on this thread: the form they started from is let go of with the
+        /// event (on other targets it goes with the session's thread).
+        fn drop(&mut self) {
+            crate::xfa::forget_base();
         }
     }
 }
