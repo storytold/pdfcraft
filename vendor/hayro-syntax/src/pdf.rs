@@ -17,6 +17,8 @@ pub struct Pdf {
     header_version: PdfVersion,
     pages: CachedPages,
     data: PdfData,
+    /// PdfCraft patch: (hayro-syntax (45)) see [`Pdf::rebuilt_unlinked_update`].
+    rebuilt_unlinked_update: bool,
 }
 
 /// An error that occurred while loading a PDF file.
@@ -59,7 +61,10 @@ impl Pdf {
         if let Err(XRefError::Encryption(e)) = root {
             return Err(LoadPdfError::Decryption(e));
         }
-        let root_encrypted = root.as_ref().ok().map(XRef::is_encrypted);
+        let root_encrypted = root.as_ref().ok().map(|(x, _)| x.is_encrypted());
+        // PdfCraft patch: (hayro-syntax (45)) said of the file whichever table is kept, as
+        // `pdfcraft-cos` says it under the same conditions.
+        let rebuilt_unlinked_update = root.as_ref().is_ok_and(|(_, rebuilt)| *rebuilt);
         if cut_off_update_follows(data.as_ref())
             && let Some(xref) = fallback(data.clone(), password)
                 .filter(|x| root_encrypted.is_none_or(|e| e == x.is_encrypted()))
@@ -73,11 +78,12 @@ impl Pdf {
                     header_version: version,
                     pages,
                     data,
+                    rebuilt_unlinked_update,
                 });
             }
         }
         let xref = match root {
-            Ok(x) => x,
+            Ok((x, _)) => x,
             Err(e) => match e {
                 XRefError::Unknown => {
                     fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?
@@ -94,7 +100,15 @@ impl Pdf {
             header_version: version,
             pages,
             data,
+            rebuilt_unlinked_update,
         })
+    }
+
+    /// PdfCraft patch: (hayro-syntax (45)) whether the newest cross-reference section has no
+    /// `/Prev`, so the page tree in the revisions before it could only be found by rebuilding the
+    /// table from the file's objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.rebuilt_unlinked_update
     }
 
     /// Return the number of objects present in the PDF file.

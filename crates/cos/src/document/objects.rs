@@ -90,6 +90,13 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
     /// Objects of the file that could not be read, lowest number first, as lines such as
     /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
     /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
