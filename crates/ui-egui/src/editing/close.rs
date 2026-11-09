@@ -91,6 +91,9 @@ impl PdfCraftApp {
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
+                    // The focus goes with them, running no exit: a script changing the document
+                    // just reverted would only make it unsaved again.
+                    view.forms.focused = None;
                     view.forms.committed = None;
                     view.forms.unbaked.clear();
                     view.pending_edit = None;
@@ -100,6 +103,9 @@ impl PdfCraftApp {
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;
                 }
+                // A signature placed since the last save is gone with the rest: the next save
+                // doesn't ask to lock it (#2149).
+                self.placed_signatures.remove(&id);
                 self.notify_tr("Reverted to the last saved version");
             }
             Err(e) => self.notify_error(e),

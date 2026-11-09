@@ -141,6 +141,7 @@ impl PdfCraftApp {
                     pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
                     pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
                     pdfcraft_engine::MarkKind::Background => tl!("background"),
+                    pdfcraft_engine::MarkKind::PrinterMarks => tl!("printer marks"),
                 };
                 crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
             }
@@ -218,6 +219,7 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),
             "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
@@ -332,6 +334,7 @@ impl PdfCraftApp {
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.split" => self.toggle_split(),
+            crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -521,11 +524,13 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
-            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
                     "edit.header_footer.remove" => K::HeaderFooter,
                     "edit.watermark.remove" => K::Watermark,
+                    "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });
@@ -826,6 +831,11 @@ impl PdfCraftApp {
             let Some(s) = spec.shortcut else { continue };
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
+                continue;
+            }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
                 continue;
             }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
