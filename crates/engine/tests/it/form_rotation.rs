@@ -23,7 +23,8 @@ fn one_page() -> Document {
     doc
 }
 
-/// Width and height of the dark pixels on page 1.
+/// Width and height of the dark pixels on page 1: the black text, not the field's grey (0.55)
+/// border, which would give the field's own outline.
 fn ink_span(doc: &Document) -> (u32, u32) {
     let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
     let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
@@ -34,7 +35,7 @@ fn ink_span(doc: &Document) -> (u32, u32) {
     for y in 0..p.height {
         for x in 0..p.width {
             let i = ((y * p.width + x) * 4) as usize;
-            if p.rgba[i] < 200 {
+            if p.rgba[i] < 100 {
                 ink = true;
                 (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
             }
@@ -44,15 +45,18 @@ fn ink_span(doc: &Document) -> (u32, u32) {
     (x1 - x0, y1 - y0)
 }
 
+/// A tall, narrow field turned 90 degrees stays where it is and its text runs up its long side
+/// (#4296), rather than the field turning into a short, wide one that cuts the text off.
 #[test]
 fn a_rotated_field_draws_along_the_vertical_edge() {
     let mut doc = one_page();
-    add_field(&mut doc, 0, [10.0, 40.0, 90.0, 60.0], &NewField::Text { multiline: false }, Some("wide")).unwrap();
-    set_value(&mut doc, "wide", &FieldValue::Text("MMMMMM".into())).unwrap();
-    set_props(&mut doc, "wide", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
+    add_field(&mut doc, 0, [10.0, 40.0, 30.0, 120.0], &NewField::Text { multiline: false }, Some("tall")).unwrap();
+    set_value(&mut doc, "tall", &FieldValue::Text("MMMMMM".into())).unwrap();
+    set_props(&mut doc, "tall", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
     let (wide, tall) = ink_span(&doc);
     assert!(wide > tall, "upright text is a horizontal run: {wide}x{tall}");
-    set_props(&mut doc, "wide", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
+    set_props(&mut doc, "tall", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
     let (wide, tall) = ink_span(&doc);
-    assert!(tall > wide, "rotated text is a vertical run: {wide}x{tall}");
+    // Six 12 pt M's are about 60 pt, 120 px at scale 2; the field is 20 pt (40 px) wide.
+    assert!(tall >= 100 && wide < 40, "the text does not run up the field: {wide}x{tall} px");
 }
