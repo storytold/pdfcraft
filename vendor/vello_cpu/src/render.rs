@@ -583,6 +583,20 @@ impl RenderContext {
         self.filter = None;
     }
 
+    /// PdfCraft patch (1): whether paths were left out of the scene because its coverage was
+    /// full (a page that paints the same content millions of times over). Cleared by
+    /// [`reset`](Self::reset).
+    pub fn coverage_full(&self) -> bool {
+        self.dispatcher.coverage_full()
+    }
+
+    /// PdfCraft patch (1): keep the scene to `max` coverage (alpha) values, fewer than the
+    /// 2^31 a strip's index reaches, after which [`coverage_full`](Self::coverage_full) says
+    /// paths were left out. Kept across [`reset`](Self::reset).
+    pub fn set_max_coverage(&mut self, max: usize) {
+        self.dispatcher.set_max_coverage(max);
+    }
+
     /// Reset the render context.
     pub fn reset(&mut self) {
         self.dispatcher.reset();

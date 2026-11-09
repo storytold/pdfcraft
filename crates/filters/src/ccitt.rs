@@ -50,7 +50,7 @@ pub fn encode_g4(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, Filter
     }
 }
 
-/// The widest row [`decode_ccitt`] decodes: its row buffer stays within 128 KiB.
+/// The widest row [`decode_ccitt_within`] decodes: its row buffer stays within 128 KiB.
 pub const MAX_CCITT_COLUMNS: u32 = 1 << 20;
 
 /// A `CCITTFaxDecode` stream's `/DecodeParms` (ISO 32000-2 Table 11). [`Default`] gives the
@@ -74,22 +74,8 @@ impl Default for CcittParams {
     }
 }
 
-/// CCITT fax `data` decoded as `CCITTFaxDecode` gives it: rows of `columns` 1-bit samples, most
-/// significant bit first, each starting on a new byte, with black as 0 (as 1 with `black_is_1`).
-///
-/// At most `max_rows` rows are decoded (fewer when `rows` says so), so the output is bounded by
-/// the caller. Damaged data gives the rows decoded before the damage, as viewers show them: a
-/// caller that needs a number of rows checks it got them.
-///
-/// Group 3 rows on bytes (`k` from 0, `encoded_byte_align`) are read by their end-of-line codes,
-/// whether the fill starts each code on a byte or ends it on one, when `data` starts with one (T.4
-/// sends one before the first row when it sends them at all), and on bytes otherwise, whatever
-/// `end_of_line` says. Group 4 is read as its parameters say. Data with codes but none before the
-/// first row is read on bytes, as PdfCraft's renderer draws it; with `k` 0 and the fill ending each
-/// code on a byte, that may be other rows than were coded.
-///
-/// Errors: `columns` that aren't from 1 to [`MAX_CCITT_COLUMNS`] ([`FilterError::Unsupported`]).
-pub fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u8>, FilterError> {
+/// What [`decode_ccitt_within`] decodes once it is paid for.
+fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u8>, FilterError> {
     let columns = u32::try_from(p.columns)
         .ok()
         .filter(|c| (1..=MAX_CCITT_COLUMNS).contains(c))
@@ -123,6 +109,39 @@ pub fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u
     Ok(out.out)
 }
 
+/// The steps of reading a byte of fax code ([`decode_ccitt_within`]): noise takes 114 ns a byte of
+/// rows and about two bytes of code to a byte of rows, so that and a step a byte of rows is about
+/// what a step of JBIG2 decoding takes.
+const CODE_WORK: u64 = 4;
+
+/// CCITT fax `data` decoded as `CCITTFaxDecode` gives it: rows of `columns` 1-bit samples, most
+/// significant bit first, each starting on a new byte, with black as 0 (as 1 with `black_is_1`).
+///
+/// At most `max_rows` rows are decoded (fewer when `rows` says so), so the output is bounded by
+/// the caller. Damaged data gives the rows decoded before the damage, as viewers show them: a
+/// caller that needs a number of rows checks it got them.
+///
+/// Group 3 rows on bytes (`k` from 0, `encoded_byte_align`) are read by their end-of-line codes,
+/// whether the fill starts each code on a byte or ends it on one, when `data` starts with one (T.4
+/// sends one before the first row when it sends them at all), and on bytes otherwise, whatever
+/// `end_of_line` says. Group 4 is read as its parameters say. Data with codes but none before the
+/// first row is read on bytes, as PdfCraft's renderer draws it; with `k` 0 and the fill ending each
+/// code on a byte, that may be other rows than were coded.
+///
+/// Errors: `columns` that aren't from 1 to [`MAX_CCITT_COLUMNS`] ([`FilterError::Unsupported`]).
+///
+/// Decoding spends from `work`, what decoding may still cost across a run of images, and there is
+/// no way in without it: a
+/// byte of rows a step, whether or not the data holds them, and [`CODE_WORK`] a byte of `data`.
+/// A blank row takes a bit of code, so the rows are what a few bytes can ask for. It is all paid
+/// before anything is decoded, and what `work` can't pay for spends all of it.
+pub fn decode_ccitt_within(data: &[u8], p: &CcittParams, max_rows: u32, work: &mut u64) -> Result<Vec<u8>, FilterError> {
+    let rows = u32::try_from(p.rows).ok().filter(|r| *r > 0).map_or(max_rows, |r| r.min(max_rows));
+    let stride = u64::try_from(p.columns).unwrap_or(0).div_ceil(8);
+    crate::pay(work, stride.saturating_mul(u64::from(rows)).saturating_add((data.len() as u64).saturating_mul(CODE_WORK)))?;
+    decode_ccitt(data, p, max_rows)
+}
+
 /// Whether CCITT fax `data` starts with an end-of-line code: a 1 after 11 zeros or more, fill
 /// included. T.4 sends one before the first row when it sends them at all, and no other code starts
 /// with more than eight zeros.
@@ -132,9 +151,10 @@ fn starts_with_end_of_line(data: &[u8]) -> bool {
 }
 
 /// Rows of 1-bit samples filled from a decoder's pixels: `columns` a row, each row on a new byte, at
-/// most `rows` rows. Pixels past a row's end and rows past the last are dropped.
-struct Rows {
-    out: Vec<u8>,
+/// most `rows` rows. Pixels past a row's end and rows past the last are dropped. The JBIG2 decoder
+/// ([`crate::decode_jbig2_within`]) fills them too.
+pub(crate) struct Rows {
+    pub(crate) out: Vec<u8>,
     row: Vec<u8>,
     x: usize,
     columns: usize,
@@ -144,12 +164,12 @@ struct Rows {
 }
 
 impl Rows {
-    fn new(columns: usize, rows: usize, black_is_1: bool) -> Self {
+    pub(crate) fn new(columns: usize, rows: usize, black_is_1: bool) -> Self {
         Rows { out: Vec::new(), row: vec![0; columns.div_ceil(8)], x: 0, columns, rows, done: 0, black_is_1 }
     }
 
     /// `count` pixels, white or black.
-    fn push(&mut self, white: bool, count: usize) {
+    pub(crate) fn push(&mut self, white: bool, count: usize) {
         let end = self.x.saturating_add(count);
         if white != self.black_is_1 {
             for x in self.x..end.min(self.columns) {
@@ -159,6 +179,16 @@ impl Rows {
             }
         }
         self.x = end;
+    }
+
+    /// The row filled so far kept, if fewer than `rows` are, and the next one begun.
+    pub(crate) fn end_row(&mut self) {
+        if self.done < self.rows {
+            self.out.extend_from_slice(&self.row);
+            self.done += 1;
+        }
+        self.row.fill(0);
+        self.x = 0;
     }
 }
 
@@ -170,18 +200,49 @@ impl hayro_ccitt::Decoder for Rows {
         self.push(white, (chunks as usize).saturating_mul(8));
     }
     fn next_line(&mut self) {
-        if self.done < self.rows {
-            self.out.extend_from_slice(&self.row);
-            self.done += 1;
-        }
-        self.row.fill(0);
-        self.x = 0;
+        self.end_row();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run pays for the rows an image asks for and the code it reads, before any of it is
+    /// decoded: rows the data doesn't hold are paid for too, as a few bytes can ask for any number.
+    #[test]
+    fn a_run_of_images_pays_for_the_rows_it_asks_for() {
+        let (w, h) = (4096u32, 64u32);
+        let stride = (w as usize).div_ceil(8);
+        let data = encode_g4(&vec![0xFF; stride * h as usize], w, h).unwrap();
+        let p = CcittParams { k: -1, columns: i64::from(w), ..CcittParams::default() };
+        let whole = decode_ccitt(&data, &p, h).unwrap();
+        let cost = (whole.len() + 4 * data.len()) as u64;
+        let mut work = cost;
+        assert_eq!(decode_ccitt_within(&data, &p, h, &mut work).unwrap(), whole, "exactly enough");
+        assert_eq!(work, 0);
+        let mut work = cost + 7;
+        decode_ccitt_within(&data, &p, h, &mut work).unwrap();
+        assert_eq!(work, 7, "only what it took");
+        let mut work = cost - 1;
+        let refused = decode_ccitt_within(&data, &p, h, &mut work).unwrap_err();
+        assert!(matches!(refused, FilterError::Spent), "a step short: {refused}");
+        assert_eq!(work, 0, "spends all that was left");
+        // Nothing left: not read at all, so bad columns aren't reported as bad columns.
+        let bad = CcittParams { columns: 0, ..p };
+        assert!(decode_ccitt_within(&data, &bad, h, &mut 0).is_err_and(|e| matches!(e, FilterError::Spent)));
+        // No code at all, for the same rows.
+        let mut work = u64::MAX;
+        decode_ccitt_within(&[], &p, h, &mut work).unwrap();
+        assert_eq!(u64::MAX - work, whole.len() as u64);
+        // `/Rows` below what is asked for, and no rows.
+        let mut work = u64::MAX;
+        decode_ccitt_within(&data, &CcittParams { rows: 3, ..p }, h, &mut work).unwrap();
+        assert_eq!(u64::MAX - work, (3 * stride + 4 * data.len()) as u64);
+        let mut work = u64::MAX;
+        decode_ccitt_within(&data, &p, 0, &mut work).unwrap();
+        assert_eq!(u64::MAX - work, 4 * data.len() as u64);
+    }
 
     /// The rows decoded by an independent decoder (`hayro-ccitt`), as 1 for white and 0 for black.
     pub(crate) fn decode(data: &[u8], columns: u32, rows: u32) -> Vec<Vec<bool>> {
