@@ -663,7 +663,7 @@ fn refuse_unlisted_bodies(doc: &Document, old: &Document, signed_role: &dyn Fn(u
 /// must be where `doc`'s cross-reference entry for that number points, with that generation. A
 /// renderer that rebuilds its object index from the file's headers takes the last one, so any
 /// other body is one it may draw while this reader compares another. `None` past a bound on the
-/// headers found, when the appended bytes cannot be judged.
+/// headers found, or on the work spent finding them, when the appended bytes cannot be judged.
 ///
 /// The scan finds more headers than a renderer's would (it does not skip dictionaries or check
 /// that an object follows), so it errs towards refusing.
@@ -672,11 +672,18 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
     let data = doc.bytes();
     let start = old.bytes().len();
     let Some(appended) = data.get(start..) else { return Some(Vec::new()) };
+    // Each candidate header may read a comment or a generation token to its end, and a later one
+    // can start inside it (`%1%1%1…`, `1 +1+1+1…`): without a bound, that is quadratic in the
+    // appended bytes. Ordinary bytes, binary stream data included, spend a small fraction of it.
+    let mut work = appended.len().saturating_mul(16).saturating_add(1 << 20);
     let mut last: HashMap<(u32, u16), usize> = HashMap::new();
     let mut i = 0;
     while let Some(b) = appended.get(i) {
+        if work == 0 {
+            return None;
+        }
         let starts_number = b.is_ascii_digit() && i.checked_sub(1).and_then(|p| appended.get(p)).is_none_or(|p| !p.is_ascii_digit());
-        if let Some((num, generation, end)) = starts_number.then(|| object_header(appended, i)).flatten() {
+        if let Some((num, generation, end)) = starts_number.then(|| object_header(appended, i, &mut work)).flatten() {
             last.insert((num, generation), start.saturating_add(i));
             if last.len() > MAX_HEADERS {
                 return None;
@@ -713,32 +720,43 @@ fn is_white_space(b: u8) -> bool {
 
 /// An `N G obj` header starting at `at` in `bytes`: its number, its generation (0 when it is no
 /// generation number, as a renderer rebuilding its index reads it) and where it ends. White space
-/// and comments may separate the parts, and the generation may be any number.
-fn object_header(bytes: &[u8], at: usize) -> Option<(u32, u16, usize)> {
-    let run = |from: usize, accept: fn(u8) -> bool| bytes.get(from..).map_or(0, |rest| rest.iter().take_while(|b| accept(**b)).count());
-    let skip_space = |mut from: usize| {
-        while let Some(b) = bytes.get(from) {
-            if is_white_space(*b) {
-                from += 1;
-            } else if *b == b'%' {
-                from = from.saturating_add(1 + run(from + 1, |c| c != b'\n' && c != b'\r'));
-            } else {
-                break;
-            }
-        }
-        from
-    };
-    let number_end = at.checked_add(run(at, |c| c.is_ascii_digit()))?;
+/// and comments may separate the parts, and the generation may be any number. The comment and
+/// generation bytes read are spent from `work`.
+fn object_header(bytes: &[u8], at: usize, work: &mut usize) -> Option<(u32, u16, usize)> {
+    let number_end = at.checked_add(count_while(bytes, at, |c| c.is_ascii_digit()))?;
     let num = std::str::from_utf8(bytes.get(at..number_end)?).ok()?.parse::<u32>().ok()?;
-    let generation_at = skip_space(number_end);
-    let generation_len = run(generation_at, |c| c.is_ascii_digit() || matches!(c, b'.' | b'+' | b'-'));
+    let generation_at = skip_space_and_comments(bytes, number_end, work);
+    let generation_len = count_while(bytes, generation_at, |c| c.is_ascii_digit() || matches!(c, b'.' | b'+' | b'-'));
+    *work = work.saturating_sub(generation_len);
     if generation_len == 0 {
         return None;
     }
     let generation_end = generation_at.checked_add(generation_len)?;
     let generation = std::str::from_utf8(bytes.get(generation_at..generation_end)?).ok().and_then(|g| g.parse::<u16>().ok()).unwrap_or(0);
-    let keyword = skip_space(generation_end);
+    let keyword = skip_space_and_comments(bytes, generation_end, work);
     (bytes.get(keyword..keyword.checked_add(3)?)? == b"obj").then_some((num, generation, keyword + 3))
+}
+
+/// How many bytes from `from` on `accept` takes.
+fn count_while(bytes: &[u8], from: usize, accept: fn(u8) -> bool) -> usize {
+    bytes.get(from..).map_or(0, |rest| rest.iter().take_while(|b| accept(**b)).count())
+}
+
+/// Where the white space and comments from `from` end, the comment bytes passed spent from
+/// `work`.
+fn skip_space_and_comments(bytes: &[u8], mut from: usize, work: &mut usize) -> usize {
+    while let Some(b) = bytes.get(from) {
+        if is_white_space(*b) {
+            from = from.saturating_add(1);
+        } else if *b == b'%' {
+            let comment = count_while(bytes, from.saturating_add(1), |c| c != b'\n' && c != b'\r').saturating_add(1);
+            *work = work.saturating_sub(comment);
+            from = from.saturating_add(comment);
+        } else {
+            break;
+        }
+    }
+    from
 }
 
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
@@ -1254,5 +1272,40 @@ mod tests {
             Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
             other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
         }
+    }
+
+    /// `signed` with a revision appended that writes `before` and then object 3, listed where its
+    /// header is.
+    fn append_object_3(signed: &[u8], before: &[u8]) -> Vec<u8> {
+        let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+        let prev: String =
+            signed.get(at..).unwrap().iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+        let mut bytes = signed.to_vec();
+        bytes.extend_from_slice(before);
+        let object = bytes.len();
+        bytes.extend_from_slice(b"3 0 obj\n(x)\nendobj\n");
+        let section = bytes.len();
+        bytes.extend_from_slice(
+            format!("xref\n3 1\n{object:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {prev} >>\nstartxref\n{section}\n%%EOF\n").as_bytes(),
+        );
+        bytes
+    }
+
+    /// A comment of digits (`%1%1%1…`) or a run of signed numbers (`1 +1+1+1…`) appended after
+    /// signing would make the header scan start at each digit and read to the end of the run every
+    /// time, quadratic in the appended bytes. Past a bound on that work the appended bytes are not
+    /// judged; an ordinary revision is.
+    #[test]
+    fn the_header_scan_is_bounded_on_runs_that_restart_it() {
+        let signed = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let comment = [b"%".to_vec(), b"1%".repeat(50_000), b"\n".to_vec()].concat();
+        let numbers = [b"1 ".to_vec(), b"+1".repeat(50_000), b"\n".to_vec()].concat();
+        for (what, run) in [("a comment of digits", comment), ("a run of signed numbers", numbers)] {
+            let doc = Document::open(Arc::new(append_object_3(&signed, &run))).unwrap();
+            assert_eq!(unlisted_bodies(&doc, &old), None, "{what}");
+        }
+        let doc = Document::open(Arc::new(append_object_3(&signed, b"% an ordinary comment 1 2 3\n"))).unwrap();
+        assert_eq!(unlisted_bodies(&doc, &old), Some(Vec::new()));
     }
 }
