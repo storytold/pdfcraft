@@ -7618,6 +7618,329 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// A page of `/ImageMask` stencils painted with a tiling pattern: the 4 × 4 stencil inks a ring
+/// (its centre 2 × 2 samples are `1`, unpainted under the default `/Decode [0 1]`), filled with
+/// a red coloured pattern.
+fn patterned_stencil_page(media: (u32, u32), content: &str) -> RenderedPage {
+    let tile = "1 0 0 rg 0 0 10 10 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Contents 4 0 R /Resources << /XObject << /Msk 5 0 R >> /Pattern << /P 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ImageMask true /Filter /ASCIIHexDecode /Length 9 >> stream
+00606000>
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream
+{tile}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        media.0,
+        media.1,
+        content.len(),
+        tile.len()
+    );
+    let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    page
+}
+
+/// A stencil mask filled with a pattern shows the pattern where the stencil inks and nothing
+/// elsewhere: not in its unpainted samples, and not around it, also when it is drawn smaller
+/// than its samples and lands on whole device pixels.
+#[test]
+fn a_patterned_stencil_mask_paints_only_where_it_inks() {
+    // Pixel rows run top down: PDF (x, y) is pixel (x, 200 - y).
+    let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[(((200 - y) * p.width + x) * 4) as usize..][..3].to_vec();
+    let page = patterned_stencil_page((200, 200), "/Pattern cs /P scn q 40 0 0 40 20 20 cm /Msk Do Q q 3 0 0 3 100.4 100.4 cm /Msk Do Q");
+    assert_eq!(px(&page, 25, 25), [255, 0, 0], "the ring is red");
+    assert_eq!(px(&page, 40, 40), [255, 255, 255], "the stencil's unpainted centre stays white");
+    for (x, y) in [(15, 40), (65, 40), (40, 15), (40, 65)] {
+        assert_eq!(px(&page, x, y), [255, 255, 255], "outside the stencil at ({x}, {y})");
+    }
+    assert!((100..104).any(|x| px(&page, x, 101) != [255, 255, 255]), "the shrunk stencil is drawn");
+    for edge in [97, 98, 106, 107] {
+        for along in 97..=107 {
+            assert_eq!(px(&page, edge, along), [255, 255, 255], "beside the shrunk stencil at ({edge}, {along})");
+            assert_eq!(px(&page, along, edge), [255, 255, 255], "above or below the shrunk stencil at ({along}, {edge})");
+        }
+    }
+}
+
+/// A patterned stencil mask under a soft mask is drawn at the soft mask's opacity once, as a
+/// rectangle filled with the pattern beside it is: the stencil's coverage, which cuts the pattern
+/// to the stencil's shape, is not masked a second time.
+#[test]
+fn a_patterned_stencil_mask_under_a_soft_mask_is_masked_once() {
+    let content = "/S gs /Pattern cs /P scn q 40 0 0 40 20 20 cm /Msk Do Q 120 20 40 40 re f";
+    let tile = "1 0 0 rg 0 0 10 10 re f";
+    let group = "0.5 g 0 0 200 200 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Msk 5 0 R >> /Pattern << /P 6 0 R >> /ExtGState << /S << /SMask << /S /Luminosity /G 7 0 R >> >> >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ImageMask true /Filter /ASCIIHexDecode /Length 9 >> stream
+00606000>
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream
+{tile}
+endstream endobj
+7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Group << /S /Transparency /CS /DeviceGray >> /Length {} >> stream
+{group}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        tile.len(),
+        group.len()
+    );
+    let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    // Pixel rows run top down: PDF (x, y) is pixel (x, 200 - y).
+    let px = |x: u32, y: u32| page.rgba[(((200 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+    let (ring, rect) = (px(25, 25), px(140, 40));
+    assert!(rect != [255, 255, 255] && rect != [255, 0, 0], "the rectangle is half masked: {rect:?}");
+    assert!(ring.iter().zip(&rect).all(|(a, b)| a.abs_diff(*b) <= 2), "stencil {ring:?}, rectangle {rect:?}");
+    assert_eq!(px(40, 40), [255, 255, 255], "the stencil's unpainted centre stays white");
+}
+
+/// A patterned stencil mask in a Type 3 glyph is shrunk by area averaging, as it is outside
+/// one (#4800): the glyph's own image rules are for its images, not for the coverage that cuts
+/// the pattern. Here a one-column stroke of an 8-column stencil, drawn 4 pixels wide, is a
+/// half-covered red; nearest-neighbour would read columns 1, 3, 5 and 7 and miss it.
+#[test]
+fn a_patterned_stencil_mask_in_a_type3_glyph_keeps_thin_strokes() {
+    let content = "BT /Pattern cs /P scn /T3 1 Tf 0 0 Td (a) Tj ET";
+    let glyph = "400 0 0 0 400 100 d1 q 400 0 0 100 0 0 cm /Im0 Do Q";
+    let tile = "1 0 0 rg 0 0 10 10 re f";
+    let pdf = format!(
+        "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /Font << /T3 6 0 R >> /Pattern << /P 8 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /Filter /ASCIIHexDecode /Length 3 >> stream
+DF>
+endstream endobj
+6 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 400 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [400] /Resources << /XObject << /Im0 5 0 R >> >> >> endobj
+7 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+8 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream
+{tile}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        glyph.len(),
+        tile.len()
+    );
+    let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (4, 1));
+    let px = page.rgba.as_chunks::<4>().0.to_vec();
+    let [r, g, b, _] = px.get(1).copied().unwrap_or_default();
+    assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got {px:?}");
+    assert_eq!(px.get(3), Some(&[255, 255, 255, 255]), "{px:?}");
+}
+
+/// pdf.js issue 8078 paints 73,047 small stencil masks with one tiling pattern. Each was drawn
+/// through a canvas-sized luminance mask (a full-page render and composite per stencil), which
+/// took minutes for the page; a stencil now costs what its rectangle covers. Here 5,000
+/// patterned stencils on a 1000 × 2000 page. What the page draws offscreen is counted (hayro
+/// patch 30) rather than timed, so the check is the same on every machine: the one pattern cell,
+/// and not a page-sized pixmap per stencil.
+#[test]
+fn many_patterned_stencil_masks_draw_no_page_sized_masks() {
+    let mut content = String::from("/Pattern cs /P scn ");
+    for i in 0..5000u32 {
+        content.push_str(&format!("q 16 0 0 16 {} {} cm /Msk Do Q ", (i % 50) * 20, (i / 50) * 20));
+    }
+    let before = hayro::offscreen_draws();
+    let page = patterned_stencil_page((1000, 2000), &content);
+    let after = hayro::offscreen_draws();
+    assert_eq!(after.tiling_cells - before.tiling_cells, 1, "one cell for the pattern's one setting");
+    let pixels = after.pixels - before.pixels;
+    assert!(pixels < 1000 * 2000, "5,000 patterned stencils drew {pixels} pixels offscreen");
+    // The last stencil sits at (980, 1980): its ring is red, its centre white.
+    let px = |x: u32, y: u32| page.rgba[(((2000 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+    assert_eq!(px(981, 1981), [255, 0, 0]);
+    assert_eq!(px(988, 1988), [255, 255, 255]);
+}
+
+/// A coloured tiling pattern's cell is drawn once for all the fills of one setting (`scn`), as
+/// counted by hayro patch 30: here 3,000 small squares filled with one pattern. Drawn again for
+/// each fill, each cell was kept until the page was composited (pdf.js issue 8078 ran out of
+/// memory that way, its 3.5 MB cell drawn for each of 73,047 stencils). The squares all show the
+/// pattern in place. The same holds for a step so large that the fills show one cell, which is
+/// drawn with a transparent border instead of repeated.
+#[test]
+fn fills_of_one_pattern_setting_share_its_cell() {
+    let mut content = String::from("/Pattern cs /P scn ");
+    for i in 0..3000u32 {
+        content.push_str(&format!("{} {} 4 4 re f ", (i % 60) * 5, (i / 60) * 5));
+    }
+    // The cell is blue with a red lower-left quarter; at `/Matrix` scale 10 a cell is 100 units,
+    // so with a step of 10 red shows where both coordinates, modulo 100, are below 50. With a
+    // step of 100000 the one cell shows and nothing past it.
+    let cell = "0 0 1 rg 0 0 10 10 re f 1 0 0 rg 0 0 5 5 re f";
+    for (step, past_the_first_cell) in [("10", [0, 0, 255]), ("100000", [255, 255, 255])] {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep {step} /YStep {step} /Matrix [10 0 0 10 0 0] /Resources << >> /Length {} >> stream
+{cell}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            cell.len()
+        );
+        let before = hayro::offscreen_draws();
+        let page = render_first_page(pdf.into_bytes());
+        let cells = hayro::offscreen_draws().tiling_cells - before.tiling_cells;
+        assert_eq!(cells, 1, "step {step}: cells drawn for 3,000 fills of one setting");
+        // Pixel rows run top down: PDF (x, y) is pixel (x, 300 - y).
+        let px = |x: u32, y: u32| page.rgba[(((300 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+        // The first square, at (0, 0), and the last, at (295, 245).
+        assert_eq!(px(1, 1), [255, 0, 0], "step {step}");
+        assert_eq!(px(296, 246), past_the_first_cell, "step {step}");
+    }
+}
+
+/// Fills interleaving the settings of two coloured patterns with cells of one size, and of one
+/// of them at two cell scales, each show their own pattern in place: a cell kept for one setting
+/// is not taken for another (hayro patch 30). `/P` is blue with a red lower-left quarter and `/Q`
+/// green with a yellow one, both at `/Matrix` scale 10, so a cell is 100 units and its quarter
+/// shows where both coordinates, modulo 100, are below 50. The form `/X`, drawn at scale 2, sets
+/// `/P` in its own space, where a cell is 200 units, red where both page coordinates, modulo
+/// 200, are below 100. Each of the six settings draws its cell once, for all its fills.
+#[test]
+fn fills_of_interleaved_pattern_settings_each_show_their_own_cell() {
+    let content = "/Pattern cs /P scn 60 60 4 4 re f 10 10 4 4 re f q 2 0 0 2 0 0 cm /X Do Q \
+                   /Q scn 110 10 4 4 re f 160 160 4 4 re f /P scn 210 210 4 4 re f q 2 0 0 2 0 0 cm /X Do Q \
+                   /Q scn 260 260 4 4 re f 110 110 4 4 re f";
+    // In page space, squares at (60, 260) and (260, 60), where `/P` at scale 1 is blue.
+    let form = "/Pattern cs /P scn 30 130 2 2 re f 130 30 2 2 re f";
+    let p = "0 0 1 rg 0 0 10 10 re f 1 0 0 rg 0 0 5 5 re f";
+    let q = "0 1 0 rg 0 0 10 10 re f 1 1 0 rg 0 0 5 5 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P 5 0 R /Q 6 0 R >> /XObject << /X 7 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Matrix [10 0 0 10 0 0] /Resources << >> /Length {} >> stream
+{p}
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Matrix [10 0 0 10 0 0] /Resources << >> /Length {} >> stream
+{q}
+endstream endobj
+7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 150 150] /Resources << /Pattern << /P 5 0 R >> >> /Length {} >> stream
+{form}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        p.len(),
+        q.len(),
+        form.len()
+    );
+    let before = hayro::offscreen_draws();
+    let page = render_first_page(pdf.into_bytes());
+    assert_eq!(hayro::offscreen_draws().tiling_cells - before.tiling_cells, 6, "one cell per setting");
+    // The middle of the 4 × 4 square at PDF (x, y); pixel rows run top down.
+    let px = |x: u32, y: u32| page.rgba[(((300 - 2 - y) * page.width + x + 2) * 4) as usize..][..3].to_vec();
+    let (red, blue, green, yellow) = ([255, 0, 0], [0, 0, 255], [0, 255, 0], [255, 255, 0]);
+    for (x, y, colour, what) in [
+        (60, 60, blue, "/P"),
+        (10, 10, red, "/P"),
+        (60, 260, red, "/P at scale 2"),
+        (260, 60, red, "/P at scale 2"),
+        (110, 10, yellow, "/Q"),
+        (160, 160, green, "/Q"),
+        (210, 210, red, "/P set again"),
+        (260, 260, green, "/Q set again"),
+        (110, 110, yellow, "/Q set again"),
+    ] {
+        assert_eq!(px(x, y), colour, "{what} at ({x}, {y})");
+    }
+}
+
+/// An uncoloured tiling pattern (`/PaintType 2`) takes the colour of each setting, so fills that
+/// alternate red and green settings of it show both, each in place. Its cell also takes the
+/// opacity the setting captured, which a patterned stencil mask's copy of the setting leaves out
+/// (its transparency group applies it, hayro-interpret patch 46), so the cell drawn for one fill
+/// of a setting is not the other's (hayro patch 30 keeps only coloured cells): a square and a
+/// stencil painted with one half-opaque blue setting show the same half blue.
+#[test]
+fn an_uncoloured_pattern_shows_each_settings_colour() {
+    let content = "/C cs 1 0 0 /U scn 10 10 20 20 re f 0 1 0 /U scn 40 10 20 20 re f \
+                   1 0 0 /U scn 70 10 20 20 re f 0 1 0 /U scn 100 10 20 20 re f \
+                   /H gs 0 0 1 /U scn 10 50 20 20 re f q 20 0 0 20 40 50 cm /Msk Do Q";
+    let tile = "0 0 10 10 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 150 100] /Contents 4 0 R /Resources << /ColorSpace << /C [/Pattern /DeviceRGB] >> /Pattern << /U 6 0 R >> /XObject << /Msk 5 0 R >> /ExtGState << /H << /ca 0.5 >> >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ImageMask true /Filter /ASCIIHexDecode /Length 9 >> stream
+00000000>
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream
+{tile}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        tile.len()
+    );
+    let page = render_first_page(pdf.into_bytes());
+    // Pixel rows run top down: PDF (x, y) is pixel (x, 100 - y).
+    let px = |x: u32, y: u32| page.rgba[(((100 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+    for (x, colour) in [(20, [255, 0, 0]), (50, [0, 255, 0]), (80, [255, 0, 0]), (110, [0, 255, 0])] {
+        assert_eq!(px(x, 20), colour, "the square at x {x}");
+    }
+    let (square, stencil) = (px(20, 60), px(50, 60));
+    assert!(square[2] == 255 && square[0].abs_diff(128) <= 1 && square[1] == square[0], "half blue: {square:?}");
+    assert!(square.iter().zip(&stencil).all(|(a, b)| a.abs_diff(*b) <= 2), "square {square:?}, stencil {stencil:?}");
+}
+
 /// #2971: in a knockout transparency group (`/K true`) each element composites with the
 /// group's initial backdrop, not with the elements drawn before it in the group, over the
 /// element's shape. A blue square at 50 % opacity over a red one at 50 % shows only the blue
