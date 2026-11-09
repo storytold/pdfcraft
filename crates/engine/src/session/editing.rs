@@ -21,15 +21,21 @@ fn deletes_pages(edit: &Edit) -> bool {
 fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     let result = guard(|| run_edit(next, edit, cx))
         .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
-    if let Some(reason) = cx.js.as_mut().and_then(|runner| runner.refused.take()) {
-        if let Some(runner) = cx.js.as_ref()
-            && let Ok(mut runtime) = runner.runtime.lock()
-        {
-            runtime.reset_after_refusal();
-        }
-        return Err(EditError::Invalid(reason));
+    let refusal = cx.js.as_mut().and_then(|runner| runner.refused.take());
+    if refusal.is_some() || result.is_err() {
+        discard_edit_callbacks(cx);
     }
-    result
+    refusal.map_or(result, |reason| Err(EditError::Invalid(reason)))
+}
+
+/// Discard callback effects if PDF commit fails after any code entered the retained realm.
+fn discard_edit_callbacks(cx: &EditCtx) {
+    if let Some(runner) = cx.js.as_ref()
+        && runner.callbacks_touched_realm
+        && let Ok(mut runtime) = runner.runtime.lock()
+    {
+        runtime.reset_after_refusal();
+    }
 }
 
 /// Compare the icon and all of its indirect resources. Conservatively retire on budget exhaustion.
@@ -114,7 +120,7 @@ impl Session {
         // Fork its realm before any edit-triggered calculation, even if the edit later fails.
         #[cfg(not(target_arch = "wasm32"))]
         if doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.is_pending() {
-            doc.js_runtime = Default::default();
+            js::replace_runtime(&mut doc.js_runtime);
         }
         doc.edit_notices.clear();
         let name = doc.name.clone();
@@ -272,12 +278,14 @@ impl Session {
             let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
             xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
-                .map_err(EditError::Write)?;
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(&cx))?;
             // Rebuilding from stale data would discard accepted widget values.
             if xfa_notes.is_empty() {
                 let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
                     .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)?;
+                    .map_err(EditError::Write)
+                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
                 if let Some(warnings) = reflow {
                     xfa_notes.extend(warnings);
                     // Layout replaces pages and widgets, even if the page count is unchanged.
@@ -296,6 +304,7 @@ impl Session {
         }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
+            discard_edit_callbacks(&cx);
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
@@ -317,6 +326,7 @@ impl Session {
         let refreshed = guard(|| if scope == Scope::Content { Self::refresh_content(doc, Some(&edit)) } else { Self::refresh_scoped(doc, scope) })
             .unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
+            discard_edit_callbacks(&cx);
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
                 && let Some((_, prev, keys, _)) = ed.undo.pop()

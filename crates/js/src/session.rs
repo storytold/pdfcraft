@@ -98,7 +98,7 @@ impl Realm {
     }
     /// Validate sources, initialize once when needed, and execute this job in the retained document realm.
     fn run(&mut self, job: Job) -> Outcome {
-        let failed = |why: String| Outcome { rc: true, execution_refused: true, error: Some(why), ..Default::default() };
+        let failed = |why: String| Outcome { rc: true, execution_refused: true, realm_untouched: true, error: Some(why), ..Default::default() };
         if let Some(why) = crate::refuse(&job.script) {
             return failed(why);
         }
@@ -150,6 +150,9 @@ impl Realm {
                 },
                 Limits::default(),
             );
+            if initial.execution_refused {
+                return initial;
+            }
             let (fields, reset_calls, calculation_evaluations) = crate::host::host(ctx)
                 .map(|h| {
                     let h = h.borrow();
@@ -248,11 +251,21 @@ impl Drop for WorkerPermit {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+struct WorkerJob {
+    job: Job,
+    english_retry: bool,
+    reset_realm: bool,
+    reply: mpsc::Sender<InteractiveEvent>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Native document runtime with one bounded-stack worker and at most one active invocation.
 /// Dropping it releases the sender; after any active job finishes the worker exits and drops its realm.
 #[derive(Default)]
 pub struct ScriptSession {
-    sender: Option<mpsc::SyncSender<(Job, bool, mpsc::Sender<InteractiveEvent>)>>,
+    sender: Option<mpsc::SyncSender<WorkerJob>>,
+    executing: Arc<std::sync::atomic::AtomicBool>,
+    reset_realm: bool,
     busy: Arc<std::sync::atomic::AtomicBool>,
     worker_lifetime: std::sync::Weak<()>,
     instances: FieldInstances,
@@ -269,14 +282,19 @@ impl ScriptSession {
 
     /// Reserve the document worker and enqueue a job. An English-date retry uses a fresh context and leaves the retained realm alone.
     fn start_job(&mut self, mut job: Job, english_retry: bool) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.is_executing() {
+            return Err("another script is active in this document".into());
+        }
         if self.sender.is_none() {
             if self.worker_lifetime.upgrade().is_some() {
                 return Err("the timed-out script is still stopping; retry once it exits".into());
             }
-            let (tx, rx) = mpsc::sync_channel::<(Job, bool, mpsc::Sender<InteractiveEvent>)>(1);
+            let (tx, rx) = mpsc::sync_channel::<WorkerJob>(1);
             let permit = WorkerPermit::acquire()?;
             let lifetime = Arc::new(());
             self.worker_lifetime = Arc::downgrade(&lifetime);
+            let executing = self.executing.clone();
             std::thread::Builder::new()
                 .name("pdfcraft-document-js".into())
                 .stack_size(crate::run::DOCUMENT_WORKER_STACK)
@@ -284,7 +302,10 @@ impl ScriptSession {
                     let _lifetime = lifetime;
                     let _permit = permit;
                     let mut realm = Realm::new();
-                    while let Ok((job, english_retry, reply)) = rx.recv() {
+                    while let Ok(WorkerJob { job, english_retry, reset_realm, reply }) = rx.recv() {
+                        if reset_realm {
+                            realm = Realm::new();
+                        }
                         crate::interaction::set_host((!english_retry).then(|| reply.clone()));
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             if english_retry {
@@ -313,6 +334,7 @@ impl ScriptSession {
                                 ..Default::default()
                             }
                         });
+                        executing.store(false, SeqCst);
                         let _ = reply.send(InteractiveEvent::Complete(out));
                     }
                 })
@@ -331,12 +353,20 @@ impl ScriptSession {
             self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("script worker unavailable".into());
         };
-        sender.try_send((job, english_retry, tx)).map_err(|_| {
-            self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.executing.store(true, SeqCst);
+        sender.try_send(WorkerJob { job, english_retry, reset_realm: self.reset_realm, reply: tx }).map_err(|_| {
+            self.executing.store(false, SeqCst);
+            self.busy.store(false, SeqCst);
             "script worker disconnected"
         })?;
+        self.reset_realm = false;
         Ok(rx)
     }
+    /// Whether the native worker still owns an invocation, including one waiting for a prompt.
+    pub fn is_executing(&self) -> bool {
+        self.executing.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// An asynchronous completion remains pending until its document outcome is accepted or discarded.
     pub fn is_pending(&self) -> bool {
         self.busy.load(std::sync::atomic::Ordering::SeqCst)
@@ -351,11 +381,21 @@ impl ScriptSession {
         self.acknowledge_completion();
     }
 
+    /// Fork the realm while keeping this document's worker reservation and execution gate.
+    /// Old invocation handles cannot submit work through the successor's channel.
+    pub fn fresh_realm(&mut self) -> Self {
+        Self {
+            sender: self.sender.take(),
+            executing: self.executing.clone(),
+            worker_lifetime: self.worker_lifetime.clone(),
+            reset_realm: true,
+            ..Self::default()
+        }
+    }
+
     /// Drop state from callbacks belonging to a rejected PDF edit.
     pub fn reset_after_refusal(&mut self) {
-        if self.sender.is_some() || self.worker_lifetime.upgrade().is_none() {
-            *self = Self::default();
-        }
+        *self = self.fresh_realm();
     }
 
     /// Run a job with one total deadline, discarding its entire realm when the host times out.
@@ -374,10 +414,18 @@ impl ScriptSession {
 
     /// Wait within one deadline for startup, prompt replies and completion. Detach a worker that exceeds the deadline.
     fn run_timed(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration, english_retry: bool) -> Outcome {
+        if limit.is_zero() {
+            return Outcome {
+                execution_refused: true,
+                realm_untouched: true,
+                error: Some("script worker had no time remaining".into()),
+                ..Default::default()
+            };
+        }
         let started = std::time::Instant::now();
         let rx = match self.start_job(job, english_retry) {
             Ok(rx) => rx,
-            Err(e) => return Outcome { execution_refused: true, error: Some(e), ..Default::default() },
+            Err(e) => return Outcome { execution_refused: true, realm_untouched: true, error: Some(e), ..Default::default() },
         };
         match Self::receive(&rx, answers, started, limit) {
             Some(out) => {
@@ -439,6 +487,11 @@ impl Default for ScriptSession {
 }
 #[cfg(target_arch = "wasm32")]
 impl ScriptSession {
+    /// Replace the web-local realm and its document bindings.
+    pub fn fresh_realm(&mut self) -> Self {
+        Self::default()
+    }
+
     /// Drop state from callbacks belonging to a rejected PDF edit.
     pub fn reset_after_refusal(&mut self) {
         *self = Self::default();

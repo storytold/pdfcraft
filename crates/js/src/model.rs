@@ -348,6 +348,8 @@ impl Panel {
 pub struct Outcome {
     /// The runtime could not execute the callback safely.
     pub execution_refused: bool,
+    /// Execution was refused before invoking any code in the retained realm.
+    pub realm_untouched: bool,
     /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
     pub reset_limit_exceeded: bool,
     /// Calculation exhaustion rejects script writeback even if the script catches the error.

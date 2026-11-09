@@ -265,6 +265,9 @@ pub(crate) fn run_in_context(
         // the other scripts, stay available (#3940).
         for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
+                if matches!(e.as_engine(), Some(boa_engine::error::EngineError::RuntimeLimit(_))) {
+                    return Err(e);
+                }
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
@@ -282,6 +285,7 @@ pub(crate) fn run_in_context(
         Ok(())
     })();
     if let Err(e) = result {
+        out.execution_refused = matches!(e.as_engine(), Some(boa_engine::error::EngineError::RuntimeLimit(_)));
         out.error = Some(e.to_string());
     }
     doc_errors.sort_by_key(|(i, _)| *i);

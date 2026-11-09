@@ -77,7 +77,7 @@ impl Session {
             let reopened =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
             if !preserves_objects {
-                doc.js_runtime = Default::default();
+                crate::js::replace_runtime(&mut doc.js_runtime);
             }
             editor.cos = reopened;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
@@ -167,6 +167,12 @@ impl Session {
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
         let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
         let doc = &self.docs[old];
+        // Opening the replacement can initialize a new worker. Wait for the old
+        // invocation to finish before allowing repeated reloads of this document.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| OpenError::Invalid("script runtime unavailable".into()))?.is_executing() {
+            return Err(OpenError::Invalid("a script is still running in this document; retry the reload once it finishes".into()));
+        }
         let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
         let new_id = self.open(name, path, bytes, password.as_deref())?;

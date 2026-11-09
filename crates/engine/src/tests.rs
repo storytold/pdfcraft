@@ -13625,6 +13625,74 @@ fn reset_draws_the_formatted_default() {
     assert_eq!(scripts.result.as_deref(), Some("undefined/undefined"));
 }
 
+/// VM limits reject earlier writes in the same script and clear its uncommitted globals.
+#[test]
+fn vm_limit_refuses_partial_script_writes() {
+    let (mut s, id) = reset_order_session("");
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let script = "var rejected = 42; getField('price').value = 1; function recurse(){ return recurse(); } recurse();";
+    let out = s.run_javascript(id, script, None).unwrap();
+    assert!(out.execution_refused, "{out:?}");
+    assert!(out.changed.is_empty() && out.requests.is_empty());
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof rejected;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
+/// A refusal before the first callback starts leaves the committed realm available.
+#[test]
+fn preflight_refusal_preserves_committed_callback_state() {
+    let (mut s, id) = reset_order_session("");
+    let nested = format!("{}1{}", "(".repeat(1_000), ")".repeat(1_000));
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "validate".into(), script: Some(nested) }).unwrap();
+    s.set_javascript(true);
+    s.run_javascript(id, "var committed = 42;", None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let edit = Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) };
+    assert!(matches!(s.apply(id, edit), Err(EditError::Invalid(_))));
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "committed;", None).unwrap().result.as_deref(), Some("42"));
+}
+
+/// Validation can reject an edit without hitting a runtime limit.
+#[test]
+fn validation_rejection_discards_callback_side_effects() {
+    let (mut s, id) = reset_order_session("");
+    let script = "var rejectedValue = event.value; event.rc = false;";
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "validate".into(), script: Some(script.into()) }).unwrap();
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let edit = Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) };
+    assert!(s.apply(id, edit).is_err());
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof rejectedValue;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
+/// Replacing a document realm while a prompt is outstanding cannot spawn a second worker.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn invalidated_prompt_retains_the_documents_worker_until_completion() {
+    use crate::js::InteractiveEvent;
+    let (mut s, id) = reset_order_session("");
+    s.set_javascript(true);
+    let pending = s.start_javascript(id, "var discarded = app.response('wait');", None).unwrap();
+    let InteractiveEvent::Prompt(_, reply) = pending.receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap() else {
+        panic!("expected prompt")
+    };
+    let same_file = s.get(id).unwrap().bytes.clone();
+    assert!(matches!(s.reload(id, same_file), Err(OpenError::Invalid(reason)) if reason.contains("a script is still running")));
+    for _ in 0..3 {
+        s.invalidate_javascript(id);
+        assert!(matches!(s.start_javascript(id, "1;", None), Err(EditError::Invalid(reason)) if reason.contains("another script is active")));
+    }
+    reply.send(Some("discarded".into())).unwrap();
+    let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap() else {
+        panic!("expected completion")
+    };
+    assert!(s.finish_javascript(pending, out).is_err());
+    assert_eq!(s.run_javascript(id, "typeof discarded;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
 #[test]
 fn a_budget_refusal_discards_pdf_edits_and_callback_globals() {
     let (mut s, id) = reset_order_session("");
@@ -13645,6 +13713,7 @@ fn timeout_after_undo_releases_the_stale_script_runtime() {
     let (mut s, id) = reset_order_session("");
     s.set_javascript(true);
     let pending = s.start_javascript(id, "1+1", None).unwrap();
+    assert!(matches!(pending.receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), crate::js::InteractiveEvent::Complete(_)));
     s.undo(id).unwrap();
     s.timeout_javascript(pending);
     assert_eq!(s.run_javascript(id, "2+2", None).unwrap().result.as_deref(), Some("4"));

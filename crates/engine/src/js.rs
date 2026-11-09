@@ -417,12 +417,21 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
 /// Runs field scripts with the document's object model and keeps what they print or ask for.
 pub type Runtime = std::sync::Arc<std::sync::Mutex<pdfcraft_js::session::ScriptSession>>;
 
+/// Invalidate pending results while retaining the document's native worker reservation.
+pub(crate) fn replace_runtime(runtime: &mut Runtime) {
+    let Ok(mut old) = runtime.lock() else { return };
+    let next = old.fresh_realm();
+    drop(old);
+    *runtime = std::sync::Arc::new(std::sync::Mutex::new(next));
+}
+
 pub struct JsRunner {
     pub runtime: Runtime,
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
     pub(crate) refused: Option<String>,
+    pub(crate) callbacks_touched_realm: bool,
     #[cfg(not(target_arch = "wasm32"))]
     callback_started: Option<std::time::Instant>,
     /// Source/order cache for this edit only; each callback still snapshots current field values.
@@ -484,6 +493,7 @@ impl JsRunner {
             doc_scripts,
             output: JsOutput::default(),
             refused: None,
+            callbacks_touched_realm: false,
             #[cfg(not(target_arch = "wasm32"))]
             callback_started: None,
             runtime: Default::default(),
@@ -579,6 +589,7 @@ impl Scripts for JsRunner {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(_) => Outcome {
                 execution_refused: true,
+                realm_untouched: true,
                 error: Some("form script callbacks exceeded their shared execution budget".into()),
                 ..Default::default()
             },
@@ -586,6 +597,7 @@ impl Scripts for JsRunner {
             Ok(mut runtime) => runtime.run(job, &[]),
             Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
+        self.callbacks_touched_realm |= !o.realm_untouched;
         self.output.absorb(&o);
         if o.execution_refused || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             self.refused = Some(o.error.clone().unwrap_or_else(|| "form script exceeded its execution budget".into()));
@@ -711,7 +723,7 @@ impl Session {
         self.js_off = !on;
         if !on {
             for doc in &mut self.docs {
-                doc.js_runtime = Default::default();
+                replace_runtime(&mut doc.js_runtime);
             }
         }
     }
@@ -901,8 +913,9 @@ impl Session {
             },
             answers,
         );
+        let discard = o.execution_refused && !o.realm_untouched;
         let result = self.apply_script_outcome(id, &states, o, opening);
-        if result.is_err() {
+        if discard || result.is_err() {
             self.invalidate_javascript(id);
         }
         result
@@ -910,6 +923,11 @@ impl Session {
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
+        if o.execution_refused {
+            o.changed.clear();
+            o.requests.clear();
+            return Ok(o);
+        }
         if o.calculation_limit_exceeded {
             return Err(EditError::Invalid(o.error.unwrap_or_else(|| "script calculation work limit exceeded".into())));
         }
@@ -1368,7 +1386,7 @@ impl Session {
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id)
             && std::sync::Arc::ptr_eq(&doc.js_runtime, &p.runtime)
         {
-            doc.js_runtime = Default::default();
+            replace_runtime(&mut doc.js_runtime);
         }
     }
     /// Discard a timed-out invocation and retain the worker slot until its thread exits.
@@ -1389,8 +1407,9 @@ impl Session {
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
         p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
+        let discard = out.execution_refused && !out.realm_untouched;
         let result = self.apply_script_outcome(p.id, &p.states, out, false);
-        if result.is_err() {
+        if discard || result.is_err() {
             self.invalidate_javascript(p.id);
         }
         result
@@ -1413,7 +1432,7 @@ impl Session {
     /// Release this document runtime after cancellation or lifecycle changes; the next event initializes anew.
     pub fn invalidate_javascript(&mut self, id: DocId) {
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
-            doc.js_runtime = Default::default();
+            replace_runtime(&mut doc.js_runtime);
         }
     }
 }
