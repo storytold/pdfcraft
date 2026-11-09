@@ -58,7 +58,7 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::garbage_input_is_rejected_without_panicking", "crates/cos/src/parser.rs::garbage_never_panics", "crates/render/src/raster/tests.rs::missing_page_and_garbage_input_fail_gracefully"]
+evidence = ["crates/ui-egui/tests/it/ui.rs::garbage_input_is_rejected_without_panicking", "crates/cos/src/parser.rs::garbage_never_panics", "crates/render/src/raster/tests.rs::missing_page_and_garbage_input_fail_gracefully", "crates/render/src/raster/tests.rs::a_form_that_draws_itself_is_drawn_once"]
 notes = "fuzzed nightly (M1.10)"
 
 [[feature]]
