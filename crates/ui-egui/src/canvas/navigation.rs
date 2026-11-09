@@ -423,21 +423,31 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         }
     }
     // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
-    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434).
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434; *Adobe Acrobat Help*, 2019,
+    // "Keys for navigating a PDF", p. 83). These take the key from the page turning and
+    // scrolling below.
     let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
-    if key(Key::Home) || pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp)) {
+    let to_start = pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp));
+    let to_end = pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown));
+    if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
-    if key(Key::End) || pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown)) {
+    if key(Key::End) || to_end {
         view.go_to_end();
     }
-    // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
-    // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
+    if to_end || to_start {
+        return;
+    }
+    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
+    // Full screen: Space and Enter go forward a page, and Shift+Enter and Backspace back
+    // (*Adobe Acrobat Help*, 2019, "Read a document in Full Screen mode", p. 66: "To go to the
+    // previous page, press Shift+Enter"). The arrows and Page Up / Page Down already turn pages
+    // where nothing scrolls, below.
     if view.presentation.is_some() {
-        if key(Key::Space) || key(Key::Enter) {
+        if key(Key::Space) || (key(Key::Enter) && !shift) {
             view.step_page(true);
         }
-        if key(Key::Backspace) {
+        if key(Key::Backspace) || (key(Key::Enter) && shift) {
             view.step_page(false);
         }
     }
@@ -446,7 +456,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // than the window (a plan zoomed in) → / ← scroll sideways a line first, and turn the page
     // once there is nothing left to scroll that way, as ↓ / ↑ do in single-page view; ⌘→ / ⌘←
     // turn it at once.
-    let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
     let line = KEY_SCROLL_LINE * speed.factor();
     // Only an up-to-date view counts: no jump pending.
