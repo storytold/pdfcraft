@@ -164,6 +164,13 @@ impl Session {
                 pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
             }
         };
+        // Comments and fields without an appearance print as the page shows them (and as Print
+        // as Image already printed them): the vector print drew only appearance streams, so a
+        // text box without one was on screen but not on paper. ISO 32000-2 §12.5.3: an
+        // annotation with the Print flag is printed.
+        if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
+            cos = displayed;
+        }
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.

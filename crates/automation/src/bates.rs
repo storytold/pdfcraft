@@ -287,7 +287,7 @@ fn same_output_name(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
                 })
                 .collect()
         }
-        return key(left) == key(right);
+        key(left) == key(right)
     }
     #[cfg(not(windows))]
     {
@@ -307,7 +307,7 @@ fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
                 wide.pop();
             }
         }
-        return Ok(std::ffi::OsString::from_wide(&wide));
+        Ok(std::ffi::OsString::from_wide(&wide))
     }
     #[cfg(not(windows))]
     {

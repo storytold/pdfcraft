@@ -209,6 +209,11 @@ impl ImageBudget {
         self.refused
     }
 
+    /// Charges `work` steps paid for out of another allowance, by a thread working on its own.
+    pub fn charge(&mut self, work: u64) {
+        self.work = self.work.saturating_sub(work);
+    }
+
     /// The steps of decoding still allowed.
     pub fn work_left(&self) -> u64 {
         self.work
