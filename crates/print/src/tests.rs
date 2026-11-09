@@ -1345,3 +1345,17 @@ fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
     let Object::Stream(s) = &*doc.get(form) else { panic!("form stream") };
     assert_eq!(s.dict.get(b"Resources"), Some(&Object::Ref(res)));
 }
+
+/// Many pages asked about at once are answered from one walk of the page tree, each as
+/// [`text_reads_up`] answers it alone; a page past the end is `false`.
+#[test]
+fn texts_read_up_answers_many_pages_from_one_walk() {
+    let doc = fixture(3_000);
+    let all: Vec<usize> = (0..3_001).collect();
+    let started = std::time::Instant::now();
+    let up = texts_read_up(&doc, &all);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    assert_eq!(up.len(), all.len());
+    assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
+    assert_eq!(up[1], text_reads_up(&doc, 1));
+}
