@@ -49,7 +49,7 @@ impl PdfCraftApp {
             // the save (and what follows it, such as closing the tab) goes on once it's answered.
             if self.signed_edit_waits(id) {
                 self.resume_after_signed_edit = Some(Box::new(move |app: &mut Self| {
-                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                    if let Some(i) = app.asking_tab(id) {
                         app.save_then(i, target, after);
                     }
                 }));
@@ -66,7 +66,9 @@ impl PdfCraftApp {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
                 // document (`is_mail_temp_copy`).
-                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
+                // Neither is a path read back from a recovery sidecar until a save confirms it:
+                // anyone who can write the recovery folder can name any file there (#3923).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) && !self.recovered_paths.contains(&id) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(name);
@@ -173,11 +175,12 @@ impl PdfCraftApp {
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
+        let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
-            // Save As to another file is a clean copy, without the earlier revisions that still
-            // hold deleted pages or replaced text (#2165). A signed document stays incremental so
-            // its signatures keep covering the file.
-            let full = target == SaveTarget::As
+            // Save As to another file and a recovered document are clean copies, without earlier
+            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
+            // document stays incremental so its signatures keep covering the file.
+            let full = (target == SaveTarget::As || recovered)
                 && !d.path.as_deref().is_some_and(|p| crate::same_file(p, dest))
                 && d.read_only_reason.is_none()
                 && !d.is_signed();
@@ -203,11 +206,14 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
+                // The tab in use: `sync_views` brings any other tab of the document up to date.
                 if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                    && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
                 {
                     view.document_changed(&doc.info);
-                    // Saving over a version that changed on disk keeps this one: nothing to ask.
+                }
+                // Saving over a version that changed on disk keeps this one: nothing to ask.
+                for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);

@@ -143,9 +143,9 @@ fn values(doc: &Document) -> Vec<(String, Vec<String>)> {
     fields(doc).into_iter().map(|f| (f.name, f.value)).collect()
 }
 
-/// #2666: Replace Text writes a StrikeOut and a Caret that replies to it. XFDF names a reply by
-/// the `/NM` of what it replies to, so when both carried one id the caret's `inreplyto` was its
-/// own `name`: importing it found a comment replying to itself and the pair was lost.
+/// #2666: Replace Text writes a Caret and a StrikeOut grouped under it. XFDF names the link by
+/// the `/NM` of the annotation it points at, so when both carried one id the `inreplyto` was the
+/// strikeout's own `name`: importing it found a comment replying to itself and the pair was lost.
 #[test]
 fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let mut src = blank();
@@ -170,8 +170,8 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
     assert!(xfdf.contains("name=\"strike\"") && xfdf.contains("name=\"caret\""), "each gets its own name: {xfdf}");
-    assert!(xfdf.contains("inreplyto=\"strike\""), "the caret replies to the strikeout: {xfdf}");
-    assert!(!xfdf.contains("inreplyto=\"caret\""), "never a reply to itself");
+    assert!(xfdf.contains("inreplyto=\"caret\""), "the strikeout is grouped under the caret: {xfdf}");
+    assert!(!xfdf.contains("inreplyto=\"strike\""), "never a reply to itself");
 
     let mut dst = blank();
     let r = import(&mut dst, xfdf.as_bytes()).unwrap();
@@ -180,6 +180,135 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let kinds: Vec<&str> = found.iter().map(|s| s.subtype.as_str()).collect();
     assert!(kinds.contains(&"StrikeOut") && kinds.contains(&"Caret"), "{kinds:?}");
     assert_eq!(comment_view(&dst), comment_view(&src), "the pair and its thread survive");
+    // Review on #5689 (CodeRabbit): the intents travel too, so the imported pair is still
+    // Replace Text, and deleting its strikeout takes the caret and its replacement with it.
+    assert!(xfdf.contains("intent=\"Replace\"") && xfdf.contains("intent=\"StrikeOutTextEdit\""), "{xfdf}");
+    let strike = summaries(&dst).into_iter().find(|s| s.subtype == "StrikeOut").expect("the strikeout");
+    pdfcraft_annot::delete_annotation(&mut dst, 0, strike.index).unwrap();
+    assert!(summaries(&dst).iter().all(|s| s.subtype != "Caret"), "the caret goes with the strikeout");
+}
+
+/// Review on #5689 (CodeRabbit): XFDF links a reply to its target by the target's `name`, so a
+/// group whose primary has no `/NM` lost its `inreplyto` on export and came back as two loose
+/// comments. Both layouts: the caret primary (this PR) and the strikeout primary (older files).
+#[test]
+fn an_unnamed_group_primary_gets_an_export_only_name() {
+    for caret_primary in [true, false] {
+        let mut src = blank();
+        let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+        let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+        let unnamed = Meta { date: None, id: String::new() };
+        add_text_replacement(
+            &mut src,
+            TextReplacement {
+                page: 0,
+                quads: &quads,
+                replacement: "new words",
+                author: "Ada",
+                strike: &style,
+                caret: &style,
+                strike_meta: &unnamed,
+                caret_meta: &unnamed,
+            },
+        )
+        .unwrap();
+        let page = pdfcraft_model::pages(&src)[0].obj;
+        let annots = src.get(page).as_dict().unwrap().get(b"Annots").and_then(|a| src.resolve(a).as_array().cloned()).unwrap();
+        let refs: Vec<ObjRef> = annots.iter().filter_map(Object::as_ref).collect();
+        let is = |doc: &Document, r: ObjRef, s: &[u8]| doc.get(r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(s);
+        let strike = *refs.iter().find(|r| is(&src, **r, b"StrikeOut")).unwrap();
+        let caret = *refs.iter().find(|r| is(&src, **r, b"Caret")).unwrap();
+        let (primary, sub) = if caret_primary { (caret, strike) } else { (strike, caret) };
+        if !caret_primary {
+            src.update_dict(strike, |d| {
+                d.remove(b"IRT");
+                d.remove(b"RT");
+            })
+            .unwrap();
+            src.update_dict(caret, |d| {
+                d.set(b"IRT".to_vec(), Object::Ref(strike));
+                d.set(b"RT".to_vec(), Object::name("Group"));
+            })
+            .unwrap();
+        }
+        // A comment already named what the made-up name would be: the two must not collide.
+        let clash = format!("pdfcraft-export-{}-{}", primary.num, primary.generation);
+        let note = NewAnnotation {
+            page: 0,
+            shape: Shape::Note { at: [300.0, 300.0], icon: Default::default() },
+            style: style.clone(),
+            contents: "note".into(),
+            author: "Ada".into(),
+        };
+        add_annotation(&mut src, &note, &Meta { date: None, id: clash.clone() }).unwrap();
+
+        let xfdf = export_xfdf(&src, true, false, "a.pdf");
+        let doc = roxmltree::Document::parse(&xfdf).unwrap();
+        let el = |t: &str| doc.descendants().find(|n| n.has_tag_name(t)).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
+        let (tag, sub_tag) = if caret_primary { ("caret", "strikeout") } else { ("strikeout", "caret") };
+        let name = el(tag).attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
+        assert_eq!(el(sub_tag).attribute("inreplyto"), Some(name), "{xfdf}");
+        assert_ne!(name, clash, "a made-up name never repeats a real /NM");
+        assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(name)).count(), 1, "{xfdf}");
+        assert!(src.get(primary).as_dict().unwrap().get(b"NM").is_none(), "the name is for the export only");
+        assert!(src.get(sub).as_dict().unwrap().get(b"NM").is_none());
+
+        let mut dst = blank();
+        import(&mut dst, xfdf.as_bytes()).unwrap();
+        // The imported subordinate is grouped under the imported primary again.
+        let dpage = pdfcraft_model::pages(&dst)[0].obj;
+        let dannots = dst.get(dpage).as_dict().unwrap().get(b"Annots").and_then(|a| dst.resolve(a).as_array().cloned()).unwrap();
+        let drefs: Vec<ObjRef> = dannots.iter().filter_map(Object::as_ref).collect();
+        let (p_sub, s_sub): (&[u8], &[u8]) = if caret_primary { (b"Caret", b"StrikeOut") } else { (b"StrikeOut", b"Caret") };
+        let dprimary = *drefs.iter().find(|r| is(&dst, **r, p_sub)).unwrap();
+        let dsub = *drefs.iter().find(|r| is(&dst, **r, s_sub)).unwrap();
+        let irt = dst.get(dsub).as_dict().unwrap().get(b"IRT").and_then(Object::as_ref);
+        assert_eq!(irt, Some(dprimary), "the group survives the round trip ({caret_primary})");
+    }
+}
+
+/// An annotation written inline in `/Annots` (a direct dictionary, not a reference) is exported
+/// under its `/NM` too, so a made-up name must not repeat it either.
+#[test]
+fn an_export_only_name_never_repeats_an_inline_annotations_nm() {
+    let mut src = blank();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let unnamed = Meta { date: None, id: String::new() };
+    add_text_replacement(
+        &mut src,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &style,
+            caret: &style,
+            strike_meta: &unnamed,
+            caret_meta: &unnamed,
+        },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let mut annots = src.get(page).as_dict().unwrap().get(b"Annots").and_then(|a| src.resolve(a).as_array().cloned()).unwrap();
+    let primary =
+        annots.iter().filter_map(Object::as_ref).find(|r| src.get(*r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(&b"Caret"[..])).unwrap();
+    // An inline note already named what the made-up name would be.
+    let clash = format!("pdfcraft-export-{}-{}", primary.num, primary.generation);
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"NM".to_vec(), PdfString::text(&clash));
+    note.set(b"Rect".to_vec(), Object::Array(vec![300.into(), 300.into(), 320.into(), 320.into()]));
+    annots.push(Object::Dict(note));
+    src.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "a.pdf");
+    let doc = roxmltree::Document::parse(&xfdf).unwrap();
+    let caret = doc.descendants().find(|n| n.has_tag_name("caret")).unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
+    let name = caret.attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
+    assert_ne!(name, clash, "a made-up name never repeats an inline annotation's /NM: {xfdf}");
+    assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(&clash[..])).count(), 1, "{xfdf}");
 }
 
 #[test]
@@ -438,8 +567,10 @@ fn fdf_keeps_replies_and_review_status_on_their_note() {
     // Every cross-reference entry points at its object (other readers trust the table).
     let tail = std::str::from_utf8(&fdf[fdf.windows(5).position(|w| w == b"xref\n").unwrap()..]).unwrap();
     let xref: usize = tail.lines().skip_while(|l| *l != "startxref").nth(1).unwrap().parse().unwrap();
-    assert!(fdf[xref..].starts_with(b"xref\n0 6\n"), "{tail}");
-    for (num, line) in tail.lines().skip(3).take(5).enumerate() {
+    // The root, the four comments and their appearance streams.
+    let count: usize = tail.lines().nth(1).and_then(|l| l.strip_prefix("0 ")).unwrap().parse().unwrap();
+    assert!(fdf[xref..].starts_with(b"xref\n") && count >= 6, "{tail}");
+    for (num, line) in tail.lines().skip(3).take(count - 1).enumerate() {
         let at: usize = line[..10].parse().unwrap();
         assert!(fdf[at..].starts_with(format!("{} 0 obj\n", num + 1).as_bytes()), "object {}: {line}", num + 1);
     }
@@ -1575,6 +1706,43 @@ fn xml_form_import_preserves_text_around_comments_and_instructions() {
     }
 }
 
+/// Page discovery accepts a leaf without /Type, so a comment's nested reference to one must not
+/// carry the page or its content into the export.
+#[test]
+fn fdf_export_nulls_a_nested_link_to_a_page_without_a_type() {
+    let source = {
+        let mut doc = Document::new_empty();
+        let root = doc.root().unwrap();
+        let tree = doc.get(root).as_dict().unwrap().reference(b"Pages").unwrap();
+        let contents = doc.add(pdfcraft_cos::Stream::from_raw(Dict::new(), b"% private-page-content\n".repeat(4_096)));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+        let mut target = Dict::new();
+        target.set(b"Label".to_vec(), PdfString::text("kept"));
+        target.set(b"Target".to_vec(), Object::Ref(page));
+        fdf_note_with_data(&mut doc, Object::Array(vec![Object::Dict(target)]));
+        write_full(&doc, &SaveOptions::default()).unwrap()
+    };
+    let source = Document::open(Arc::new(source)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&source).len(), 1);
+    let bytes = export_fdf(&source, true, false, "source.pdf").unwrap();
+    assert!(bytes.len() < 4_096, "the untyped page's content must stay in the PDF ({} bytes)", bytes.len());
+    let fdf = Document::open(Arc::new(bytes)).unwrap();
+    let data = exported_note_data(&fdf);
+    let target = data.as_array().unwrap()[0].as_dict().unwrap();
+    assert_eq!(target.get(b"Label").unwrap().as_string().unwrap().to_text(), "kept");
+    assert_eq!(*fdf.resolve(target.get(b"Target").unwrap()), Object::Null);
+}
+
 #[test]
 fn fdf_export_nulls_nested_page_links_without_copying_the_source_page_tree() {
     for indirect_type in [false, true] {
@@ -2153,6 +2321,19 @@ fn importing_comments_as_copies_adds_them_on_the_page_with_fresh_names() {
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     assert_eq!(summaries(&other).len(), 4, "the named import replaced its own earlier copy");
+}
+
+/// Comment import never takes the file's field values, whatever the placement (a non-finite
+/// offset, which is ignored, and no page or prefix made it the full import).
+#[test]
+fn comment_import_leaves_field_values_alone() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" rect="10,10,30,30" name="n"/></annots><fields><field name="Name"><value>from the file</value></field></fields></xfdf>"#;
+    for offset in [Some([f64::NAN, 0.0]), None] {
+        let mut doc = one_field_named("Name", "mine");
+        let r = import_comments(&mut doc, xfdf, None, None, offset).unwrap();
+        assert_eq!((r.comments, r.fields), (1, 0), "{offset:?}: {r:?}");
+        assert_eq!(values(&doc), [("Name".to_string(), vec!["mine".to_string()])], "{offset:?}");
+    }
 }
 
 /// Other tools write comments straight into the page's `/Annots` array, without an object of

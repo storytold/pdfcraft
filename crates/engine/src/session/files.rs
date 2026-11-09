@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print,
+    print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -25,15 +25,17 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
     }
 
-    /// A new document from plain text (US Letter, 11 pt Helvetica). Text Helvetica can't draw is
+    /// A new document from plain text (US Letter, 11 pt Helvetica, or the bundled Inter face for
+    /// text with Latin, Greek or Cyrillic letters Helvetica can't draw). Text neither can draw is
     /// refused, naming the line and the character (never set as `?`).
     pub fn create_from_text(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
     /// [`Self::create_from_text`] for a report PdfCraft writes from documents (comment summaries,
-    /// compare reports), which can quote any language: characters Helvetica can't draw are written
-    /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
+    /// compare reports), which can quote any language: when the bundled Inter face can't draw it
+    /// all, characters Helvetica can't draw are written as `[U+XXXX]`, and the report's first line
+    /// says so, rather than the report being refused.
     pub(crate) fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
         self.write_new(&doc)
@@ -114,6 +116,15 @@ impl Session {
         .map_err(EditError::Write)
     }
 
+    /// How many hairlines [`Edit::FixHairlines`] would change on `pages` of `id`, and on how many
+    /// pages, without changing the document (the edit itself refuses when there is nothing to fix).
+    pub fn count_hairlines(&self, id: DocId, pages: &[usize], settings: &Hairlines) -> HairlinesFixed {
+        let Some(doc) = self.get(id) else { return HairlinesFixed::default() };
+        let Some(editor) = doc.editor.as_ref() else { return HairlinesFixed::default() };
+        let mut cos = editor.cos.clone();
+        pdfcraft_edit::fix_hairlines(&mut cos, pages, settings).unwrap_or_default()
+    }
+
     /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
     /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
     pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
@@ -164,11 +175,27 @@ impl Session {
                 pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
             }
         };
+        // Comments and fields without an appearance print as the page shows them (and as Print
+        // as Image already printed them): the vector print drew only appearance streams, so a
+        // text box without one was on screen but not on paper. ISO 32000-2 §12.5.3: an
+        // annotation with the Print flag is printed.
+        if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
+            cos = displayed;
+        }
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.
-        if !doc.config.layers.is_empty() {
+        // On top of either, the configuration's auto state for the Print event sets the layers it
+        // names (`print_layer_states`), as printing does in a viewer (ISO 32000-2 §8.11.4.4).
+        if let Some(printed) = print_layer_states(&cos, &doc.info.layers) {
+            set_default_layer_state(&mut cos, &printed);
+        } else if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
+        }
+        // Signature states as the screen shows them, so not when its display copy could not be
+        // written. This copy is only printed, never saved.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
@@ -289,7 +316,8 @@ impl Session {
 
     /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
     /// file split into several runs placed apart: each file is opened and copied once, so it keeps
-    /// one bookmark, its links between its own pages, its fields and its attachments whole (see
+    /// one bookmark, and its links between its own pages and its fields whole across its runs; its
+    /// attachments come along when its runs use all of its pages (see
     /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
     /// and password; a source without a key is a file of its own.
     pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {

@@ -1,10 +1,13 @@
 //! Page input: what the tools do with the pointer on one page, what lies under it for the page
 //! router, the text layer, and what is drawn over the page after its text.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use pdfcraft_render::{DocInfo, PageText};
+use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
+use pdfcraft_render::{DocInfo, LinkTarget, PageText};
 
-use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
+use super::{
+    DocView, MARK_ICON_SHARE, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, mark_anchor,
+    signature_badges, verdict_mark_rect,
+};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
@@ -64,6 +67,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         redact_mark,
         table_preview,
         text_style,
+        text_links,
         tool,
         ..
     } = frame.env;
@@ -97,13 +101,17 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        text_links,
     };
     if let Some(o) = ptr.pressed() {
         // A press with Shift or ⌘ in Edit text is the objects', whatever lies under it
-        // (`object_ui::modified_hit`): the page's objects are read for it alone.
+        // (`object_ui::modified_hit`): the page's objects are read for it alone. Crop mode holds
+        // it on its page as any other press, so a modified click away applies the crop rather
+        // than taking the picture into a group (#6422).
         let adds = tool == QuickTool::EditText
             && can_modify
             && xf.rect.contains(o)
+            && !hits.cropping(view)
             && crate::object_ui::adds(ptr.modifiers)
             && !crate::object_ui::menu_open(ui, resp);
         let objects = adds.then(|| view.objects.inventory(doc, i));
@@ -216,7 +224,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let adding = (tool == QuickTool::AddText).then_some(added.as_slice());
         let pcx = crate::edit_text_ui::ParagraphCx { press, gate, hover: hovered.as_ref(), adding };
         let text_used = crate::edit_text_ui::page_input(cx, &lines, pcx, view);
-        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, info, press, gate };
+        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, doc, info, press, gate };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         text_used || image_used
     };
@@ -447,6 +455,8 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
 }
 
 impl PageHits<'_> {
@@ -528,8 +538,9 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            text_links,
         } = *self;
-        // A press with Shift or ⌘ is the objects', crop mode's page included (`object_ui::modified_hit`).
+        // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
             return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
         }
@@ -583,9 +594,25 @@ impl PageHits<'_> {
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
-        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
-        [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
+        let text_link = (text_links && link.is_none()).then(|| text_link_hit(view, info, xf, page, p)).flatten();
+        let on_link = link.is_some() || text_link.is_some();
+        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, on_link) };
+        [link, text_link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
+}
+
+/// The web or email address written as plain text under `p` on `page` (#4207), with no link
+/// annotation over it: the same hand and tip (its address) as a link annotation's.
+fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
+    let (vx, vy) = xf.screen_to_view(p);
+    let (index, link) = view.text_link_at(info, page, vx, vy)?;
+    let owner = crate::page_router::Owner::TextLink { index };
+    // A drag from the address selects its text, as from any other text: only a click opens it.
+    Some(crate::page_router::Hit {
+        tip: Some(link.uri.clone()),
+        declines_drag: true,
+        ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand)
+    })
 }
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
@@ -599,9 +626,9 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            // The I-beam drops where a press would go to a link (ruling E: the tools that select a
-            // link's text show it there).
-            let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. }));
+            // The I-beam drops where a press would go to a link, an address written as page text
+            // included (#4207) (ruling E: the tools that select a link's text show it there).
+            let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. } | Owner::TextLink { .. }));
             let pointer = TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag };
             text_pointer_input(ui, view, &text, pointer);
         }
@@ -813,6 +840,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         form,
         generation,
         info,
+        prepare_tab_order,
         prefs,
         preparing,
         redact_mark,
@@ -821,7 +849,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         unobstructed,
         ..
     } = frame.env;
-    let PageSlot { i, xf, .. } = *slot;
+    let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
@@ -831,8 +859,13 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     // it is over first sees, whichever page it began on.
     let pick_sees =
         matches!(input.press, PagePress::Free | PagePress::Mine(Owner::Link { .. })) || input.press == PagePress::Elsewhere && ptr.drag_started;
-    if tool == QuickTool::Select && pick_sees && !input.consumed {
+    if tool != QuickTool::Select {
+        view.pending_pick = None;
+    } else if pick_sees && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, input.press == PagePress::Free, view);
+    } else if resp.clicked() || ptr.drag_started {
+        // Another owner took the press: an earlier click's picture, still being found, isn't picked.
+        view.pending_pick = None;
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
@@ -860,7 +893,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::link_ui::paint(painter, &xf, i, info, doc_links, view, pointer);
     }
     if preparing {
-        crate::prepare::paint_page(tool_cx, form, view);
+        crate::prepare::paint_page(tool_cx, form, prepare_tab_order.unwrap_or_default(), view);
         if let Some(preview) = &table_preview {
             crate::field_table_ui::paint_preview(painter, &xf, i, preview);
         }
@@ -894,6 +927,19 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     {
         frame.out.clicked_link = Some(l.target.clone());
     }
+    // A web or email address written as plain text (#4207): the same click as a link annotation,
+    // and the same check and confirmation on opening.
+    if unobstructed
+        && resp.clicked()
+        && tool == QuickTool::Select
+        && !input.consumed
+        && frame.out.clicked_link.is_none()
+        && let PagePress::Mine(Owner::TextLink { index }) = input.press
+        && input.released_over
+        && let Some(uri) = view.text_link_uri(i, index)
+    {
+        frame.out.clicked_link = Some(LinkTarget::Uri(uri));
+    }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
     for (mp, mr, mc) in &view.compare_marks {
@@ -923,27 +969,29 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
             view.flash = None;
         }
     }
-    // Validation is viewer chrome over the signer's original artwork, which
-    // may still say "Signature Not Verified". These badges never enter document
-    // streams, image/text exports, vector printing or Print as Image.
+    // Validation badges are viewer chrome over the widget. A recognised named-layer appearance may
+    // show the verdict in the display copy too; saves retain its original streams. Badges never
+    // enter document streams, exports or either print path. Their tips show where the comments'
+    // do (`comments::tips_shown`).
+    let tips = comments::tips_shown(tool, view);
     for badge in signature_badges(&doc.signatures, i) {
         let [x0, y0, x1, y1] = badge.rect;
         let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-        let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
-        painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-        // A widget too small for the mark keeps its outline: the verdict still shows.
-        if sr.width() < 4.0 || sr.height() < 4.0 {
+        // The page transform can turn a finite widget into one the screen cannot place; stroking
+        // it would put NaN into the mesh.
+        if !sr.is_finite() {
             continue;
         }
-        // Big enough to read at a glance, small enough to leave the signer's own
-        // text visible around it.
-        let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
-        let mark = Rect::from_center_size(sr.center(), vec2(side, side));
-        icons::paint(ui, mark, icon, side * 0.64, color);
-        // Overlapping widgets paint in order, so the topmost badge's verdict is the tip, with
-        // any tool; a link's or a comment's tip wins over any badge.
-        if pointer.is_some_and(|p| mark.expand(2.0).contains(p)) {
-            view.cursor.describe(Subject::SignatureBadge, badge.summary.to_string());
+        let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
+        painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
+        if let Some(mark) = verdict_mark_rect(sr, r, mark_anchor(&xf, info, i, badge.rect)) {
+            icons::paint(ui, mark, icon, mark.width() * MARK_ICON_SHARE, color);
+        }
+        // The whole widget answers the pointer, so a field too small for a mark still says its
+        // verdict; only where it is on the page, though. Overlapping widgets paint in order, so
+        // the topmost badge's verdict is the tip; a link's or a comment's tip wins over any badge.
+        if tips && pointer.is_some_and(|p| sr.expand(2.0).intersect(r).contains(p)) {
+            view.cursor.describe(Subject::SignatureBadge, crate::i18n::t(badge.summary).to_string());
         }
     }
 }
