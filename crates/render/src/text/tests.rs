@@ -934,6 +934,113 @@ fn vertical_ligatures_stay_in_their_column() {
     assert_eq!(text.line_rects(0..3).len(), 1, "one column");
 }
 
+/// A column of Latin capitals in a vertical font, tracked out with negative character spacing
+/// (pdf.js issue 20930: `-40 Tc` puts 40 pt between 24 pt letters). Across the column each glyph
+/// is as wide as its `/W` width w0 and centred on the column (ISO 32000-2 §9.7.4.3), so the
+/// letters stay one line and Find matches the word. Boxes as wide as each outline made a narrow
+/// letter's line allowance smaller than the tracking, and the column broke into lines.
+#[test]
+fn tracked_vertical_latin_stays_one_line() {
+    tracked_vertical_latin(-40.0, 100.0);
+}
+
+#[test]
+fn horizontally_scaled_vertical_latin_box_is_scaled_across_the_column() {
+    // Horizontal scaling Th = Tz / 100 scales the glyph's width w0 across the column (ISO 32000-2
+    // §9.4.4, the text rendering matrix), and not the advance down it. The tracking is 20 pt here:
+    // the line's gap allowance is three times the narrower box across it, 3 × 8 pt at 50 Tz.
+    tracked_vertical_latin(-20.0, 50.0);
+}
+
+/// `ABCDE` down one Identity-V column at 24 pt with `tc Tc` and `tz Tz`.
+fn tracked_vertical_latin(tc: f32, tz: f32) {
+    let text = vertical_latin(
+        &[(36, 667), (37, 667), (38, 722), (39, 722), (40, 667)],
+        None,
+        &format!("BT /F1 24 Tf {tc} Tc {tz} Tz 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET"),
+    );
+    assert_eq!(text.plain_text(), "ABCDE");
+    assert_eq!(text.find("ABCDE"), vec![0..5]);
+    // Each box spans w0 (here 24 pt × 0.667 or 0.722, times Th) centred on the column at x = 100.
+    assert_eq!(text.glyphs.len(), 5);
+    for (g, w0) in text.glyphs.iter().zip([667.0, 667.0, 722.0, 722.0, 667.0]) {
+        let [x0, _, x1, _] = g.rect;
+        assert!((x1 - x0 - 24.0 * w0 / 1000.0 * tz / 100.0).abs() < 0.01, "{:?} is w0 wide: {:?}", g.text, g.rect);
+        assert!(((x0 + x1) / 2.0 - 100.0).abs() < 0.01, "{:?} is centred on the column: {:?}", g.text, g.rect);
+    }
+}
+
+/// The text of a page showing `content` in a vertical CIDFontType2 `/F1` with `/DW 1000`, the
+/// `widths` (CID, w0) in `/W`, and CIDs 36 to 41 reading `A` to `F`. `cmap` is the body of an
+/// embedded vertical CMap mapping codes to CIDs (`begincidchar` … `endcidchar`); `None` uses
+/// Identity-V.
+fn vertical_latin(widths: &[(i64, i64)], cmap: Option<&str>, content: &str) -> crate::text::PageText {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let to_unicode = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 6 beginbfchar <0024> <0041> <0025> <0042> <0026> <0043> <0027> <0044> <0028> <0045> <0029> <0046> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let unicode = doc.add_object(Stream::new(dictionary! {}, to_unicode.to_vec()));
+    let widths: Vec<Object> = widths.iter().flat_map(|&(cid, w)| [Object::Integer(cid), Object::Array(vec![Object::Integer(w)])]).collect();
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestVerticalLatin",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "W" => widths, "DW2" => vec![Object::Integer(880), Object::Integer(-1000)], "CIDToGIDMap" => "Identity"
+    });
+    let encoding = match cmap {
+        Some(body) => {
+            let stream = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def /CMapName /TestCodes-V def /CMapType 1 def /WMode 1 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {body} endcmap CMapName currentdict /CMap defineresource pop end end"
+            );
+            Object::Reference(doc.add_object(Stream::new(
+                dictionary! { "Type" => "CMap", "CMapName" => "TestCodes-V", "WMode" => 1, "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 } },
+                stream.into_bytes(),
+            )))
+        }
+        None => Object::Name(b"Identity-V".to_vec()),
+    };
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVerticalLatin", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+    let content = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(500)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap()
+}
+
+/// A CID that `/W` doesn't list is `/DW` wide across the column (ISO 32000-2 §9.7.4.3), and the
+/// widths are looked up by CID, not by character code: an embedded vertical CMap maps the codes
+/// `<0024>`… (which `/W` lists 500 wide as CIDs) to CIDs 50…. The tracked column stays one line
+/// that Find matches.
+#[test]
+fn vertical_latin_widths_come_from_dw_and_are_looked_up_by_cid() {
+    let cmap = "5 begincidchar <0024> 50 <0025> 51 <0026> 52 <0027> 53 <0028> 54 endcidchar";
+    // CID 52 (`C`) has no /W entry: it is /DW = 1000 wide.
+    let widths = [(36, 500), (37, 500), (38, 500), (39, 500), (40, 500), (50, 667), (51, 667), (53, 722), (54, 667)];
+    let text = vertical_latin(&widths, Some(cmap), "BT /F1 24 Tf -40 Tc 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET");
+    assert_eq!(text.plain_text(), "ABCDE");
+    assert_eq!(text.find("ABCDE"), vec![0..5]);
+    let got: Vec<f32> = text.glyphs.iter().map(|g| g.rect[2] - g.rect[0]).collect();
+    assert_eq!(got.len(), 5);
+    for (w, w0) in got.iter().zip([667.0, 667.0, 1000.0, 722.0, 667.0]) {
+        assert!((w - 24.0 * w0 / 1000.0).abs() < 0.01, "{got:?}");
+    }
+}
+
+/// Two vertical columns of `/DW`-wide letters set 13.5 pt apart at 20 pt overlap across the
+/// column (each box is 20 pt wide), and still read as two lines, in order, with Find matching
+/// each column and not a word spanning both.
+#[test]
+fn close_vertical_columns_of_dw_wide_letters_stay_apart() {
+    let text = vertical_latin(&[], None, "BT /F1 20 Tf 1 0 0 1 113.5 340 Tm <002400250026> Tj 1 0 0 1 100 340 Tm <002700280029> Tj ET");
+    assert_eq!(text.plain_text().lines().map(str::trim).collect::<Vec<_>>(), ["ABC", "DEF"]);
+    assert_eq!(text.find("ABC").len(), 1);
+    assert_eq!(text.find("DEF").len(), 1);
+    assert!(text.find("CD").is_empty() && text.find("ABCDEF").is_empty(), "{:?}", text.plain_text());
+}
+
 #[test]
 fn upright_mapping_round_trips() {
     let r = [10.0, 20.0, 30.0, 25.0];

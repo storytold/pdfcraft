@@ -475,6 +475,13 @@ impl Type0Font {
         }
     }
 
+    /// PdfCraft patch: the code's width w0 (its horizontal displacement, from `/W` or `/DW`)
+    /// in either writing mode. In vertical writing it is the glyph's extent across the column
+    /// (ISO 32000-2 §9.7.4.3).
+    pub(crate) fn code_horizontal_width(&self, code: u32) -> f32 {
+        self.horizontal_width(self.code_to_cid(code).unwrap_or(0))
+    }
+
     fn horizontal_width(&self, cid: u32) -> f32 {
         self.widths.get(&cid).copied().unwrap_or(self.dw)
     }
