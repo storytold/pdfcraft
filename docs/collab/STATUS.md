@@ -5,11 +5,13 @@
   `origin/main` `8d5d39ef`** (2026-11-09; all 40 commits moved, no conflicts —
   main's `43f24aa1..8d5d39ef` delta touches 16 files and overlaps the branch
   only in `crates/ui-egui/src/app.rs`, in different hunks). The §6.6 gates were
-  re-run at the rebased head (§4). **Not pushed:** the fork and PR #6622 are
-  still at `333072e8`, so the PR reads `CONFLICTING` until a human force-pushes;
-  `git merge-tree origin/main HEAD` is clean and HEAD contains `origin/main`,
-  so it should go `MERGEABLE` once pushed. The PR body draft is
-  `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
+  re-run at the rebased head (§4). **Pushed:** the force-push was done on
+  2026-11-09; `gh pr view 6622` reports head `81035bf2` (equal to the fork head
+  and to the local HEAD before this STATUS commit) and `mergeable: MERGEABLE`;
+  the only reported check, CodeRabbit, is `SUCCESS` (2026-11-09T00:01:35Z).
+  `mergeStateStatus` is `UNSTABLE` with that single green check and no required
+  review. The PR body is the text of `pdfcraft/PR-DRAFT.md` from `## What` on
+  (§6.6). This STATUS update is local only, not pushed.
   Limitation 1 (crash recovery against the real process) is closed in
   `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
   limitation 12 (commit publication outside the hub lock) in `a47641fb`. After
@@ -252,9 +254,13 @@ same way before the rebase and without the `collab` feature (the
 `control::transport::transport_tests::only_so_many_connections_may_wait_to_authenticate`
 passed in this run.
 
-Mergeability after a push is expected, not observed: the fork still holds
-`333072e8` (`git ls-remote fork` and `gh pr view 6622` agree, `mergeable:
-CONFLICTING`), `git rev-list --count origin/main..HEAD` is 0 behind, and
+Mergeability is now observed, not expected: after the force-push `gh pr view
+6622` reports head `81035bf2` (the pushed head; the local branch is that head
+plus this STATUS commit, which is not pushed), `mergeable: MERGEABLE`,
+`mergeStateStatus: UNSTABLE` with the single reported check CodeRabbit
+`SUCCESS` at 2026-11-09T00:01:35Z and no required review;
+`git ls-remote fork` names the same `81035bf2`, `git rev-list --count
+origin/main..HEAD` is 0 behind, and
 `git merge-tree --write-tree origin/main HEAD` exits 0.
 
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
@@ -754,22 +760,24 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   (`editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone`),
   which reproduces without the `collab` feature. The parallel-load flake in
   `control::transport` did not recur.
-- **Nothing was pushed.** `git ls-remote fork
-  refs/heads/feature/realtime-collaboration` and `gh pr view 6622` still report
-  head `333072e8` and `mergeable: CONFLICTING`; the local branch is 41 commits
-  ahead of `origin/main` and 0 behind (the 40 rebased commits plus this STATUS
-  commit). A
-  force-push of the rebased branch would make the PR `MERGEABLE`: HEAD contains
-  `origin/main` and `git merge-tree --write-tree origin/main HEAD` exits 0 with
-  no conflicted paths. Push and editing the PR text are publication actions for
-  the owner.
+- **Pushed on 2026-11-09.** The force-push of the rebased branch was done (a
+  publication action by the owner); `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` and `gh pr view 6622` both name
+  head `81035bf2` — the local HEAD before this STATUS commit — and the PR reads
+  `mergeable: MERGEABLE` (previously `333072e8` / `CONFLICTING`). The local
+  branch is 43 commits ahead of `origin/main` and 0 behind: the 40 rebased
+  commits, `e04ed03b` and `81035bf2` (both pushed), and this STATUS commit
+  (local only). `git merge-tree --write-tree origin/main HEAD` exits 0 with no
+  conflicted paths. Pushing this docs commit and editing the PR text remain
+  publication actions for the owner.
 - **The PR body was replaced** on 2026-11-09 with the text in
-  `pdfcraft/PR-DRAFT.md` (from `## What` on). Every claim in it holds at the
-  pushed head `333072e8` as well; the rebase only changes the base, not the
-  features it describes. What it fixes: cursors and their TTL, the typed
-  annotation set, undo of deleted comments and pages from server copies, the
-  control plane, the commit callback running outside the hub lock, and the
-  SIGKILL crash-recovery test.
+  `pdfcraft/PR-DRAFT.md` (from `## What` on); the body on the PR is byte for
+  byte that text plus CodeRabbit's appended summary block. Every claim in it
+  describes the feature at the pushed head `81035bf2`; the rebase only changed
+  the base, not the features it describes. What it fixes: cursors and their TTL,
+  the typed annotation set, undo of deleted comments and pages from server
+  copies, the control plane, the commit callback running outside the hub lock,
+  and the SIGKILL crash-recovery test.
 - Remaining limitations stated in that body: no web client/host bridge
   (§6.3), no publication queue (a failed cabinet POST is retried only by the
   next commit or the last-client-leave commit), no endpoint to resolve a
