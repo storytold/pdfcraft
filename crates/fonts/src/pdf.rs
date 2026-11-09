@@ -84,6 +84,12 @@ fn dict(doc: &Document, o: Option<&Object>) -> Option<Dict> {
     o.and_then(|o| doc.resolve(o).as_dict().cloned())
 }
 
+/// Whether `font`'s `/Encoding` is the name Identity-H, given directly or through a reference,
+/// as [`Metrics::from_dict`] reads it (a Type 0 font's `/Encoding` may be indirect).
+fn identity_h(doc: &Document, font: &Dict) -> bool {
+    font.get(b"Encoding").is_some_and(|e| doc.resolve(e).as_name() == Some(b"Identity-H".as_slice()))
+}
+
 /// Whether `base_font` (subset tag allowed) names a legacy Indic font family that is laid out in
 /// visual order (Kruti Dev, DevLys, Chanakya, Shusha, Shivaji, Walkman, Akruti, APS-DV, DV-TT…).
 fn legacy_indic_font(base_font: &str) -> bool {
@@ -138,7 +144,7 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
         // with any other `/Encoding` nothing is, so its metrics aren't read, and a program with a
         // cmap of its own is kept as it is, as when the rebuild finds nothing.
-        if font.name(b"Subtype") == Some(b"Type0") && font.name(b"Encoding") != Some(b"Identity-H") {
+        if font.name(b"Subtype") == Some(b"Type0") && !identity_h(doc, font) {
             if own_cmap {
                 return Some(bytes);
             }

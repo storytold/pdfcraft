@@ -2015,6 +2015,20 @@ fn a_composite_font_that_cant_be_adapted_spends_only_its_program() {
     }
 }
 
+/// A composite font's `/Encoding` given through a reference is the name it refers to, as the
+/// metrics read it: Identity-H by reference is adapted as Identity-H written directly is.
+#[test]
+fn a_composite_fonts_encoding_given_by_reference_is_read() {
+    use skrifa::MetadataProvider as _;
+    let mut doc = Document::new_empty();
+    let (mut source, _, _, expected, _) = cmapless_composite(&mut doc);
+    let identity = doc.add(Object::name("Identity-H"));
+    source.set(b"Encoding".to_vec(), Object::Ref(identity));
+    assert_eq!(Metrics::from_dict(&doc, &source).code_len, 2);
+    let editor = embedded_sfnt(&doc, &source).expect("Identity-H by reference is adapted");
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+}
+
 /// The `/CIDToGIDMap` a composite subset's cmap is rebuilt from reads as the font's other streams
 /// do: a full map, which compresses well, reads behind ASCIIHex and Flate, though the hex stage's
 /// output comes on top of the map.

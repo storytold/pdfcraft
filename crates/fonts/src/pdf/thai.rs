@@ -7,7 +7,7 @@
 //! does (a mark takes none); correct maps and unrelated fonts are never changed. No font
 //! artwork is bundled.
 
-use super::{Dict, Document, Metrics, Reads, dict, only_char, unicode_map};
+use super::{Dict, Document, Metrics, Reads, dict, identity_h, only_char, unicode_map};
 use pdfcraft_cos::{DecodeBudget, Object};
 use std::collections::BTreeMap;
 
@@ -19,7 +19,7 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
     let family = base.rsplit('+').next()?;
     if !matches!(family, "THSarabunPSK" | "THSarabunPSK-Bold" | "THSarabunPSK-Italic" | "THSarabunPSK-BoldItalic")
         || font.name(b"Subtype") != Some(b"Type0")
-        || font.name(b"Encoding") != Some(b"Identity-H")
+        || !identity_h(doc, font)
     {
         return None;
     }
@@ -190,7 +190,7 @@ pub(super) fn composite_glyph_maps(
     budget: &mut DecodeBudget,
 ) -> Option<(BTreeMap<u32, u32>, BTreeMap<u32, u16>)> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
-    if font.name(b"Encoding") != Some(b"Identity-H") {
+    if !identity_h(doc, font) {
         return None;
     }
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|a| doc.resolve(a).as_array().and_then(|a| a.first()).cloned()).as_ref())?;
@@ -548,6 +548,10 @@ mod tests {
         let recovered: HashMap<_, _> = recovered_thai_map(&doc, &font).unwrap().into_iter().collect();
         assert_eq!(recovered[&262], 'ั');
         assert_eq!(recovered[&297], '๘');
+        // `/Encoding` given through a reference is the name it refers to.
+        let mut indirect = font.clone();
+        indirect.set(b"Encoding".to_vec(), Object::Ref(doc.add(Object::name("Identity-H"))));
+        assert_eq!(recovered_thai_map(&doc, &indirect), recovered_thai_map(&doc, &font));
         // 259–261 are ฮ, ฯ and ะ, between the last anchor (อ, 258) and the first mark: a font that
         // put Mai Han-akat one glyph earlier passes every anchor and only this check sees it.
         let mut shifted = thai_ordered_program();
