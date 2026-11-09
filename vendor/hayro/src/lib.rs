@@ -65,6 +65,9 @@ pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale,
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
+/// PdfCraft patch (30): exported for its regression tests.
+#[doc(hidden)]
+pub use renderer::{OffscreenDraws, offscreen_draws};
 
 /// A cache used by the renderer.
 ///
