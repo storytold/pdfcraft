@@ -20,7 +20,9 @@ impl Layouter<'_> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
+            let start = self.item_count();
             self.draw_border(b, rect)?;
+            self.field_border = Some((start, self.item_count()));
         }
         let fctx = ctx.child(&f.common);
         let inner = rect.inset(&f.common.margin);
