@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 use egui::{Align, Layout};
-use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanError, ScanOptions, ScanPageSize, ScanResolution, ScanSource, ScannerDevice};
+use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanError, ScanOptions, ScanPageSize, ScanResolution, ScanRotation, ScanSource, ScanUiMode, ScannerDevice};
 use crate::theme::{self, Tokens};
 use crate::{widgets, PdfCraftApp};
 
@@ -134,11 +134,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Options", &mut |ui| {
         #[cfg(target_os = "windows")]
         {
-            ui.add(widgets::checkbox(&mut d.options.use_native_ui, tl!("Use system scan dialog (Windows basic)")));
+            ui.label(egui::RichText::new(tl!("Scanner Driver Mode:")).small().color(t.text_muted));
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.options.ui_mode, ScanUiMode::Direct, tl!("Direct (PdfCraft)"));
+                widgets::radio_value(ui, &mut d.options.ui_mode, ScanUiMode::ManufacturerUi, tl!("Manufacturer driver (PaperStream)"));
+                widgets::radio_value(ui, &mut d.options.ui_mode, ScanUiMode::SystemBasicUi, tl!("Windows basic"));
+            });
             ui.add_space(6.0);
         }
 
-        if !d.options.use_native_ui {
+        if d.options.ui_mode == ScanUiMode::Direct {
             ui.label(egui::RichText::new(tl!("Paper Source & Sides:")).small().color(t.text_muted));
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.options.source, ScanSource::Auto, tl!("Auto"));
@@ -180,7 +185,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 widgets::radio_value(ui, &mut d.options.color_mode, ScanColorMode::Grayscale, tl!("Grayscale"));
                 widgets::radio_value(ui, &mut d.options.color_mode, ScanColorMode::BlackAndWhite, tl!("Black & White"));
             });
+            ui.add_space(6.0);
         }
+
+        ui.label(egui::RichText::new(tl!("Orientation:")).small().color(t.text_muted));
+        ui.horizontal(|ui| {
+            widgets::radio_value(ui, &mut d.options.rotation, ScanRotation::None, tl!("0° (Normal)"));
+            widgets::radio_value(ui, &mut d.options.rotation, ScanRotation::Rotate90, tl!("90°"));
+            widgets::radio_value(ui, &mut d.options.rotation, ScanRotation::Rotate180, tl!("180°"));
+            widgets::radio_value(ui, &mut d.options.rotation, ScanRotation::Rotate270, tl!("270°"));
+        });
     });
 
     // 3. Document destination & OCR
@@ -314,9 +328,18 @@ impl PdfCraftApp {
                     .enumerate()
                     .map(|(idx, bytes)| (format!("Scan_{:03}.png", idx + 1), bytes))
                     .collect();
+                let page_count = images.len();
+                let rotation_degrees = run.options.rotation.degrees();
                 match target {
                     ScanTarget::NewDocument => {
                         self.create_from_images_with_resolution(images, resolution);
+                        if rotation_degrees != 0 && self.active_ids().is_some() {
+                            let pages: Vec<usize> = (0..page_count).collect();
+                            let _ = self.apply_edit(pdfcraft_engine::Edit::RotatePages {
+                                pages,
+                                degrees: rotation_degrees,
+                            });
+                        }
                         if recognize_text {
                             self.start_ocr();
                         }
@@ -335,6 +358,13 @@ impl PdfCraftApp {
                                         at: active_page_count,
                                         field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
                                     });
+                                    if rotation_degrees != 0 {
+                                        let pages: Vec<usize> = (active_page_count..(active_page_count + page_count)).collect();
+                                        let _ = self.apply_edit(pdfcraft_engine::Edit::RotatePages {
+                                            pages,
+                                            degrees: rotation_degrees,
+                                        });
+                                    }
                                     if recognize_text {
                                         self.start_ocr();
                                     }

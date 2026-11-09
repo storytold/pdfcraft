@@ -1,7 +1,7 @@
 //! Scanner automation tools: list scanners, and scan documents into PDF.
 
 use serde_json::{Value, json};
-use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanOptions, ScanPageSize, ScanResolution, ScanSource};
+use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanOptions, ScanPageSize, ScanResolution, ScanRotation, ScanSource, ScanUiMode};
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
 impl Automation {
@@ -53,6 +53,23 @@ impl Automation {
         };
         let all_pages = a.opt_bool("all")?.unwrap_or(true);
         let use_native_ui = a.opt_bool("ui")?.unwrap_or(false);
+        let ui_mode = match a.opt_str("ui_mode")? {
+            Some("manufacturer" | "driver") => ScanUiMode::ManufacturerUi,
+            Some("system" | "windows") => ScanUiMode::SystemBasicUi,
+            _ => {
+                if use_native_ui {
+                    ScanUiMode::SystemBasicUi
+                } else {
+                    ScanUiMode::Direct
+                }
+            }
+        };
+        let rotation = match a.opt_int("rotate")? {
+            Some(90) => ScanRotation::Rotate90,
+            Some(180) => ScanRotation::Rotate180,
+            Some(270) => ScanRotation::Rotate270,
+            _ => ScanRotation::None,
+        };
 
         let options = ScanOptions {
             device_id,
@@ -62,7 +79,14 @@ impl Automation {
             source,
             duplex,
             all_pages,
+            ui_mode,
+            rotation,
             use_native_ui,
+        };
+
+        let out_target = match a.opt_str("out")? {
+            Some(s) => Some(self.resolve(s, true)?),
+            None => None,
         };
 
         let raw_pages = scanner::acquire_scan_pages(&options)
@@ -94,16 +118,38 @@ impl Automation {
                     field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
                 },
             )?;
+            if rotation.degrees() != 0 {
+                let pages: Vec<usize> = (initial_page_count..(initial_page_count + page_count)).collect();
+                self.apply(
+                    a,
+                    pdfcraft_engine::Edit::RotatePages {
+                        pages,
+                        degrees: rotation.degrees(),
+                    },
+                )?;
+            }
             return Ok(json!({ "pages_inserted": page_count, "at": initial_page_count }));
         }
 
-        if let Some(out_str) = a.opt_str("out")? {
-            let out_path = self.resolve(out_str, true)?;
-            write_atomic(&out_path, &created_bytes)?;
+        let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| "Scan.pdf".to_string());
+        let id = self.session.open_new(name, created_bytes).map_err(failed)?;
+        if rotation.degrees() != 0 {
+            let pages: Vec<usize> = (0..page_count).collect();
+            let _ = self.session.apply(
+                id,
+                pdfcraft_engine::Edit::RotatePages {
+                    pages,
+                    degrees: rotation.degrees(),
+                },
+            );
+        }
+
+        if let Some(out_path) = out_target {
+            let final_bytes = self.session.save_full_bytes(id).map_err(failed)?;
+            self.session.close(id);
+            write_atomic(&out_path, &final_bytes)?;
             Ok(json!({ "saved": out_path.to_string_lossy(), "pages": page_count }))
         } else {
-            let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| "Scan.pdf".to_string());
-            let id = self.session.open_new(name, created_bytes).map_err(failed)?;
             Ok(json!({ "doc": id.0, "pages": page_count }))
         }
     }

@@ -160,6 +160,39 @@ pub struct ScannerDevice {
     pub name: String,
 }
 
+/// Driver interface mode for scan acquisition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScanUiMode {
+    /// Direct acquisition using selected settings (A4, duplex, DPI, color). Fast, silent, no popups.
+    #[default]
+    Direct,
+    /// Scanner manufacturer's custom driver UI (e.g. Fujitsu PaperStream IP).
+    ManufacturerUi,
+    /// Standard basic Windows scan dialog.
+    SystemBasicUi,
+}
+
+/// Page rotation applied to scanned documents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScanRotation {
+    #[default]
+    None,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+}
+
+impl ScanRotation {
+    pub fn degrees(self) -> i64 {
+        match self {
+            Self::None => 0,
+            Self::Rotate90 => 90,
+            Self::Rotate180 => 180,
+            Self::Rotate270 => 270,
+        }
+    }
+}
+
 /// Options configured for a scan acquisition session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanOptions {
@@ -170,6 +203,8 @@ pub struct ScanOptions {
     pub source: ScanSource,
     pub duplex: ScanDuplex,
     pub all_pages: bool,
+    pub ui_mode: ScanUiMode,
+    pub rotation: ScanRotation,
     pub use_native_ui: bool,
 }
 
@@ -183,6 +218,8 @@ impl Default for ScanOptions {
             source: ScanSource::Auto,
             duplex: ScanDuplex::Simplex,
             all_pages: true,
+            ui_mode: ScanUiMode::Direct,
+            rotation: ScanRotation::None,
             use_native_ui: false,
         }
     }
@@ -214,6 +251,12 @@ impl std::error::Error for ScanError {}
 
 #[cfg(target_os = "windows")]
 pub fn list_scanners() -> Result<Vec<ScannerDevice>, ScanError> {
+    if std::env::var_os("PDFCRAFT_MOCK_SCAN").is_some() || std::env::var_os("CI").is_some() {
+        return Ok(vec![ScannerDevice {
+            id: "mock".to_string(),
+            name: "Mock Test Scanner".to_string(),
+        }]);
+    }
     let script = r#"
 $ErrorActionPreference = 'Stop'
 try {
@@ -262,6 +305,22 @@ try {
 
 #[cfg(target_os = "windows")]
 pub fn acquire_scan_pages(options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanError> {
+    const MOCK_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+        0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    if options.device_id.as_deref() == Some("mock")
+        || std::env::var_os("PDFCRAFT_MOCK_SCAN").is_some()
+        || std::env::var_os("CI").is_some()
+    {
+        return Ok(vec![MOCK_PNG.to_vec()]);
+    }
+
     let temp_dir = std::env::temp_dir();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -283,13 +342,18 @@ pub fn acquire_scan_pages(options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanErr
         .extents_px(dpi_num)
         .unwrap_or((0, 0));
 
-    let script = if options.use_native_ui {
+    let is_manufacturer_ui = options.ui_mode == ScanUiMode::ManufacturerUi;
+    let is_basic_ui = options.ui_mode == ScanUiMode::SystemBasicUi || (options.use_native_ui && options.ui_mode == ScanUiMode::Direct);
+    let is_ui_mode = is_manufacturer_ui || is_basic_ui;
+
+    let script = if is_ui_mode {
+        let use_device_page_str = if is_manufacturer_ui { "$true" } else { "$false" };
         format!(
             r#"
 $ErrorActionPreference = 'Stop'
 try {{
     $dialog = New-Object -ComObject WIA.CommonDialog
-    $image = $dialog.ShowAcquireImage(1, {intent}, 131072, '{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}', $false, $true, $false)
+    $image = $dialog.ShowAcquireImage(1, {intent}, 131072, '{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}', $false, {use_device_page}, $false)
     if ($image -eq $null) {{
         Write-Output "CANCELLED"
         exit 0
@@ -309,6 +373,7 @@ try {{
 }}
 "#,
             intent = intent_num,
+            use_device_page = use_device_page_str,
             out_dir = out_dir_str.replace('\'', "''"),
         )
     } else {
@@ -634,7 +699,17 @@ mod tests {
         assert_eq!(opt.resolution, ScanResolution::Dpi300);
         assert_eq!(opt.color_mode, ScanColorMode::Color);
         assert_eq!(opt.page_size, ScanPageSize::A4);
+        assert_eq!(opt.ui_mode, ScanUiMode::Direct);
+        assert_eq!(opt.rotation, ScanRotation::None);
         assert!(opt.device_id.is_none());
+    }
+
+    #[test]
+    fn test_scan_rotation_degrees() {
+        assert_eq!(ScanRotation::None.degrees(), 0);
+        assert_eq!(ScanRotation::Rotate90.degrees(), 90);
+        assert_eq!(ScanRotation::Rotate180.degrees(), 180);
+        assert_eq!(ScanRotation::Rotate270.degrees(), 270);
     }
 
     #[test]

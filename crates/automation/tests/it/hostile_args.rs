@@ -260,6 +260,10 @@ fn fixture(a: &mut Automation, root: &Path, tool: &str) -> serde_json::Map<Strin
             let args = json!({ "steps": [{ "step": "set_title", "arg": "Confined" }] });
             args.as_object().cloned().unwrap_or_default()
         }
+        "doc_scan" => {
+            let args = json!({ "device": "mock" });
+            args.as_object().cloned().unwrap_or_default()
+        }
         _ => serde_json::Map::new(),
     }
 }

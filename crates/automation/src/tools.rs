@@ -728,6 +728,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "source": { "type": "string", "enum": ["auto", "flatbed", "feeder"], "description": "Paper source: auto, flatbed or feeder (ADF)." },
                 "duplex": { "type": "string", "enum": ["simplex", "duplex"], "description": "Scan sides: simplex (1-sided) or duplex (2-sided)." },
                 "all": { "type": "boolean", "description": "Whether to scan all pages from the feeder (continuous multipage)." },
+                "ui_mode": { "type": "string", "enum": ["direct", "manufacturer", "system"], "description": "Scanner driver UI mode: direct (fast, silent), manufacturer (driver property page), system (basic Windows dialog)." },
+                "rotate": { "type": "integer", "enum": [0, 90, 180, 270], "description": "Page rotation in degrees clockwise (0, 90, 180, 270)." },
                 "doc": doc(),
                 "out": { "type": "string", "description": "Optional output path to save the generated PDF." },
                 "ui": { "type": "boolean", "description": "Whether to invoke system scanner dialog (Windows only)." }
