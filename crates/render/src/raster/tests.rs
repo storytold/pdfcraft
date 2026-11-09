@@ -8983,6 +8983,10 @@ mod devicen_inks;
 // #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35).
 mod png_predicted_images;
 
+// TIFF-predicted Flate images at 8 and 16 bits are undone byte by byte (vendored hayro-syntax
+// patch 42).
+mod tiff_predicted_images;
+
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
