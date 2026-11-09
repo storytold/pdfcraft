@@ -665,13 +665,21 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 60.0], "steps": 12, "button": "middle" }));
     h.run_steps(2);
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
-    assert!(h.state().views[0].auto_scrolling(), "release keeps scrolling toggled on even after movement");
+    assert!(!h.state().views[0].auto_scrolling(), "releasing after holding and scrolling turns auto-scroll off");
     let released = h.state().views[0].page_screen_rect(0).unwrap().top();
     h.run_steps(8);
-    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), released, "no drift after releasing a held middle drag");
     assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     assert!(h.state().dialog.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+
+    // Small movement within the dead zone before release still latches auto-scroll on.
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 10.0], "steps": 4, "button": "middle" }));
+    assert!(h.state().views[0].auto_scrolling(), "release within the dead zone keeps scrolling toggled on");
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 60.0 }));
+    h.run_steps(8);
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y + 60.0, "button": "middle" }));
     assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
 }
@@ -886,7 +894,8 @@ fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     assert!(h.state().views[0].selected.is_empty());
     assert!(h.state().views[0].org_drag.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    assert!(h.state().views[0].auto_scrolling(), "releasing the wheel leaves the grid scrolling on");
+    assert!(!h.state().views[0].auto_scrolling(), "releasing a held wheel stops the grid scrolling");
+    start_autoscroll(&mut h, &c);
     h.state_mut().views[0].organize = false;
     h.run_steps(2);
     assert!(!h.state().views[0].auto_scrolling(), "changing canvas mode cancels the gesture");
@@ -1426,6 +1435,10 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
 #[test]
 fn screenshots_of_window_and_region() {
     let (mut h, c) = harness();
+    // The harness makes its GPU renderer on the first render. The app has one before the control
+    // channel answers anything, so make it here, outside the screenshot's 5 s deadline: with 16
+    // tests at once on Windows, making it took up to 6 s and every copy of this test failed.
+    h.render().expect("the test renderer draws");
     let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
     let ppp = shot["pixels_per_point"].as_f64().unwrap();
     assert_eq!(shot["width"].as_f64().unwrap(), (1400.0 * ppp).round());

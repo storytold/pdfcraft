@@ -2,6 +2,7 @@
 
 mod cid_fallback_query;
 mod euro_width;
+mod fill_stroke_knockout;
 mod inline_image_ei;
 mod jbig2_invariants;
 mod knockout_backdrop;
@@ -14,6 +15,7 @@ mod search;
 mod separation_all;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
+mod stroke_zero_end_tangent;
 mod substitute_widths;
 mod symbol_dingbats_width;
 mod tiling_cell_placement;
