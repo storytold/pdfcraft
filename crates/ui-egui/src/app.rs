@@ -468,6 +468,11 @@ impl eframe::App for PdfCraftApp {
         storage.set_string("pdfcraft", self.persist());
     }
 
+    /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.updates.exiting();
+    }
+
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
     ///
