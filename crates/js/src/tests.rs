@@ -31,6 +31,21 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
+/// the script assigned it, even to the value it already had.
+#[test]
+fn the_outcome_says_whether_the_script_assigned_event_value() {
+    let ev = Event::field("Calculate", "total", "7");
+    let o = go("event.value = event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", true));
+    let o = go("event.value = 2; event.value += 3; typeof event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set, o.result.as_deref()), ("5", true, Some("number")));
+    let o = go("var v = event.value; this.getField('price').value = 3;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", false));
+    let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
+    assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
 #[test]
 fn numbers_with_leading_zeros_stay_text() {
     let o = go("event.value = typeof getField('zip').value + ':' + typeof getField('qty').value;", &Event::field("Calculate", "total", ""));
@@ -1329,6 +1344,16 @@ mod formcalc {
         assert_eq!(calc(r#"Date2Num("2000-02-29") <> 0"#), "1");
         assert_eq!(calc(r#"Date2Num("2024-04-30") <> 0"#), "1");
         assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
+    }
+
+    /// A `YY` year in a date picture splits its century at 30, the XFA picture clause default:
+    /// `00` to `29` are 2000 to 2029 and `30` to `99` are 1930 to 1999.
+    #[test]
+    fn a_two_digit_year_splits_its_century_at_30() {
+        for (text, iso) in [("12/31/29", "2029-12-31"), ("01/01/30", "1930-01-01"), ("12/31/49", "1949-12-31"), ("01/01/50", "1950-01-01")] {
+            assert_eq!(calc(&format!(r#"Num2Date(Date2Num("{text}", "MM/DD/YY"), "YYYY-MM-DD")"#)), iso, "{text}");
+            assert_eq!(calc(&format!(r#"Parse("MM/DD/YY", "{text}")"#)), iso, "{text}");
+        }
     }
 
     #[test]

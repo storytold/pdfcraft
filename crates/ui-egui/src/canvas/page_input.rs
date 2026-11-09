@@ -2,8 +2,9 @@
 //! router, the text layer, and what is drawn over the page after its text.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_render::{DocInfo, PageText};
+use pdfcraft_render::{DocInfo, LinkTarget, PageText};
 
+use super::area::{SignTab, paint_sign_tab, sign_tab_at, sign_tabs};
 use super::{
     DocView, MARK_ICON_SHARE, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, mark_anchor,
     signature_badges, verdict_mark_rect,
@@ -30,6 +31,8 @@ pub(super) struct PageInput {
     /// The press's click came up over what the press began on: a link's or a field's click counts
     /// only then, as a button's does.
     pub(super) released_over: bool,
+    /// The sign tabs on empty fields a click would sign, painted over the page.
+    pub(super) sign_tabs: Vec<SignTab>,
 }
 
 /// Common geometry and pointer state for a tool acting on one page.
@@ -67,6 +70,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         redact_mark,
         table_preview,
         text_style,
+        text_links,
         tool,
         ..
     } = frame.env;
@@ -82,6 +86,10 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     };
     // While a table is being set up, nothing else is drawn or moved.
     let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
+    // An empty field a click would sign carries a small tab saying so, shown only while
+    // a click on the field signs it (the Select tool, not while preparing a form). The tab
+    // is drawn over every field, so a click on it signs its field (`forms_ui::hit`).
+    let tabs = page_sign_tabs(ui, doc, form, info, slot, can_fill, tool == QuickTool::Select && !preparing);
     let hits = PageHits {
         page: i,
         xf: &xf,
@@ -100,13 +108,18 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        text_links,
+        tabs: &tabs,
     };
     if let Some(o) = ptr.pressed() {
         // A press with Shift or ⌘ in Edit text is the objects', whatever lies under it
-        // (`object_ui::modified_hit`): the page's objects are read for it alone.
+        // (`object_ui::modified_hit`): the page's objects are read for it alone. Crop mode holds
+        // it on its page as any other press, so a modified click away applies the crop rather
+        // than taking the picture into a group (#6422).
         let adds = tool == QuickTool::EditText
             && can_modify
             && xf.rect.contains(o)
+            && !hits.cropping(view)
             && crate::object_ui::adds(ptr.modifiers)
             && !crate::object_ui::menu_open(ui, resp);
         let objects = adds.then(|| view.objects.inventory(doc, i));
@@ -249,7 +262,39 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
-    PageInput { press, text_drag: !view.router.keeps_drag(), consumed, area_tool, hover, released_over }
+    PageInput {
+        press,
+        text_drag: !view.router.keeps_drag(),
+        consumed,
+        area_tool,
+        hover,
+        released_over,
+        sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect(),
+    }
+}
+
+/// The sign tabs on the slot's page, on empty fields a click would sign, each with the field it
+/// signs; none unless `shown`.
+fn page_sign_tabs<'a>(
+    ui: &egui::Ui,
+    doc: &'a pdfcraft_engine::Document,
+    form: &[pdfcraft_engine::FormField],
+    info: &DocInfo,
+    slot: &PageSlot,
+    can_fill: bool,
+    shown: bool,
+) -> Vec<(&'a str, SignTab)> {
+    let PageSlot { i, xf, .. } = slot;
+    let i = *i;
+    if !shown {
+        return Vec::new();
+    }
+    sign_tabs(&doc.signatures, form, i, can_fill)
+        .into_iter()
+        .filter_map(|(name, [x0, y0, x1, y1])| {
+            sign_tab_at(ui, xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]), xf.rect).map(|tab| (name, tab))
+        })
+        .collect()
 }
 
 /// What lies under the pointer at `p`, after the tools act: its top, what a press there would take,
@@ -450,6 +495,11 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
+    /// The sign tabs on empty signature fields, with the field each one signs: drawn over every
+    /// field, so the pointer on one is on its own field.
+    tabs: &'a [(&'a str, SignTab)],
 }
 
 impl PageHits<'_> {
@@ -531,8 +581,10 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            text_links,
+            tabs,
         } = *self;
-        // A press with Shift or ⌘ is the objects', crop mode's page included (`object_ui::modified_hit`).
+        // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
             return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
         }
@@ -553,7 +605,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
         } else {
             None
         };
@@ -586,9 +638,25 @@ impl PageHits<'_> {
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
-        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
-        [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
+        let text_link = (text_links && link.is_none()).then(|| text_link_hit(view, info, xf, page, p)).flatten();
+        let on_link = link.is_some() || text_link.is_some();
+        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, on_link) };
+        [link, text_link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
+}
+
+/// The web or email address written as plain text under `p` on `page` (#4207), with no link
+/// annotation over it: the same hand and tip (its address) as a link annotation's.
+fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
+    let (vx, vy) = xf.screen_to_view(p);
+    let (index, link) = view.text_link_at(info, page, vx, vy)?;
+    let owner = crate::page_router::Owner::TextLink { index };
+    // A drag from the address selects its text, as from any other text: only a click opens it.
+    Some(crate::page_router::Hit {
+        tip: Some(link.uri.clone()),
+        declines_drag: true,
+        ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand)
+    })
 }
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
@@ -602,9 +670,9 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            // The I-beam drops where a press would go to a link (ruling E: the tools that select a
-            // link's text show it there).
-            let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. }));
+            // The I-beam drops where a press would go to a link, an address written as page text
+            // included (#4207) (ruling E: the tools that select a link's text show it there).
+            let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. } | Owner::TextLink { .. }));
             let pointer = TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag };
             text_pointer_input(ui, view, &text, pointer);
         }
@@ -816,9 +884,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         form,
         generation,
         info,
+        prepare_tab_order,
         prefs,
         preparing,
         redact_mark,
+        t,
         table_preview,
         tool,
         unobstructed,
@@ -868,7 +938,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::link_ui::paint(painter, &xf, i, info, doc_links, view, pointer);
     }
     if preparing {
-        crate::prepare::paint_page(tool_cx, form, view);
+        crate::prepare::paint_page(tool_cx, form, prepare_tab_order.unwrap_or_default(), view);
         if let Some(preview) = &table_preview {
             crate::field_table_ui::paint_preview(painter, &xf, i, preview);
         }
@@ -902,6 +972,19 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     {
         frame.out.clicked_link = Some(l.target.clone());
     }
+    // A web or email address written as plain text (#4207): the same click as a link annotation,
+    // and the same check and confirmation on opening.
+    if unobstructed
+        && resp.clicked()
+        && tool == QuickTool::Select
+        && !input.consumed
+        && frame.out.clicked_link.is_none()
+        && let PagePress::Mine(Owner::TextLink { index }) = input.press
+        && input.released_over
+        && let Some(uri) = view.text_link_uri(i, index)
+    {
+        frame.out.clicked_link = Some(LinkTarget::Uri(uri));
+    }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
     for (mp, mr, mc) in &view.compare_marks {
@@ -930,6 +1013,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         } else {
             view.flash = None;
         }
+    }
+    // The sign tabs (above). Like the validation badges, they never enter the file,
+    // exports or printing.
+    for tab in &input.sign_tabs {
+        paint_sign_tab(ui, painter, tab, t);
     }
     // Validation badges are viewer chrome over the widget. A recognised named-layer appearance may
     // show the verdict in the display copy too; saves retain its original streams. Badges never

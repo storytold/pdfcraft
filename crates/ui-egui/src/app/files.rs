@@ -444,6 +444,8 @@ impl PdfCraftApp {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = d.path.clone();
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) if looks_like_pdf(&bytes) => {
@@ -475,7 +477,12 @@ impl PdfCraftApp {
                     pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
                     None,
                     move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
-                        Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
+                        Ok(()) => {
+                            // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
+                            // effort: a volume without alternate data streams can't carry it.
+                            let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));
+                            app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())])
+                        }
                         Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
                     },
                 );
@@ -852,20 +859,25 @@ impl PdfCraftApp {
             return;
         }
         self.remember_view(index);
-        let id = self.views.remove(index).id;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
-            if self.closed_tabs.len() == 10 {
-                self.closed_tabs.remove(0);
+        let view = self.views.remove(index);
+        let (id, place) = (view.id, view.place());
+        // Another tab showing the same document (split view) keeps it open.
+        if !self.views.iter().any(|v| v.id == id) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                if self.closed_tabs.len() == 10 {
+                    self.closed_tabs.remove(0);
+                }
+                self.closed_tabs.push(path);
             }
-            self.closed_tabs.push(path);
+            self.forget_recovery(id);
+            self.session.close(id);
         }
-        self.forget_recovery(id);
-        self.session.close(id);
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
-            Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
+            // The tab after it in its strip comes forward (or the last).
+            Some(a) if a == index => self.after_close(place, index),
             other => other,
         };
     }
