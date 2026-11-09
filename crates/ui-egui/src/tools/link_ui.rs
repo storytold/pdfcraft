@@ -117,7 +117,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem
         let index = links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index;
         (index, info.links.iter().find(|l| l.page == page && l.index == index))
     } else {
-        let link = info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
+        let link = info.links.iter().rfind(|l| l.page == page && xf.link_contains(info, page, l, p))?;
         (link.index, Some(link))
     };
     let tip = link.map(|l| target_label(info, &l.target));

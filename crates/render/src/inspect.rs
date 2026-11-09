@@ -36,14 +36,16 @@ pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, ReviewStates, TransitionStyle, Xfa, link_replies, thread_tops,
+    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
+    OutlineItem, PageInfo, PageTransition, RemoteDestination, ReviewStates, TransitionStyle, Xfa, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
-pub use resources::{attachment_data, looks_like_pdf};
 #[cfg(test)]
-use resources::{xfa_config_dynamic_render, xfa_packet_text};
+use resources::LABEL_DECODES;
+#[cfg(test)]
+use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, xfa_config_dynamic_render, xfa_packet_text};
+pub use resources::{attachment_data, looks_like_pdf};
 
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
@@ -70,10 +72,17 @@ pub struct DocInfo {
     pub annotations: Vec<Annotation>,
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
+    /// The catalog's `/URI /Base` (ISO 32000-2 Table 211), the base for relative URI actions, when
+    /// it is a string of at most [`crate::MAX_URI_BASE_BYTES`].
+    pub uri_base: Option<String>,
     pub layers: Vec<Layer>,
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
     pub layer_groups: Vec<Vec<(u32, u16)>>,
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99), a
+    /// tree of layers (indices into `layers`) and labels. A layer it doesn't list isn't presented,
+    /// though it still draws in its state; no `/Order` presents none.
+    pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
