@@ -42,6 +42,7 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
@@ -714,6 +715,24 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
+    /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
+    /// above `redactions_downloaded`, Save asks where.
+    /// Undo of an Apply redactions step takes one off and Redo adds it back. Reload and a desktop
+    /// save set it to 0, and Revert sets it to `redactions_downloaded`; after a desktop save the document has the name it was saved
+    /// under. A web download keeps it, so later downloads carry the `_Redacted` name.
+    pub redactions_applied: usize,
+    /// How many Apply redactions steps saved into the document's file are undone in this view.
+    /// While it is above 0, Save asks where, so the restored content is not written over the
+    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    pub redactions_undone_after_save: usize,
+    /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
+    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    pub saved_redactions_cut_off: bool,
+    /// `redactions_applied` at the last web download, which Revert restores. While
+    /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
+    /// save leaves it at 0.
+    pub redactions_downloaded: usize,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -1133,6 +1152,10 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redactions_applied: 0,
+            redactions_undone_after_save: 0,
+            saved_redactions_cut_off: false,
+            redactions_downloaded: 0,
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -1722,6 +1745,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
             area_tool: false,
             hover: None,
             released_over: false,
+            sign_tabs: Vec::new(),
         }
     } else {
         page_tool_input(ui, view, frame, &slot)
@@ -3046,7 +3070,8 @@ fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
+/// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
+/// signature badges and sign tabs) and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");
@@ -3720,5 +3745,7 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+#[cfg(test)]
+mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
