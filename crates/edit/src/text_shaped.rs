@@ -75,13 +75,16 @@ pub(super) fn rewrite(
     let page = page_dict(doc, page)?;
     let size = style.size.unwrap_or(first.size);
     let color = style.color.unwrap_or(first.color);
+    let sources = latin_sources(doc, &page.dict, &members);
     // Every run keeps its source look (a size, colour or weight asked for applies to all of them).
-    // Italic is for the Latin runs: Arabic script has no italic and stays upright.
+    // Italic is for the Latin runs: Arabic script has no italic and stays upright. Latin stays in
+    // the run's own font where it has the glyphs, unless another weight is asked for.
     let look = |line: &TextLine| appearance_text::SpanStyle {
         size: style.size.unwrap_or(line.size),
         color: style.color.unwrap_or(line.color),
         bold: style.bold.unwrap_or(line.bold),
         italic: line.italic,
+        latin: sources.iter().position(|s| s.resource == line.font).filter(|_| style.bold.is_none_or(|bold| bold == line.bold)),
     };
     let spans: Vec<_> = row_sources(block, draft, block.edited_spans(draft))
         .into_iter()
@@ -115,7 +118,25 @@ pub(super) fn rewrite(
     if let Some(c) = appearance_text::first_undrawable(draft) {
         return Err(crate::undrawable(c));
     }
-    let laid = appearance_text::wrap_styled(draft, size, width, look(first), &spans)
+    // Word and browsers tighten rows with `TJ` kerning that this drawing doesn't repeat, so a
+    // source row laid out again is a little wider than it was drawn. Rows as wide as the
+    // paragraph's own source rows still fit (by at most 5%), so an edit doesn't push a row's last
+    // word onto a row of its own over the next paragraph.
+    let wrap_width = if style.width.is_some() {
+        width
+    } else {
+        block
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let line = row.first().and_then(|i| lines.get(*i))?;
+                let text: String = row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.as_str()).collect();
+                appearance_text::wrap_styled_with(&text, size, 14_400.0, look(line), &[], &sources).ok()?.first().map(|l| l.width)
+            })
+            .fold(width, f64::max)
+            .min(width * 1.05)
+    };
+    let laid = appearance_text::wrap_styled_with(draft, size, wrap_width, look(first), &spans, &sources)
         .map_err(|_| EditError::Invalid("the Arabic paragraph cannot be shaped within its limits".into()))?;
     let align = style.align.unwrap_or(if rtl { crate::added::Align::Right } else { crate::added::Align::Left });
     let left = if rtl && style.width.is_none() && style.align.is_none() { block.rect[2] - width } else { block.rect[0] } + dx;
@@ -246,6 +267,40 @@ pub(super) fn rewrite(
         dict.set(b"Resources".to_vec(), Object::Dict(resources));
     })?;
     Ok(LineEdit { substituted: pdfcraft_fonts::document_arabic_font().map(|font| format!("{} Type3", font.family)) })
+}
+
+/// A character's bytes in a source font and its advance (em).
+type SourceGlyph = (Vec<u8>, f64);
+
+/// The fonts of the paragraph's runs that the fallback may draw Latin in: each page font
+/// resource a run shows, with what it has glyphs for (a subset such as Word's Calibri keeps the
+/// characters the document uses). The fallback's own fonts are left out, and so is a resource
+/// whose name the drawing could not write as it is.
+fn latin_sources<'a>(doc: &Document, page: &Dict, members: &[&TextLine]) -> Vec<appearance_text::LatinSource<'a>> {
+    let fonts = page.get(b"Resources").and_then(|o| doc.dict(o)).and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f))).unwrap_or_default();
+    let mut out: Vec<appearance_text::LatinSource<'a>> = Vec::new();
+    for line in members {
+        let name = line.font.as_str();
+        let regular = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'+'));
+        if !regular || name.starts_with("PCEdArabic") || out.iter().any(|s| s.resource == name) {
+            continue;
+        }
+        let Some(font) = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)) else { continue };
+        let metrics = Metrics::from_dict(doc, &font);
+        let seen: std::cell::RefCell<HashMap<char, Option<SourceGlyph>>> = Default::default();
+        let glyph = move |c: char| {
+            seen.borrow_mut()
+                .entry(c)
+                .or_insert_with(|| {
+                    let bytes = metrics.encode(c.encode_utf8(&mut [0; 4]))?;
+                    let advance: f64 = metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
+                    (advance.is_finite() && advance >= 0.0).then_some((bytes, advance))
+                })
+                .clone()
+        };
+        out.push(appearance_text::LatinSource { resource: name.to_owned(), glyph: Box::new(glyph) });
+    }
+    out
 }
 
 /// The distance between a paragraph's evenly spaced source rows of one size, when it has two
