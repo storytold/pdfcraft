@@ -30,7 +30,11 @@
   `pdfcraft_collab_forced_commits_total` counts the compactions.
   Limitation 1 (crash recovery against the real process) is closed in
   `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
-  limitation 11 (commit publication outside the hub lock) in `a47641fb`. After
+  limitation 11 (commit publication outside the hub lock) in `a47641fb`.
+  **Limitation 2 (style-only edits and status replies) is done locally in
+  `ce5c38798`** (§4, §6.2): `annotation.update` sets the final look of an
+  existing comment as one all-or-nothing operation with a compare-and-set undo,
+  and `annotation.reply` carries a review state (`/State`). After
   the rebases those commits are `d3e62ecf6`, `b5a67b098`, `2dfae0fe`/`e043c132`
   being the intermediate pair from the `8d5d39ef` rebase (§4).
 - Audience: the next session (human or agent). Everything here was verified in
@@ -45,8 +49,8 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
-| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
+| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`) and its before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
@@ -232,6 +236,91 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Restyling a comment and status replies — §5 p.2 / limitation 2 (2026-11-09, local; not pushed)
+
+`ce5c38798` on `b7f66cde8`. Limitation 2 said that "edits that only change an
+annotation's style" and "comment replies that carry a status (`/State`)" were
+not shared. Both are now ordinary merge operations:
+
+- `annotation.update` (target `Target::Annotation`, payload `action`,
+  `style`, optional `expect`) sets the **final** look of the comment `/NM`:
+  `color`, `opacity`, `width`, `fill`, `border_color`, `border_shape`, each
+  optional, `null` for `fill`/`border_color`/`border_shape` meaning "take it
+  away". It is one operation where the interface sends up to four edits
+  (`StyleAnnotation`, `FillAnnotation`, `BorderColorAnnotation`,
+  `BorderShapeAnnotation`, usually inside `Edit::Batch`), so a replica applies
+  one version and undo takes back one choice.
+- Why one engine edit: `Edit::RestyleAnnotation` (`pdfcraft_annot::restyle`)
+  applies the whole look all-or-nothing — every property is checked before the
+  first mutation (locked, `can_draw`, foreign text, does the comment have a
+  width/fill/border at all), the annotation and its Replace Text partners are
+  snapshotted, and a failure part-way puts the dictionaries back. A sequence of
+  the interactive edits (`Edit::Batch`) has no rollback, and a half-applied
+  operation that was then rejected would leave the server and every replica
+  disagreeing.
+- The address is checked **before** any change: a `/NM` that is not on the page
+  (`annotation_index` → `conflict` "the annotation was deleted"), a locked
+  comment (`unsupported`), or a property the comment does not have — `width` on
+  a sticky note, `fill` on a line, `border_*` outside text boxes/typewriter
+  text, `border_shape` on a callout — is `invalid`/`unsupported`, and the
+  document is untouched (test `an_update_that_cannot_be_applied_changes_nothing`).
+- Undo is compare-and-set (ADR-0010 §3): the accepted operation carries `style`
+  (what it set, `expect` removed) and `before` (the previous values of exactly
+  those fields), and the undo is `annotation.update` with `style = before` and
+  `expect = style`. `StyleUpdate::still_matches` compares only the named fields
+  with a `5e-4` tolerance (the engine writes three decimals); a mismatch is
+  `conflict`, not retryable, and the other user's look stays.
+- `annotation.reply` gained an optional `state`
+  (`none`/`accepted`/`rejected`/`cancelled`/`completed`). A state reply needs
+  the client's `nm`; the adapter applies `Edit::SetAnnotationStatusNamed`
+  (new, the named twin of `SetAnnotationStatus`, like `ReplyToAnnotationNamed`),
+  so the engine writes `/State` + `/StateModel /Review` and the status text
+  ("Accepted set by bo") under the server's `/NM` on every replica. The
+  accepted operation carries the canonical `text` and `state`. `restore` of a
+  state reply rebuilds a state reply (`SetAnnotationStatusNamed`), not a plain
+  comment — the delete's copy keeps the body with `state`.
+- A reply resolves its parent first (`annotation_index`), so a reply addressed
+  to a deleted comment is `conflict` before anything is added; deleting a
+  comment takes its replies with it (`delete_annotation`), which is what the
+  test then checks.
+- Client projection: `style_update_for_edits` folds a group of interactive
+  style edits on one comment into one `StyleUpdate` (a single `StyleAnnotation`
+  is the one-element case), `edit_for` rebuilds `Edit::RestyleAnnotation`, and
+  `inverse_for`/`inverse_after` build the CAS undo. `Edit::SetAnnotationStatus`
+  from the comment panel/menu becomes a named state reply. `annotation.restore`
+  on a replica now understands `parent` and `state` (before this a restored
+  reply fell through to `AddAnnotationNamed` and a reply body that is not a
+  shape was unreadable). Line endings (`/LE`) do not travel yet: a style edit
+  carrying them is refused whole (`unsupported`), never partly applied.
+
+Tests added (collab):
+
+| Crate | Test |
+|---|---|
+| `collab-annot` | `a_style_update_round_trips_and_says_what_it_clears`, `a_style_update_needs_a_property_and_names_no_unknown_one`, `a_style_update_refuses_a_property_the_comment_does_not_have`, `before_records_only_what_the_update_names_and_the_undo_checks_it`, `the_review_state_names_are_stable` |
+| `collab-pdf` | `an_update_restyles_a_comment_and_carries_the_look_it_replaced` (incl. replay on a fresh replica), `an_update_that_cannot_be_applied_changes_nothing`, `an_undo_of_a_restyle_puts_the_old_look_back_unless_someone_restyled_since`, `a_state_reply_sets_the_status_and_a_reply_to_a_deleted_comment_is_refused` |
+| `collab-client-pdf` | `a_style_edit_becomes_one_update_and_its_inverse`, `a_batch_of_style_edits_is_one_update_and_round_trips`, `a_style_edit_the_wire_cannot_carry_is_refused`, `a_state_reply_keeps_its_status_through_the_wire_and_a_restore`, `the_accepted_update_answers_with_the_operation_that_undoes_it` |
+| `collab-ws` e2e | `two_clients_restyle_a_comment_and_undo_it` (two clients: both replicas see colour/opacity/width/fill, undo from the accepted operation, a later restyle makes the undo a `conflict`), `two_clients_reply_with_a_status_and_a_deleted_parent_refuses_a_reply` (both replicas get `/State` + "Accepted set by bo", the status survives delete/restore from the copy, a reply to a deleted parent is refused and adds nothing) |
+
+Gates at `ce5c38798` (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **167**: proto 12, server 22, hub 5, client 12, client-pdf 20, session 5, ws 6 (unit), pdf 30, annot 15, daemon 28 + 1 (`tests/crash_recovery.rs`) + the 11 e2e |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **11/11** (run inside the `cargo test` above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| wasm, client crate | `cargo check --target wasm32-unknown-unknown -p pdfcraft-collab-client-pdf` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+
+Not re-run for this slice: the full UI suite (the only `ui-egui` change is one
+arm in `comment_page` for `Edit::RestyleAnnotation`; clippy with `--features
+collab` is green on it). The branch is 53 commits ahead of `origin/main`
+`ca9e3c2c3` and 0 behind; nothing was pushed, so PR #6622 still describes
+`81035bf2`.
 
 ### Page insert and duplicate — §5 p.3 (2026-11-09, local; not pushed)
 
@@ -813,11 +902,16 @@ Ordered by the risk they pose to production.
 2. **Annotation coverage beyond the typed set.** `annotation.add` shares
    `TextMarkup` (kind/quads/colour), `Rectangle`, `Oval`, `Line`, `Ink`,
    `FreehandHighlight`, `TextBox`, `Typewriter`, palette `Stamp`, `Mark` and
-   `Note` with their style (colour, opacity, width, fill, border). Drawn and
-   typed signatures, custom stamps, redaction marks and attachments are refused
-   with `unsupported` (RFC §3.1.1). Comment replies that carry a status
-   (`/State`) and edits that only change an annotation's style are not shared
-   yet.
+   `Note` with their style (colour, opacity, width, fill, border).
+   `annotation.update` (`ce5c38798`, §4) shares the restyle of an existing
+   comment — colour, opacity, line width, fill, border colour and shape — as one
+   operation with a compare-and-set undo, and `annotation.reply` carries a
+   review state (`/State`) whose reply is named by the client and survives
+   delete/restore. Drawn and typed signatures, custom stamps, redaction marks
+   and attachments are still refused with `unsupported` (RFC §3.1.1); line
+   endings (`/LE`), font size, note icon and author/subject changes are not
+   shared yet (`Edit::FontSizeAnnotation`, `Edit::SetAnnotationInfo` and a style
+   edit carrying `endings` are refused whole).
 3. **Structural coverage.** Page rotate, move, delete and restore, and now
    insert and duplicate (§4, `b13933e9b`). An insert or a duplicate carries the
    page as a one-page PDF inside the operation (base64, ≤
@@ -951,9 +1045,13 @@ client, and `ops_for_edit(Edit::AddAnnotation)` (no more note-only branch) sends
 `add_annotation_payload`. UI code needed no change: it already forwards
 `Edit::AddAnnotation` through `ops_for_edit`.
 
-Tests: the round-trip and two-client scenarios are listed in §4. What is still
-open here: sharing `annotation.set_style` (recolour/width/opacity of an existing
-comment), status replies (`/State`), and the same typed envelope for
+Tests: the round-trip and two-client scenarios are listed in §4. **Done since
+(`ce5c38798`, §4):** the restyle of an existing comment (`annotation.update`:
+colour, opacity, width, fill, border colour/shape, one all-or-nothing edit with
+a CAS undo) and status replies (`annotation.reply` with `state` → `/State` +
+`/StateModel /Review`, named by the client, restored as a status reply). What
+is still open here: line endings (`/LE`), font size, note icon and
+author/subject (`SetAnnotationInfo`), and the same typed envelope for
 `AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
 would need the blob channel).
 
@@ -1260,6 +1358,17 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 - `inverse_for` returns `None` for the two deletes on purpose; the UI patches the
   inverse from `applied` with `inverse_after`. An inverse for a delete built on
   the client would need the content the replica no longer has.
+- A restyle is one operation on purpose: do not map a `StyleAnnotation`,
+  `FillAnnotation`, `BorderColorAnnotation` or `BorderShapeAnnotation` to its own
+  wire op. `annotation.update` carries the final look plus `before` (the look it
+  replaced); `expect` is the undo's compare-and-set and is stripped from the
+  accepted operation. `Edit::RestyleAnnotation` is all-or-nothing — use it, not
+  `Edit::Batch`, for anything that reaches the server, because a `Batch` has no
+  rollback and a failed operation must leave the server unchanged.
+- A state reply must be named by the client (`Edit::SetAnnotationStatusNamed`):
+  the unnamed `Edit::SetAnnotationStatus` generates a random `/NM` per replica,
+  so the replicas would disagree on the reply's address. The status text
+  ("Accepted set by …") is the engine's; the wire `text` is only a plain reply's.
 - Presence TTL is a client-side clock (`PRESENCE_TTL` in `ui-egui/src/collab.rs`):
   the server stores only the last state per participant and does not evict it, so
   "inactive" is drawn where presence is read. A merge intent re-addressed after a
