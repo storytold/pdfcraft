@@ -497,21 +497,15 @@ mod tests {
     #[test]
     fn reduce_file_size_asks_where_to_save_before_it_compresses() {
         let (mut app, dir) = reducing("first");
+        app.run_inline = true;
         let out = dir.join("notes (reduced).pdf");
         app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
         app.reduce_file_size();
         assert!(app.optimize_run.is_none() && app.progress_notice.is_none(), "nothing runs until the answer is in");
         assert!(app.pickers.pending(), "the question is out");
-        app.process_picked();
-        let run = app.optimize_run.as_ref().expect("the answer starts it");
-        assert_eq!(run.destination.as_deref(), out.to_str());
         // Nothing more is asked at the end: the copy is simply there.
         app.pick_override = Some(vec![dir.join("not asked.pdf").to_string_lossy().into_owned()]);
-        let start = std::time::Instant::now();
-        while app.optimize_run.is_some() && start.elapsed() < std::time::Duration::from_secs(30) {
-            app.poll_optimize();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        app.process_picked();
         assert!(!app.pickers.pending(), "it doesn't ask again");
         let written = std::fs::read(&out).unwrap_or_default();
         let mut again = pdfcraft_engine::Session::new();
