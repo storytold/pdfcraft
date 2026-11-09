@@ -95,6 +95,9 @@ fn mirrored(c: char) -> char {
 fn class(c: char) -> Class {
     if is_digit(c) {
         Class::Number
+    } else if is_number_separator(c) {
+        // The Arabic decimal and thousands separators sit inside a number (١٬٢٥٠), like `.`.
+        Class::Neutral
     } else if is_rtl(c) {
         Class::Rtl
     } else if c.is_alphabetic() {
@@ -175,7 +178,14 @@ fn runs(cl: &[Cluster], member: impl Fn(&Cluster) -> bool, bridge: impl Fn(&[Clu
 /// One separator between two digits (`1,000`, `12:30`, `3.5`, `1/2`, `5-6`) keeps a number whole.
 fn number_separator(cl: &[Cluster], j: usize) -> bool {
     let digit = |k: Option<usize>| k.and_then(|k| cl.get(k)).is_some_and(|c| c.class == Class::Number);
-    cl.get(j).is_some_and(|c| matches!(c.text.as_str(), "." | "," | ":" | "/" | "-" | "+")) && digit(j.checked_sub(1)) && digit(Some(j + 1))
+    cl.get(j).is_some_and(|c| matches!(c.text.as_str(), "." | "," | ":" | "/" | "-" | "+") || c.text.chars().all(is_number_separator))
+        && digit(j.checked_sub(1))
+        && digit(Some(j + 1))
+}
+
+/// U+066B ARABIC DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS SEPARATOR.
+fn is_number_separator(c: char) -> bool {
+    matches!(c, '\u{066B}' | '\u{066C}')
 }
 
 fn reverse_mirrored(cl: &mut [Cluster]) {
@@ -328,6 +338,9 @@ mod tests {
             "פרק 3 (מבוא)",
             "שָׁלוֹם עוֹלָם",
             "مرحبا بالعالم",
+            // Arabic thousands and decimal separators inside a number (١٬٢٥٠ read as ٢٥٠٬١).
+            "الإيرادات ١٬٢٥٠ ريال",
+            "النسبة ١٢٫٥ في المئة",
         ] {
             let visual = drawn(logical);
             assert_ne!(visual, logical, "{logical:?} should be reordered");
