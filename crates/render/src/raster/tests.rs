@@ -4234,7 +4234,7 @@ fn inline_images_with_ei_in_their_data_parse_in_linear_time() {
 /// From the nightly `cargo xtask fuzz`: a JBIG2 image whose stream declares a page and a
 /// generic region of 65535 × 65535 pixels (each side within JBIG2's limit) behind a small
 /// /Width and /Height: decoding its 4.3 billion pixels one by one took minutes. Vendored
-/// hayro-jbig2 patch: at most 2^28 pixels per bitmap, and 2^26 per symbol dictionary.
+/// hayro-jbig2 patch: at most 2^28 pixels per bitmap, and as many per symbol dictionary.
 #[test]
 fn jbig2_regions_of_billions_of_pixels_are_refused() {
     // Embedded JBIG2 segments (ISO 14492 §7.2): page information, then an immediate generic
@@ -4495,6 +4495,21 @@ fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
     assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
 }
 
+/// A symbol dictionary may hold as many pixels as the largest page bitmap. It was held to a
+/// quarter of that, and the soft mask of a scanned drawing, one dictionary of 7,559 symbols, passed
+/// it: refused, the mask left its picture drawn whole, which covered the page in noise (#6722).
+#[test]
+fn a_symbol_dictionary_holds_as_many_pixels_as_a_page() {
+    let stream = |heights: &[u32]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &wide_jbig2_dictionary(65535, heights));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&[1100])), "72,088,500 pixels, past 2^26");
+    assert!(jbig2_image_draws(&stream(&[2047, 2048])), "268,365,825 pixels, within 2^28");
+    assert!(!jbig2_image_draws(&stream(&[2048, 2049])), "268,496,895 pixels, past 2^28");
+}
+
 /// A page's allowance ends with it, so what decodes on its thread afterwards has no page to run out
 /// on, and a `Context` used again starts afresh.
 #[test]
@@ -4739,6 +4754,40 @@ fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
     for _ in 0..rows {
         bits.put(0xFF, 8);
     }
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of one white symbol of `width` columns in each height class
+/// of `heights` (rising), none exported: wide symbols hold many pixels in few retained words.
+fn wide_jbig2_dictionary(width: u32, heights: &[u32]) -> Vec<u8> {
+    let mut bits = Bits::default();
+    let mut previous = 0;
+    for &height in heights {
+        match height - previous {
+            // Height class delta (table B.4): 1, or the upper line.
+            1 => bits.put(0, 1),
+            delta => {
+                bits.put(0b11111, 5);
+                bits.put(delta - 76, 32);
+            }
+        }
+        previous = height;
+        bits.put(0b111110, 6); // width delta, the upper line of table B.2
+        bits.put(width - 75, 32);
+        bits.put(0b111111, 6); // end of the class (B.2)
+        let rows = height.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+        bits.table_b1(rows); // BMSIZE (B.1)
+        bits.align();
+        for _ in 0..rows {
+            bits.put(0xFF, 8);
+        }
+    }
+    let symbols = u32::try_from(heights.len()).unwrap();
     bits.table_b1(symbols); // the first export run, not exported, is all of them
     let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
     dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
