@@ -437,9 +437,10 @@ fn g_names_read_their_glyph_ids_in_the_mac_order() {
 /// were renumbered from 1 (class J: dense, a few dozen glyphs), a program that draws most of
 /// its 300 glyphs, one whose drawn glyphs read as punctuation and digits, one whose drawn
 /// glyphs are one gapless block (renumbered from some start), one whose glyphs lie among the
-/// order's accented letters (a symbol font under another name), one with a Unicode
-/// `cmap`, one with a `post` table naming glyphs its own way, one with `/ToUnicode` (it is the
-/// strict text's business), and one named as a symbol font.
+/// order's accented letters (a symbol font under another name), one whose Unicode `cmap`
+/// names a glyph otherwise than the order, one with a `post` table naming glyphs its own way,
+/// one whose `/ToUnicode` names glyphs otherwise than the order, and one named as a symbol
+/// font.
 #[test]
 fn fonts_without_the_mac_order_evidence_recover_nothing() {
     let shown = gids(SENTENCE);
@@ -462,7 +463,8 @@ fn fonts_without_the_mac_order_evidence_recover_nothing() {
         ("punctuation", subset(300, &punctuation, Cmap::None, None), punctuation.clone(), "ArialMT", false),
         ("gapless block", subset(300, &block, Cmap::None, None), block.clone(), "ArialMT", false),
         ("accented range", subset(300, &accented, Cmap::None, None), accented.clone(), "TT24Fo00", false),
-        ("unicode cmap", kept_ids(SENTENCE, Cmap::Unicode(&[('B', 37)])), shown.clone(), "ArialMT", false),
+        // Glyph 37 is `B` in the order: a `cmap` naming it `C` contradicts the order.
+        ("unicode cmap", kept_ids(SENTENCE, Cmap::Unicode(&[('C', 37)])), shown.clone(), "ArialMT", false),
         ("own glyph names", subset(300, &shown, Cmap::None, Some(0x0002_0000)), shown.clone(), "ArialMT", false),
         ("to unicode", kept_ids(SENTENCE, Cmap::None), shown.clone(), "ArialMT", true),
         ("symbol font", kept_ids(SENTENCE, Cmap::None), shown.clone(), "Wingdings-Regular", false),
@@ -799,4 +801,403 @@ fn the_redraw_dedupe_and_drop_doubles_share_one_budget() {
     DOUBLES_WORK.with(|c| c.set(0));
     let _ = layers(&pdf);
     assert!(DOUBLES_WORK.with(std::cell::Cell::get) > 0);
+}
+
+use pdfcraft_testkit::cff::{helvetica_width, standard_string_id as sid};
+
+/// A Type 0 font over a CID-keyed CFF program (`CIDFontType0`, Identity-H, no `/ToUnicode`)
+/// drawing `text`: each character's glyph has CID `sid(c) + shift` and the width Helvetica
+/// gives the character (600 for every glyph when `mono`), in a font of character collection
+/// Adobe-`ordering`.
+fn cid_cff_page(text: &str, shift: i32, mono: bool, ordering: &str) -> Vec<u8> {
+    let cid = |c: char| u16::try_from(i32::from(sid(c)) + shift).unwrap();
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let cids: Vec<u16> = unique.iter().map(|&c| cid(c)).collect();
+    let w: String = unique.iter().map(|&c| format!("{} [{}] ", cid(c), if mono { 600 } else { helvetica_width(c) })).collect();
+    let shown: String = text.chars().map(|c| format!("{:04X}", cid(c))).collect();
+    page_with_font(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+MetaNormalLF-Roman-Identity-H /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        &format!("<{shown}>"),
+        false,
+        &[
+            (
+                &format!(
+                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+MetaNormalLF-Roman /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 0 >> /DW 1000 /W [{w}] /FontDescriptor 8 0 R >>"
+                ),
+                Vec::new(),
+            ),
+            (
+                "<< /Type /FontDescriptor /FontName /ABCDEF+MetaNormalLF-Roman /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                Vec::new(),
+            ),
+            ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+        ],
+    )
+}
+
+/// A Type 3 font drawing `text`, each character with code `code(c)` named `/{prefix}{code}`,
+/// with Helvetica's widths (a thousandth of an em per unit, `/FontMatrix` [0.001 …]).
+fn type3_page(text: &str, code: impl Fn(char) -> u8, prefix: &str) -> Vec<u8> {
+    type3_page_named(text, code, |k| format!("{prefix}{k}"))
+}
+
+/// [`type3_page`] with each code `k` named `name(k)`.
+fn type3_page_named(text: &str, code: impl Fn(char) -> u8, name: impl Fn(u8) -> String) -> Vec<u8> {
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let codes: Vec<u8> = unique.iter().map(|&c| code(c)).collect();
+    let (first, last) = (*codes.iter().min().unwrap(), *codes.iter().max().unwrap());
+    let widths: String = (first..=last)
+        .map(|k| unique.iter().position(|&c| code(c) == k).map_or(0, |i| helvetica_width(unique[i])).to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let diffs: String = codes.iter().map(|&k| format!("{k} /{} ", name(k))).collect();
+    let procs: String = codes.iter().map(|&k| format!("/{} 7 0 R ", name(k))).collect();
+    let shown: String = text.chars().map(|c| format!("{:02X}", code(c))).collect();
+    page_with_font(
+        &format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar {first} /LastChar {last} /Widths [{widths}] /Encoding << /Type /Encoding /Differences [{diffs}] >> /CharProcs << {procs}>> >>"
+        ),
+        &format!("<{shown}>"),
+        false,
+        &[("", b"500 0 0 0 500 700 d1 0 0 500 700 re f".to_vec())],
+    )
+}
+
+/// Rule N: a CID-keyed CFF font whose CIDs are the CFF standard string ids of its glyphs'
+/// names (TN #5176 Appendix A), without `/ToUnicode`, reads nothing strictly (ISO 32000-2
+/// §9.10.2) and its text in the recovered layer, the glyph widths confirming the order.
+#[test]
+fn cids_that_are_standard_string_ids_fill_the_recovered_layer() {
+    let text = "The Residence address and ZIP code are indicated.";
+    let (strict, recovered, plain) = layers(&parse(cid_cff_page(text, 0, false, "Identity")));
+    assert_eq!(strict, plain);
+    assert!(strict.glyphs.is_empty(), "{:?}", strict.plain_text());
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), text);
+    assert!(r.recovery.iter().flatten().all(|x| x.rule == RecoveryRule::StandardStringOrder && x.mode == RecoveryMode::Fill));
+}
+
+/// Rule N reads nothing where the evidence is missing or contradicts it: CIDs one ahead or
+/// behind the standard strings, or two ahead (the Macintosh order), whose widths put an `l`
+/// where the `m` is; a monospaced font, whose widths prove nothing; a font of an Adobe
+/// character collection (its CIDs are the collection's); and CIDs renumbered from 1.
+#[test]
+fn cids_the_widths_dont_confirm_recover_nothing() {
+    let text = "The Residence address and ZIP code are indicated.";
+    for shift in [-1, 1, 2] {
+        let (_, recovered, _) = layers(&parse(cid_cff_page(text, shift, false, "Identity")));
+        assert!(recovered.is_none(), "shift {shift}: {:?}", recovered.map(|r| r.text.plain_text()));
+    }
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 0, true, "Identity")));
+    assert!(recovered.is_none(), "monospaced: {:?}", recovered.map(|r| r.text.plain_text()));
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 0, false, "Japan1")));
+    assert!(recovered.is_none(), "Adobe-Japan1: {:?}", recovered.map(|r| r.text.plain_text()));
+    // `!` to `/`: fifteen glyphs numbered 2 to 16 with no gap.
+    let (_, recovered, _) = layers(&parse(cid_cff_page("!\"#$%&()*+,-./", 0, false, "Identity")));
+    assert!(recovered.is_none());
+}
+
+/// Rule N in a Type 3 font whose codes are standard string ids and whose glyph names only
+/// number them (`/c37` draws `D`): the strict text reads the codes as ASCII (`%BUB%JSFDU`) and
+/// stays so in the strict layer; the recovered layer overrides it, saying why.
+#[test]
+fn type3_codes_that_are_standard_string_ids_override_the_ascii_reading() {
+    let text = "DataDirect Connect";
+    let page = type3_page(text, |c| u8::try_from(sid(c)).unwrap(), "c");
+    let (strict, recovered, plain) = layers(&parse(page));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text().replace(' ', ""), "%BUB%JSFDU$POOFDU");
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), text);
+    let over = r.recovery.iter().flatten().find(|x| matches!(x.mode, RecoveryMode::Override { .. })).expect("an override");
+    assert_eq!(over.rule, RecoveryRule::StandardStringOrder);
+}
+
+/// A Type 3 font whose codes are ASCII keeps its strict text, numbered names or not: read as
+/// standard string ids its letters are 31 off and the widths contradict them; a font with glyph
+/// list names is read by those names.
+#[test]
+fn type3_fonts_whose_codes_read_right_keep_their_strict_text() {
+    let text = "Residence address";
+    let ascii = |c: char| u8::try_from(u32::from(c)).unwrap();
+    for prefix in ["c", "g"] {
+        let (strict, recovered, _) = layers(&parse(type3_page(text, ascii, prefix)));
+        assert_eq!(strict.plain_text(), text);
+        assert!(recovered.is_none(), "/{prefix}: {:?}", recovered.map(|r| r.text.plain_text()));
+    }
+    // Codes that are standard string ids, with the widths to prove it, but glyph list names
+    // (each glyph named as the capital of its letter): the names are the strict text's, and are
+    // kept.
+    let sid8 = |c: char| u8::try_from(sid(c)).unwrap();
+    let text = "DataDirect Connect";
+    let named = |k: u8| {
+        let c = text.chars().find(|&c| sid8(c) == k).unwrap();
+        if c == ' ' { "space".to_string() } else { c.to_ascii_uppercase().to_string() }
+    };
+    let (strict, recovered, _) = layers(&parse(type3_page_named(text, sid8, named)));
+    assert_eq!(strict.plain_text(), "DATADIRECT CONNECT");
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+    // Glyph list names at standard-string codes: `/D` at 37 reads `D` strictly.
+    let names = "37 /D 66 /a 85 /t 74 /i 83 /r 70 /e 68 /c";
+    let page = page_with_font(
+        &format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 37 /LastChar 85 /Widths [722 {}] /Encoding << /Type /Encoding /Differences [{names}] >> /CharProcs << /D 7 0 R /a 7 0 R /t 7 0 R /i 7 0 R /r 7 0 R /e 7 0 R /c 7 0 R >> >>",
+            vec!["556"; 48].join(" ")
+        ),
+        "<25425542254A53464455>",
+        false,
+        &[("", b"500 0 0 0 500 700 d1".to_vec())],
+    );
+    let (strict, recovered, _) = layers(&parse(page));
+    assert_eq!(strict.plain_text(), "DataDirect");
+    assert!(recovered.is_none());
+}
+
+/// `/W` giving the glyph the Macintosh order puts each character of `text` at Helvetica's width
+/// for that character (shifted `shift` glyphs on, to give a reading the widths contradict).
+fn mac_widths(text: &str, shift: i32) -> String {
+    text.chars().map(|c| format!("{} [{}] ", i32::from(mac_gid(c)) + shift, helvetica_width(c))).collect()
+}
+
+/// A Type 0 font over an embedded TrueType program, Identity-H, showing glyph ids `gids`, with
+/// `/W` entries `w` and `/ToUnicode` `tu` (bfchar lines) when given.
+fn type0_page_with_to_unicode(program: Vec<u8>, gids: &[u16], w: &str, tu: Option<&str>) -> Vec<u8> {
+    let shown: String = gids.iter().map(|g| format!("{g:04X}")).collect();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [7 0 R]{} >>",
+        if tu.is_some() { " /ToUnicode 10 0 R" } else { "" }
+    );
+    let cmap = tu.map(|lines| {
+        let n = lines.lines().filter(|l| !l.trim().is_empty()).count();
+        let chars = if n == 0 { String::new() } else { format!("{n} beginbfchar {lines} endbfchar ") };
+        format!("/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <0000> <FFFF> endcodespacerange {chars}endcmap CMapName currentdict /CMap defineresource pop end end").into_bytes()
+    });
+    let mut extra = vec![
+        (
+            format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 600 /W [{w}] /FontDescriptor 8 0 R >>"),
+            Vec::new(),
+        ),
+        (
+            "<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>".to_string(),
+            Vec::new(),
+        ),
+        (String::new(), program),
+    ];
+    if let Some(cmap) = cmap {
+        extra.push((String::new(), cmap));
+    }
+    let extra: Vec<(&str, Vec<u8>)> = extra.iter().map(|(d, b)| (d.as_str(), b.clone())).collect();
+    page_with_font(&font, &format!("<{shown}>"), false, &extra)
+}
+
+/// The K extension: a Type 0 font whose `/ToUnicode` names nothing (an empty map) or only
+/// glyphs it names as the Macintosh order does, and whose program's Unicode `cmap` keeps a few
+/// characters, each agreeing with the order, is read in the order when the glyph widths confirm
+/// it. The strict layer keeps exactly what the map names.
+#[test]
+fn a_type0_font_whose_few_names_agree_with_the_mac_order_is_read_in_it() {
+    let text = "Indicadores de estudiantes";
+    let g = gids(text);
+    let (strict, recovered, plain) = layers(&parse(type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, &mac_widths(text, 0), Some(""))));
+    assert_eq!(strict, plain);
+    assert!(strict.glyphs.is_empty());
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text), "an empty /ToUnicode");
+    let e = mac_gid('e');
+    let tu = format!("<{e:04X}> <0065>");
+    let program = kept_ids(text, Cmap::Unicode(&[('I', mac_gid('I')), ('d', mac_gid('d'))]));
+    let (strict, recovered, plain) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), Some(&tu))));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text().replace(' ', ""), "eeee", "the map names the e's");
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), text);
+    assert!(r.recovery.iter().flatten().all(|x| x.mode == RecoveryMode::Fill));
+    // Glyph ids from 130 on (`©` is 139) are not read in such a font; a font that names nothing
+    // reads them.
+    let with_copyright: Vec<u16> = g.iter().copied().chain([139]).collect();
+    let program = subset(300, &with_copyright, Cmap::None, None);
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program.clone(), &with_copyright, &mac_widths(text, 0), Some(""))));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text));
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &with_copyright, &mac_widths(text, 0), None)));
+    assert_eq!(recovered.map(|r| r.text.plain_text()), Some(format!("{text}\u{a9}")));
+    // One answer otherwise than the order, from the map or from the `cmap`, and nothing is read.
+    let wrong = format!("<{e:04X}> <0066>");
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, &mac_widths(text, 0), Some(&wrong))));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+    // A map that names nothing, over a subset whose widths say its glyphs are in another order
+    // (each glyph's width is the next character's), or that gives no widths at all.
+    for w in [mac_widths(text, 1), String::new()] {
+        let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, &w, Some(""))));
+        assert!(recovered.is_none(), "{w}: {:?}", recovered.map(|r| r.text.plain_text()));
+    }
+    let program = kept_ids(text, Cmap::Unicode(&[('I', mac_gid('I')), ('x', mac_gid('d'))]));
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), None)));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
+
+/// The candidate policy every rule passes through: a private use character is never
+/// recovered. The Macintosh order's `apple` (glyph 210) is U+F8FF in the glyph list; the other
+/// glyphs of the same font still read.
+#[test]
+fn a_private_use_character_is_never_recovered() {
+    let text = "Indicadores";
+    let mut g = gids(text);
+    g.push(210);
+    let program = subset(300, &g, Cmap::None, None);
+    let (_, recovered, _) = layers(&parse(type0_page(program, &g, "ArialMT", false)));
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), text);
+    assert!(!r.text.plain_text().contains('\u{F8FF}'));
+    assert_eq!(
+        recovery_policy(RecoveryRule::MacGlyphOrder, None, hayro::hayro_interpret::hayro_cmap::BfString::Char('\u{F8FF}'), RecoveryMode::Fill),
+        None
+    );
+    assert_eq!(
+        recovery_policy(RecoveryRule::MacGlyphOrder, None, hayro::hayro_interpret::hayro_cmap::BfString::Char('\u{1}'), RecoveryMode::Fill),
+        None
+    );
+    assert!(
+        recovery_policy(RecoveryRule::MacGlyphOrder, None, hayro::hayro_interpret::hayro_cmap::BfString::Char('a'), RecoveryMode::Fill).is_some()
+    );
+}
+
+/// The candidate policy, through `recovery_policy`: whatever a rule reads, a private use
+/// character (U+E000–U+F8FF, planes 15 and 16), a C0 or C1 control, a noncharacter or nothing at
+/// all is never recovered, alone or inside a string.
+#[test]
+fn the_candidate_policy_refuses_what_is_not_text() {
+    use hayro::hayro_interpret::hayro_cmap::BfString;
+    let read = |text: BfString| recovery_policy(RecoveryRule::StandardStringOrder, None, text, RecoveryMode::Fill);
+    for c in [
+        '\u{E000}',
+        '\u{F8FF}',
+        '\u{F0041}',
+        '\u{10FFFD}',
+        '\u{0}',
+        '\u{1F}',
+        '\u{7F}',
+        '\u{80}',
+        '\u{9F}',
+        '\u{FDD0}',
+        '\u{FDEF}',
+        '\u{FFFE}',
+        '\u{FFFF}',
+        '\u{1FFFE}',
+    ] {
+        assert_eq!(read(BfString::Char(c)), None, "{c:?}");
+        assert_eq!(read(BfString::String(format!("a{c}"))), None, "a{c:?}");
+    }
+    assert_eq!(read(BfString::String(String::new())), None);
+    for c in ['A', ' ', '\u{A0}', '\u{AD}', '\u{2019}', '\u{D7FF}', '\u{FDCF}', '\u{FFFD}', '\u{1F600}'] {
+        assert!(read(BfString::Char(c)).is_some(), "{c:?}");
+    }
+    assert!(read(BfString::String("fi".into())).is_some());
+    // An override is refused the same way, and replaces strict text only with other text.
+    let strict = BfString::Char('%');
+    let over = RecoveryMode::Override { reason: "test" };
+    assert_eq!(recovery_policy(RecoveryRule::StandardStringOrder, Some(&strict), BfString::Char('\u{E000}'), over), None);
+    assert!(recovery_policy(RecoveryRule::StandardStringOrder, Some(&strict), BfString::Char('D'), over).is_some());
+}
+
+/// Rule N reads the CFF standard strings as TN #5176 Appendix A lists them: printable ASCII
+/// from SID 1 (`space`) to 95 (`asciitilde`), `quoteright` (8) as ’ and `quoteleft` (65) as ‘,
+/// `bullet` at 116, through the Adobe Glyph List; nothing past SID 149 (`Aacute` at 171), the
+/// ISOAdobe charset's Latin-1 additions, where a converter's numbering departs from the
+/// strings' (a © drawn at 166, `minus`).
+#[test]
+fn standard_string_ids_read_as_the_specification_lists_them() {
+    // Helvetica's widths for ’ and ‘ are 222; both are read right only if SID 8 and 65 are.
+    let text = "Indicated (when applicable) for Kim\u{2019}s Bank Zone, 9 \u{2018}Quote";
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 0, false, "Identity")));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text));
+    // Glyphs past the printable range: a bullet (SID 116) and Á (SID 171), read in a font that
+    // the plain letters prove.
+    let text = "The Residence address";
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let mut cids: Vec<u16> = unique.iter().map(|&c| sid(c)).collect();
+    cids.extend([116, 171]);
+    let w: String = unique.iter().map(|&c| format!("{} [{}] ", sid(c), helvetica_width(c))).collect::<String>() + "116 [350] 171 [667]";
+    let shown: String = text.chars().map(|c| format!("{:04X}", sid(c))).collect::<String>() + "007400AB";
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        &format!("<{shown}>"),
+        false,
+        &[
+            (
+                &format!(
+                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Meta /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
+                ),
+                Vec::new(),
+            ),
+            (
+                "<< /Type /FontDescriptor /FontName /ABCDEF+Meta /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                Vec::new(),
+            ),
+            ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+        ],
+    );
+    let (_, recovered, _) = layers(&parse(page));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("The Residence address\u{2022}"));
+}
+
+/// The K extension's `cmap` check takes the candidate policy's choice when a glyph is named
+/// more than once: a space and a no-break space for glyph 3 is the space, which the order
+/// agrees with; `B` and `b` for one glyph is ambiguous, and agrees with nothing.
+#[test]
+fn a_glyph_named_twice_agrees_only_through_the_candidate_policy() {
+    let text = "Indicadores de estudiantes";
+    let g = gids(text);
+    let program = kept_ids(text, Cmap::Unicode(&[(' ', 3), ('\u{A0}', 3), ('I', mac_gid('I'))]));
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), None)));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text));
+    let program = kept_ids(text, Cmap::Unicode(&[('I', mac_gid('I')), ('i', mac_gid('I'))]));
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), None)));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
+
+/// Type 3 fonts count toward the page's budget of fonts asked of the recovery rules, as
+/// outline fonts do: a page showing more distinct Type 3 fonts than the budget allows stops
+/// recovering (no recovered layer) and keeps its strict text; a few of them recover.
+#[test]
+fn type3_fonts_count_toward_the_recovery_font_budget() {
+    let text = "DataDirect";
+    let sid8 = |c: char| u8::try_from(sid(c)).unwrap();
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let codes: Vec<u8> = unique.iter().map(|&c| sid8(c)).collect();
+    let (first, last) = (*codes.iter().min().unwrap(), *codes.iter().max().unwrap());
+    let widths: String =
+        (first..=last).map(|k| unique.iter().find(|&&c| sid8(c) == k).map_or(0, |&c| helvetica_width(c)).to_string()).collect::<Vec<_>>().join(" ");
+    let diffs: String = codes.iter().map(|k| format!("{k} /c{k} ")).collect();
+    let procs: String = codes.iter().map(|k| format!("/c{k} 3 0 R ")).collect();
+    let shown: String = text.chars().map(|c| format!("{:02X}", sid8(c))).collect();
+    let page = |fonts: usize| {
+        let resources: String = (0..fonts).map(|k| format!("/T{k} {} 0 R ", k + 5)).collect();
+        let content: String = (0..fonts).map(|k| format!("BT /T{k} 10 Tf 20 {} Td <{shown}> Tj ET ", 700 - (k % 60) * 11)).collect();
+        let mut pdf = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
+            .stream("", b"500 0 0 0 500 700 d1 0 0 500 700 re f")
+            .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << {resources}>> >> >>", fonts + 5));
+        // Each font its own dictionary (`/Name`): fonts are told apart by their bytes.
+        for k in 0..fonts {
+            pdf = pdf.obj(format!(
+                "<< /Type /Font /Subtype /Type3 /Name /T{k} /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar {first} /LastChar {last} /Widths [{widths}] /Encoding << /Type /Encoding /Differences [{diffs}] >> /CharProcs << {procs}>> >>"
+            ));
+        }
+        parse(pdf.stream("", content).build())
+    };
+    let (strict, recovered, plain) = layers(&page(3));
+    assert_eq!(strict, plain);
+    assert_eq!(recovered.map(|r| r.text.glyphs.len()), Some(3 * text.len()));
+    let (strict, recovered, plain) = layers(&page(1025));
+    assert_eq!(strict, plain);
+    assert!(!strict.glyphs.is_empty());
+    assert!(recovered.is_none(), "past the font budget nothing is recovered");
 }

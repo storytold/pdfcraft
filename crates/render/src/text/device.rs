@@ -576,8 +576,14 @@ impl TextDevice {
         &mut self,
         glyph: &Glyph<'_>,
     ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
-        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= MAX_RECOVERED_GLYPHS
-            || matches!(glyph, Glyph::Outline(g) if self.recovery_fonts.insert(g.font_cache_key()) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS);
+        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= MAX_RECOVERED_GLYPHS || {
+            // Outline and Type 3 fonts count alike: each runs the rules' font-level guards.
+            let font = match glyph {
+                Glyph::Outline(g) => g.font_cache_key(),
+                Glyph::Type3(g) => g.font_cache_key(),
+            };
+            self.recovery_fonts.insert(font) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS
+        };
         if !over_budget {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]

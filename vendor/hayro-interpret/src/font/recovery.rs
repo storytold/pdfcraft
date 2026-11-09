@@ -20,18 +20,23 @@
 //! Rules are named by the mechanism they read, never by a language or a producer, and tried
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
+mod candidate;
+mod orders;
+mod standard_order;
+mod widths;
+
 use crate::font::FontFlags;
-use crate::font::generated::symbol;
-use crate::font::{glyph_name_numbers, glyph_name_to_unicode, is_numbered_glyph_name};
+use crate::font::{glyph_name_numbers, is_numbered_glyph_name};
 use hayro_cmap::BfString;
 use hayro_syntax::object::dict::keys::{
     BASE_FONT, ENCODING, FLAGS, FONT_DESC, FONT_WEIGHT, ITALIC_ANGLE,
 };
 use hayro_syntax::object::{Dict, Name};
+use orders::{MAC_GLYPH_COUNT, mac_glyph_char, symbol_char};
 use skrifa::raw::TableProvider;
-use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::raw::types::Version16Dot16;
-use skrifa::{FontRef, GlyphId};
+use skrifa::{FontRef, GlyphId, MetadataProvider};
+use standard_order::StandardStringOrder;
 use std::sync::{Arc, OnceLock};
 
 /// A way to recover a glyph's text, named by the mechanism it reads.
@@ -45,17 +50,26 @@ pub enum RecoveryRule {
     /// table, format 1), from a TrueType program that keeps its original glyph ids, or from
     /// glyph names that only number the glyph id (`/g55`): see [`MacGlyphOrder`].
     MacGlyphOrder,
+    /// CIDs of a CID-keyed CFF font, or codes of a Type 3 font with numbered glyph names, that
+    /// are CFF standard string ids (Adobe Technical Note #5176 Appendix A), when the glyph widths
+    /// confirm it: see `StandardStringOrder`.
+    StandardStringOrder,
 }
 
 impl RecoveryRule {
     /// Every rule, in the order they are tried.
-    pub const ORDER: [Self; 2] = [Self::NumberedLatin1Names, Self::MacGlyphOrder];
+    pub const ORDER: [Self; 3] = [
+        Self::NumberedLatin1Names,
+        Self::MacGlyphOrder,
+        Self::StandardStringOrder,
+    ];
 
     /// A stable name for logs and tests.
     pub fn name(self) -> &'static str {
         match self {
             Self::NumberedLatin1Names => "numbered-latin1-names",
             Self::MacGlyphOrder => "mac-glyph-order",
+            Self::StandardStringOrder => "standard-string-order",
         }
     }
 }
@@ -110,8 +124,13 @@ pub(crate) enum FontKind {
     TrueType,
     /// A Type 0 font whose descendant has a TrueType (or OpenType) program.
     CidTrueType,
+    /// A Type 0 font whose descendant has an embedded CID-keyed CFF program (`CIDFontType0`),
+    /// drawn by CID through an identity `/CIDToGIDMap`.
+    CidCff,
     /// Any other Type 0 font.
     CidOther,
+    /// A Type 3 font.
+    Type3,
 }
 
 /// What a font says about itself, for the rules' font-level guards and readings. Built
@@ -135,6 +154,39 @@ pub(crate) struct FontFacts<'a> {
     pub(crate) program: Option<&'a FontRef<'a>>,
     /// Simple TrueType fonts: the glyph a code draws and the code's strict text.
     pub(crate) code_glyph: Option<&'a dyn Fn(u8) -> (GlyphId, Option<BfString>)>,
+    /// Type 0 fonts: whether `has_to_unicode` comes from a `/ToUnicode` map alone (not the
+    /// `/Identity-H` name or an Adobe character collection), so its answers can be checked
+    /// against a reading through [`Self::id_text`].
+    pub(crate) to_unicode_checkable: bool,
+    /// The numbers [`GlyphFacts::id`] takes in this font, for rules that read them in a standard
+    /// order: the CIDs of a CID-keyed CFF program's charset, the codes of a Type 3 font that
+    /// have a glyph procedure.
+    pub(crate) ids: Option<&'a dyn Fn() -> Vec<u32>>,
+    /// The width the font gives an id (`/W` by CID, `/Widths` by code), when it gives one.
+    pub(crate) id_width: Option<&'a dyn Fn(u32) -> Option<f32>>,
+    /// For a Type 0 font shown through an identity CMap and `/CIDToGIDMap`: the strict text of
+    /// the code that draws glyph id `id`.
+    pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+}
+
+impl FontFacts<'_> {
+    /// The facts of a font of `kind` that says nothing more about itself.
+    pub(crate) fn of_kind(kind: FontKind) -> Self {
+        Self {
+            kind,
+            base_font: None,
+            flags: None,
+            has_to_unicode: false,
+            has_encoding: false,
+            names: None,
+            program: None,
+            code_glyph: None,
+            to_unicode_checkable: false,
+            ids: None,
+            id_width: None,
+            id_text: None,
+        }
+    }
 }
 
 /// What one glyph says, for a rule's reading.
@@ -151,6 +203,9 @@ pub(crate) struct GlyphFacts<'a> {
     pub(crate) name: Option<&'a str>,
     /// The strict text, when it is more than control characters.
     pub(crate) strict: Option<&'a BfString>,
+    /// The number a standard-order rule reads ([`FontFacts::ids`]): a Type 0 glyph's CID, a
+    /// Type 3 glyph's code.
+    pub(crate) id: Option<u32>,
 }
 
 /// One recovery rule.
@@ -174,6 +229,7 @@ pub(crate) trait Rule {
 pub(crate) struct Guards {
     numbered: Option<<NumberedLatin1Names as Rule>::Guard>,
     mac: Option<<MacGlyphOrder as Rule>::Guard>,
+    standard: Option<<StandardStringOrder as Rule>::Guard>,
 }
 
 impl Guards {
@@ -181,12 +237,13 @@ impl Guards {
         Self {
             numbered: NumberedLatin1Names::guard(font),
             mac: MacGlyphOrder::guard(font),
+            standard: StandardStringOrder::guard(font),
         }
     }
 
     /// Whether no rule takes the font: nothing is ever recovered from it.
     fn none(&self) -> bool {
-        self.numbered.is_none() && self.mac.is_none()
+        self.numbered.is_none() && self.mac.is_none() && self.standard.is_none()
     }
 }
 
@@ -306,6 +363,7 @@ impl std::fmt::Debug for Guards {
         f.debug_struct("Guards")
             .field("numbered", &self.numbered.is_some())
             .field("mac", &self.mac.is_some())
+            .field("standard", &self.standard.is_some())
             .finish()
     }
 }
@@ -334,6 +392,9 @@ impl RecoveryCache {
             RecoveryRule::MacGlyphOrder => {
                 apply::<MacGlyphOrder>(guards.mac.as_ref(), &font, glyph)
             }
+            RecoveryRule::StandardStringOrder => {
+                apply::<StandardStringOrder>(guards.standard.as_ref(), &font, glyph)
+            }
         })
     }
 }
@@ -350,17 +411,21 @@ pub(crate) fn apply<R: Rule>(
     recovery_policy(R::RULE, glyph.strict, text, mode)
 }
 
-/// The fill/override policy every rule's reading passes through: over a glyph without strict
-/// text (`strict` is `None`: none, or only control characters) the reading is a fill whatever
-/// the rule said; strict text is replaced only by a reading marked [`RecoveryMode::Override`],
-/// and only when the text differs. Public so the policy can be tested from outside the crate
-/// with a synthetic rule's reading.
+/// The fill/override policy every rule's reading passes through. A reading the candidate policy
+/// refuses (`candidate`: empty, or with a private use character, a control character or a
+/// noncharacter) is nothing. Over a glyph without strict text (`strict` is `None`: none, or only
+/// control characters) the reading is a fill whatever the rule said; strict text is replaced
+/// only by a reading marked [`RecoveryMode::Override`], and only when the text differs. Public
+/// so the policy can be tested from outside the crate with a synthetic rule's reading.
 pub fn recovery_policy(
     rule: RecoveryRule,
     strict: Option<&BfString>,
     text: BfString,
     mode: RecoveryMode,
 ) -> Option<Recovery> {
+    if !candidate::text_acceptable(&text) {
+        return None;
+    }
     let mode = match (strict, mode) {
         (None, _) => RecoveryMode::Fill,
         (Some(_), RecoveryMode::Fill) => return None,
@@ -467,22 +532,6 @@ fn advent_postscript(base: Option<&str>) -> bool {
     base.is_some_and(|b| untagged(b).starts_with("AdvPS"))
 }
 
-/// The character the Symbol font's built-in encoding gives `code`, through the Adobe Glyph
-/// List. The glyph list puts the Symbol font's serif and sans-serif ©, ® and ™ in the private
-/// use area; they are the plain characters. Other private-use glyphs (the pieces of large
-/// brackets and braces) read as nothing.
-fn symbol_char(code: u8) -> Option<char> {
-    let name = symbol::get(code)?;
-    let c = match name {
-        "copyrightserif" | "copyrightsans" => '\u{a9}',
-        "registerserif" | "registersans" => '\u{ae}',
-        "trademarkserif" | "trademarksans" => '\u{2122}',
-        _ => glyph_name_to_unicode(name)?,
-    };
-    let private = matches!(u32::from(c), 0xE000..=0xF8FF);
-    (!private && !c.is_control()).then_some(c)
-}
-
 impl Rule for NumberedLatin1Names {
     const RULE: RecoveryRule = RecoveryRule::NumberedLatin1Names;
     type Guard = NumberedEncoding;
@@ -548,6 +597,16 @@ impl Rule for NumberedLatin1Names {
 ///   renumbered from 1 is dense and fails. In a simple font of this kind the strict text is
 ///   the code read as WinAnsi, a last resort with no evidence behind it, so the rule overrides
 ///   it.
+///
+///   A Type 0 font may still say a little about its glyphs and qualify, when everything it
+///   says agrees with the order: a `/ToUnicode` map (read through an identity CMap and
+///   `/CIDToGIDMap`) that names some glyphs or none, each as the order does, and a Unicode
+///   `cmap` that keeps a few characters, each on the glyph the order puts it at. Such a font
+///   must also prove the order with its glyph widths (`widths::widths_agree`, as
+///   `StandardStringOrder` does): a subset numbered in another order agrees with a map that
+///   names nothing, and its glyphs a few places off still read as text. The rule only fills,
+///   so the glyphs the map names keep their strict text, and reads such a font's glyph ids
+///   below 130 only (`MAC_RELAXED_LIMIT`).
 /// - **Glyph names that only number the glyph id** (`/g55`, as converters write for TrueType
 ///   outlines) in a simple font: every numbered name is `g` and a decimal number, and the
 ///   glyphs they name read as text. These only fill.
@@ -563,8 +622,9 @@ pub(crate) struct MacGlyphOrder;
 #[derive(Debug)]
 pub(crate) enum MacSource {
     /// The glyph ids drawn, from a program that keeps its original ids; `override_strict` when
-    /// the strict text is the last-resort WinAnsi reading.
-    Program { override_strict: bool },
+    /// the strict text is the last-resort WinAnsi reading; `below`, the first glyph id not read,
+    /// for a Type 0 font that names some glyphs (`MAC_RELAXED_LIMIT`).
+    Program { override_strict: bool, below: u32 },
     /// `/gNN` glyph names.
     Names,
 }
@@ -572,13 +632,6 @@ pub(crate) enum MacSource {
 /// Why [`MacGlyphOrder`] replaces the strict text of a simple TrueType font.
 const WINANSI_GUESS: &str = "the strict text is the code read as WinAnsi, a last resort for a font without /Encoding, \
      /ToUnicode or a Unicode cmap";
-
-/// The character the standard Macintosh glyph order gives glyph id `gid`, through the Adobe
-/// Glyph List; nothing past the 258 standard glyphs or for a control (`.null`).
-pub(crate) fn mac_glyph_char(gid: u32) -> Option<char> {
-    let name = DEFAULT_GLYPH_NAMES.get(usize::try_from(gid).ok()?)?;
-    glyph_name_to_unicode(name).filter(|c| !c.is_control())
-}
 
 /// The glyph id a name that only numbers it gives (`g55` is 55): `g` and one to five decimal
 /// digits.
@@ -599,14 +652,26 @@ fn g_name_number(name: &str) -> Option<u32> {
 /// letters, at least two different vowels. Renumbered glyph ids (1, 2, 3 …) decode to
 /// punctuation and digits and fail.
 pub(crate) fn plausible(ids: &[u32]) -> bool {
-    let (mut known, mut basic, mut letters, mut lower) = (0_usize, 0_usize, 0_usize, 0_usize);
+    plausible_reading(
+        ids.iter()
+            .map(|&gid| (mac_glyph_char(gid), (3..=97).contains(&gid))),
+    )
+}
+
+/// Whether a standard order's reading of a font's ids reads as text, as [`plausible`] says it
+/// for the Macintosh order: each id's character (`None` when the order gives none) and whether
+/// the id is in the order's basic Latin range (printable ASCII).
+pub(crate) fn plausible_reading(readings: impl Iterator<Item = (Option<char>, bool)>) -> bool {
+    let (mut total, mut known, mut basic, mut letters, mut lower) =
+        (0_usize, 0_usize, 0_usize, 0_usize, 0_usize);
     let mut vowels = [false; 6];
-    for &gid in ids {
-        let Some(c) = mac_glyph_char(gid) else {
+    for (c, in_basic) in readings {
+        total = total.saturating_add(1);
+        let Some(c) = c else {
             continue;
         };
         known = known.saturating_add(1);
-        if (3..=97).contains(&gid) {
+        if in_basic {
             basic = basic.saturating_add(1);
         }
         if c.is_alphabetic() {
@@ -619,7 +684,6 @@ pub(crate) fn plausible(ids: &[u32]) -> bool {
             }
         }
     }
-    let total = ids.len();
     let vowel_kinds = vowels.iter().filter(|v| **v).count();
     total >= 3
         && known.saturating_mul(10) >= total.saturating_mul(9)
@@ -705,23 +769,23 @@ fn codes_read_as_winansi(font: &FontFacts<'_>) -> bool {
     compared > 0 && agree.saturating_mul(2) >= compared
 }
 
-/// Whether a program says nothing about its glyphs' characters: no Unicode `cmap` subtable
-/// (Windows 1 or 10, or the Unicode platform) and no glyph names of its own (`post` missing,
-/// or format 3). A `post` table of format 1 *is* the standard Macintosh order and qualifies.
-fn program_names_nothing(program: &FontRef<'_>) -> bool {
-    if let Ok(cmap) = program.cmap() {
-        let unicode = cmap.encoding_records().iter().any(|r| {
+/// Whether a program has a Unicode `cmap` subtable (Windows 1 or 10, or the Unicode platform).
+fn has_unicode_cmap(program: &FontRef<'_>) -> bool {
+    program.cmap().is_ok_and(|cmap| {
+        cmap.encoding_records().iter().any(|r| {
             use skrifa::raw::tables::cmap::PlatformId;
             match r.platform_id() {
                 PlatformId::Unicode => true,
                 PlatformId::Windows => matches!(r.encoding_id(), 1 | 10),
                 _ => false,
             }
-        });
-        if unicode {
-            return false;
-        }
-    }
+        })
+    })
+}
+
+/// Whether a program has no glyph names of its own (`post` missing, or format 3). A `post`
+/// table of format 1 *is* the standard Macintosh order and qualifies.
+fn program_unnamed(program: &FontRef<'_>) -> bool {
     match program.post() {
         Ok(post) => matches!(
             post.version(),
@@ -729,6 +793,80 @@ fn program_names_nothing(program: &FontRef<'_>) -> bool {
         ),
         Err(_) => true,
     }
+}
+
+/// Whether a program says nothing about its glyphs' characters: no Unicode `cmap` subtable and
+/// no glyph names of its own.
+fn program_names_nothing(program: &FontRef<'_>) -> bool {
+    !has_unicode_cmap(program) && program_unnamed(program)
+}
+
+/// The first glyph id [`MacGlyphOrder`] doesn't read in a Type 0 font whose `/ToUnicode` map or
+/// `cmap` names some glyphs: ids 3 to 129 are printable ASCII and the accented letters, which
+/// the widths and the names check; past them come symbols, ligatures and punctuation, where a
+/// vendor's font was seen to depart from the order by a glyph (an Arial subset whose `fi` is at
+/// 191, where the order has `guilsinglright`).
+const MAC_RELAXED_LIMIT: u32 = 130;
+
+/// Most `cmap` mappings [`cmap_agrees`] reads.
+const MAX_CMAP_MAPPINGS: usize = 65_536;
+
+/// For a Type 0 font's program: whether what it says about its glyphs agrees with the
+/// Macintosh order. It has no glyph names of its own, and every glyph id of the standard 258
+/// that the order reads as a character and that its Unicode `cmap` names is named that
+/// character, after the candidate policy's choice among its names (a subset whose `cmap` keeps a few characters, its glyphs still in
+/// the Macintosh order). A program without a Unicode `cmap` agrees; one with more mappings than
+/// are read doesn't.
+fn cmap_agrees(program: &FontRef<'_>) -> bool {
+    if !program_unnamed(program) {
+        return false;
+    }
+    if !has_unicode_cmap(program) {
+        return true;
+    }
+    let mut pairs: Vec<(u32, char)> = Vec::new();
+    for (k, (code, gid)) in program.charmap().mappings().enumerate() {
+        if k >= MAX_CMAP_MAPPINGS {
+            return false;
+        }
+        // A mapping to a private use or control character names nothing.
+        if let Some(c) = candidate::from_code_point(code) {
+            pairs.push((gid.to_u32(), c));
+        }
+    }
+    pairs.sort_unstable();
+    let mut named: Vec<u32> = pairs.iter().map(|&(gid, _)| gid).collect();
+    named.dedup();
+    for &gid in named.iter().filter(|&&gid| gid < MAC_GLYPH_COUNT) {
+        let Some(mac) = mac_glyph_char(gid) else {
+            continue;
+        };
+        let start = pairs.partition_point(|&(g, _)| g < gid);
+        let end = pairs.partition_point(|&(g, _)| g <= gid);
+        let names = pairs.get(start..end).unwrap_or_default();
+        // Several characters for one glyph (a space and a no-break space) go through the
+        // candidate policy; an ambiguous answer agrees with nothing.
+        if candidate::choose(names.iter().map(|&(_, c)| c)) != Some(mac) {
+            return false;
+        }
+    }
+    true
+}
+
+/// For a Type 0 font shown through an identity CMap and `/CIDToGIDMap`: whether every answer
+/// its `/ToUnicode` map gives for a drawn glyph that the order reads agrees with the order
+/// (a map that names a few glyphs, or none); `false` when one disagrees or the map can't be
+/// checked.
+fn to_unicode_agrees(font: &FontFacts<'_>, drawn: &[u32]) -> bool {
+    let Some(text) = font.id_text.filter(|_| font.to_unicode_checkable) else {
+        return false;
+    };
+    drawn
+        .iter()
+        .all(|&gid| match (text(gid), mac_glyph_char(gid)) {
+            (Some(strict), Some(mac)) => strict == BfString::Char(mac),
+            _ => true,
+        })
 }
 
 impl Rule for MacGlyphOrder {
@@ -766,7 +904,11 @@ impl Rule for MacGlyphOrder {
             FontKind::CidTrueType => false,
             _ => return None,
         };
-        if font.has_to_unicode || (simple && font.has_encoding) {
+        // A simple font's `/ToUnicode` or `/Encoding` names its codes. A Type 0 font's
+        // `/ToUnicode` may name a few glyphs: its answers are checked below.
+        if (simple && (font.has_to_unicode || font.has_encoding))
+            || (font.has_to_unicode && !font.to_unicode_checkable)
+        {
             return None;
         }
         // A simple font must be marked Symbolic and not Nonsymbolic: a nonsymbolic font's codes
@@ -778,13 +920,39 @@ impl Rule for MacGlyphOrder {
             return None;
         }
         let program = font.program?;
-        if !program_names_nothing(program) {
+        // A Type 0 font's program may keep a Unicode `cmap` of a few characters, as long as each
+        // agrees with the order; a simple font's program must name nothing.
+        let agrees = if simple {
+            program_names_nothing(program)
+        } else {
+            cmap_agrees(program)
+        };
+        if !agrees {
             return None;
         }
         let drawn = sparse_original_ids(program)?;
+        // A Type 0 font with a `/ToUnicode` map or a Unicode `cmap` of its own says something
+        // about its glyphs, and only agreeing answers let it be read; its glyph widths must
+        // confirm the order too (a subset numbered in another order agrees with a map that
+        // names nothing, and reads as text a few glyphs off).
+        let relaxed = !simple && (font.has_to_unicode || has_unicode_cmap(program));
+        if relaxed {
+            if font.has_to_unicode && !to_unicode_agrees(font, &drawn) {
+                return None;
+            }
+            let width = font.id_width?;
+            if !widths::widths_agree(&widths::read_widths(&drawn, mac_glyph_char, width)).proves() {
+                return None;
+            }
+        }
         let reads = !renumbered_block(&drawn) && plausible(&drawn);
         reads.then_some(MacSource::Program {
             override_strict: simple && !codes_read_as_winansi(font),
+            below: if relaxed {
+                MAC_RELAXED_LIMIT
+            } else {
+                MAC_GLYPH_COUNT
+            },
         })
     }
 
@@ -798,8 +966,12 @@ impl Rule for MacGlyphOrder {
                 let c = mac_glyph_char(g_name_number(glyph.name?)?)?;
                 Some((BfString::Char(c), RecoveryMode::Fill))
             }
-            MacSource::Program { override_strict } => {
-                let c = mac_glyph_char(glyph.gid.to_u32())?;
+            MacSource::Program {
+                override_strict,
+                below,
+            } => {
+                let c =
+                    mac_glyph_char(glyph.gid.to_u32()).filter(|_| glyph.gid.to_u32() < *below)?;
                 let mode = if *override_strict {
                     RecoveryMode::Override {
                         reason: WINANSI_GUESS,

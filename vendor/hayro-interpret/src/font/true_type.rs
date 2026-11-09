@@ -219,11 +219,13 @@ impl TrueTypeFont {
                 Kind::Standard(_) => None,
             },
             code_glyph: Some(&code_glyph),
+            ..FontFacts::of_kind(FontKind::TrueType)
         };
         let glyph = || GlyphFacts {
             gid,
             name: u8::try_from(code).ok().and_then(names),
             strict,
+            id: None,
         };
         self.recovery.cache.recover(facts, glyph)
     }

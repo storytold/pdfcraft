@@ -27,6 +27,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cff;
 pub mod truetype;
 
 /// A small PDF with a classic cross-reference table, built one object at a time.

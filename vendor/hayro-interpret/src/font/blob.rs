@@ -195,6 +195,20 @@ impl CffFontBlob {
         Self::new(Arc::new(cff.offset_data().as_ref().to_vec()))
     }
 
+    /// PdfCraft patch (104): a CID-keyed program's CIDs, from its charset in glyph order, at
+    /// most 65,536 of them; nothing for a font without a charset.
+    pub(crate) fn charset_cids(&self) -> Vec<u32> {
+        self.charset()
+            .map(|charset| {
+                charset
+                    .iter()
+                    .take(65_536)
+                    .map(|(_, sid)| u32::from(sid.to_u16()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn is_cid(&self) -> bool {
         self.font().is_cid()
     }

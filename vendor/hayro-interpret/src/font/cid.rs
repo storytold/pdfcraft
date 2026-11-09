@@ -533,11 +533,24 @@ impl Type0Font {
         &self.recovery
     }
 
-    /// PdfCraft patch (104): the recovery rules' reading of glyph `gid` (see `font::recovery`),
-    /// given its strict text when that is more than control characters. Only an embedded
-    /// program is evidence: a substitute's glyph ids are its own.
+    /// PdfCraft patch (104): whether codes are CIDs and CIDs glyph ids: an `Identity-H` or
+    /// `Identity-V` encoding CMap and an identity `/CIDToGIDMap`.
+    fn identity_codes(&self) -> bool {
+        matches!(self.cid_to_gid_map, CidToGIdMap::Identity)
+            && self
+                .encoding
+                .metadata()
+                .name
+                .as_deref()
+                .is_some_and(|n| matches!(n, b"Identity-H" | b"Identity-V"))
+    }
+
+    /// PdfCraft patch (104): the recovery rules' reading of code `code`, drawn as glyph `gid`
+    /// (see `font::recovery`), given its strict text when that is more than control characters.
+    /// Only an embedded program is evidence: a substitute's glyph ids are its own.
     pub(crate) fn recovery(
         &self,
+        code: u32,
         gid: GlyphId,
         strict: Option<&BfString>,
     ) -> Option<Recovery> {
@@ -545,9 +558,31 @@ impl Type0Font {
             FontType::OpenType(t) if !self.fallback => Some(t.font_ref()),
             _ => None,
         };
+        // An embedded CID-keyed CFF program drawn by CID: its charset's CIDs are what a
+        // standard order reads.
+        let cid_cff = match &self.font_type {
+            FontType::Cff(c)
+                if !self.fallback
+                    && c.is_cid()
+                    && matches!(self.cid_to_gid_map, CidToGIdMap::Identity) =>
+            {
+                Some(c)
+            }
+            _ => None,
+        };
+        let ids = || cid_cff.map(|c| c.charset_cids()).unwrap_or_default();
+        let id_width = |cid: u32| self.widths.get(&cid).copied();
+        let identity = self.identity_codes();
+        let id_text = |gid: u32| {
+            identity
+                .then(|| self.char_code_to_unicode(gid))
+                .flatten()
+        };
         let facts = || FontFacts {
             kind: if program.is_some() {
                 FontKind::CidTrueType
+            } else if cid_cff.is_some() {
+                FontKind::CidCff
             } else {
                 FontKind::CidOther
             },
@@ -563,11 +598,22 @@ impl Type0Font {
             names: None,
             program,
             code_glyph: None,
+            to_unicode_checkable: self.to_unicode.is_some()
+                && !self.to_unicode_is_cid_indexed
+                && !self.identity_to_unicode
+                && !self.adobe_collection
+                && identity,
+            ids: cid_cff.is_some().then_some(&ids as &dyn Fn() -> Vec<u32>),
+            // By CID: a glyph id too when codes are glyph ids.
+            id_width: (cid_cff.is_some() || identity)
+                .then_some(&id_width as &dyn Fn(u32) -> Option<f32>),
+            id_text: identity.then_some(&id_text as &dyn Fn(u32) -> Option<BfString>),
         };
         let glyph = || GlyphFacts {
             gid,
             name: None,
             strict,
+            id: self.code_to_cid(code),
         };
         self.recovery.cache.recover(facts, glyph)
     }
