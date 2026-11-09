@@ -6,9 +6,8 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
-  <!-- UI catalogs are embedded TSVs rather than .lproj resources. Tell AppKit which languages
-       the app supports so native Open/Save panels can follow the user's preferred languages.
-       Keep in sync with i18n::LANGUAGES (checked by macos_localizations.rs). -->
+  <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). Keep in sync with LANGUAGES in crates/ui-egui/src/i18n.rs. -->
   <key>CFBundleLocalizations</key>
   <array>
     <string>en</string>
@@ -16,8 +15,7 @@
     <string>zh-Hans</string>
     <string>zh-Hant</string>
     <string>cs</string>
-    <!-- The UI uses its Brazilian catalog for every Portuguese locale. Include the base
-         language too: pt-PT otherwise falls back to English rather than pt-BR in AppKit. -->
+    <!-- Include the base language so pt-PT can use the Brazilian catalog in AppKit. -->
     <string>pt</string>
     <string>pt-BR</string>
     <string>de</string>
@@ -31,15 +29,15 @@
     <string>uk</string>
     <string>it</string>
     <string>ar</string>
+    <string>ckb</string>
     <string>fa</string>
     <string>pl</string>
     <string>sl</string>
     <string>el</string>
     <string>tr</string>
     <string>lt</string>
-    <string>vi</string>
-    <string>ckb</string>
     <string>id</string>
+    <string>vi</string>
     <string>fi</string>
     <string>sq</string>
     <string>th</string>
