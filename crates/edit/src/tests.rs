@@ -14295,6 +14295,29 @@ fn legacy_thai_subsets_are_read_within_one_budget_per_edit() {
     assert_eq!(pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap(), before, "a refused edit changes nothing");
 }
 
+/// An edit whose THSarabunPSK subset spends the edit's allowance to the byte goes through: only a
+/// read refused for want of it refuses the edit. The subset is read four times over its program
+/// (the edit's metrics read, `LegacyThaiFont`'s, the editor's program read and its metrics read)
+/// and three times over its ToUnicode, so a program 192 bytes short of 16 MiB and a ToUnicode of
+/// 256 bytes cost exactly the 64 MiB; a byte more of ToUnicode is three past it.
+#[test]
+fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let edit = |unicode_len: usize| {
+        let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+        unicode.resize(unicode_len, b' ');
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).map(|_| ()).map_err(|e| e.to_string())
+    };
+    assert_eq!(edit(256), Ok(()));
+    let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
 /// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
 /// shaped with its own layout like any source font, not by the legacy shaper (which would ask
 /// for Windows PUA alternates such a face doesn't need).

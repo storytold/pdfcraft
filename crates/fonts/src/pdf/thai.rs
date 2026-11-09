@@ -298,12 +298,16 @@ impl LegacyThaiFont {
     /// Thai glyphs are not in the legacy order: the nominal and alternate marks this shaper
     /// assumes can't be trusted there, so it is shaped as an ordinary source font.
     ///
-    /// Its streams are decoded against `budget`, which the caller shares between every font it
-    /// reads: what they keep is the programs decoded and the editor cmaps added to them.
+    /// Its streams, its metrics' too, are decoded against `budget`, which the caller shares
+    /// between every font it reads: what they keep is the programs decoded and the editor cmaps
+    /// added to them. Metrics read past it adapt nothing: the font is refused.
     pub fn from_pdf(doc: &Document, font: &Dict, space: f64, budget: &mut DecodeBudget) -> Result<Option<Self>, String> {
-        let m = Metrics::from_dict(doc, font);
+        let m = Metrics::from_dict_within(doc, font, budget);
         if !m.base_font.rsplit('+').next().unwrap_or(&m.base_font).starts_with("THSarabunPSK") {
             return Ok(None);
+        }
+        if m.past_allowance {
+            return Err("the source Thai font's metrics are past the edit's allowance".into());
         }
         if !space.is_finite() || space < 0.0 {
             return Err("the source space width is invalid".into());
@@ -531,6 +535,46 @@ mod tests {
 
     /// An intact legacy map: nominal Thai and two tone alternates.
     const INTACT: &[u8] = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
+
+    /// A THSarabunPSK subset whose own cmap is Latin-only has its Thai mappings rebuilt from its
+    /// `/CIDToGIDMap`. With that map left unread for want of the editor's allowance, the editor
+    /// lists no copy, rather than the program without its Thai mappings.
+    #[test]
+    fn a_map_left_unread_for_the_allowance_lists_no_copy() {
+        let mut doc = Document::new_empty();
+        let program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let file = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), program))));
+        let map: Vec<u8> = (0u16..512).flat_map(u16::to_be_bytes).collect();
+        let cid_to_gid = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &map))));
+        let font = thai_font_over(&mut doc, file, cid_to_gid, INTACT);
+        let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut budget).is_some());
+        let cost = usize::MAX / 2 - budget.remaining();
+        // The map the cmap is rebuilt from is read last: a byte short of the cost, it is refused.
+        let mut short = DecodeBudget::new(cost - 1, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut short).is_none(), "the program is listed without its Thai mappings");
+        assert_eq!(short.refused(), 1);
+    }
+
+    /// `LegacyThaiFont::from_pdf` reads its metrics within the edit's allowance too: the subset's
+    /// program, for its outlined glyphs, and its ToUnicode are paid for on top of what the
+    /// editor's read of it pays. Metrics read past the allowance refuse the font before its
+    /// program is read.
+    #[test]
+    fn a_legacy_fonts_metrics_are_paid_for_from_the_edits_allowance() {
+        let mut doc = Document::new_empty();
+        let program = thai_ordered_program();
+        let font = thai_font(&mut doc, &program, INTACT);
+        let mut editor = DecodeBudget::new(usize::MAX / 2, 0);
+        assert!(crate::pdf::embedded_sfnt_within(&doc, &font, &mut editor).is_some());
+        let editor_cost = usize::MAX / 2 - editor.remaining();
+        let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+        LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut budget).unwrap();
+        assert_eq!(usize::MAX / 2 - budget.remaining(), editor_cost + program.len() + INTACT.len());
+        let mut short = DecodeBudget::new(program.len() + INTACT.len() - 1, 0);
+        let error = LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut short).err().unwrap_or_default();
+        assert!(error.contains("past the edit's allowance"), "{error}");
+    }
 
     /// The exporter's damaged map: intact anchors, Latin/control destinations for the other Thai
     /// codes, and the oversized range first.

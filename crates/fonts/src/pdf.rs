@@ -156,8 +156,13 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         }
         let mut mappings = std::collections::BTreeMap::new();
         if metrics.composite {
+            let refused = budget.refused();
             if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
                 mappings = map;
+            } else if budget.refused() > refused {
+                // The map the cmap is rebuilt from was left unread for want of the allowance: no
+                // copy is listed, adapted or as it is, as for metrics read past it.
+                continue;
             }
             if own_cmap {
                 let charmap = face.charmap();
