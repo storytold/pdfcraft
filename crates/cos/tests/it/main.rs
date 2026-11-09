@@ -2,6 +2,7 @@
 
 mod bounded_writer;
 mod corpus;
+mod efopen;
 mod encryption;
 mod generations;
 mod proptests;

@@ -75,7 +75,10 @@ pub use error::{
     SegmentError, SymbolError, TemplateError,
 };
 
-use crate::file::{SegmentCount, parse_segments_sequential};
+use crate::file::{
+    FileOrganization, SegmentCount, after_file_header, parse_segments_random_access,
+    parse_segments_sequential,
+};
 use bitmap::Bitmap;
 use decode::CombinationOperator;
 use decode::generic;
@@ -117,7 +120,9 @@ impl<'a> Image<'a> {
     /// Parse an embedded JBIG2 image with optional global segments.
     ///
     /// The file is expected to use the embedded organization defined in
-    /// Annex D.3.
+    /// Annex D.3. PdfCraft patch (17): data that starts with a file header (D.4)
+    /// is read past it, in the organization it declares, as Acrobat and PDFBox
+    /// draw such streams; its segments still count together with the globals'.
     pub fn new_embedded(data: &'a [u8], globals: Option<&'a [u8]>) -> Result<Self> {
         let mut segments = Vec::new();
         let mut count = SegmentCount::default();
@@ -126,8 +131,18 @@ impl<'a> Image<'a> {
             parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
         };
 
-        let mut reader = Reader::new(data);
-        parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+        match after_file_header(data)? {
+            Some((mut reader, FileOrganization::RandomAccess)) => {
+                parse_segments_random_access(&mut reader, &mut segments, &mut count)?;
+            }
+            Some((mut reader, FileOrganization::Sequential)) => {
+                parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+            }
+            None => {
+                let mut reader = Reader::new(data);
+                parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+            }
+        }
 
         segments.sort_by_key(|seg| seg.header.segment_number);
 

@@ -56,9 +56,12 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   editor can use the first one that has all of the replacement's glyphs (the faces differ in
   coverage, e.g. of Cyrillic).
 - `ui_thai_fonts` / `document_thai_font` / `shape_thai`: the `Thai` faces for the interface
-  and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
+  and shaped Thai content. Harfrust positions stacked vowel/tone marks and decomposes
   Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
-  embeds outlines, so reopening does not depend on installed fonts.
+  (`shaped_text`) embeds outlines, so reopening does not depend on installed fonts: Add text,
+  text boxes, Fill & Sign text, form fields, headers, footers and watermarks all write with it
+  (`shaped_text::appearance_lines` for appearances, whose glyph streams `store_streams` moves into
+  the document). `wrap_with` never breaks a line before a Thai mark.
 - `craft_glyph(face, ch)` and `face_has(bytes, ch)`: bounded outlines and glyph coverage for any bundled face.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 - `TextPlan::for_words`: how the OCR output writes text beyond WinAnsi — per word the first
