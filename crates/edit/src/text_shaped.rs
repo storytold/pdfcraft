@@ -147,10 +147,22 @@ pub(super) fn rewrite(
         crate::added::Align::Right => 2,
         _ => 0,
     };
-    let drawn = match row_positions(block, lines, draft, &laid, style, size) {
+    let layout = row_positions(block, lines, draft, &laid, style, size);
+    let kept = layout.as_ref().map_or_else(|| vec![false; block.rows.len()], |layout| kept_rows(block, draft, style, layout));
+    let drawn = match layout {
         // Each edited row stays on its source row's baseline and against the edge it was set
-        // against, so a heading and its subtitle keep their spacing.
-        Some(positions) => appearance_text::draw_positioned(&laid, size, &positions, Some(color)),
+        // against, so a heading and its subtitle keep their spacing. Rows the edit leaves alone
+        // keep their own drawing and aren't drawn again.
+        Some(layout) => {
+            let (redrawn, positions): (Vec<_>, Vec<_>) = laid
+                .iter()
+                .zip(&layout.positions)
+                .zip(&layout.owner)
+                .filter(|(_, row)| !kept.get(**row).copied().unwrap_or(false))
+                .map(|((line, at), _)| (line.clone(), *at))
+                .unzip();
+            appearance_text::draw_positioned(&redrawn, size, &positions, Some(color))
+        }
         None => match source_pitch(block, lines) {
             // A reflowed paragraph keeps its own line pitch where its rows have ink-safe room.
             Some(pitch) => {
@@ -178,9 +190,14 @@ pub(super) fn rewrite(
     let streams = content_streams(doc, &page.dict)?;
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
-    let origin = &first.origin;
+    // The source runs drawn again: those of every row the edit doesn't leave as it was.
+    let kept_lines: std::collections::HashSet<usize> =
+        block.rows.iter().zip(&kept).filter(|(_, kept)| **kept).flat_map(|(row, _)| row.iter().copied()).collect();
+    let redrawn: Vec<&TextLine> = block.lines.iter().filter(|i| !kept_lines.contains(i)).filter_map(|i| lines.get(*i)).collect();
+    let anchor = redrawn.first().copied().unwrap_or(first);
+    let origin = &anchor.origin;
     // Validate the splice before materializing any new font objects.
-    let at = first
+    let at = anchor
         .ops
         .iter()
         .copied()
@@ -189,8 +206,8 @@ pub(super) fn rewrite(
     // Marked paragraph boundaries are authoritative. A later edit can wrap close to a
     // neighbouring paragraph; overlap alone must not turn that paragraph into a duplicate.
     let same_scope: Vec<_> = lines.iter().filter(|line| members.iter().any(|target| line.scope == target.scope)).cloned().collect();
-    let mut drop = coincident_ops(&same_scope, &members);
-    drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+    let mut drop = coincident_ops(&same_scope, &redrawn);
+    drop.extend(redrawn.iter().flat_map(|line| line.ops.iter().copied()));
     let mut resources = page.dict.get(b"Resources").and_then(|o| doc.dict(o)).unwrap_or_default();
     let mut fonts = resources.get(b"Font").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &fonts, &mut HashMap::new(), &mut Carry::new(), None, None)?;
@@ -359,7 +376,7 @@ fn row_positions(
     laid: &[appearance_text::Line],
     style: &BlockStyle,
     size: f64,
-) -> Option<Vec<[f64; 2]>> {
+) -> Option<RowLayout> {
     let rows: Vec<&str> = draft.split('\n').collect();
     if style.width.is_some() || style.align.is_some() || style.offset.is_some() || rows.len() != block.rows.len() {
         return None;
@@ -399,6 +416,7 @@ fn row_positions(
     let centre = (block.rect[0] + block.rect[2]) / 2.0;
     let centred = rects.iter().all(|r| near((r[0] + r[2]) / 2.0, centre));
     let mut out = Vec::with_capacity(laid.len());
+    let mut moved = vec![false; rows.len()];
     let mut shift = 0.0;
     let mut previous: Option<(usize, f64, &appearance_text::Line)> = None;
     for (line, &index) in laid.iter().zip(&owner) {
@@ -410,7 +428,12 @@ fn row_positions(
                 shift += step;
                 y - step
             }
-            _ => baselines.get(index)? - shift,
+            _ => {
+                if let Some(row) = moved.get_mut(index) {
+                    *row = shift > 1e-9;
+                }
+                baselines.get(index)? - shift
+            }
         };
         let x = if right && (rtl || !left) {
             block.rect[2] - line.width
@@ -429,7 +452,39 @@ fn row_positions(
         out.push([x, y]);
         previous = Some((index, y, line));
     }
-    Some(out)
+    Some(RowLayout { positions: out, owner, moved })
+}
+
+/// Where [`row_positions`] puts the laid lines: each line's position and the draft row it is in,
+/// and the rows a wrapped row above moved down.
+struct RowLayout {
+    positions: Vec<[f64; 2]>,
+    owner: Vec<usize>,
+    moved: Vec<bool>,
+}
+
+/// The rows of the paragraph an edit leaves as they were, which keep their own drawing: the same
+/// text in the draft as in the source, on one line, not moved down by a row above that wrapped,
+/// and no size, colour or weight asked for. All `false` when every row would be kept.
+fn kept_rows(block: &TextBlock, draft: &str, style: &BlockStyle, layout: &RowLayout) -> Vec<bool> {
+    let source: Vec<&str> = block.editor_text.split('\n').collect();
+    let rows: Vec<&str> = draft.split('\n').collect();
+    let restyled = style.size.is_some() || style.color.is_some() || style.bold.is_some();
+    if restyled || source.len() != rows.len() || source.len() != block.rows.len() {
+        return vec![false; block.rows.len()];
+    }
+    let kept: Vec<bool> = (0..rows.len())
+        .map(|k| {
+            let same = |a: Option<&&str>, b: Option<&&str>| match (a, b) {
+                (Some(a), Some(b)) => a.strip_suffix('\r').unwrap_or(a).trim_end() == b.strip_suffix('\r').unwrap_or(b).trim_end(),
+                _ => false,
+            };
+            same(source.get(k), rows.get(k))
+                && !layout.moved.get(k).copied().unwrap_or(true)
+                && layout.owner.iter().filter(|&&row| row == k).count() == 1
+        })
+        .collect();
+    if kept.iter().all(|k| *k) { vec![false; kept.len()] } else { kept }
 }
 
 fn advance_op(advance: f64, state: &Ts) -> Result<Op, EditError> {
