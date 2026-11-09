@@ -2204,7 +2204,10 @@ fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
         match apply(&mut doc, None) {
             Err(RedactError::SharedJbig2Globals(_)) => assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted"),
             Ok(_) if through_reference => {
-                assert!(!pdfcraft_cos::reachable_objects(&doc).unwrap().contains(&9), "{other}: the dictionary stays");
+                // Object 10 too, the copy or the reference to the dictionary: `assert_gone` can't
+                // decode the copy, its `/Filter` given by reference, nor see its bytes, which are Flate.
+                let kept = pdfcraft_cos::reachable_objects(&doc).unwrap();
+                assert!(!kept.contains(&9) && !kept.contains(&10), "{other}: the dictionary or its copy stays");
                 assert_gone(&doc, b"LEAK_GLOBALS");
             }
             result => panic!("{other}: {result:?}"),
