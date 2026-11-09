@@ -79,3 +79,20 @@ fn renderer_and_security_vendors_remain() {
         assert!(manifest.contains(&format!("path = \"{vendor}\"")), "{vendor} must stay a path patch");
     }
 }
+
+/// The vendored `winprint` keeps the ~96 dpi Windows print fix in the build: the root manifest
+/// patches `winprint` to `vendor/winprint`, and the patched tree reads the job's resolution from
+/// the DEVMODE and renders each page at it. See `vendor/README.md` and storytold/pdfcraft#4941.
+#[test]
+fn windows_print_resolution_vendor_is_patched_in() {
+    let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("root Cargo.toml");
+    assert!(
+        manifest.contains("[patch.\"https://github.com/storytold/winprint.rs\"]"),
+        "Cargo.toml must patch winprint to the vendored copy for the print-resolution fix"
+    );
+    assert!(manifest.contains("winprint = { path = \"vendor/winprint\" }"), "the winprint patch must point at vendor/winprint");
+    let dxgi = std::fs::read_to_string(root().join("vendor/winprint/src/printer/dxgi.rs")).expect("vendored winprint dxgi.rs");
+    assert!(dxgi.contains("SetDpi("), "the vendored winprint must set the Direct2D context's DPI from the job");
+    let win_pdf = std::fs::read_to_string(root().join("vendor/winprint/src/printer/win_pdf.rs")).expect("vendored winprint win_pdf.rs");
+    assert!(win_pdf.contains("DestinationWidth"), "the vendored winprint must request a page at the job's resolution");
+}

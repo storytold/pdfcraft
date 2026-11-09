@@ -136,6 +136,12 @@ licences = ["MIT"]
 destination = "vendor/vello_common/LICENSE-MIT"
 sha256 = "adf157330f722fe7cfd5964a2a6974eff851b718228c6735724a11706e6f4dec"
 
+[[document]]
+source = "vendor/winprint/LICENSE.md"
+licences = ["BSD-3-Clause"]
+destination = "vendor/winprint/LICENSE.md"
+sha256 = "970f241e73b246bc077c8ed67fd1ce1ee47f1dce72290bfeb537a425a655fd6d"
+
 [[bundled]]
 crate = "epaint_default_fonts"
 path = "fonts/Ubuntu-Light.ttf"
