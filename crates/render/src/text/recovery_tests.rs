@@ -154,11 +154,52 @@ fn a_page_slow_to_read_keeps_its_strict_text_and_skips_the_recovered_layout() {
     assert!(recovered.is_some(), "a quick page has its recovered layer");
     let millis = u64::try_from(RECOVERY_DEADLINE.as_millis()).unwrap_or(u64::MAX);
     STRICT_MILLIS.with(|m| m.set(Some(millis)));
+    let _reset = Reset(|| STRICT_MILLIS.with(|m| m.set(None)));
     let (strict, recovered, plain) = layers(&pdf);
-    STRICT_MILLIS.with(|m| m.set(None));
     assert_eq!(strict, plain);
     assert_eq!(strict.plain_text(), "Hi");
     assert!(recovered.is_none(), "past the deadline the recovered layout is skipped");
+}
+
+/// Runs its function when dropped, also while a failing test unwinds: resets a thread-local
+/// override so it can't leak into the next test on the thread.
+struct Reset(fn());
+
+impl Drop for Reset {
+    fn drop(&mut self) {
+        (self.0)();
+    }
+}
+
+/// [`Reset`] runs while a test unwinds.
+#[test]
+fn reset_runs_while_unwinding() {
+    let unwound = std::panic::catch_unwind(|| {
+        STRICT_MILLIS.with(|m| m.set(Some(1)));
+        let _reset = Reset(|| STRICT_MILLIS.with(|m| m.set(None)));
+        panic!("a failing test");
+    });
+    assert!(unwound.is_err());
+    assert_eq!(STRICT_MILLIS.with(std::cell::Cell::get), None);
+}
+
+/// Review on #6733: a recovered layout still running when three quarters of the render pool's
+/// watchdog have passed since the page's text extraction started gives up and is discarded;
+/// the page keeps its strict layer. The strict layout never runs under that deadline, so it is
+/// the same whether or not the recovered one gave up.
+#[test]
+fn a_recovered_layout_out_of_time_is_discarded_and_the_strict_layer_kept() {
+    use super::device::RECOVERY_LAYOUT_END;
+    assert!(RECOVERY_DEADLINE < RECOVERY_LAYOUT_END && RECOVERY_LAYOUT_END < crate::raster::STUCK_AFTER);
+    let pdf = parse(names_page("/C83 /C111 /C99", "ABCDEF+AdvTTSynthetic", true));
+    let (before, recovered, _) = layers(&pdf);
+    assert!(recovered.is_some(), "in time, the page has its recovered layer");
+    super::layout::GIVE_UP_NOW.with(|g| g.set(true));
+    let _reset = Reset(|| super::layout::GIVE_UP_NOW.with(|g| g.set(false)));
+    let (strict, recovered, plain) = layers(&pdf);
+    assert_eq!(strict, before, "the strict layer is the same");
+    assert_eq!(strict, plain);
+    assert!(recovered.is_none(), "a recovered layout out of time is discarded");
 }
 
 /// A CFF INDEX of `items` (offsets one byte wide when they fit, else two).
