@@ -1701,6 +1701,43 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
 }
 
+/// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
+#[test]
+fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
+    const JS: &str = "if (event.value < 50) AFRange_Validate(true, 10 + 5, false, 0); else AFRange_Validate(false, 0, true, 100);";
+    struct RejectingInterpreter {
+        calls: usize,
+    }
+    impl Scripts for RejectingInterpreter {
+        fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+            assert_eq!(event, FieldEvent::Validate);
+            assert_eq!(script, JS);
+            assert_eq!(target.name, "amount");
+            self.calls += 1;
+            ScriptResult { rc: false, value: value.into(), changes: Vec::new(), message: Some("custom validation ran".into()) }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("amount")).unwrap();
+    set_value(&mut doc, "amount", &FieldValue::Text("20".into())).unwrap();
+    set_field_script(&mut doc, "amount", "validate", Some(JS)).unwrap();
+    let reopened = reopen(&doc);
+    for mut doc in [doc, reopened] {
+        let all = fields(&doc);
+        let actions = &field(&all, "amount").actions;
+        assert_eq!(actions.validate, af::Validate::None);
+        assert_eq!(actions.scripts.validate.as_deref(), Some(JS));
+        assert!(actions.unsupported.contains(&"validate"));
+        let mut scripts = RejectingInterpreter { calls: 0 };
+        assert_eq!(
+            set_value_with(&mut doc, "amount", &FieldValue::Text("10".into()), &mut scripts),
+            Err(FormError::Invalid("custom validation ran".into()))
+        );
+        assert_eq!(scripts.calls, 1);
+        assert_eq!(field(&fields(&doc), "amount").value, ["20"]);
+    }
+}
+
 /// Renaming a field renames it in the calculations that read it: a sum dropped it, notation
 /// read it as 0 and a script read a field that no longer existed.
 #[test]
@@ -6412,6 +6449,123 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+/// Three radio groups whose buttons have the on states given (`S`, `M` … or a repeated `Yes`):
+/// `free` (Radio), `plain` (Radio | NoToggleToOff) and `unison` (… | RadiosInUnison).
+fn radio_groups() -> Document {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 8 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),           // 4
+        "<< /FT /Btn /T (free) /Ff 32768 /V /Off /Kids [6 0 R 7 0 R] >>".into(),    // 5
+    ];
+    let kid = |parent: usize, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{state} 16 0 R /Off 17 0 R >> >> >>",
+            x + 15
+        )
+    };
+    objs.push(kid(5, 100, "S")); // 6
+    objs.push(kid(5, 200, "M")); // 7
+    objs.push("<< /FT /Btn /T (plain) /Ff 49152 /V /Off /Kids [9 0 R 10 0 R 11 0 R] >>".into()); // 8
+    objs.push(kid(8, 100, "Yes")); // 9
+    objs.push(kid(8, 200, "Yes")); // 10
+    objs.push(kid(8, 300, "No")); // 11
+    objs.push("<< /FT /Btn /T (unison) /Ff 33603584 /V /Off /Kids [13 0 R 14 0 R 15 0 R] >>".into()); // 12
+    objs.push(kid(12, 100, "Yes")); // 13
+    objs.push(kid(12, 200, "Yes")); // 14
+    objs.push(kid(12, 300, "No")); // 15
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 16
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 17
+    document(&objs)
+}
+
+/// Which widgets of field `name` are on, and its value.
+fn on_widgets(doc: &Document, name: &str) -> (Vec<bool>, Vec<String>) {
+    let all = fields(doc);
+    let f = field(&all, name);
+    ((0..f.widgets.len()).map(|i| f.widget_on(i)).collect(), f.value.clone())
+}
+
+/// ISO 32000-2 Table 229, RadiosInUnison: "If clear, the buttons are mutually exclusive"; and
+/// §12.7.5.2.3: without it "at most one radio button in a field shall be set at a time". Two
+/// buttons sharing the on state `Yes` both show `/V /Yes`: their `/AS` alone says which is on,
+/// and it survives a save.
+#[test]
+fn radio_buttons_sharing_an_on_state_are_exclusive_unless_in_unison() {
+    let mut doc = radio_groups();
+    set_value(&mut doc, "plain", &FieldValue::Widget(0)).unwrap();
+    assert_eq!(on_widgets(&doc, "plain"), (vec![true, false, false], vec!["Yes".to_string()]), "only the clicked button");
+    set_value(&mut doc, "plain", &FieldValue::Widget(1)).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(on_widgets(&doc, "plain"), (vec![false, true, false], vec!["Yes".to_string()]), "the other Yes, after a save");
+    // Setting the value by its name keeps the button already on.
+    set_value(&mut doc, "plain", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    assert_eq!(on_widgets(&doc, "plain").0, [false, true, false]);
+    set_value(&mut doc, "plain", &FieldValue::Widget(2)).unwrap();
+    assert_eq!(on_widgets(&doc, "plain"), (vec![false, false, true], vec!["No".to_string()]));
+    // From another state, the name turns on the first button that has it.
+    set_value(&mut doc, "plain", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    assert_eq!(on_widgets(&doc, "plain").0, [true, false, false]);
+    // NoToggleToOff still keeps one on.
+    assert!(matches!(set_value(&mut doc, "plain", &FieldValue::Radio(None)), Err(FormError::Invalid(_))));
+    // RadiosInUnison: the buttons sharing the state turn on and off together.
+    set_value(&mut doc, "unison", &FieldValue::Widget(1)).unwrap();
+    assert_eq!(on_widgets(&doc, "unison"), (vec![true, true, false], vec!["Yes".to_string()]));
+    set_value(&mut doc, "unison", &FieldValue::Widget(2)).unwrap();
+    assert_eq!(on_widgets(&doc, "unison").0, [false, false, true]);
+    // Without NoToggleToOff the group can be cleared.
+    set_value(&mut doc, "free", &FieldValue::Widget(0)).unwrap();
+    assert_eq!(on_widgets(&doc, "free"), (vec![true, false], vec!["S".to_string()]));
+    set_value(&mut doc, "free", &FieldValue::Radio(None)).unwrap();
+    assert_eq!(on_widgets(&doc, "free"), (vec![false, false], vec![]));
+    // A widget that isn't there, or a field that isn't a button, is refused.
+    assert!(matches!(set_value(&mut doc, "free", &FieldValue::Widget(9)), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "free", &FieldValue::Widget(usize::MAX)), Err(FormError::Invalid(_))));
+}
+
+/// A radio group whose buttons share the on state `Yes`, have no `/AS` and whose `/V` is `Yes`:
+/// field flags `ff` on the field, entries `own` on the second button's own dictionary.
+fn radio_without_as(ff: u32, own: &str) -> Document {
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        format!("<< /FT /Btn /T (r) /Ff {ff} /V /Yes /Kids [6 0 R 7 0 R 8 0 R] >>"),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [100 700 115 715] /P 3 0 R /AP << /N << /Yes 9 0 R /Off 10 0 R >> >> >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 5 0 R {own} /Rect [200 700 215 715] /P 3 0 R /AP << /N << /Yes 9 0 R /Off 10 0 R >> >> >>"),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [300 700 315 715] /P 3 0 R /AP << /N << /No 9 0 R /Off 10 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ])
+}
+
+/// Table 229: without RadiosInUnison the buttons are mutually exclusive. Buttons sharing the
+/// state `/V` names and lacking `/AS` can't all be on: the first is, as a set by name picks it.
+#[test]
+fn radio_buttons_without_as_sharing_the_value_show_one_on() {
+    let doc = radio_without_as(49152, "");
+    assert_eq!(on_widgets(&doc, "r").0, [true, false, false]);
+    // RadiosInUnison: they are on together.
+    let doc = radio_without_as(33603584, "");
+    assert_eq!(on_widgets(&doc, "r").0, [true, true, false]);
+    // One that has `/AS` naming the state is the one on.
+    let doc = radio_without_as(49152, "/AS /Yes");
+    assert_eq!(on_widgets(&doc, "r").0, [false, true, false]);
+}
+
+/// Table 227, ReadOnly: a processor "shall not allow a user to change the value". A button whose own
+/// dictionary sets it can't be turned on by number.
+#[test]
+fn a_read_only_button_is_not_turned_on_by_number() {
+    let mut doc = radio_without_as(49152, "/Ff 1");
+    assert!(matches!(set_value(&mut doc, "r", &FieldValue::Widget(1)), Err(FormError::ReadOnly(_))));
+    assert_eq!(on_widgets(&doc, "r").0, [true, false, false]);
+    set_value(&mut doc, "r", &FieldValue::Widget(2)).unwrap();
+    assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
 }
 
 /// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`

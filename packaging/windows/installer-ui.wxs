@@ -19,7 +19,7 @@
           <Publish Event="SpawnDialog" Value="BrowseFolder" />
         </Control>
         <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="126" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="144" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="144" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &amp;Edit and Combine files to the right-click menu of PDF files" />
         <Control Id="HotFolder" Type="CheckBox" X="20" Y="166" Width="330" Height="17" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
             Property="INSTALLHOTFOLDER" CheckBoxValue="1" Text="Also install PdfCraft &amp;Hot Folder" />
         <Control Id="HotFolderDescription" Type="Text" X="32" Y="186" Width="318" Height="30" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"

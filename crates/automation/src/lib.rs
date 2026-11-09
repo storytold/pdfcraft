@@ -22,6 +22,7 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod hairlines;
 mod hot_folder;
 mod hot_folder_service;
 mod layers;
