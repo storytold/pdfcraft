@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M5: XFDF paste previews preserve complete direct annotation contents; estimates unchanged)
+
 > **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** patch (M5: XFDF annotation contents retain text around XML comments and processing instructions; estimates unchanged)
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 
@@ -239,6 +241,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-09 (M5, XFDF text preview):** Annotation import and paste previews retain all direct contents text across XML comments and processing instructions, including CDATA and character references; nested-element text stays excluded. A synthetic preview regression also checks text colour, font size, box/fringe and callout leader. Existing blank-preview and newline rules remain unchanged. Estimates unchanged.
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
 - **2026-11-08 (M5, comment exchange):** Comments keep their formatting and appearance through XFDF and FDF. XFDF export and import carry rich text, default style, border width, style and dash pattern, rotation, justification, fringe, line leaders and captions, the caret symbol and redaction overlay text as XFDF 3.0 (ISO 19444-1) names them, and a stamp's appearance as `<appearance>` (the DICT/STREAM/DATA encoding, bounded); copy and paste carries every comment's appearance. FDF export keeps a stamp's /AP with its forms and images, as XFDF does, and FDF import keeps any /AP the file carries (ISO 32000-2 §12.7.8.3.4). The intent goes out as both `intent` and `IT`. An unreadable XFDF appearance is left out, said in the import report and the repair log, and the comment is drawn by PdfCraft; an FDF past the import budget is refused whole. A redaction mark is always drawn by PdfCraft.
