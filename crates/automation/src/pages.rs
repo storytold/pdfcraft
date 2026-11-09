@@ -235,6 +235,10 @@ impl Automation {
         let (mut html_left, mut spent, mut cut) = (html_budget, false, false);
         for (&p, t) in pages.iter().zip(texts) {
             let mut page = json!({ "page": p + 1, "text": text(&t) });
+            // Content cut at the renderer's limits (#623): the text is incomplete, and said so.
+            if t.truncated {
+                page["truncated"] = json!(true);
+            }
             if html {
                 // Copy with formatting: the same glyphs as an HTML fragment, within one budget for
                 // the whole call; a page past it gets none and the call says so.
