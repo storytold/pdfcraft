@@ -15,7 +15,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader, XrefEntry};
+use crate::document::{Document, ObjectReader, XrefEntry, held_bytes};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -23,9 +23,7 @@ pub fn serialize(o: &Object, out: &mut Vec<u8>) {
     match o {
         Object::Null => out.extend_from_slice(b"null"),
         Object::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
-        Object::Int(i) => {
-            let _ = write!(out, "{i}");
-        }
+        Object::Int(i) => write_int(*i, out),
         Object::Real(r) => write_real(*r, out),
         Object::String(s) => write_string(s, out),
         Object::Name(n) => write_name(n, out),
@@ -42,9 +40,44 @@ pub fn serialize(o: &Object, out: &mut Vec<u8>) {
         Object::Dict(d) => write_dict(d, out),
         Object::Stream(s) => write_stream(s, out),
         Object::Ref(r) => {
-            let _ = write!(out, "{} {} R", r.num, r.generation);
+            write_digits(u64::from(r.num), out);
+            out.push(b' ');
+            write_digits(u64::from(r.generation), out);
+            out.extend_from_slice(b" R");
         }
     }
+}
+
+/// Upper-case hexadecimal digits.
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// The decimal digits of `v`, the same bytes `write!(out, "{v}")` gives, without the formatter.
+fn write_digits(mut v: u64, out: &mut Vec<u8>) {
+    // `u64::MAX` has 20 digits, so `at` never goes below 0.
+    let mut buf = [0u8; 20];
+    let mut at = buf.len();
+    loop {
+        at -= 1;
+        buf[at] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    out.extend_from_slice(&buf[at..]);
+}
+
+/// A signed integer in decimal, as `write!(out, "{i}")` writes it.
+fn write_int(i: i64, out: &mut Vec<u8>) {
+    if i < 0 {
+        out.push(b'-');
+    }
+    write_digits(i.unsigned_abs(), out);
+}
+
+/// `b` as two upper-case hexadecimal digits.
+fn hex_pair(b: u8) -> [u8; 2] {
+    [HEX[usize::from(b >> 4)], HEX[usize::from(b & 15)]]
 }
 
 fn write_real(r: f64, out: &mut Vec<u8>) {
@@ -55,7 +88,7 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     // A whole number is written as an integer only within the integer range Annex C gives
     // (±2³¹−1), so `4e9` or `1e30` stays a real token for readers with 32-bit integers.
     if r.fract() == 0.0 && r.abs() <= f64::from(i32::MAX) {
-        let _ = write!(out, "{}", r as i32);
+        write_int(i64::from(r as i32), out);
         return;
     }
     // Plain decimal notation (§7.3.3 has no exponents). Rust's `Display` for f64 prints the
@@ -76,7 +109,8 @@ fn write_name(n: &[u8], out: &mut Vec<u8>) {
         if regular {
             out.push(b);
         } else {
-            let _ = write!(out, "#{b:02X}");
+            out.push(b'#');
+            out.extend_from_slice(&hex_pair(b));
         }
     }
 }
@@ -84,9 +118,10 @@ fn write_name(n: &[u8], out: &mut Vec<u8>) {
 fn write_string(s: &PdfString, out: &mut Vec<u8>) {
     let binary = s.bytes.iter().filter(|b| !(b' '..=b'~').contains(*b) && !matches!(b, b'\n' | b'\r' | b'\t')).count();
     if s.hex || binary * 4 > s.bytes.len().max(1) {
+        out.reserve(s.bytes.len().saturating_mul(2).saturating_add(2));
         out.push(b'<');
-        for b in &s.bytes {
-            let _ = write!(out, "{b:02X}");
+        for &b in &s.bytes {
+            out.extend_from_slice(&hex_pair(b));
         }
         out.push(b'>');
         return;
@@ -105,7 +140,7 @@ fn write_string(s: &PdfString, out: &mut Vec<u8>) {
             0x0C => out.extend_from_slice(b"\\f"),
             b' '..=b'~' => out.push(b),
             _ => {
-                let _ = write!(out, "\\{b:03o}");
+                out.extend_from_slice(&[b'\\', b'0' + (b >> 6), b'0' + ((b >> 3) & 7), b'0' + (b & 7)]);
             }
         }
     }
@@ -129,6 +164,24 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
     out.extend_from_slice(b"\nstream\n");
     out.extend_from_slice(&s.raw);
     out.extend_from_slice(b"\nendstream");
+}
+
+/// A document opened without the password its embedded files need holds their data as stored and
+/// can't encrypt: a save keeps its `/Encrypt` as it is, and writes no edited or added stream that
+/// would have to be encrypted (an attached file put in, say), which would be written in the clear.
+fn keyless_check(doc: &Document) -> Result<(), CosError> {
+    if !doc.embedded_files_locked() {
+        return Ok(());
+    }
+    let refuse =
+        |what: &str| Err(CosError::Security(format!("{what} without the password of the document's embedded files: open it with the password")));
+    if doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none() {
+        return refuse("the document's security can't change");
+    }
+    if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+        return refuse("an edited or added embedded file can't be encrypted");
+    }
+    Ok(())
 }
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
@@ -207,6 +260,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
+    keyless_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
@@ -273,20 +327,24 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     Ok(file)
 }
 
-/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
-pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    if doc.stream_limited() {
-        return Err(CosError::ReadOnlyLimit);
-    }
-    // A full traversal must not fill the editor's shared caches (which undo snapshots also
-    // own). Parsed objects and decoded object streams are temporary working data here.
-    let mut reader = doc.object_reader();
-    stamp_mod_date(&mut reader.document, opts);
-    let trailer_in = reader.document.trailer().clone();
+/// The objects [`write_full`] writes: everything reachable from the trailer's /Root, /Info and
+/// /Encrypt and from its unknown entries, breadth-first, with the new number each gets
+/// (aliases of one slot included) and, in visit order, whether it is a stream and the parsed
+/// object where the budget allowed keeping it.
+type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>, Vec<Option<Arc<Object>>>);
+
+/// Number the objects reachable from the trailer. `retain` keeps parsed objects for the write
+/// pass, up to the budget. A caller that needs only the numbers passes `false`, so the traversal
+/// holds no parsed objects beyond the current one.
+fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict, retain: bool) -> Result<SaveOrder, CosError> {
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
     let mut order: Vec<(ObjRef, bool)> = Vec::new();
+    // The parsed object of each entry in `order`, kept for the write pass while the budget
+    // allows it. Past the budget the write pass reads the object again.
+    let mut kept: Vec<Option<Arc<Object>>> = Vec::new();
+    let mut kept_budget = KeptObjects::default();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
     for key in [&b"Root"[..], b"Info", b"Encrypt"] {
@@ -325,7 +383,40 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         map.insert(canonical, num);
         order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
+        kept.push((retain && kept_budget.admit(&o, reader.document.bytes())).then_some(o));
     }
+    Ok((map, order, kept))
+}
+
+/// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
+/// reaches from the trailer, object streams included. For a check that something removed from a
+/// document cannot reach the saved file through a reference nobody looked for.
+pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
+    let mut reader = doc.object_reader();
+    let trailer_in = reader.document.trailer().clone();
+    let (_, order, _) = full_save_order(&mut reader, &trailer_in, false)?;
+    Ok(order.into_iter().map(|(r, _)| r.num).collect())
+}
+
+/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
+pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit);
+    }
+    keyless_check(doc)?;
+    // Renumbering breaks a key that mixes in the object number.
+    if doc.security().is_some_and(|h| !h.has_key() && !h.survives_renumbering()) {
+        return Err(CosError::Security(
+            "the embedded files are encrypted and the document was opened without their password: open it with the password to save it in full"
+                .into(),
+        ));
+    }
+    // A full traversal must not fill the editor's shared caches (which undo snapshots also
+    // own). Parsed objects and decoded object streams are temporary working data here.
+    let mut reader = doc.object_reader();
+    stamp_mod_date(&mut reader.document, opts);
+    let trailer_in = reader.document.trailer().clone();
+    let (map, order, mut kept) = full_save_order(&mut reader, &trailer_in, true)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
@@ -355,14 +446,14 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
-    let mut packed: Vec<(u32, ObjRef)> = Vec::new();
+    let mut packed: Vec<(u32, ObjRef, Option<Arc<Object>>)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
         let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(&num) && root_outside != Some(num);
         if in_stream {
-            packed.push((num, *r));
+            packed.push((num, *r, kept[i].take()));
         } else {
-            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = written_object(&mut reader, *r, *is_stream, kept[i].take())?;
             let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &o, &mut out);
@@ -372,9 +463,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // individually: the whole stream is (§7.5.7, §7.6.2).
     let mut next = output_number(order.len())?;
     let mut batch = ObjectStreamBatch::default();
-    for (num, reference) in packed {
+    for (num, reference, parsed) in packed {
         let mut encoded = Vec::new();
-        serialize(&renumber(&*reread(&mut reader, reference, false)?, &map), &mut encoded);
+        serialize(&renumber(&*written_object(&mut reader, reference, false, parsed)?, &map), &mut encoded);
         if batch.count > 0 && batch.body.len().saturating_add(encoded.len()).saturating_add(1) > OBJSTM_BYTES {
             batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
         }
@@ -406,6 +497,38 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// What `write_full` keeps of the objects it parsed while numbering them, measured with
+/// [`held_bytes`] (the parsed tree and any data that is not a view into the file). Beyond the
+/// budget objects are read again when written, which bounds the memory of a save of a huge
+/// document.
+#[derive(Default)]
+struct KeptObjects {
+    bytes: usize,
+}
+
+impl KeptObjects {
+    const BYTES: usize = 64 * 1024 * 1024;
+
+    /// Whether `object` still fits the budget; if so it is counted against it.
+    fn admit(&mut self, object: &Object, data: &Arc<Vec<u8>>) -> bool {
+        let bytes = self.bytes.saturating_add(held_bytes(object, data, 0));
+        if bytes > Self::BYTES {
+            return false;
+        }
+        self.bytes = bytes;
+        true
+    }
+}
+
+/// The object to write for `r`: the one parsed while numbering when it was kept, else `r` read
+/// again.
+fn written_object(reader: &mut ObjectReader, r: ObjRef, is_stream: bool, kept: Option<Arc<Object>>) -> Result<Arc<Object>, CosError> {
+    match kept {
+        Some(o) => Ok(o),
+        None => reread(reader, r, is_stream),
+    }
 }
 
 /// Assemble the full rewrite's trailer and apply its identifier policy.
@@ -666,13 +789,21 @@ fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
     }
 }
 
-/// Keep an existing `/ID`, or create one (two equal 16-byte strings, §14.4).
+/// Keep any existing two-element `/ID` array as it is, even a malformed one such as `[<> <>]` or `[1 2]` (an ordinary
+/// save preserves what it doesn't understand; Save as PDF/A replaces or completes it), or create one with
+/// [`new_file_id`] when there is none or it isn't a two-element array.
 fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     if matches!(trailer.get(b"ID"), Some(Object::Array(a)) if a.len() == 2) {
         return;
     }
+    trailer.set(b"ID".to_vec(), new_file_id(content, opts.id_seed));
+}
+
+/// A new file identifier for a file whose bytes are `content` (ISO 32000-1 14.4): an array of
+/// two equal 16-byte strings, the same for the same content and `seed`.
+pub fn new_file_id(content: &[u8], seed: u64) -> Object {
     // FNV-1a over a sample of the content and the seed: stable, dependency-free.
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ opts.id_seed;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
     for b in content.iter().step_by((content.len() / 4096).max(1)).chain(content.iter().rev().take(64)) {
         h ^= *b as u64;
         h = h.wrapping_mul(0x0100_0000_01b3);
@@ -681,7 +812,7 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     id.extend_from_slice(&h.to_be_bytes());
     id.extend_from_slice(&h.rotate_left(29).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
     let s = Object::String(PdfString { bytes: id, hex: true });
-    trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
+    Object::Array(vec![s.clone(), s])
 }
 
 /// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
@@ -823,14 +954,14 @@ pub fn pdf_date(unix_secs: i64) -> String {
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day). Total for any `i64` count:
+/// dates past `NaiveDate`'s ±262143-year range keep their proleptic Gregorian year instead of
+/// falling back to the epoch.
 ///
-/// A `from_timestamp` epoch fallback would change dates past `NaiveDate`'s ±262143-year range,
-/// which the old hand-rolled converter formatted directly. The Gregorian calendar repeats every
-/// 400 years (146_097 days), so chrono converts the day within one cycle and whole cycles go back
-/// into the year (an `i128` so the extremes can't overflow), keeping chrono as the only calendar
-/// logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+/// The Gregorian calendar repeats every 400 years (146_097 days), so chrono converts the day
+/// within one cycle and whole cycles go back into the year (an `i128` so the extremes can't
+/// overflow), keeping chrono as the only calendar logic. 1970-01-01 is `num_days_from_ce` 719_163.
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     use chrono::Datelike;
     let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
     // `rest + 719_163` is 719_163..865_259, always a valid CE day.
@@ -916,6 +1047,38 @@ mod tests {
     }
 
     #[test]
+    fn kept_objects_stop_at_their_byte_budget() {
+        let data = Arc::new(Vec::new());
+        let string = Object::String(PdfString::literal(vec![b'x'; 1000]));
+        let array = Object::Array(vec![Object::Int(1), Object::Null]);
+        let mut kept = KeptObjects::default();
+        assert!(kept.admit(&string, &data) && kept.admit(&array, &data));
+        assert_eq!(kept.bytes, held_bytes(&string, &data, 0) + held_bytes(&array, &data, 0));
+        let mut full = KeptObjects { bytes: KeptObjects::BYTES - held_bytes(&string, &data, 0) + 1 };
+        let before = full.bytes;
+        assert!(!full.admit(&string, &data), "one byte over the budget");
+        assert_eq!(full.bytes, before, "a refused object is not counted");
+        let mut deep = Object::Null;
+        for _ in 0..300 {
+            deep = Object::Array(vec![deep]);
+        }
+        assert!(!KeptObjects::default().admit(&deep, &data), "nesting past the limit is never kept");
+    }
+
+    #[test]
+    fn kept_objects_count_names_and_dictionary_keys() {
+        let data = Arc::new(Vec::new());
+        let name = Object::Name(vec![b'n'; KeptObjects::BYTES + 1]);
+        let mut kept = KeptObjects::default();
+        assert!(!kept.admit(&name, &data), "a name over the byte budget is not kept");
+        assert_eq!(kept.bytes, 0);
+        let mut dict = Dict::new();
+        dict.set(vec![b'k'; KeptObjects::BYTES + 1], Object::Null);
+        assert!(!kept.admit(&Object::Dict(dict), &data), "nor a dictionary key");
+        assert_eq!(kept.bytes, 0);
+    }
+
+    #[test]
     fn a_second_read_that_differs_fails_the_save_instead_of_writing_null() {
         let mut doc = Document::new_empty();
         let dict = doc.add(Object::Dict(Dict::new()));
@@ -982,6 +1145,12 @@ mod tests {
         // its sign, exactly as before).
         assert_eq!(pdf_date(10_000_000_000_000), "D:3188570520174640Z");
         assert_eq!(pdf_date(-10_000_000_000_000), "D:-3149180813061320Z");
+        assert_eq!(crate::civil_from_days(0), (1970, 1, 1));
+        assert_eq!(crate::civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(crate::civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(crate::civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(crate::civil_from_days(i64::MAX), (25_252_734_927_768_524, 7, 27));
+        assert_eq!(crate::civil_from_days(i64::MIN), (-25_252_734_927_764_585, 6, 7));
     }
 
     #[test]
