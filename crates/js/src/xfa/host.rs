@@ -30,6 +30,7 @@ pub(crate) struct XHost {
     pub(crate) nodes: Vec<HNode>,
     pub(crate) effects: Vec<XfaEffect>,
     pub(crate) console: Vec<String>,
+    console_bytes: usize,
     pub(crate) doc: XfaDoc,
     pub(super) added: usize,
     /// Index of `this`.
@@ -62,6 +63,7 @@ impl XHost {
             nodes,
             effects: Vec::new(),
             console: Vec::new(),
+            console_bytes: 0,
             doc: doc.clone(),
             added: 0,
             current,
@@ -136,7 +138,13 @@ impl XHost {
             XfaEffect::MessageBox(m) => XfaEffect::MessageBox(Message { text: clip(m.text), title: m.title.map(clip), ..m }),
             XfaEffect::LaunchUrl(u) => XfaEffect::LaunchUrl(clip(u)),
             XfaEffect::SetFocus(s) => XfaEffect::SetFocus(clip(s)),
-            XfaEffect::ResetData(names) => XfaEffect::ResetData(names.into_iter().map(clip).collect()),
+            XfaEffect::ResetData(mut names) => {
+                names.truncate(MAX_EFFECTS);
+                for n in &mut names {
+                    *n = clip(std::mem::take(n));
+                }
+                XfaEffect::ResetData(names)
+            }
             XfaEffect::SetValue { som, value } => {
                 let (value, cut) = clip_value(value);
                 if cut {
@@ -184,9 +192,10 @@ impl XHost {
     }
 
     pub(crate) fn print(&mut self, line: String) {
-        if self.console.len() >= MAX_CONSOLE {
+        if self.console.len() >= MAX_CONSOLE || self.console_bytes.saturating_add(line.len()) > crate::MAX_HOST_BYTES {
             self.dropped_console += 1;
         } else if self.room(line.len()) {
+            self.console_bytes = self.console_bytes.saturating_add(line.len());
             self.console.push(line);
         }
     }
