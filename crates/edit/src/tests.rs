@@ -9019,6 +9019,52 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Fix hairlines: zero-width strokes and strokes thinner than the threshold on
+/// the page (after the CTM) get the chosen width, in page content and the forms it draws; wider
+/// lines, and glyphs and patterns unless asked, are left alone.
+#[test]
+fn hairlines_are_widened_in_page_content_and_forms() {
+    use crate::hairlines::{Hairlines, fix_hairlines};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // A form drawn at half scale with a 0.1 pt line (0.05 pt on the page) and a 4 pt line.
+    let mut fd = Dict::new();
+    fd.set(b"Type".to_vec(), Object::name("XObject"));
+    fd.set(b"Subtype".to_vec(), Object::name("Form"));
+    fd.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, 100.0, 100.0].iter().map(|v| Object::Real(*v)).collect()));
+    let form = doc.add(Object::Stream(Stream::flate(fd, b"0.1 w 0 0 m 50 50 l S 4 w 0 50 m 50 0 l S")));
+    let content = b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S q 0.5 0 0 0.5 0 0 cm 0.2 w 0 0 m 10 10 l S /Fm1 Do Q 0.5 w 10 30 m 100 30 l S";
+    let cs = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    let mut xo = Dict::new();
+    xo.set(b"Fm1".to_vec(), Object::Ref(form));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(cs));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap();
+    // Page: the 0 w line and the 0.2 w line at half scale (0.1 pt); the 2 pt and 0.5 pt lines stay.
+    // Form: the 0.1 w line (0.05 pt on the page); the 4 pt line stays.
+    assert_eq!(fixed, crate::hairlines::Fixed { lines: 3, pages: 1, elsewhere: 0 });
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = flat(&page_content_bytes(&doc, 0));
+    assert!(text.contains("0.72 w 10 10 m 100 10 l S"), "zero width → 0.72 pt: {text}");
+    assert!(text.contains("2 w 10 20 m 100 20 l S") && text.contains("0.5 w 10 30 m 100 30 l S"), "wider lines untouched: {text}");
+    assert!(text.contains("1.44 w 0 0 m 10 10 l S"), "under a half-scale CTM the width is doubled: {text}");
+    let Object::Stream(fs) = &*doc.get(form) else { panic!() };
+    let ft = flat(&fs.decoded().unwrap());
+    assert!(ft.contains("1.44 w 0 0 m 50 50 l S") && ft.contains("4 w 0 50 m 50 0 l S"), "{ft}");
+    // Nothing left to fix: a second run changes nothing.
+    assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0);
+    // A stricter threshold catches the 0.5 pt line too, with a custom width.
+    let fixed = fix_hairlines(&mut doc, &[0], &Hairlines { narrower_than: 0.6, width: 1.0, ..Hairlines::default() }).unwrap();
+    assert_eq!(fixed.lines, 1);
+    assert!(flat(&page_content_bytes(&doc, 0)).contains("1 w 10 30 m 100 30 l S"));
+    assert!(fix_hairlines(&mut doc, &[0], &Hairlines { width: 0.0, ..Hairlines::default() }).is_err());
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.
@@ -10980,8 +11026,140 @@ fn carriage_returns_break_rows_on_the_styled_path() {
 fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
-    let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
+    let reopened = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "ab  ba   ab");
+}
+
+/// Spaces drawn as TJ gaps in a subset without a space glyph are wrapped in `/ActualText`, so
+/// repeated spaces and leading indents read back through `text_lines`, `editor_text`, and text
+/// extraction, and survive a second edit without shifting the line or miscalibrating its scale
+/// (#4229).
+#[test]
+fn spaces_and_indents_in_a_subset_without_a_space_glyph_round_trip_across_edits() {
+    for paragraph in [true, false] {
+        for typed in ["  ab  ba", "ab  ba   ab", "  ab  ba   ab  "] {
+            let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+            let edit = if paragraph { text::replace_block(&mut doc, 0, 0, typed) } else { text::replace_line(&mut doc, 0, 0, typed) };
+            assert_eq!(edit.unwrap().substituted, None, "{typed:?}");
+            let mut doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), 1, "{typed:?}: {lines:?}");
+            assert_eq!(lines[0].text, typed, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks[0].editor_text, typed, "{typed:?}");
+
+            // Re-edit the reopened document and verify the origin, gap count, and scale stay exact.
+            let next = "   ba  ab";
+            let edit2 = if paragraph { text::replace_block(&mut doc, 0, 0, next) } else { text::replace_line(&mut doc, 0, 0, next) };
+            assert_eq!(edit2.unwrap().substituted, None, "{typed:?}");
+            let doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines[0].text, next, "{typed:?}");
+            assert!((lines[0].rect[0] - 72.0).abs() < 0.01, "{typed:?}: {:?}", lines[0].rect);
+            let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+            assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+        }
+    }
+
+    // Styled multi-row path: untouched calibration and row breaks keep 100 Tz and every space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba   ab").unwrap().substituted, None);
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba   ab");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  ab  ba\nba  ab").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  ab  ba", "ba  ab"]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  ab  ba\nba  ab");
+
+    // Two subsets of the same face (/F2 holds 'a' only, /F3 holds 'b' only, neither has ' '):
+    // spaces adopt their neighbour's subset on the row so no space is stranded in a glyph-less run.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (a) Tj /F1 12 Tf ( ) Tj /F3 12 Tf (b) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(97));
+        f.set(b"LastChar".to_vec(), Object::Int(97));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500)]));
+    })
+    .unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |f| {
+        f.set(b"FirstChar".to_vec(), Object::Int(98));
+        f.set(b"LastChar".to_vec(), Object::Int(98));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(520)]));
+    })
+    .unwrap();
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "  b  a  \n  a  b  ").unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  b  a  ", "  a  b  "]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "  b  a  \n  a  b  ");
+
+    // A RangeStyle covering only spaces in a subset without a space glyph joins an adjacent
+    // glyph-bearing segment so its space count survives save/reopen.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab   ba");
+}
+
+/// A space that joins a neighbour's subset for `/ActualText` keeps the underline of its own
+/// style, not the neighbour's, and still reads back as that space.
+#[test]
+fn a_reassigned_subset_space_keeps_its_own_underline() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 2..5,
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some("ab   ba"), &style).unwrap().substituted, None);
+    let doc = reopen(&doc);
+    let line = text::text_lines(&doc, 0).unwrap().into_iter().next().expect("a line");
+    assert_eq!(line.text, "ab   ba");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let mut widths = Vec::new();
+    let mut from = None;
+    for row in content.lines() {
+        if let Some(rest) = row.strip_suffix(" m") {
+            from = rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
+        } else if let Some(rest) = row.strip_suffix(" l")
+            && let (Some(x0), Some(x1)) = (from.take(), rest.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()))
+        {
+            widths.push((x1 - x0).abs());
+        }
+    }
+    let text_width = line.rect[2] - line.rect[0];
+    assert!(widths.iter().any(|w| *w > 1.0), "the spaces lost their underline: {widths:?}\n{content}");
+    assert!(
+        widths.iter().all(|w| *w < text_width * 0.6),
+        "the space underline covered the neighbouring glyphs ({text_width}): {widths:?}\n{content}"
+    );
 }
 
 /// #6131: a subset that writes width 0 for its unused space (pdfTeX does) has no space glyph. A word added to

@@ -606,6 +606,12 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan(&e.cos)).unwrap_or_default()
     }
 
+    /// [`Self::hidden_info`] for the categories in `which` alone, without the reading the others
+    /// need (see [`pdfcraft_redact::sanitize::scan_only`]).
+    pub fn hidden_info_of(&self, which: &[Hidden]) -> Vec<(Hidden, usize)> {
+        self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan_only(&e.cos, which)).unwrap_or_default()
+    }
+
     /// Verification: faux redactions (opaque covers over extractable text) and redaction
     /// marks that were never applied. Fails closed: any read error is returned, never an
     /// empty list.

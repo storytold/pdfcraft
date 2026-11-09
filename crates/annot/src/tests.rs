@@ -1314,6 +1314,44 @@ fn urls_are_found_after_length_changing_lowercase() {
     assert_eq!(range, 21..39, "range is in source-character indices");
 }
 
+/// Review on #4472: an address inside one written with another scheme isn't taken out of it
+/// (`ftp://www.example.com` opened as `http://www.example.com`), and brackets that pair up
+/// inside an address belong to it.
+#[test]
+fn urls_keep_their_written_scheme_and_paired_brackets() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    for s in
+        ["ftp://www.example.com/pub", "file://www.example.com/x", "javascript:www.example.com", "ftp://user@example.com/x", "smb://a@example.org/s"]
+    {
+        assert_eq!(found(s), Vec::<String>::new(), "{s}");
+    }
+    assert_eq!(found("mailto:someone@example.com and (www.example.com)"), ["mailto:someone@example.com", "http://www.example.com"]);
+    assert_eq!(found("See https://en.wikipedia.org/wiki/Mercury_(planet)."), ["https://en.wikipedia.org/wiki/Mercury_(planet)"]);
+    assert_eq!(found("(https://example.com/a_(b)_c)"), ["https://example.com/a_(b)_c"]);
+    assert_eq!(found("https://example.com/a(b c"), ["https://example.com/a"]);
+    // Deeply nested or unbalanced brackets end the address without trouble.
+    let deep = format!("https://example.com/{}x{}", "(".repeat(10_000), ")".repeat(9_999));
+    assert_eq!(found(&deep), ["https://example.com/"]);
+}
+
+/// Review on #4472: brackets that never close in text without spaces (`https://a/(` again and
+/// again) made each address in it read the rest of the text, then start again one character on,
+/// a pass over the page per address. Each is read 2,048 characters at most now, and the
+/// addresses around them are still found. A run of address characters longer than that is no
+/// address.
+#[test]
+fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
+    let started = std::time::Instant::now();
+    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
+    assert_eq!(found(&long), ["http://www.after.org"]);
+    let fits = format!("https://example.com/{}", "a".repeat(2000));
+    assert_eq!(found(&fits), std::slice::from_ref(&fits));
+}
+
 #[test]
 fn url_scheme_and_www_match_case_insensitively() {
     let t: Vec<char> = "HTTP://Example.COM".chars().collect();

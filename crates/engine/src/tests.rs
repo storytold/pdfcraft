@@ -7933,6 +7933,29 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert!(!d2.dirty);
 }
 
+/// An XFA button's click returns only what the click produced. The alerts and errors of the
+/// scripts that ran on open stay in the document's output.
+#[test]
+fn an_xfa_click_returns_only_its_own_script_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    let mut s = Session::new();
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+    assert!(o.error.is_none(), "{o:?}");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["opened"]);
+    assert!(out.errors.iter().any(|e| e.contains("open failed")), "{out:?}");
+    // A click whose script fails returns that error, and the next click does not repeat it.
+    let broken =
+        pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "throw new Error('click failed');");
+    let id = s.open("broken.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&broken)), None).unwrap();
+    s.take_js_output(id);
+    assert!(s.run_javascript(id, "", Some("hello")).unwrap().error.is_some_and(|e| e.contains("click failed")));
+    assert!(s.run_javascript(id, "", Some("legacy")).unwrap().error.is_none());
+}
+
 /// A repeating table inside an area of a positioned page (as in real Designer forms): every
 /// row is laid out, the values Adobe wrote (under the area's parent: areas are
 /// not data scopes) are read, a FormCalc total over all rows computes, and what is filled here
@@ -10466,6 +10489,8 @@ fn exporting_to_word_keeps_the_page_background() {
     assert!(docx.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "Word is told to show the page colour");
 }
 
+/// A table of contents' entries with dotted leaders export to an office document as paragraphs, in
+/// reading order, not as a table.
 #[test]
 fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let mut content = String::new();
@@ -10633,7 +10658,8 @@ fn a_later_field_script_reads_the_highlight_an_earlier_one_set() {
 }
 
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
-/// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
+/// yyyymd are rewritten as yyyymmdd, and the data holds the date. Text none of them reads is kept
+/// as typed, in the field and the data, as another viewer keeps it.
 #[test]
 fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first() {
     let mut s = Session::new();
@@ -10645,18 +10671,21 @@ fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first()
     assert_eq!(value(&s), ["20261018"]);
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2026118".into()) }).expect("so is yyyymd");
     assert_eq!(value(&s), ["20261108"]);
-    let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) });
-    assert!(refused.is_err_and(|e| e.to_string().contains("yyyymmdd")), "none of its patterns reads it");
-    assert_eq!(value(&s), ["20261108"]);
     // The data holds the date.
-    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
-    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
-    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")), Some("2026-11-08"));
+    let data_of = |s: &Session| {
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")).map(str::to_string)
+    };
+    assert_eq!(data_of(&s).as_deref(), Some("2026-11-08"));
+    s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) }).expect("kept as typed");
+    assert_eq!(value(&s), ["2618"]);
+    assert_eq!(data_of(&s).as_deref(), Some("2618"));
 }
 
-/// A date the field's own scripts refuse is not tried again in another of an XFA date field's
-/// patterns: only a date its format refuses is, which happens before any script runs, so the
-/// scripts run once. This validate script counts its runs in `name` and accepts on its second.
+/// A date typed in another of an XFA date field's patterns is rewritten before any of the field's
+/// scripts run, so they run once, and a date they refuse stays refused. This validate script counts
+/// its runs in `name` and accepts on its second.
 #[test]
 fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let mut s = Session::new();
@@ -10666,7 +10695,7 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let script = Some("var n = Number(getField('name').value || 0) + 1; getField('name').value = String(n); event.rc = n >= 2;".to_string());
     s.apply(id, Edit::SetFieldScript { name: "leave".into(), event: "validate".into(), script }).unwrap();
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
-    // Its format reads 18OCT26, and so does its DDMMMYY pattern.
+    // Its DDMMMYY pattern reads 18OCT26, which its format would read more loosely too.
     let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("18OCT26".into()) });
     assert!(refused.is_err(), "the validate script refused it, once");
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));
