@@ -249,16 +249,7 @@ impl PdfCraftApp {
                 // own backdrop stays off, or places applied redactions left holding the removed text
                 // (the Apply redactions dialog then says it after its count): said, not silent.
                 // Before the scripts' output, so an alert they raise still shows.
-                if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(match &n {
-                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
-                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
-                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
-                        }
-                    });
-                }
+                self.notify_first_edit_notice(id);
                 if matches!(edit, Edit::ApplyRedactions { .. }) {
                     self.count_applied_redactions(i);
                 }
@@ -287,6 +278,18 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
+        }
+    }
+
+    /// Shows the first notice the last edit left on document `id`, if any.
+    fn notify_first_edit_notice(&mut self, id: pdfcraft_engine::DocId) {
+        if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
+            self.notify(match &n {
+                pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                pdfcraft_engine::EditNotice::RedactionIdentification(id) => crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string()),
+            });
         }
     }
 
