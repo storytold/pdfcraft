@@ -18,7 +18,7 @@ mod links;
 mod prefs;
 mod window;
 
-pub(crate) use clipboard::{copy_refused, print_refused};
+pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
@@ -66,6 +66,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -73,6 +74,7 @@ impl PdfCraftApp {
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
             units: Default::default(),
+            blank_paper: crate::paper::Paper::system(),
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
@@ -87,15 +89,18 @@ impl PdfCraftApp {
             space_hand: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
+            hotbar: Default::default(),
             theme: ThemeKind::Light,
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
+            show_page_edge_shadows: true,
             #[cfg(target_os = "linux")]
             desktop_theme: None,
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
+            invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
@@ -104,7 +109,12 @@ impl PdfCraftApp {
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
+            fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
+            fill_text_border: 0.0,
+            fill_text_border_color: None,
+            fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
+            fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
             updates: updates::Updates::default(),
             printer_source: None,
@@ -117,12 +127,14 @@ impl PdfCraftApp {
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
+            recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,
             last_views: Vec::new(),
             last_session: Default::default(),
             quit_session: None,
             reload_changed_files: true,
+            update_check_at_start: true,
             show_secured_notice: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -132,10 +144,21 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            deferred_opens: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            password_retry: None,
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            launch_layout: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            launch_display_target: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            recent_check: Default::default(),
+            pinned_tools: Vec::new(),
+            pin_tool_search: String::new(),
             toast: None,
             toast_script: None,
             script_messages: std::collections::VecDeque::new(),
@@ -184,6 +207,11 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
+            ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -191,6 +219,7 @@ impl PdfCraftApp {
             action_files_override: None,
             pdfa: Default::default(),
             compare_old: None,
+            compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
             doc_js: Default::default(),
@@ -215,15 +244,22 @@ impl PdfCraftApp {
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
+            scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
+            scan_clean_run: None,
             progress_notice: None,
             page_clipboard: None,
+            comment_clipboard: None,
+            object_clipboard: None,
+            object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
+            html_clipboard_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            os_clipboard: None,
             clipboard_override: None,
-            v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
             page_props_draft: None,
@@ -249,6 +285,7 @@ impl PdfCraftApp {
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
             bookmark_rename: None,
+            bookmark_clipboard: None,
             last_opened_url: None,
             community_card_closed: false,
             pending_link: None,
@@ -353,6 +390,46 @@ impl PdfCraftApp {
     pub fn render_pending(&self) -> bool {
         self.views.iter().any(|v| v.render_pending())
     }
+
+    /// Check whether a tool group is pinned to Home.
+    pub fn is_tool_pinned(&self, id: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == id)
+    }
+
+    /// Pin a tool group to Home. Returns true if newly pinned.
+    pub fn pin_tool(&mut self, id: &str) -> bool {
+        if pdfcraft_engine::catalog::group(id).is_none() {
+            return false;
+        }
+        if !self.is_tool_pinned(id) {
+            self.pinned_tools.push(id.to_string());
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Unpin a tool group from Home.
+    pub fn unpin_tool(&mut self, id: &str) {
+        if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
+            self.pinned_tools.remove(pos);
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
+            }
+        }
+    }
+
+    /// Toggle a tool group's pinned state on Home. Returns whether it is now pinned.
+    pub fn toggle_pin_tool(&mut self, id: &str) -> bool {
+        if self.is_tool_pinned(id) {
+            self.unpin_tool(id);
+            false
+        } else {
+            self.pin_tool(id)
+        }
+    }
 }
 
 impl eframe::App for PdfCraftApp {
@@ -362,6 +439,10 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
+        // The wheel after Alt+Tab back, before the mouse has moved (#1518).
+        let known = ctx.input(|i| i.pointer.latest_pos().is_some());
+        let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
+        drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
@@ -392,6 +473,10 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        self.apply_status_captions(lang);
+        // Form date fields name months in the date language (Preferences ▸ Date format), which
+        // follows the interface language until one is picked (#5303).
+        pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(worker) = &self.open_worker {
@@ -399,6 +484,7 @@ impl eframe::App for PdfCraftApp {
             }
             self.poll_pending_opens();
         }
+        self.check_restored_recent();
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
         let cjk = theme::CjkPreference::for_language(lang.code());
         if !self.styled {
@@ -438,11 +524,11 @@ impl eframe::App for PdfCraftApp {
         let dropped = self.drop_on_signature_pad(dropped);
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
-                self.drop_into_combine(f, ctx);
-            } else {
+        // Files dropped on the Combine files tab join its list, all at once, instead of opening.
+        if self.combine_showing() && !dropped.is_empty() {
+            self.drop_into_combine(dropped, ctx);
+        } else {
+            for f in dropped {
                 self.open_dropped(f, ctx);
             }
         }
@@ -455,7 +541,7 @@ impl eframe::App for PdfCraftApp {
         // Don't replace a pending prompt or import. A startup file may need its own password
         // prompt, so its bytes stay queued until the current interaction finishes.
         #[cfg(not(target_arch = "wasm32"))]
-        let opening = !self.pending_opens.is_empty();
+        let opening = !self.pending_opens.is_empty() || !self.deferred_opens.is_empty();
         #[cfg(target_arch = "wasm32")]
         let opening = false;
         if !opening
@@ -514,7 +600,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
@@ -534,9 +621,15 @@ impl eframe::App for PdfCraftApp {
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let shut = blocked || self.active != Some(index);
+            view.objects.set_input_blocked(shut);
+            if shut {
                 view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
@@ -553,7 +646,21 @@ impl eframe::App for PdfCraftApp {
         self.auto_ocr_scanned_page();
         self.poll_ocr();
         self.poll_optimize();
+        self.poll_scan_clean();
         self.poll_action();
+        // The OCR Verify screen's worker may have finished while no frame was drawn.
+        if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
+        }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
+        }
+        // So may a page or region re-read's worker.
+        if self.ocr_verify.reread.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
+        }
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
@@ -612,6 +719,28 @@ impl eframe::App for PdfCraftApp {
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
+        // recognized text brings it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
+        if self.ocr_verify.open {
+            // The OCR Verify screen takes the document area (its four panes) under the window's
+            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
+            // still show above it.
+            workflows::ocr_verify::show(self, ui);
+            palette::show(self, &ctx);
+            dialogs::show(self, &ctx);
+            self.show_progress(&ctx);
+            widgets::toast(self, &ctx);
+            self.finish_render_frame(&ctx);
+            if let Some(mut control) = self.control.take() {
+                control.finish_frame(&ctx, self);
+                self.control = Some(control);
+            }
+            return;
+        }
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;

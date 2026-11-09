@@ -13,6 +13,9 @@ pub(crate) struct SignatureBadge {
 pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], page: usize) -> Vec<SignatureBadge> {
     signatures
         .iter()
+        // A signature whose appearance draws its state keeps the badge too: the document controls
+        // its own layers and can clip the drawn state away or cover it with its own artwork,
+        // which it cannot do to the badge.
         .filter(|s| s.signed && s.visible && s.page == Some(page))
         .filter_map(|s| {
             s.rect.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() < f32::MAX as f64)).map(|rect| SignatureBadge {
@@ -24,22 +27,22 @@ pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], pa
         .collect()
 }
 
-/// Suppression window for egui's eased copy of point input.
-///
-/// egui 0.36.2 drains `WheelState::after_events` tail deltas by 90% per 0.1 s.
-pub(super) const SUPPRESS_SECS: f64 = 0.25;
-
-/// Short rolling extension while egui still has an unprocessed wheel tail.
-pub(super) const SUPPRESS_TAIL_SECS: f64 = 0.05;
-
-// Keep the viewer's scroll identity tied to the document instead of its parent UI.
+// Keep the viewer's scroll identity tied to the document instead of its parent UI. Without
+// `fades` (Show Page Edge Shadows off) the viewport-edge gradients are off for this area only.
 pub(super) fn page_scroll<R>(
     ui: &mut egui::Ui,
     scroll: egui::ScrollArea,
     id: egui::Id,
+    fades: bool,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
-    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner
+    let strength = ui.spacing().scroll.fade.strength;
+    if !fades {
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+    }
+    let out = ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner;
+    ui.spacing_mut().scroll.fade.strength = strength;
+    out
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
@@ -86,6 +89,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
                     read_only: None,
                     required: None,
                     display: Some(if hide { 1 } else { 0 }),
+                    rect: None,
                 })
                 .collect();
             if !changes.is_empty() {
