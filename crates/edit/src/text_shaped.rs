@@ -147,7 +147,7 @@ pub(super) fn rewrite(
         crate::added::Align::Right => 2,
         _ => 0,
     };
-    let drawn = match row_positions(block, lines, draft, &laid, style) {
+    let drawn = match row_positions(block, lines, draft, &laid, style, size) {
         // Each edited row stays on its source row's baseline and against the edge it was set
         // against, so a heading and its subtitle keep their spacing.
         Some(positions) => appearance_text::draw_positioned(&laid, size, &positions, Some(color)),
@@ -347,16 +347,42 @@ fn row_sources(block: &TextBlock, draft: &str, spans: Vec<(std::ops::Range<usize
 }
 
 /// Baseline positions that keep every row where it was: when the draft still has one row per
-/// source row, none of them wraps and no width, alignment or move is asked for. Every row keeps
-/// its source baseline and the edge the source rows share: the right one (the paragraph reads
-/// right to left, or only the right edges line up), the left one, or their centre.
-fn row_positions(block: &TextBlock, lines: &[TextLine], draft: &str, laid: &[appearance_text::Line], style: &BlockStyle) -> Option<Vec<[f64; 2]>> {
-    if style.width.is_some()
-        || style.align.is_some()
-        || style.offset.is_some()
-        || laid.len() != block.rows.len()
-        || draft.split('\n').count() != laid.len()
-    {
+/// source row and no width, alignment or move is asked for. Every row keeps its source baseline
+/// and the edge the source rows share: the right one (the paragraph reads right to left, or only
+/// the right edges line up), the left one, or their centre. A row that wraps (bold made it wider,
+/// or words were added) goes on below its first line, an ink-safe line apart, and moves the rows
+/// after it down by as much: the rows above it, a title or a heading, stay where they are.
+fn row_positions(
+    block: &TextBlock,
+    lines: &[TextLine],
+    draft: &str,
+    laid: &[appearance_text::Line],
+    style: &BlockStyle,
+    size: f64,
+) -> Option<Vec<[f64; 2]>> {
+    let rows: Vec<&str> = draft.split('\n').collect();
+    if style.width.is_some() || style.align.is_some() || style.offset.is_some() || rows.len() != block.rows.len() {
+        return None;
+    }
+    // The draft row each laid line belongs to: a row's lines hold its text, in order.
+    let mut owner = Vec::with_capacity(laid.len());
+    let mut next = laid.iter();
+    for (index, row) in rows.iter().enumerate() {
+        let row = row.strip_suffix('\r').unwrap_or(row);
+        let mut text = String::new();
+        loop {
+            let line = next.next()?;
+            text.push_str(&line.text);
+            owner.push(index);
+            if text.len() >= row.len() {
+                break;
+            }
+        }
+        if text != row {
+            return None;
+        }
+    }
+    if next.next().is_some() {
         return None;
     }
     let rects: Vec<[f64; 4]> = block
@@ -366,32 +392,44 @@ fn row_positions(block: &TextBlock, lines: &[TextLine], draft: &str, laid: &[app
             row.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect).reduce(|a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])])
         })
         .collect::<Option<_>>()?;
+    let baselines: Vec<f64> = block.rows.iter().map(|row| lines.get(*row.first()?).map(|l| l.origin.baseline)).collect::<Option<_>>()?;
     let near = |a: f64, b: f64| (a - b).abs() <= 2.0;
     let rtl = appearance_text::paragraph_rtl(draft);
     let (right, left) = (rects.iter().all(|r| near(r[2], block.rect[2])), rects.iter().all(|r| near(r[0], block.rect[0])));
     let centre = (block.rect[0] + block.rect[2]) / 2.0;
     let centred = rects.iter().all(|r| near((r[0] + r[2]) / 2.0, centre));
-    block
-        .rows
-        .iter()
-        .zip(laid)
-        .zip(&rects)
-        .map(|((row, line), rect)| {
-            let first = lines.get(*row.first()?)?;
-            let x = if right && (rtl || !left) {
-                block.rect[2] - line.width
-            } else if left {
-                block.rect[0]
-            } else if centred {
-                centre - line.width / 2.0
-            } else if rtl {
-                rect[2] - line.width
-            } else {
-                rect[0]
-            };
-            [x, first.origin.baseline].iter().all(|v| v.is_finite()).then_some([x, first.origin.baseline])
-        })
-        .collect()
+    let mut out = Vec::with_capacity(laid.len());
+    let mut shift = 0.0;
+    let mut previous: Option<(usize, f64, &appearance_text::Line)> = None;
+    for (line, &index) in laid.iter().zip(&owner) {
+        let rect = rects.get(index)?;
+        let y = match previous {
+            // A wrapped row's next line, one ink-safe line below the last.
+            Some((row, y, above)) if row == index => {
+                let step = size * (above.descent + line.ascent);
+                shift += step;
+                y - step
+            }
+            _ => baselines.get(index)? - shift,
+        };
+        let x = if right && (rtl || !left) {
+            block.rect[2] - line.width
+        } else if left {
+            block.rect[0]
+        } else if centred {
+            centre - line.width / 2.0
+        } else if rtl {
+            rect[2] - line.width
+        } else {
+            rect[0]
+        };
+        if !(x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        out.push([x, y]);
+        previous = Some((index, y, line));
+    }
+    Some(out)
 }
 
 fn advance_op(advance: f64, state: &Ts) -> Result<Op, EditError> {

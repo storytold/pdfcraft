@@ -15707,6 +15707,39 @@ fn the_arabic_fallback_does_not_wrap_a_row_that_kerning_had_tightened() {
     assert_eq!(rows.len(), 2, "the paragraph keeps its two rows: {rows:?}");
 }
 
+/// A title, a heading and a body grouped as one paragraph keep their rows when a body row wraps
+/// in the Arabic fallback (bold made it wider, or words were added): the rows above stay on
+/// their baselines and the rows below move down by the added line. They were laid out again
+/// from the top at the title's size, which drew the body's first words on the heading's line.
+#[test]
+fn a_row_that_wraps_in_the_arabic_fallback_keeps_the_rows_above_it_in_place() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 24 Tf 300 700 Td (Title row) Tj ET BT /F1 24 Tf 300 668 Td (Heading row) Tj ET BT /F1 12 Tf 300 638 Td (first body row) Tj ET BT /F1 12 Tf 300 622 Td (second body row) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let Some(index) = blocks.iter().position(|b| b.editor_text.contains("Heading row") && b.editor_text.contains("first body row")) else {
+        return; // The rows group otherwise; nothing to keep in place.
+    };
+    let bottom = |lines: &[text::TextLine], needle: &str| {
+        lines.iter().find(|l| l.text.contains(needle)).map(|l| l.rect[1]).unwrap_or_else(|| panic!("{needle}: {lines:?}"))
+    };
+    let before = text::text_lines(&doc, 0).unwrap();
+    let draft = blocks[index].editor_text.replace("first body row", "first body row تمت إضافة كلمات عربية كثيرة حتى يلتف هذا السطر");
+    text::replace_block(&mut doc, 0, index, &draft).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    for needle in ["Title", "Heading", "first body"] {
+        assert!((bottom(&lines, needle) - bottom(&before, needle)).abs() < 1.0, "{needle} moved: {lines:?}");
+    }
+    // Nothing else is drawn on the heading's line, and the last row moved down below the wrap.
+    let heading = bottom(&before, "Heading");
+    assert!(lines.iter().filter(|l| (l.rect[1] - heading).abs() < 3.0).all(|l| l.text.contains("Heading")), "{lines:?}");
+    assert!(bottom(&lines, "second body") < bottom(&before, "second body") - 10.0, "{lines:?}");
+}
+
 /// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
 /// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
 /// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
