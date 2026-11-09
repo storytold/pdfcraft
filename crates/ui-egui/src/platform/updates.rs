@@ -27,6 +27,9 @@ pub(crate) struct Updates {
     startup_check: bool,
     #[cfg(not(target_arch = "wasm32"))]
     check_requested: bool,
+    /// How many times `on_exit` called [`Updates::exiting`].
+    #[cfg(test)]
+    exits: u32,
 }
 
 impl Updates {
@@ -55,6 +58,20 @@ impl Default for Updates {
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
             check_requested: false,
+            #[cfg(test)]
+            exits: 0,
+        }
+    }
+}
+
+impl Updates {
+    /// Starts the helper of an update that waits for the app to exit. Later calls do nothing.
+    pub(crate) fn exiting(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.updater.start_pending_update();
+        #[cfg(test)]
+        {
+            self.exits += 1;
         }
     }
 }
@@ -137,4 +154,17 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (app, ctx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::App as _;
+
+    #[test]
+    fn on_exit_calls_the_update_exit_hook_once() {
+        let mut app = PdfCraftApp::new();
+        app.on_exit(None);
+        assert_eq!(app.updates.exits, 1);
+    }
 }

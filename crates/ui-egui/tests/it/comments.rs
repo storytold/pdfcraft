@@ -1627,6 +1627,32 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
 }
 
+// Contributor-original PDF. A status is set on a reply (its /IRT names the reply, ISO 32000-2
+// §12.5.6.3), not on the comment; the status reply's text is found only there.
+const REPLY_STATUS_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Alpha) /Contents (Plain root) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [60 140 80 160] /T (Beta) /Contents (Other root) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 5 0 R /T (Reader) /Contents (Ordinary reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 7 0 R /T (Carol) /StateModel /Review /State /Accepted /Contents (Reply-status token) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
+    let mut h = harness_with_bytes(REPLY_STATUS_FIXTURE.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("reply-status token".into());
+    });
+    h.run_steps(2);
+    h.get_by_label("Plain root");
+    h.get_by_label("Ordinary reply");
+    assert_eq!(h.query_all_by_label("Other root").count(), 0, "the other comment has no such status");
+    assert_eq!(h.query_all_by_label("No comments match.").count(), 0);
+}
+
 // Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
 // `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
 const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
@@ -1706,7 +1732,7 @@ fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
     assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
     assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
     h.get_by_label("Right reply");
-    h.get_by_label("Accepted");
+    h.get_by_label("Ben: Accepted"); // One badge per reviewer.
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
 
     // Copy text copies the reply's text.
@@ -2333,6 +2359,68 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// ISO 32000-2 §12.5.6.3 and Table 174: a comment shows each reviewer's latest status, with
+/// their name, and a status set back to None stays shown; a checkmark shows only for the
+/// reviewer who set it.
+#[test]
+fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let me = h.state().comment_prefs.author.clone();
+    let other = format!("{me} (other)");
+    for (state, author) in [
+        (pdfcraft_engine::ReviewState::Accepted, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Carol"),
+        (pdfcraft_engine::ReviewState::Rejected, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Dan"),
+        (pdfcraft_engine::ReviewState::None, "Dan"),
+    ] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationStatus { page: 0, index: 0, state, author: author.into() });
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: other.clone() });
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.get_by_label("Bob: Rejected");
+    h.get_by_label("Carol: Completed");
+    h.get_by_label("Dan: None");
+    assert_eq!(h.query_all_by_label("Bob: Accepted").count(), 0, "only Bob's latest");
+    assert!(h.query_all_by_label("Remove checkmark").next().is_none(), "another reviewer's checkmark isn't mine");
+    h.get_by_label("Mark with checkmark");
+
+    // Filters: a comment stays while any reviewer's status is shown; one nobody set a status on
+    // counts as None; the checkmark filter goes by my checkmark only.
+    h.state_mut().set_option("quick", "circle").unwrap();
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
+    let shown = cards(&h);
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "Carol's and Dan's statuses still show the rectangle");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0, shown.1 - 1), "the oval has no status, so it counts as None");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into(), "Completed".into(), "None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0 - 1, shown.1 - 1), "every status hidden");
+    h.state_mut().views[0].comments.hidden_statuses.clear();
+    h.state_mut().views[0].comments.hidden_checks = vec!["Checked".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "another reviewer's checkmark isn't mine");
+
+    h.state_mut().views[0].comments.hidden_checks.clear();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().comment_prefs.author = other;
+    h.run_steps(2);
+    h.get_by_label("Remove checkmark");
+}
+
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
@@ -2580,17 +2668,14 @@ fn highlighting_an_area_off_the_text() {
     let q = c[0].quads[0];
     assert!((q[0] - 40.0).abs() < 3.0 && (q[1] - 100.0).abs() < 3.0, "{q:?}");
     // Dragging over text still highlights the text (once the text layer is in).
-    let mut glyphs = None;
-    for _ in 0..200 {
-        h.run_steps(1);
+    support::wait_until(&mut h, "the page's text layer", |app| {
+        let v = &app.views[0];
+        v.glyph_screen_pos(0, 4).is_some() && v.glyph_screen_pos(0, 14).is_some()
+    });
+    let (a, b) = {
         let v = &h.state().views[0];
-        if let (Some(a), Some(b)) = (v.glyph_screen_pos(0, 4), v.glyph_screen_pos(0, 14)) {
-            glyphs = Some((a, b));
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let (a, b) = glyphs.expect("text layer");
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
     drag(&mut h, a, b);
     assert_eq!(comments(&h).len(), 2);
 }

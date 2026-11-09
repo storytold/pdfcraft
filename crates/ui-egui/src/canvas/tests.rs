@@ -484,6 +484,7 @@ fn history_search_view() -> DocView {
             }],
             line_of: vec![0],
             space_before: vec![false],
+            truncated: false,
         }
         .into(),
     );
@@ -509,7 +510,8 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -520,6 +522,18 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         v.go_to_match(2);
         assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
         assert_eq!(v.back, vec![0]);
+    }
+}
+
+#[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
     }
 }
 
@@ -550,6 +564,7 @@ fn find_test_text(s: &str) -> PageText {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     }
 }
 
@@ -1178,6 +1193,7 @@ fn select_all_of_the_document_only_while_scrolling_through_several_pages() {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     };
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     for p in 0..3 {
@@ -1208,6 +1224,7 @@ fn text_layers_keep_the_selection_page() {
         glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
         line_of: vec![0],
         space_before: vec![false],
+        truncated: false,
     };
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
@@ -2062,6 +2079,59 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
     assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
+}
+
+/// A cut page (#623) is named in a bar of its own: a static XFA form's notice, which comes
+/// first among the form notices, still shows beside it instead of replacing it (review on #2113).
+#[test]
+fn a_cut_page_is_named_beside_an_xfa_form_notice() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
+        app.open_bytes("form.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("XFA data are kept in step");
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label_contains("XFA data are kept in step");
+}
+
+/// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
+/// cut-page notice lasts until another page is found cut (review on #2113).
+#[test]
+fn a_page_found_cut_after_a_dismissal_is_still_named() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    // The reader dismissed the document's notice before the render found the cut page.
+    h.state_mut().views[0].notice_dismissed = true;
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the cut-page notice can be dismissed");
+    // Re-reading the same page (an undo, a layer toggle) doesn't bring it back.
+    h.state_mut().views[0].invalidate_content();
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the dismissed page stays dismissed");
+    h.state_mut().views[0].cut_pages.insert(1);
+    h.run_steps(2);
+    h.get_by_label_contains("2 pages hold more content than PdfCraft can read, page 1 first");
 }
 
 #[test]
