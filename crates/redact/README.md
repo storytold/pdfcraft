@@ -16,7 +16,14 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   `/W`/`/DW` (composite fonts, embedded CMaps with codespace and CID ranges), Type 3 font
   matrices, and approximations for the standard 14. A glyph goes when it overlaps an area by
   more than a fifth of its size (or a point) both ways; zero-size text goes when its origin is
-  inside;
+  inside.
+  When all glyphs contributing to a text clipping path (render modes 4–7) are removed,
+  an explicit empty clip at `ET` keeps later artwork hidden until the original graphics
+  state is restored. Pending clipping runs accumulate across `q`/`Q` until `ET`; the
+  renderer preserves them across restores rather than discarding or resurrecting outlines.
+  The empty clip uses an open, move-only path
+  (`0 0 m W n`), avoiding the device pixel a closed zero-area rectangle can retain.
+  Partial removal retains the surviving glyph clip;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
   the last filter, decoded through `Document::decoded_image_within`, a JBIG2 image with its
@@ -41,7 +48,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   filters, decoders and pixels alike) is refused
   and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
   covers with it.
-- **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
+- **vectors**: paths intersecting a mark are removed whole; shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a

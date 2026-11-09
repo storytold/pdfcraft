@@ -12904,6 +12904,57 @@ fn page_render_draws_stamps_without_an_appearance() {
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
 
+/// #3123: removing a clipping title must preserve every pixel outside the mark, including
+/// content after Q. Exercise the public tools and render the saved, reopened document.
+#[test]
+fn redacting_clipping_titles_does_not_flood_the_page() {
+    let dir = workdir("redact-clipping-title");
+    let mut a = auto(&dir);
+    // A shading survives partial redaction; an intersecting vector fill is removed whole.
+    for (mode, restored, translated) in [
+        (0, false, false),
+        (4, false, false),
+        (5, false, false),
+        (6, false, false),
+        (7, false, false),
+        (7, true, false),
+        (7, false, true),
+        (7, true, true),
+    ] {
+        let (save, restore) = if restored { ("q", "Q") } else { ("", "") };
+        let (transform, x, y) = if translated { ("1 0 0 1 250 350 cm", -178, 310) } else { ("", 72, 660) };
+        let body = format!(
+            "q {transform} BT {save} /F1 48 Tf {mode} Tr {x} {y} Td (Title) Tj {restore} ET /Blue sh Q BT /F1 12 Tf 72 600 Td (Body text) Tj ET"
+        );
+        let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+        let bytes = pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Shading << /Blue << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 612 0] /Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 0 1] /N 1 >> >> >> >> >>",
+            &stream,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]);
+        std::fs::write(dir.join("title.pdf"), bytes).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({"path": "title.pdf"}))["doc"].as_u64().unwrap();
+        let (w, _, before) = a.render_pixels(doc, 1, 1.0).unwrap();
+        ok(&mut a, "redact_mark", json!({"doc": doc, "page": 1, "rect": [60, 90, 200, 140]}));
+        ok(&mut a, "redact_apply", json!({"doc": doc, "pages": [1]}));
+        let path = format!("redacted-{mode}-{restored}-{translated}.pdf");
+        ok(&mut a, "doc_save", json!({"doc": doc, "path": path}));
+        ok(&mut a, "doc_close", json!({"doc": doc}));
+        let reopened = ok(&mut a, "doc_open", json!({"path": path}))["doc"].as_u64().unwrap();
+        let (_, _, after) = a.render_pixels(reopened, 1, 1.0).unwrap();
+        for (i, (old, new)) in before.as_ref().as_chunks::<4>().0.iter().zip(after.as_ref().as_chunks::<4>().0.iter()).enumerate() {
+            let (x, y) = (i % w as usize, i / w as usize);
+            if !(59..=201).contains(&x) || !(89..=141).contains(&y) {
+                assert_eq!(old, new, "mode {mode}, restored {restored}, translated {translated}, pixel ({x}, {y}) outside the mark changed");
+            }
+        }
+        assert!(page_text(&mut a, reopened)[0].contains("Body text"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn deleting_one_radio_button_through_tools_keeps_the_group() {
     let dir = workdir("delete-radio");

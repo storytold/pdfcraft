@@ -704,7 +704,15 @@ fn interpret_window<'a>(
             TypedInstruction::ClipEvenOdd(_) => {
                 *(context.clip_mut()) = Some(FillRule::EvenOdd);
             }
-            TypedInstruction::RestoreState(_) => context.restore_state(device),
+            TypedInstruction::RestoreState(_) => {
+                // PdfCraft patch (104): pending glyph outlines belong to the text object,
+                // not the graphics state (ISO 32000-1 §9.3.6). Keep them across Q until ET
+                // consumes them; restoring a saved copy could discard new outlines or
+                // resurrect outlines already consumed at ET. Applied clips restore as usual.
+                let outlines = std::mem::take(&mut context.get_mut().text_state.clip_paths);
+                context.restore_state(device);
+                context.get_mut().text_state.clip_paths = outlines;
+            }
             TypedInstruction::FlatnessTolerance(_) => {
                 // Ignore for now.
             }
@@ -866,7 +874,7 @@ fn interpret_window<'a>(
                     .is_some();
 
                 if has_outline {
-                    let clip_path = context.get().ctm * context.get().text_state.clip_paths.clone();
+                    let clip_path = context.get().text_state.clip_paths.clone();
 
                     context.push_clip_path(clip_path, FillRule::NonZero, device);
                 }

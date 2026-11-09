@@ -4964,6 +4964,103 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     }
 }
 
+/// #3123: removing the last glyph of a text clipping path must not unmask later artwork.
+#[test]
+fn redacted_clipping_title_keeps_an_empty_clip() {
+    for mode in 4..=7 {
+        for show in ["(TITLE) Tj", "[(TI) 0 (TLE)] TJ", "(TITLE) '", "0 0 (TITLE) \""] {
+            let src = format!("q BT /F1 10 Tf {mode} Tr 10 100 Td {show} ET 0 0 1 rg 0 0 300 300 re f Q BT /F1 10 Tf 0 Tr 10 200 Td (BODY) Tj ET");
+            let mut doc = one_page(src.as_bytes(), "", vec![]);
+            mark(&mut doc, 0, &[[5.0, 95.0, 40.0, 110.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
+            let doc = reopen(&doc);
+            let c = content(&doc, 0);
+            assert!(c.contains("ET\n0 0 m\nW\nn"), "mode {mode}, {show}: {c}");
+            assert!(!c.contains("TITLE"));
+            assert!(c.contains("BODY"));
+        }
+    }
+}
+
+/// An empty clip is needed only when redaction removes the last clipping glyph: surviving
+/// clipping runs keep their mask, while painted runs and originally empty shows add none.
+#[test]
+fn clipping_text_keeps_surviving_runs_and_ignores_painted_runs() {
+    for (runs, empty) in [
+        ("7 Tr (TITLE) Tj", true),
+        ("7 Tr (TI) Tj (TLE) Tj", true),
+        ("7 Tr (TITLE) Tj 0 Tr 0 100 Td (BODY) Tj", true),
+        ("0 Tr (TITLE) Tj 7 Tr 0 100 Td (MASK) Tj", false),
+        ("7 Tr (TITLE) Tj 0 100 Td (MASK) Tj", false),
+        ("7 Tr (TITLEMASK) Tj", false),
+        ("0 Tr (TITLE) Tj", false),
+        ("7 Tr [] TJ", false),
+    ] {
+        let src = format!("q BT /F1 10 Tf 10 100 Td {runs} ET 0 0 1 rg 0 0 300 300 re f Q");
+        let mut doc = one_page(src.as_bytes(), "", vec![]);
+        mark(&mut doc, 0, &[[5.0, 95.0, 35.0, 110.0]], "");
+        apply(&mut doc, None).unwrap();
+        let c = content(&doc, 0);
+        assert_eq!(c.contains("ET\n0 0 m\nW\nn"), empty, "{runs}: {c}");
+        if runs.contains("MASK") {
+            assert!(c.contains("MASK"), "{c}");
+        }
+    }
+}
+
+/// All clipping outlines accumulate until ET, including those shown inside q/Q.
+/// Removing inner runs must retain an empty mask unless another clipping run survives.
+#[test]
+fn clipping_text_accumulates_across_q() {
+    for (runs, empty) in [
+        ("q (TITLE) Tj Q", true),
+        ("q q (TITLE) Tj Q Q", true),
+        ("(TITLE) Tj q 0 100 Td (MASK) Tj Q", false),
+        ("0 100 Td (MASK) Tj q 0 -100 Td (TITLE) Tj Q", false),
+        ("(TITLE) Tj Q", true), // A stray Q restores nothing.
+    ] {
+        let src = format!("BT /F1 10 Tf 7 Tr 10 100 Td {runs} ET");
+        let mut doc = one_page(src.as_bytes(), "", vec![]);
+        mark(&mut doc, 0, &[[5.0, 95.0, 40.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
+        let c = content(&reopen(&doc), 0);
+        assert_eq!(c.contains("ET\n0 0 m\nW\nn"), empty, "{runs}: {c}");
+    }
+}
+
+/// Clipping state follows a text object across content-stream pieces, including an inherited
+/// rendering mode, and resets before a later text object with a surviving mask.
+#[test]
+fn clipping_title_state_crosses_streams_but_resets_at_bt() {
+    let mut doc = one_page(b"q 7 Tr BT /F1 10 Tf 10 100 Td (TI) Tj", "", vec![]);
+    let tail = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(
+        Dict::new(),
+        b"(TLE) Tj ET 0 0 1 rg 0 0 300 300 re f Q q BT /F1 10 Tf 7 Tr 10 200 Td (MASK) Tj ET 0 1 0 rg 0 0 300 300 re f Q".to_vec(),
+    )));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let first = d.get(b"Contents").unwrap().clone();
+        d.set(b"Contents".to_vec(), Object::Array(vec![first, Object::Ref(tail)]));
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[5.0, 95.0, 40.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
+    let c = content(&reopen(&doc), 0);
+    assert_eq!(c.matches("ET\n0 0 m\nW\nn").count(), 1, "{c}");
+    assert!(c.contains("MASK"), "the second text object keeps its clip: {c}");
+}
+
+/// Hidden-text cleanup shares the redaction interpreter and must preserve an empty clip
+/// when it removes every glyph of a clipping title, keeping subsequent artwork masked.
+#[test]
+fn hidden_clipping_text_keeps_an_empty_clip() {
+    let mut doc = one_page(b"q BT /F1 10 Tf 7 Tr 10 100 Td (TITLE) Tj ET 0 0 1 rg 0 0 300 300 re f Q", "", vec![]);
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let c = content(&reopen(&doc), 0);
+    assert!(!c.contains("TITLE"), "{c}");
+    assert!(c.contains("ET\n0 0 m\nW\nn"), "{c}");
+}
+
 /// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
 /// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
 /// their real advances, removed, and the verifier passes.

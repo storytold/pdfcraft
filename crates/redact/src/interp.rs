@@ -496,6 +496,9 @@ struct Walk {
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
+    /// Clipping glyphs removed and retained across all shows in the current text object.
+    clip_removed: bool,
+    clip_kept: bool,
     out: Output,
 }
 
@@ -515,6 +518,8 @@ impl Walk {
             path_box: None,
             clip: false,
             clipped: HashSet::new(),
+            clip_removed: false,
+            clip_kept: false,
             out: Output::default(),
         }
     }
@@ -543,6 +548,25 @@ impl Walk {
             }
             b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
+                Some(op)
+            }
+            b"ET" => {
+                // An empty text show does not intersect the clip; preserve the empty mask
+                // for the remainder of the original graphics-state scope.
+                if scope.mode == Mode::Apply && self.clip_removed && !self.clip_kept {
+                    piece.ops.push(op);
+                    // A move-only subpath has no segments to scan-convert. A closed
+                    // zero-area rectangle can retain the pixel at the transformed origin.
+                    piece.ops.push(Op::new("m", vec![num(0.0); 2]));
+                    piece.ops.push(Op::new("W", vec![]));
+                    piece.ops.push(Op::new("n", vec![]));
+                    piece.changed = true;
+                    self.clip_removed = false;
+                    self.clip_kept = false;
+                    return;
+                }
+                self.clip_removed = false;
+                self.clip_kept = false;
                 Some(op)
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
@@ -685,6 +709,8 @@ impl Walk {
         let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"BT" => {
+                self.clip_removed = false;
+                self.clip_kept = false;
                 self.tm = Matrix::IDENTITY;
                 self.tlm = Matrix::IDENTITY;
             }
@@ -759,6 +785,10 @@ impl Walk {
             self.out.vertical = true;
         }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        if (4..=7).contains(&self.gs.render_mode) {
+            self.clip_removed |= removed > 0;
+            self.clip_kept |= new_items.iter().any(|item| matches!(item, Object::String(s) if !s.bytes.is_empty()));
+        }
         if removed == 0 {
             return Some(op);
         }

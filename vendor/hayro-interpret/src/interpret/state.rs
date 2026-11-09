@@ -148,6 +148,7 @@ pub(crate) struct TextState<'a> {
 
     // When setting the text rendering mode to `clip`, the glyphs should instead be collected
     // as paths and then applied as 1 single clip path. This field stores those clip paths.
+    /// Pending glyph outlines in device space, consumed at ET rather than restored by Q.
     pub(crate) clip_paths: BezPath,
 }
 
