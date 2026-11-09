@@ -58,7 +58,7 @@ impl Decoder {
         let mut d = Decoder { map: HashMap::new(), width: if composite { 2 } else { 1 }, opaque: false };
         let tu = font.get(b"ToUnicode").map(|t| doc.resolve(t));
         if let Some(Object::Stream(s)) = tu.as_deref() {
-            let data = ctx.decode(s)?;
+            let data = ctx.decode(doc, s)?;
             if data.len() > MAX_CMAP {
                 return Err(());
             }
@@ -435,7 +435,7 @@ pub(super) fn page_content(doc: &Document, page: &Dict, ctx: &Ctx, skip_overlay:
     for o in &list {
         match &*resolve_strict(doc, o)? {
             Object::Stream(s) => {
-                let d = ctx.decode(s)?;
+                let d = ctx.decode(doc, s)?;
                 if skip_overlay && ctx.is_overlay(&d) {
                     continue;
                 }
@@ -536,7 +536,7 @@ impl Extractor<'_> {
             self.stack.push(r);
         }
         let result = (|| {
-            let data = self.ctx.decode(s)?;
+            let data = self.ctx.decode(self.doc, s)?;
             let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
             self.scope(&data, own.as_ref().unwrap_or(parent), ctm, depth, placed)
         })();

@@ -313,16 +313,16 @@ impl Interp<'_> {
         let Some(n) = self.node(i) else { return Ok(Val::Null) };
         Ok(match name {
             "formattedValue" => match &n.formatted {
-                Some(f) => Val::Str(f.clone()),
+                Some(f) => Val::Str(f.to_string()),
                 None => self.node_value(i),
             },
             "rawValue" | "value" => self.node_value(i),
-            "name" => Val::Str(n.name.clone()),
-            "somExpression" => Val::Str(n.som.clone()),
+            "name" => Val::Str(n.name.to_string()),
+            "somExpression" => Val::Str(n.som.to_string()),
             "className" => Val::Str(n.kind.class_name().into()),
             "index" | "instanceIndex" => Val::Num(n.index as f64),
-            "presence" => Val::Str(n.presence.clone()),
-            "access" => Val::Str(n.access.clone()),
+            "presence" => Val::Str(n.presence.to_string()),
+            "access" => Val::Str(n.access.to_string()),
             "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
             "mandatory" => Val::Str("disabled".into()),
             "parent" => n.parent.map_or(Val::Null, Val::Node),
@@ -332,7 +332,7 @@ impl Interp<'_> {
                 None => Val::Node(i),
             },
             "instanceManager" => match n.parent {
-                Some(p) => Val::Im(p, n.name.clone()),
+                Some(p) => Val::Im(p, n.name.to_string()),
                 None => Val::Null,
             },
             "border" | "ui" | "font" | "caption" | "fillColor" | "borderColor" | "fontColor" | "margin" | "para" | "assist" | "validate"
