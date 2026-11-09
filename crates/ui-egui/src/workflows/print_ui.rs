@@ -13,9 +13,12 @@ use crate::{PdfCraftApp, widgets};
 
 mod body;
 mod draft;
+mod setups;
 
 pub(crate) use body::body;
 pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
+pub use setups::PrinterSetup;
+pub(crate) use setups::{from_json as setups_from_json, to_json as setups_to_json};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
 const PREVIEW_W: f32 = 320.0;
@@ -111,9 +114,10 @@ enum JobNews {
     Done(Result<String, String>),
 }
 
-/// The printer the dialog preselects: the system default, else the first.
-fn default_printer(printers: &[spool::Printer]) -> Option<String> {
-    printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone())
+/// The printer the dialog preselects: the one printed to last while it is listed (#2001), else
+/// the system default, else the first.
+fn default_printer(d: &PrintDraft, printers: &[spool::Printer]) -> Option<String> {
+    d.last_printer(printers).or_else(|| printers.iter().find(|p| p.default)).or(printers.first()).map(|p| p.name.clone())
 }
 
 /// Whether `printer` can still be chosen from `printers`: Save as PDF (`None`) always can.
@@ -149,7 +153,6 @@ impl PdfCraftApp {
             }
             _ => (listed_printers(), false),
         };
-        let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let mut keep = std::mem::take(&mut self.print_draft);
@@ -157,9 +160,13 @@ impl PdfCraftApp {
         if keep.handling == Handling::Label {
             keep.set_handling(Handling::Size);
         }
+        let default = default_printer(&keep, &printers);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
+        // A printer other than last time's brings back what it was last printed with (#2001);
+        // the same one keeps this session's choices.
+        let changed = printer != keep.printer;
         // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, the whole
         // document.
         let which = if selected.is_empty() { Which::All } else { Which::Selected };
@@ -202,6 +209,9 @@ impl PdfCraftApp {
             which,
             ..keep
         };
+        if changed {
+            self.print_draft.apply_setup();
+        }
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -343,7 +353,11 @@ impl PdfCraftApp {
                     // A picked printer that is no longer listed falls back to the default too.
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
+                        let printer = default_printer(d, &printers);
+                        if printer != d.printer {
+                            d.printer = printer;
+                            d.apply_setup();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;
@@ -441,7 +455,8 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        match self.print_draft.printer.clone() {
+        let to_printer = self.print_draft.printer.is_some();
+        let sent = match self.print_draft.printer.clone() {
             #[cfg(target_arch = "wasm32")]
             Some(printer) if printer == crate::web_print::BROWSER_PRINTER => {
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
@@ -464,7 +479,12 @@ impl PdfCraftApp {
                 self.send_to_printer(printer, bytes, job)
             }
             None => self.save_print_pdf(&name, bytes),
+        };
+        // What this printer printed with is what it starts with next time (#2001).
+        if sent && to_printer {
+            self.print_draft.remember_setup();
         }
+        sent
     }
 
     /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
