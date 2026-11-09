@@ -165,7 +165,7 @@ resolve из §2.2.
 | `pdfcraft_collab_room_version{room="…"}`, `_epoch` | голова комнаты |
 | `pdfcraft_collab_room_read_only{room="…"}` | журнал не пишется |
 | `pdfcraft_collab_room_conflict{room="…"}` | нужен resolve |
-| `pdfcraft_collab_forced_commits_total` | серверные компакции журнала |
+| `pdfcraft_collab_forced_commits_total` | серверные компакции журнала (порог операций, байт или простоя) |
 | `pdfcraft_collab_publication_retries_total` | фоновые повторы callback |
 | `pdfcraft_collab_conflicts_resolved_total` | успешные resolve (§2.2) |
 
@@ -179,6 +179,8 @@ resolve из §2.2.
 - `CURRENT` — `{"version","epoch"}` последней записанной базы;
 - `versions/<N>/file.pdf` — база; базы старше `CURRENT` удаляются на коммите;
 - `journal.jsonl` — принятые операции после базы (пишутся до подтверждения);
+  запись несёт `ms` — время принятия операции, по нему после рестарта
+  восстанавливается idle-порог компакции (RFC §4.6);
 - `CABINET` — `{"version","etag","expected"}`: `version` — версия комнаты у
   опубликованной базы (проверка «есть несохранённое» после рестарта),
   `expected` — номер той же копии в нумерации кабинета (следующий

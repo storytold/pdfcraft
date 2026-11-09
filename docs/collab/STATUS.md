@@ -1,87 +1,41 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
-- State: implemented behind the `collab` feature (off by default). **Rebased onto
-  `origin/main` `8d5d39ef`** (2026-11-09; all 40 commits moved, no conflicts —
-  main's `43f24aa1..8d5d39ef` delta touches 16 files and overlaps the branch
-  only in `crates/ui-egui/src/app.rs`, in different hunks). The §6.6 gates were
-  re-run at the rebased head (§4). **Pushed:** the force-push was done on
-  2026-11-09; `gh pr view 6622` reports head `81035bf2` (equal to the fork head
-  and to the local HEAD before this STATUS commit) and `mergeable: MERGEABLE`;
-  the only reported check, CodeRabbit, is `SUCCESS` (2026-11-09T00:01:35Z).
-  `mergeStateStatus` is `UNSTABLE` with that single green check and no required
-  review. The PR body is the text of `pdfcraft/PR-DRAFT.md` from `## What` on
-  (§6.6). This STATUS update is local only, not pushed. **Observed at
-  2026-11-09T02:59Z:** `storytold/pdfcraft` `main` moved on to `cde331fb` (286
-  commits, 339 files), so `gh pr view 6622` now reports
-  `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` for the pushed head
-  `81035bf2`, and the `MERGEABLE` above is the state at the force-push. The
-  rebase onto the new `main` and the §6.6 gate re-run were done in the
-  2026-11-09 rebase session (§4, §6.6): the branch then sat on `origin/main`
-  `ca9e3c2c3` (which contains the requested `cde331fb7`), with the local head
-  before that STATUS commit at `0e839a4b1`. A later session rebased it again
-  onto `origin/main` `b6cbf9bb3` (307 commits on; 64 branch commits moved, four
-  conflicts; §4) with the field-projection fix `e0d200af5` at the tip and the
-  docs commit `4bcb5b85b` recording that rebase: the local head before this
-  STATUS commit is `4bcb5b85b`, 66 ahead and 0 behind `b6cbf9bb3`, all §6.6 gates are green
-  (re-run at `4bcb5b85b`, §4), and nothing was pushed. The body of PR #6622 was
-  replaced with the text of `PR-DRAFT.md` updated to this base (§4); its head
-  is still the pushed `4eea573be`, so `gh pr view 6622` keeps reporting
-  `CONFLICTING` / `DIRTY` until the force-push.
-  **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
-  the browser transport and the five host messages (§4, §6.3) — and is not
-  pushed either: PR #6622 still has the pushed head `4eea573be` (its body was
-  later updated to the rebased base, §4).
-  **§6.1 limitation 10 (forced journal commit) is done locally in `8fc898bae`**
-  (§4, §6.1): a live room compacts its journal at an operation or byte
-  threshold, with the base under the hub lock and the cabinet POST outside it;
-  `pdfcraft_collab_forced_commits_total` counts the compactions.
-  Limitation 1 (crash recovery against the real process) is closed in
-  `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
-  limitation 11 (commit publication outside the hub lock) in `a47641fb`.
-  **Limitation 2 (style-only edits and status replies) is done locally in
-  `ce5c38798`** (§4, §6.2): `annotation.update` sets the final look of an
-  existing comment as one all-or-nothing operation with a compare-and-set undo,
-  and `annotation.reply` carries a review state (`/State`). After
-  the rebases those commits are `d3e62ecf6`, `b5a67b098`, `2dfae0fe`/`e043c132`
-  being the intermediate pair from the `8d5d39ef` rebase (§4).
-  **§5 p.6 limitation 6 (the publication queue) is done locally in `a639f30c0`**
-  (§4, §6.6): a retryable cabinet failure is retried by the daemon in the
-  background with a doubling backoff and an idempotency key, without waiting for
-  the next commit or the last client leaving; a `409` stops the queue;
-  `pdfcraft_collab_publication_retries_total` counts the attempts.
-  **§5 p.4 / limitation 4 (presence selections) is done locally in `b4e9179d8`**
-  (§4, §5): presence now carries a selection — the `/NM` of the selected comment
-  or a rectangle in user space (a text range's bounding box, a column select) —
-  under the cursor's 30 s TTL, drawn in the actor's colour for every participant
-  including viewers; changing it writes no operation and moves no version. The
-  pushed head, the fork and PR #6622 are unchanged, and nothing was pushed from
-  this session either.
-  **§5 p.6 / limitation 6 (the `conflict` resolution endpoint) is done locally
-  in `62d48d30a`** (§4, §6.4): `POST /v1/sessions/{fileId}/resolve` with a
-  service token (the same RS256 JWT, `owner`/`editor`) takes the cabinet's
-  current version and etag, clears the `conflict` flag, adopts the marker and
-  lets the next commit publish again; a wrong version, another file, a role
-  without write access, a missing room or a second resolve are refused without
-  touching the room. The marker now keeps both numberings (the room's and the
-  cabinet's), so a resolution survives the publication that follows and the
-  metric `pdfcraft_collab_conflicts_resolved_total` counts it. Not pushed.
-- **§5 p.2 / limitation 2's remainder (line endings, font size, note
-  properties) is done locally in `c400147b3`** (§4, §6.2): `annotation.update`
-  carries `/LE` in its style object, and two new addressable operations cover
-  the rest — `annotation.font_size` over `Edit::FontSizeAnnotation` and
-  `annotation.info` (author, subject, note icon) over `Edit::SetAnnotationInfo`,
-  each with a compare-and-set undo and a refusal that changes neither the
-  document nor the version. Nothing was pushed: PR #6622 still has the pushed
-  head `4eea573be`.
-- **§5 p.3 / limitation 3 (page replacement and blank insert) is done locally in
-  `e9756d138`** (§4, RFC §3.1.4): `page.replace` addresses the page, carries the
-  new one-page PDF (base64, ≤ `MAX_RESTORE_PAGE_BYTES`), keeps the page it
-  replaced for an exact undo (a page over the budget has no copy and its undo is
-  a `conflict`), and `page.insert_blank` carries the size of the page it adds.
-  Both bump the epoch, so a passed epoch is `stale`; a bad payload is refused
-  before the document changes. The pushed head and the fork are unchanged (the
-  PR body was later updated to this base, §4).
+- Base: `origin/main` `b6cbf9bb3` ("Merge pull request #6710 from
+  storytold/merge/forms-links-text2", 307 commits past `ca9e3c2c3`). The branch
+  was rebased onto it on 2026-11-09 (64 commits, four conflicts, each resolved
+  by hand; §4 records them) and was 0 behind, with
+  `git merge-tree --write-tree origin/main HEAD` exiting 0. **Observed at
+  2026-11-09T14:46Z:** `origin/main` has moved on to `fe3879bc8` (94 commits),
+  so the branch is now 94 behind and `merge-tree` against it exits 1 with two
+  conflicted paths (`crates/annot/src/lib.rs`, `crates/engine/src/lib.rs`).
+  This pass did not rebase — the drift is the next session's task.
+- Local head before this STATUS commit: `2a3b6e43e` (code: the idle forced
+  commit) on `171cbd0fb` (docs: the re-run at the rebased head and the PR body)
+  on `4bcb5b85b` (docs: the rebase record) on `e0d200af5` (the field-projection
+  fix on top of the 64 replayed commits). Commits named below and in §4 by
+  their pre-rebase hashes are mapped in the rebase section of §4.
+- PR #6622 on GitHub still has the pushed head `4eea573be` and reports
+  `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` (observed 2026-11-09,
+  13:59Z and 14:33Z). The `MERGEABLE` an earlier session saw belongs to the
+  older push `81035bf2` and does not describe the branch. Nothing was pushed
+  from these sessions: only the owner's force-push moves the PR, and
+  mergeability follows it. The PR body was replaced (a body edit, not a push)
+  with the text of `pdfcraft/PR-DRAFT.md` updated to this base.
+- State: implemented behind the `collab` feature (off by default). The §6.6
+  gates are green at the head above (§4).
+- What is done locally, all recorded in §4 and none pushed: the web host bridge
+  (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
+  threshold (`2a3b6e43e`), crash recovery against the real process
+  (`999da5ec`), the commit publication outside the hub lock (`a47641fb`),
+  restyle and status replies (`ce5c38798`), the publication queue
+  (`a639f30c0`), presence selections (`b4e9179d8`), the conflict-resolution
+  endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
+  replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`).
+- Known gaps before production are listed in §5, the plan in §6. The one this
+  pass leaves explicitly open: a kill between the base write and the `CURRENT`
+  rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
+  SIGKILL test covers the journal→base window.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -889,6 +843,83 @@ New tests:
   one remaining line), and one record (version 10) is left after the base at
   version 9. The production thresholds are larger; the test uses three.
 
+### Idle forced commit — §6.1 limitation 10, the time threshold (2026-11-09, local; not pushed)
+
+`2a3b6e43e` on `171cbd0fb`. The operation and byte thresholds
+(`8fc898bae`, above) only fire when an operation or a join arrives. A comment
+written in a quiet room stays in the journal until somebody acts, so the time
+threshold closes that gap:
+
+- **`RoomConfig::forced_commit_idle_secs`** (default 300, `0` disables it) sits
+  next to `forced_commit_ops` / `forced_commit_bytes`. **Idle** is defined as
+  the time since the newest journaled operation: `version > base_version` (the
+  journal holds work the base does not) and
+  `now - last_activity_ms ≥ forced_commit_idle_secs`. It is room state, not
+  connection state: a reconnect or a new join does not reset the clock, and a
+  base written by any commit empties the journal and disarms it. A dirty room
+  whose base is already written but unpublished is *not* idle-eligible: the
+  journal is empty, and republishing that base is the queued publication's path,
+  not a compaction.
+- **It survives a restart.** `JournalRecord` gained `ms` (the acceptance time;
+  `#[serde(default)]`, so an older journal reads `0`), `Adapter::record` takes
+  that clock from `Room::apply`, and `Room::replay` re-arms `last_activity_ms`
+  from the newest record. An old record without a timestamp arms nothing — the
+  next edit starts the clock — rather than guessing a time.
+- **The transport sweeps.** `Hub::documents` + `WsServer::sweep_forced_commits(now_ms)`
+  walks every room under the hub lock, queues the compactions that are due and
+  runs their publications outside the lock. The daemon's background loop
+  (`WsServer::spawn_publication_retries`, 100 ms) calls it after the publication
+  queue, because a quiet room sends no message the transport could react to.
+- **The same commit path and the same counter.** A sweep compaction is
+  `Room::commit_now` under the hub lock plus a publication outside it, exactly
+  like the operation/byte threshold; it increments
+  `pdfcraft_collab_forced_commits_total`, and a `409` flags the room `conflict`
+  and stops further forced commits until the operator resolves it (§4, `62d48d30a`).
+  A `busy` room (a publication in flight) queues nothing; the threshold stays
+  crossed and the next sweep retries.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-server` | `an_idle_journal_compacts_without_a_new_edit_and_a_reconnect_keeps_its_clock` (one operation below both counters; not due at 119 999 ms, not due after a disconnect + rejoin at 60 s, due at 120 s; the commit disarms it; `0` disables the clock), `a_replayed_journal_carries_its_idle_clock_across_a_restart` (an entry recorded at 5 s is due at 125 s but not at 124 999 ms; a record with `ms = 0` arms nothing) |
+| `collab-pdf` | `a_base_and_the_journal_survive_reopening` now asserts the stored `ms` of both records |
+| `collab-ws` e2e | `an_idle_room_compacts_its_journal_without_another_edit`: one edit, far below the counters, then no message at all; a sweep with a later clock compacts it, the publication runs once, `metrics().forced_commits` is 1 and a second sweep queues nothing. `the_background_loop_compacts_an_idle_room`: the daemon's loop, started at 20 ms, compacts the room on its own with exactly one publication (1 s idle) |
+
+Gates at `2a3b6e43e` (host `agents`, rustc 1.99.1; no `-j` flag, so the host's
+`[build] jobs = 4` applied):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates touched + daemon | `cargo clippy -p pdfcraft-collab-{server,hub,ws,pdf} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the nine-crate list | pass — **213**: proto 12, server 29, hub 5, client 13, client-pdf 28, session 5, ws 8 (unit) + 20 e2e, pdf 41, annot 18, daemon 31 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **20/20** |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+
+What this does **not** cover: the idle clock starts from the journal, so a
+room that is dirty only because its base was written and never published is
+still republished by the next commit, join or leave (the queued publication,
+§4), not by this threshold; a kill between the base write and the `CURRENT`
+rename stays covered at the `Store` level only (`Store::tests`, §5 p.1) — the
+real-process SIGKILL test (`tests/crash_recovery.rs`, `999da5ec`) parks in the
+journal→base window, and that window remains the only one with process-level
+coverage. The idle threshold was not exercised against a real cabinet.
+
+### Blob channel — decision (2026-11-09, no code)
+
+RFC §16 and §4.1 leave the blob channel open: every page copy (insert,
+duplicate, replace, restore) travels as base64 inside the operation, capped at
+`MAX_RESTORE_PAGE_BYTES` = 160 KiB, inside a 256 KiB frame. **Decision: C — the
+blob channel is a separate PR after this one merges.** The channel is a protocol
+addition (a blob message, a server-side store with quota and GC, a client upload
+path) that needs its own design and ADR; it would enlarge an already wide PR and
+cannot be reviewed against the same base. Until then the 160 KiB cap is an
+accepted, tested limit: a larger page is refused with `limit` before the
+document changes, and a larger replacement is applied with no copy, so its undo
+is a `conflict` (§5 p.3, RFC §3.1.4). Nothing was raised and no constant changed.
+
 ### Web host bridge — §6.3 (2026-11-09, local; not pushed)
 
 Code: `81a92f32f` (the slice) on top of `018c9840`. The branch is local-only
@@ -1493,7 +1524,9 @@ Ordered by the risk they pose to production.
    is SIGKILLed, and the restart comes back at version 2 / epoch 1, returns the
    stored acknowledgement for the retried `opId`, and commits each edit once.
    The layout and the other two windows (base written but `CURRENT` not yet
-   renamed, torn last line) stay covered at the `Store` level. A kill during
+   renamed, torn last line) stay covered at the `Store` level: a kill between
+   the base write and the `CURRENT` rename is a `Store::tests` case only, not a
+   real-process one. A kill during
    the cabinet publication itself is still not crash-tested: it only leaves the
    room dirty and is retried by the next commit (limitation 6).
 2. **Annotation coverage beyond the typed set.** `annotation.add` shares
@@ -1573,12 +1606,15 @@ Ordered by the risk they pose to production.
     `forced_commit_bytes` (default 8 MiB) of records, with the base written
     under the hub lock and the cabinet POST outside it; a `busy` room is retried
     by the next message or by the end of the publication, and
-    `pdfcraft_collab_forced_commits_total` counts the compactions. What is still
-    open: a time-based threshold (a room that is dirty with no further edits
-    waits for a join or the last leave), and a `409` from the cabinet stops
-    forced commits (the room is flagged `conflict` until the operator's
-    `POST /v1/sessions/{fileId}/resolve`, §4) — retrying the same
-    `expectedVersion` cannot succeed. Bases are pruned to the
+    `pdfcraft_collab_forced_commits_total` counts the compactions. The time
+    threshold is closed in `2a3b6e43e` (§4, §6.1):
+    `RoomConfig::forced_commit_idle_secs` (default 300) compacts a journal that
+    has seen no accepted operation for that long, through the daemon's
+    background sweep; idle is room state — a reconnect does not reset it — and
+    the journal's recorded acceptance time re-arms it after a restart. Still
+    open: a `409` from the cabinet stops forced commits (the room is flagged
+    `conflict` until the operator's `POST /v1/sessions/{fileId}/resolve`, §4) —
+    retrying the same `expectedVersion` cannot succeed. Bases are pruned to the
     one `CURRENT` names, so disk is one PDF plus the journal, not one PDF per
     commit.
 11. ~~The callback is synchronous inside the hub lock~~ — the base is written
@@ -1633,14 +1669,25 @@ in flight) is retried by the next message or by that publication's completion; a
 `409` sets the room's `conflict` flag and stops further forced commits, the same
 rule as a manual commit; the flag clears through the operator's resolve (§4),
 after which the threshold is due again on the next call. `/metrics` gains
-`pdfcraft_collab_forced_commits_total`. What is still open here: a time-based
-threshold, so a room whose journal stays small and then sees no edit waits for a
-join or the last leave (a failed *publication* is queued and retried, §4); and a
-kill between the base write and
-the `CURRENT` rename is still covered at the `Store` level only. The fault
-injection limitation 1 asked for is done for the real process in the
-journal→base window (`apps/pdfcraft-collab-server/tests/crash_recovery.rs`,
-`999da5ec`, §4).
+`pdfcraft_collab_forced_commits_total`.
+
+The time threshold (`2a3b6e43e`, §4) is `RoomConfig::forced_commit_idle_secs`
+(default 300, `0` disables it): the newest journaled operation is that old and
+the journal has not grown since. "Idle" is room state — a reconnect or a join
+does not reset it — and it survives a restart because each journal record
+carries its acceptance time (`ms`, `#[serde(default)]`, read back by
+`Room::replay`); a record written before the field existed arms no clock. The
+daemon's background loop (`WsServer::spawn_publication_retries`, 100 ms) sweeps
+every room with `WsServer::sweep_forced_commits`, so a room that sees no message
+still compacts itself, and the compaction counts in the same metric.
+
+What is still open here: a room that is dirty only because its base was written
+and never published is not idle-eligible (its journal is empty) — the next
+commit, join, leave or the queued publication republishes it; and a kill between
+the base write and the `CURRENT` rename is still covered at the `Store` level
+only (`Store::tests`; §5 p.1). The fault injection limitation 1 asked for is done
+for the real process in the journal→base window
+(`apps/pdfcraft-collab-server/tests/crash_recovery.rs`, `999da5ec`, §4).
 
 ### 6.2 Shared annotation shapes — done in this branch
 
@@ -1844,9 +1891,10 @@ comment delete undone by the other, one page delete undone from the copy, both
 replicas equal).
 
 Still open here: the blob channel that would lift the 160 KiB page cap and make
-a page restore independent of one frame. Remote selections are done (§4,
-`b4e9179d8`); what remains of them is listed in §5 p.4 (several selected
-comments, per-line range geometry, caret).
+a page restore independent of one frame — decided as a separate PR after this
+one merges (§4 "Blob channel — decision"), so the cap stands until then. Remote
+selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.4
+(several selected comments, per-line range geometry, caret).
 
 ### 6.6 Cleanup and submission
 
