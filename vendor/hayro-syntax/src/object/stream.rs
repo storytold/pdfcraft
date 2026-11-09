@@ -273,11 +273,16 @@ impl<'a> Stream<'a> {
             }
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
+            // PdfCraft patch: the last filter of an image produces its rows.
+            let rows = (i + 1 == count && image_params.height > 0)
+                .then(|| usize::try_from(image_params.height).ok())
+                .flatten();
             let new = filter.apply(
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
                 limit,
+                rows,
             )?;
             current = Some(new);
         }

@@ -9083,7 +9083,8 @@ mod default_colour_spaces;
 // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
 mod devicen_inks;
 
-// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35).
+// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35), and
+// PDFBOX-3932: rows that carry no filter-type byte are read as samples (patch 40).
 mod png_predicted_images;
 
 // TIFF-predicted Flate images at 8 and 16 bits are undone byte by byte (vendored hayro-syntax

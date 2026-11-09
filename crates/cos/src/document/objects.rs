@@ -479,7 +479,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
