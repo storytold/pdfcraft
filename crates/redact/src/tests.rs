@@ -3087,6 +3087,37 @@ fn hidden_information_is_counted_and_removed() {
     assert!(shown, "the field's value stays visible as page content");
 }
 
+/// A page thumbnail (`/Thumb`) is a picture of the page as it was. Remove Hidden Information's
+/// private data takes it, so Sanitize does too, and a full save no longer holds it (#6749).
+#[test]
+fn page_thumbnails_go_with_private_data_and_sanitize() {
+    use crate::sanitize::{Hidden, remove_hidden, sanitize, scan_only};
+    const MARKER: &[u8; 16] = b"F5-THUMB-PREVIEW";
+    let thumbed = || {
+        let thumb = stream("/Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", MARKER);
+        let mut doc = one_page(b"BT /F1 10 Tf 10 10 Td (Visible) Tj ET", "", vec![thumb]);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Thumb".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+        doc
+    };
+    let holds = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        bytes.windows(MARKER.len()).any(|w| w == MARKER)
+    };
+    assert!(holds(&thumbed()), "the control: a full save keeps the thumbnail");
+
+    let mut doc = thumbed();
+    assert_eq!(scan_only(&doc, &[Hidden::PrivateData]), [(Hidden::PrivateData, 1)]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 1)]);
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Thumb"));
+    assert!(!holds(&doc), "private data leaves no thumbnail in the saved file");
+
+    let mut doc = thumbed();
+    sanitize(&mut doc).unwrap();
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Thumb"));
+    assert!(!holds(&doc), "Sanitize leaves no thumbnail in the saved file");
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {

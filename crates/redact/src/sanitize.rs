@@ -28,8 +28,9 @@ pub enum Hidden {
     Bookmarks,
     /// Links, actions (open action, additional actions, what bookmarks run) and document JavaScript.
     LinksActionsScripts,
-    /// Private data of other applications (`/PieceInfo`), and prepress data on images and Forms
-    /// (`/OPI`, `/Alternates`).
+    /// Private data of other applications (`/PieceInfo`), prepress data on images and Forms
+    /// (`/OPI`, `/Alternates`), and page thumbnails (`/Thumb`), which a producer stores as a
+    /// picture of the page as it was.
     PrivateData,
 }
 
@@ -271,11 +272,14 @@ fn outline_action_count(doc: &Document, cat: &Dict) -> usize {
 /// XMP on images, fonts and Forms, private data on Forms, associated files on pages and
 /// annotations, additional actions on fields. Images and Forms also carry prepress data: an OPI
 /// proxy's link to the original file, and alternate images, which can be the unedited original.
-const OWNED: [(Hidden, &[u8]); 6] = [
+/// A page's thumbnail is a picture of the page as it was, whatever was removed from it since
+/// (#6749).
+const OWNED: [(Hidden, &[u8]); 7] = [
     (Hidden::Metadata, b"Metadata"),
     (Hidden::PrivateData, b"PieceInfo"),
     (Hidden::PrivateData, b"OPI"),
     (Hidden::PrivateData, b"Alternates"),
+    (Hidden::PrivateData, b"Thumb"),
     (Hidden::Attachments, b"AF"),
     (Hidden::LinksActionsScripts, b"AA"),
 ];
