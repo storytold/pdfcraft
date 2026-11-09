@@ -4887,6 +4887,25 @@ fn split_by_size_and_bookmarks_and_page_filters() {
     assert_eq!(filter_pages(info, &all, PageParity::Odd, PageOrientation::Portrait), [0, 2, 4]);
 }
 
+/// A zoomed link follows its target page, not its number: deleting a page before the target keeps
+/// the link on that page at its zoom. Deleting the target page drops the link's destination, as
+/// for any link to a deleted page, and undo brings it back with its zoom.
+#[test]
+fn a_zoomed_link_follows_its_page_and_loses_it_when_the_page_is_deleted() {
+    let (mut s, id) = session_with(3);
+    let zoom = LinkZoom::Percent(200.0);
+    let rect = [10.0, 10.0, 60.0, 30.0];
+    s.apply(id, Edit::AddLink { page: 0, rect, action: LinkAction::Page { page: 2, zoom }, style: LinkStyle::default() }).unwrap();
+    let action = |s: &Session| s.get(id).unwrap().links()[0].action.clone();
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "the link follows its page");
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    // The destination is removed, not left pointing at a page that is gone.
+    assert_eq!(action(&s), LinkAction::Other("no action".into()), "no destination left");
+    s.undo(id).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "undo restores the destination and its zoom");
+}
+
 #[test]
 fn links_from_urls_and_link_edits() {
     // One page whose text contains a web address.
@@ -4928,8 +4947,12 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(s.get(id).unwrap().links().len(), 1);
     // Link Properties and delete.
     let l = s.get(id).unwrap().links()[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
-    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page(0));
+    s.apply(
+        id,
+        Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }), style: None },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::FitPage });
     s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
     assert!(s.get(id).unwrap().links().is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");
@@ -11845,6 +11868,25 @@ fn imported_bookmarks_undo_in_one_step() {
     let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
+}
+
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
 }
 
 /// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
