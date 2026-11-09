@@ -763,6 +763,7 @@ fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
                         recovered: None,
                         then: None,
                         display_override: Some((PageLayout::TwoUp, false)),
+                        ready: None,
                     });
                     replies.push((
                         sender,
@@ -820,6 +821,7 @@ fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
             recovered: None,
             then: None,
             display_override: Some((PageLayout::TwoUp, false)),
+            ready: None,
         });
         app.set_launch_layout("single").unwrap();
         assert!(app.set_launch_layout("invalid").is_err());
@@ -903,4 +905,19 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
     assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
     assert_eq!(doc.info.pages.len(), 2);
     let _ = std::fs::remove_file(path);
+}
+
+/// A file waiting for room in the open queue, named again with a tool (Open and run), keeps
+/// that tool; a later repeat without one doesn't drop it.
+#[test]
+fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
+    let file = tool_open_file("deferred-tool", "pdf", &fixture(1));
+    let path = file.0.to_string_lossy().into_owned();
+    let mut app = PdfCraftApp::new();
+    app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), then: None, display_override: None });
+    assert_eq!(app.open_path_then(&path, Some("export.text")), crate::OpenOutcome::Pending);
+    assert_eq!(app.deferred_opens.len(), 1);
+    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
+    assert_eq!(app.open_path(&path), crate::OpenOutcome::Pending);
+    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
 }

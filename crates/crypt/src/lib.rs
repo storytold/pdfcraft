@@ -82,16 +82,23 @@ pub enum Auth {
     User,
 }
 
-/// Permission bits from `/P` (§7.6.4.2, Table 22). Owners have every permission.
+/// Permission flags from `/P`, read the way the handler's revision reads them (ISO 32000-1:2008,
+/// Table 22). Owners have every permission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Permissions {
     pub bits: i32,
     pub owner: bool,
+    /// The `/R` value of the handler that read `bits`.
+    pub revision: i64,
 }
 
 impl Permissions {
     fn bit(&self, n: u32) -> bool {
         self.owner || (self.bits >> (n - 1)) & 1 == 1
+    }
+    /// Revision 3 and later read the full flag list of Table 22; revision 2 has its own.
+    fn is_revision_3_or_later(&self) -> bool {
+        self.revision >= 3
     }
     pub fn print(&self) -> bool {
         self.bit(3)
@@ -107,17 +114,22 @@ impl Permissions {
         self.bit(6)
     }
     pub fn fill_forms(&self) -> bool {
-        self.bit(9) || self.bit(6)
+        if self.is_revision_3_or_later() { self.bit(9) || self.bit(6) } else { self.bit(6) }
     }
+    /// Revision 2 covers accessibility with the copy flag (bit 5); revision 3 and later with bit 10.
     pub fn extract_for_accessibility(&self) -> bool {
-        self.bit(10)
+        if self.is_revision_3_or_later() { self.bit(10) } else { self.bit(5) }
     }
-    /// Insert, rotate or delete pages; create bookmarks and thumbnails.
+    /// Insert, rotate or delete pages; create bookmarks and thumbnails. Revision 3 and later grant
+    /// it by bit 11 alone. Table 22 defines bit 11 for those revisions only, so at revision 2 the
+    /// modify flag (bit 4) covers it.
     pub fn assemble(&self) -> bool {
-        self.bit(11) || self.bit(4)
+        if self.is_revision_3_or_later() { self.bit(11) } else { self.bit(4) }
     }
+    /// Revision 3 and later need bit 3 as well as bit 12. Table 22 defines bit 12 for those
+    /// revisions only: at revision 2 the print flag (bit 3) is all there is.
     pub fn print_high_quality(&self) -> bool {
-        self.bit(12)
+        if self.is_revision_3_or_later() { self.print() && self.bit(12) } else { self.print() }
     }
 }
 
@@ -250,7 +262,7 @@ impl SecurityHandler {
     /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
         let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
-        Permissions { bits, owner: self.auth == Auth::Owner }
+        Permissions { bits, owner: self.auth == Auth::Owner, revision: self.dict.r }
     }
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
@@ -290,20 +302,33 @@ impl SecurityHandler {
         }
     }
 
-    /// Algorithm 1 (§7.6.3.3): the key for one object. AES-256 uses the file key directly.
+    /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 uses the file key directly
+    /// (Algorithm 1.A, §7.6.3.3).
+    ///
+    /// For an RC4 crypt filter under `/V 4`, a file key shorter than 16 bytes is first extended
+    /// to 16 bytes with zeros. The standard doesn't say so (Algorithm 1 takes the n-byte key as
+    /// it is), but that is how Acrobat writes and reads such files: a `/V 4` RC4 crypt filter
+    /// with a 40- or 48-bit key (pdf.js issue 19484). The renderer's `hayro-syntax` reads them
+    /// the same way, so a page it shows is one this crate can read and save. AES-128 keys are
+    /// left as they are: `AESV2` takes a 128-bit key (Table 25), and Acrobat's extension is only
+    /// seen with RC4. Every key PdfCraft writes under `/V 4` is 16 bytes already.
     fn object_key(&self, method: Method, num: u32, generation: u16) -> Vec<u8> {
         if method == Method::Aes256 {
             return self.key.clone();
         }
+        let mut key = self.key.clone();
+        if method == Method::Rc4 && self.dict.v == 4 && key.len() < 16 {
+            key.resize(16, 0);
+        }
         let mut h = Md5::new();
-        h.update(&self.key);
+        h.update(&key);
         h.update(&num.to_le_bytes()[..3]);
         h.update(generation.to_le_bytes());
         if method == Method::Aes128 {
             h.update(b"sAlT");
         }
         let digest = h.finalize();
-        digest[..(self.key.len() + 5).min(16)].to_vec()
+        digest[..(key.len() + 5).min(16)].to_vec()
     }
 
     fn apply(&self, method: Method, num: u32, generation: u16, data: &[u8], encrypt: bool) -> Vec<u8> {

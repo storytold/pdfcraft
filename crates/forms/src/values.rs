@@ -206,6 +206,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
+            // Thai this build can't draw is refused (before any script runs), rather than stored
+            // and drawn as `?`.
+            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+                return invalid(format!("{:?} can't take this text: {why}", f.name));
+            }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
@@ -430,7 +435,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     // fonts can't draw the date language's (#5303).
     let mut english: Option<Option<String>> = None;
     for w in &f.widgets {
-        let (stream, missing) = match &shown {
+        let (mut stream, missing) = match &shown {
             Some(s) => {
                 let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);
                 // Taken when the English run happened and draws whole, even where it is the
@@ -447,6 +452,8 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
+        // Thai glyphs are streams of their own.
+        pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {
                 doc.get(w.obj)
