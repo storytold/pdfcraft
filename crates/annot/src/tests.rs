@@ -1130,7 +1130,7 @@ fn stamps_outside_the_standard_fonts_are_drawn_as_outlines() {
     assert!(!ap.contains(" Tj") && !ap.contains('?'), "nothing is written in Helvetica: {ap}");
     assert_eq!(d.name(b"PCLang"), Some(&b"ru"[..]));
     assert!(appearance::undrawable_text(d).is_none());
-    assert!(appearance::build(d).is_some(), "it can be restyled");
+    assert!(appearance::build(&doc, d).is_some(), "it can be restyled");
     set_style(&mut doc, 0, i, StyleChange::new(Some([0.1, 0.2, 0.9]), None, None, None), &meta("")).unwrap();
     assert!(ap_content(&doc, &list(&doc, 0)[i]).contains("/ActualText <FEFF041E"), "restyled in Russian");
     // An English stamp keeps its Helvetica label; a Cyrillic name on it becomes outlines.
@@ -1174,9 +1174,9 @@ fn a_stamp_whose_language_this_build_cant_draw_keeps_its_artwork() {
     d.set(b"Name".to_vec(), Object::name("Approved"));
     d.set(b"PCStamp".to_vec(), Object::Bool(true));
     d.set(b"PCLang".to_vec(), Object::name("ja"));
-    assert_eq!(appearance::build(&d).is_some(), StampLang::Ja.drawable());
+    assert_eq!(appearance::build(&bare_doc(), &d).is_some(), StampLang::Ja.drawable());
     d.set(b"PCLang".to_vec(), Object::name("xx"));
-    assert!(appearance::build(&d).is_some(), "an unknown language is English");
+    assert!(appearance::build(&bare_doc(), &d).is_some(), "an unknown language is English");
 }
 
 #[test]
