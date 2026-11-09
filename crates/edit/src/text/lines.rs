@@ -291,7 +291,13 @@ fn fill_color(fill: &[Op]) -> [f64; 3] {
 
 /// The lines of text on a page (0-based), in content order.
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true)
+    text_lines_in(doc, &page_dict(doc, page)?, true, false)
+}
+
+/// [`text_lines`] with every show of invisible text a line of its own, however alike its
+/// neighbours: an OCR layer's words, which an edit can keep or change one by one.
+pub(crate) fn word_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, &page_dict(doc, page)?, true, true)
 }
 
 /// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
@@ -299,11 +305,12 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
 /// through every page doesn't walk the page tree again for each.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, page, false)
+    text_lines_in(doc, page, false, false)
 }
 
-/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans.
-fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) -> Result<Vec<TextLine>, EditError> {
+/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans, and with
+/// `invisible_apart`, no show of invisible text joins the one before it.
+fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, invisible_apart: bool) -> Result<Vec<TextLine>, EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
@@ -345,7 +352,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 && near
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
-                && (s.state.render_mode != 3 || gap < pen.size * 0.6)
+                && (s.state.render_mode != 3 || (gap < pen.size * 0.6 && !invisible_apart))
         });
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
