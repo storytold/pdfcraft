@@ -356,6 +356,94 @@ const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
 /// one is not decoded at all.
 const MAX_CMAP_BYTES: usize = 16 << 20;
+/// Most Type 3 glyph descriptions read for their `d1` box. A simple font shows at most 256 codes.
+const MAX_TYPE3_GLYPHS: usize = 256;
+/// Largest decoded Type 3 glyph description read for its `d1` box; a larger one is skipped.
+const MAX_TYPE3_GLYPH_BYTES: usize = 64 << 10;
+/// Decoded bytes all of one font's glyph descriptions may take together.
+const MAX_TYPE3_FONT_BYTES: usize = 4 << 20;
+/// Farthest a Type 3 glyph box reaches from the baseline, in text space per unit of font size. A
+/// bitmap font drawn in page units at `0.01 Tf` is a few thousand; past this a box is garbage, and
+/// clamping it keeps the run boxes built from it finite.
+const MAX_TYPE3_EXTENT: f64 = 1e6;
+
+/// The union of the boxes a Type 3 font's glyph descriptions declare with `d1` (ISO 32000-2
+/// §9.6.4, Table 111), in glyph space, and whether every description chosen was read; `None` when
+/// no glyph declares one (`d0` glyphs don't). The descriptions the encoding's `/Differences`
+/// names are chosen, since it "shall specify the complete character encoding" (Table 110); only a
+/// font without one has its first descriptions chosen. Reads at most [`MAX_TYPE3_GLYPHS`]
+/// descriptions within [`MAX_TYPE3_FONT_BYTES`].
+fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<([f64; 4], bool)> {
+    let procs = dict(doc, font.get(b"CharProcs"))?;
+    let mut names: Vec<&[u8]> = Vec::new();
+    // Whether every glyph that can be drawn is read; if not, the union may be short of them.
+    let mut complete = true;
+    let encoding = dict(doc, font.get(b"Encoding"));
+    // A base encoding reaches glyphs `/Differences` doesn't name, which Type 3 doesn't provide for (its
+    // `/Differences` "shall specify the complete character encoding", Table 110): those boxes go unread.
+    if encoding.as_ref().is_some_and(|e| e.contains(b"BaseEncoding")) {
+        complete = false;
+    }
+    let diffs = encoding.as_ref().and_then(|e| e.get(b"Differences")).map(|d| doc.resolve(d));
+    for name in diffs.as_deref().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_name) {
+        if procs.get(name).is_none() || names.contains(&name) {
+            continue;
+        }
+        if names.len() >= MAX_TYPE3_GLYPHS {
+            complete = false;
+            break;
+        }
+        names.push(name);
+    }
+    let chosen: Vec<&Object> = if names.is_empty() {
+        complete = procs.len() <= MAX_TYPE3_GLYPHS;
+        procs.iter().take(MAX_TYPE3_GLYPHS).map(|(_, proc)| proc).collect()
+    } else {
+        names.iter().filter_map(|n| procs.get(n)).collect()
+    };
+    let mut budget = DecodeBudget::new(MAX_TYPE3_FONT_BYTES, 0);
+    let mut union: Option<[f64; 4]> = None;
+    for proc in chosen {
+        let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+        let Ok(data) = budget.decode_within(&doc.with_direct_parms(s), MAX_TYPE3_GLYPH_BYTES) else {
+            if budget.remaining() == 0 {
+                // The rest go unread too.
+                complete = false;
+                break;
+            }
+            continue;
+        };
+        if let Some([llx, lly, urx, ury]) = d1_box(&data) {
+            let r = [llx.min(urx), lly.min(ury), llx.max(urx), lly.max(ury)];
+            union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        }
+    }
+    union.map(|u| (u, complete))
+}
+
+/// The glyph box `llx lly urx ury` of a glyph description that begins with `wx wy llx lly urx ury
+/// d1`; `None` for `d0` or anything else first.
+fn d1_box(data: &[u8]) -> Option<[f64; 4]> {
+    let mut lexer = pdfcraft_cos::Lexer::new(data, 0);
+    let mut operands = [0.0; 6];
+    for slot in &mut operands {
+        lexer.skip_ws();
+        *slot = std::str::from_utf8(lexer.token()).ok()?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+    }
+    lexer.skip_ws();
+    (lexer.token() == b"d1").then(|| [operands[2], operands[3], operands[4], operands[5]])
+}
+
+/// The lowest and highest text-space y of the glyph-space box `r` under a font matrix whose
+/// y column is `b`, `d`, `f` (§9.2.4): a flipped matrix (`d < 0`) turns the box over. `None`
+/// when the box has no height in text space or the numbers overflow; clamped to
+/// [`MAX_TYPE3_EXTENT`].
+fn text_y_extent(r: [f64; 4], b: f64, d: f64, f: f64) -> Option<(f64, f64)> {
+    let ys = [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])].map(|(x, y)| b * x + d * y + f);
+    let lo = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo.max(-MAX_TYPE3_EXTENT), hi.min(MAX_TYPE3_EXTENT)))
+}
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.
@@ -754,6 +842,8 @@ impl Metrics {
         m.std14 = None;
         let subtype = font.name(b"Subtype").unwrap_or(b"Type1").to_vec();
         let descriptor;
+        // A Type 3 font measured from its glyph descriptions' `d1` boxes or its `/FontBBox` (see below).
+        let mut type3_measured = false;
         if subtype == b"Type0" {
             m.composite = true;
             m.default = 1000.0;
@@ -814,13 +904,28 @@ impl Metrics {
             descriptor = dict(doc, font.get(b"FontDescriptor"));
             m.default = descriptor.as_ref().and_then(|d| d.get(b"MissingWidth")).and_then(|w| doc.resolve(w).as_f64()).unwrap_or(0.0);
             if subtype == b"Type3" {
-                let fm = nums(doc, font.get(b"FontMatrix"));
-                if fm.len() == 6 {
-                    m.scale = fm[0];
-                    let bbox = nums(doc, font.get(b"FontBBox"));
-                    if bbox.len() == 4 && fm[3] != 0.0 {
-                        m.ascent = (bbox[3] * fm[3]).max(0.5);
-                        m.descent = (bbox[1] * fm[3]).min(-0.1);
+                if let [a, b, _, d, _, f] = nums(doc, font.get(b"FontMatrix"))[..] {
+                    m.scale = a;
+                    // The glyphs' own boxes first: a bitmap font's `/FontBBox` is often all zero
+                    // or one unit high, while each `d1` declares the box its glyph fills.
+                    // Each `d1` box "shall be correct" (Table 111), so their union is used as
+                    // declared, only widened to reach the baseline: a font of small glyphs gets a
+                    // small box. A `/FontBBox` is often one unit high, so it keeps the 0.5 / 0.1 em
+                    // minimum.
+                    // A union cut short by a limit may miss glyphs that are drawn, so a nonzero
+                    // `/FontBBox` comes first then; all zero, the partial union is still better
+                    // than no box. A box with no height in text space gives way to the next.
+                    let glyphs = type3_glyph_box(doc, font);
+                    // All zero: no assumption about glyph sizes (Table 110).
+                    let bbox = <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0));
+                    let union = |complete: bool| glyphs.filter(|g| g.1 == complete).map(|(r, _)| (r, 0.0, 0.0));
+                    let candidates = [union(true), bbox.map(|r| (r, 0.5, -0.1)), union(false)];
+                    if let Some(((lo, hi), min_ascent, max_descent)) =
+                        candidates.into_iter().flatten().find_map(|(r, up, down)| text_y_extent(r, b, d, f).map(|e| (e, up, down)))
+                    {
+                        m.ascent = hi.max(min_ascent);
+                        m.descent = lo.min(max_descent);
+                        type3_measured = true;
                     }
                 }
             } else if m.widths.is_empty() {
@@ -840,11 +945,15 @@ impl Metrics {
             let ascent = d.get(b"Ascent").and_then(|v| doc.resolve(v).as_f64());
             let descent = d.get(b"Descent").and_then(|v| doc.resolve(v).as_f64());
             // Fonts often claim 0; never shrink the glyph box below a sensible minimum.
-            if ascent.is_some() || subtype != b"Type3" {
+            // A Type 3 font measured from its glyphs' `d1` boxes or its `/FontBBox` keeps those:
+            // they are in glyph space and go through its font matrix, while a descriptor's
+            // /Ascent and /Descent are optional for Type 3 (Table 120) and read here as 1000-unit
+            // values, whatever the matrix.
+            if (ascent.is_some() && !type3_measured) || subtype != b"Type3" {
                 let a = ascent.unwrap_or(0.0) / 1000.0;
                 m.ascent = if a > 0.3 { a.min(1.5) } else { 0.9 };
             }
-            if descent.is_some() || subtype != b"Type3" {
+            if (descent.is_some() && !type3_measured) || subtype != b"Type3" {
                 let de = descent.unwrap_or(0.0) / 1000.0;
                 m.descent = if de < -0.05 { de.max(-0.6) } else { -0.25 };
             }
