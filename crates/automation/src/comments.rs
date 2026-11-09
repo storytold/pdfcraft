@@ -209,6 +209,8 @@ impl Automation {
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
                 "group": group,
+                // Unchanged on a page the viewer could not read, as `rect` is.
+                "popup": c.popup.map(|w| json!({ "rect": crate::view_rect(&doc.info, c.page, w.rect), "open": w.open })),
             });
             // A text box's or typed text's oval or circle (a rectangle is not reported).
             if c.subtype == "FreeText"
@@ -229,14 +231,18 @@ impl Automation {
                     v["text_opacity"] = json!(t);
                 }
             }
-            // A line's ends, or the corners of connected lines, a polygon or a cloud, as
-            // comment_edit's `points` takes them.
+            // A line's ends, the corners of connected lines, a polygon or a cloud, or a callout's
+            // arrow point and knee, as comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
             if !c.points.is_empty() {
                 let round = |v: f32| (v * 100.0).round() / 100.0;
                 let page = doc.info.pages.get(c.page);
                 v["points"] =
                     json!(c.points.iter().map(|q| page.map_or([q[0], q[1]], |p| p.user_to_view(q[0], q[1])).map(round)).collect::<Vec<_>>());
+            }
+            // A callout's text box, as comment_edit's `rect` takes it (`rect` also holds the line).
+            if let Some(tb) = c.text_box {
+                v["text_box"] = json!(crate::view_rect(&doc.info, c.page, tb));
             }
             v
         };
@@ -427,18 +433,8 @@ impl Automation {
                     let point = to_user(&info, t[0], t[1]);
                     let knee = match a.nums::<2>("knee")? {
                         Some(k) => to_user(&info, k[0], k[1]),
-                        // Halfway between the point and the box, level with the box's middle.
-                        None => {
-                            let mid = (rect[1] + rect[3]) / 2.0;
-                            let side = if point[0] < rect[0] {
-                                rect[0]
-                            } else if point[0] > rect[2] {
-                                rect[2]
-                            } else {
-                                (rect[0] + rect[2]) / 2.0
-                            };
-                            [(point[0] + side) / 2.0, mid]
-                        }
+                        // Acrobat's: 12 pt out from the middle of the side facing the point.
+                        None => pdfcraft_engine::callout_knee(rect, point),
                     };
                     Shape::Callout {
                         rect,
@@ -719,6 +715,17 @@ impl Automation {
         self.apply(a, Edit::MarkAnnotation { page, index, marked, author })
     }
 
+    pub(crate) fn comment_popup(&mut self, a: &Args) -> Result<Value> {
+        let (page, index) = self.comment_target(a)?;
+        let info = self.doc(a)?.info.pages[page].clone();
+        let open = a.opt_bool("open")?;
+        let rect = a.nums::<4>("rect")?.map(|r| rect_to_user(&info, r));
+        if open.is_none() && rect.is_none() {
+            return Err(ToolError::InvalidArgs("nothing to change: pass open and/or rect".into()));
+        }
+        self.apply(a, Edit::SetAnnotationPopup { page, index, rect, open })
+    }
+
     pub(crate) fn comment_lock(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         let locked = a.opt_bool("locked")?.unwrap_or(true);
@@ -892,6 +899,7 @@ impl Automation {
         let bytes = crate::read_input(&path)?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
+        let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -901,7 +909,16 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            author: a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string(),
+            line: None,
+            author: author.clone(),
+        };
+        // A dynamic line (#1741): `{name}`, `{date}` and `{time}` filled in now.
+        let edit = match (edit, a.opt_str("line")?) {
+            (Edit::AddCustomStamp { page, rect, name, file, author, .. }, Some(t)) if !t.trim().is_empty() => {
+                let line = Some(self.session().stamp_line(t, &author));
+                Edit::AddCustomStamp { page, rect, name, file, author, line }
+            }
+            (edit, _) => edit,
         };
         self.apply(a, edit)
     }

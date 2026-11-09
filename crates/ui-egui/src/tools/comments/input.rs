@@ -1,8 +1,9 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, on_text, point_handle, reaches_points, reshapable, reshaped,
-    resizable, resized, snapped_caret,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, frame, handle_pos, held, is_callout, is_markup, on_text, point_handle, reaches_points,
+    reshapable, reshape_for, resizable, resized, snapped_caret,
 };
-use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
+use super::paint::{closes_at, drawn_shape, edit_anchor, erase, moves_box_only, new_comment};
+use super::popups::has_popup;
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
@@ -122,10 +123,10 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
         {
-            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, point_cursor(Some(a), point)));
         }
         if resizable(a)
-            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
+            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.frame_rect(a), *h).distance(p) <= 7.0)
         {
             let icon = match (x, y) {
                 (0, _) => egui::CursorIcon::ResizeVertical,
@@ -181,7 +182,7 @@ pub(crate) fn anchor(cx: &PageCx<'_>, p: Pos2, view: &mut DocView) {
 pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView) {
     match index {
         // `index` is what the right-click is on ([`context_hit`]): no second look at the point.
-        Some(i) => match cx.annotation(i) {
+        Some(i) => match cx.get(i) {
             Some(a) => view.comments.pick(cx, a),
             None => view.comments.select(Some((cx.page, i))),
         },
@@ -213,6 +214,8 @@ pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
         .comments()
         .map(|a| (a, a))
         .chain(members.iter().copied())
+        // An open pop-up already shows the comment: no tooltip over it.
+        .filter(|(_, says)| !says.popup.is_some_and(|w| w.open))
         .filter(|(a, _)| cx.screen_rects(a).any(|r| r.contains(p)))
         .filter_map(|(a, says)| hover_tip(says, cx.prefs).map(|text| (a.index, text)))
         .max_by_key(|(index, _)| *index);
@@ -268,7 +271,7 @@ fn select_input(
                 let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
                 // A drawn signature keeps its shape from the corners, as image signatures do.
                 let aspect_ratio = aspect_ratio.or_else(|| {
-                    let r = cx.screen_rect(a);
+                    let r = cx.frame_rect(a);
                     (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
                 });
                 cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
@@ -338,15 +341,23 @@ fn select_input(
             None => {}
         }
     }
-    if resp.double_clicked()
+    if (resp.double_clicked() || resp.triple_clicked())
         && on_page
         && cx.allowed
         && let Some((a, _)) = owner
     {
         let (page, index) = cx.selects(a);
         cv.pick(cx, a);
-        // A group's text is its primary's, wherever in the group the double-click was.
+        // A group's text and pop-up are its primary's, wherever in the group the double-click was.
         let a = cx.get(index).filter(|_| page == cx.page).unwrap_or(a);
+        // A double-click opens the comment's pop-up window, as in Acrobat; a text box, whose
+        // text is the comment itself, is edited in place.
+        if has_popup(a) {
+            if !a.popup.is_some_and(|p| p.open) {
+                view.pending_edit = Some(Edit::SetAnnotationPopup { page: cx.page, index: a.index, rect: None, open: Some(true) });
+            }
+            return true;
+        }
         cv.composer = Some(Composer {
             page: cx.page,
             at: edit_anchor(cx.info, a),
@@ -368,6 +379,12 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
             let (a, b) = (cx.to_user(from), cx.to_user(p));
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             if from.distance(p) >= 2.0 {
+                // A callout dragged by its text box moves the box alone: its arrow point stays.
+                if let Some(a) = cx.get(index).filter(|a| moves_box_only(cx, a, from)) {
+                    let f = frame(a, cx.rotation()).map(f64::from);
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect: [f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy] });
+                    return;
+                }
                 // The other selected comments on this page (not text markup or a Replace Text
                 // caret, which are where their text is, nor a locked one, which would refuse the
                 // whole step) move with the dragged one, as one undo step.
@@ -389,7 +406,7 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
         Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
             view.comments.gesture = None;
             if let Some(a) = cx.get(index) {
-                let from_rect = cx.screen_rect(a);
+                let from_rect = cx.frame_rect(a);
                 let shift = ui.input(|i| i.modifiers.shift);
                 let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
                 let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
@@ -402,8 +419,8 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
             view.comments.gesture = None;
             let shift = ui.input(|i| i.modifiers.shift);
             let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-            if moved {
-                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+            if moved && let Some(a) = cx.get(index) {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshape_for(a, &points, point, cx.to_user(p), shift) });
             }
         }
         _ => {}
@@ -830,5 +847,19 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
         view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+    }
+}
+
+/// The pointer over point handle `i` of `selected`: a callout's knee moves along its knee line only
+/// (see `callout_reshaped`), so it shows that direction; other points move freely.
+fn point_cursor(selected: Option<&Annotation>, i: usize) -> egui::CursorIcon {
+    let knee_side = selected.filter(|a| i == 1 && is_callout(a)).and_then(|a| {
+        let (tb, knee) = (a.text_box?, a.points.get(1)?);
+        Some(pdfcraft_engine::callout_side(tb.map(f64::from), [f64::from(knee[0]), f64::from(knee[1])]))
+    });
+    match knee_side {
+        Some(side) if side.horizontal() => egui::CursorIcon::ResizeHorizontal,
+        Some(_) => egui::CursorIcon::ResizeVertical,
+        None => egui::CursorIcon::Crosshair,
     }
 }

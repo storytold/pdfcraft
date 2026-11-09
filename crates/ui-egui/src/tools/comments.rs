@@ -26,6 +26,7 @@ mod geometry;
 mod input;
 mod menu;
 mod paint;
+mod popups;
 mod state;
 
 pub(crate) use composer::{composer, submit_key};
@@ -45,6 +46,7 @@ use menu::{RECENT_CUSTOM, same_colour};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
+pub(crate) use popups::popups;
 #[cfg(test)]
 use state::after_delete;
 use state::login_name;
