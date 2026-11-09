@@ -33,6 +33,7 @@ impl DocView {
         self.presentation =
             Some(SavedDisplay { layout: self.layout, continuous: self.continuous, cover: self.cover, fit: self.fit, zoom: self.zoom });
         self.selection = None;
+        self.presenter = Default::default();
         // Off, the Fill screen preference keeps the display full screen was entered from (#4273),
         // and the reading position in it.
         if self.full_screen_fill {
@@ -49,6 +50,7 @@ impl DocView {
     pub fn leave_presentation(&mut self) {
         let goto = if self.fills_screen() { (self.current, 0.0) } else { self.reading_position() };
         let Some(saved) = self.presentation.take() else { return };
+        self.presenter = Default::default();
         self.layout = saved.layout;
         self.continuous = saved.continuous;
         self.cover = saved.cover;
@@ -97,6 +99,12 @@ impl DocView {
     /// The least space beside the pages: none while full screen fills the screen.
     pub(super) fn side(&self) -> f32 {
         if self.fills_screen() { 0.0 } else { SIDE }
+    }
+
+    /// Whether full screen is playing a page transition (or holding the page before it until the
+    /// next one has rendered).
+    pub fn presenting_a_transition(&self) -> bool {
+        self.presenter.turning()
     }
 
     /// Switch the base page display (Single or Two-page), leaving continuous scrolling as it is.
@@ -174,6 +182,31 @@ impl DocView {
         self.layout == PageLayout::TwoUp
     }
 
+    /// The page (or spread) the view shows first, as `FitWindow` sizes the window to it
+    /// ([`crate::viewer_prefs::window_commands`]). `None` when there is no such page.
+    pub(crate) fn first_page_now(&self, info: &DocInfo) -> Option<crate::viewer_prefs::PageNow> {
+        info.pages.get(self.current)?;
+        // Two-page view shows the spread the page is in (a cover page on its own); the spread
+        // is as wide as its pages side by side and as tall as the taller one, as `layout`
+        // places it. The last spread of an odd page count has one page.
+        let (first, last) = if self.layout == PageLayout::TwoUp {
+            let first = self.spread_first(self.current);
+            (first, if self.cover && first == 0 { 0 } else { first.saturating_add(1) })
+        } else {
+            (self.current, self.current)
+        };
+        let sizes: Vec<(f32, f32)> =
+            info.pages.iter().skip(first).take(last.saturating_sub(first).saturating_add(1)).map(|p| self.display_size(p)).collect();
+        let w: f32 = sizes.iter().map(|s| s.0).sum();
+        let h = sizes.iter().map(|s| s.1).fold(0.0, f32::max);
+        let gap = self.page_gap() * sizes.len().saturating_sub(1) as f32;
+        Some(crate::viewer_prefs::PageNow {
+            size: vec2(w * PT, h * PT),
+            margins: vec2(2.0 * SIDE + gap, 2.0 * MARGIN),
+            zoom: (self.fit == Fit::None).then_some(self.zoom),
+        })
+    }
+
     /// Displayed page size in points for this view rotation.
     pub(super) fn display_size(&self, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
         if self.rotation % 180 == 90 { (p.height, p.width) } else { (p.width, p.height) }
@@ -249,15 +282,18 @@ impl DocView {
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
+        // Just after a find step, around the match at the window's centre (#3530).
+        let held = self.find_hold.map(|(p, fx, fy)| (p, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
         // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
         // Fractions outside 0..1 preserve the pointer's position outside the page as well.
-        let anchor =
+        let anchor = held.or_else(|| {
             self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
                 |(p, r)| {
                     let f = (screen_pos - r.min) / r.size();
                     (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
                 },
-            );
+            )
+        });
         self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {

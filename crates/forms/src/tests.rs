@@ -497,6 +497,31 @@ fn opt_export_values_select_button_states() {
     assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
 }
 
+/// Export values that are themselves numbers (`/Opt [(1) (2)]`, as static XFA forms write their
+/// items) name the buttons in `/Opt` order when read as export values, though `1` is also the
+/// second button's on-state name (`/0`, `/1` by position; ISO 32000-2 Table 230).
+#[test]
+fn numeric_opt_export_values_name_their_own_buttons() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Btn /T (lang) /Ff 49152 /Opt [(1) (2)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let lang = field(&all, "lang");
+    assert_eq!((lang.state_for_export("1"), lang.state_for_export("2")), (Some("0"), Some("1")));
+    // A state name no export value matches still names its button; anything else names none.
+    assert_eq!((lang.state_for_export("0"), lang.state_for_export("3")), (Some("0"), None));
+    // On-state names keep their meaning where the caller has one (a click sends the state).
+    assert_eq!(lang.state_for("1"), Some("1"));
+}
+
 /// What fits a text field is measured as its appearance draws it: in the field's own font (its
 /// `/DR` font, Helvetica where that can't show the text), inside the border and padding, at its
 /// size, wrapped for multi-line, at the smallest automatic size, as asterisks for a password,
@@ -3255,14 +3280,14 @@ fn rotated_fields_draw_in_their_quadrant() {
     let turned = field(&fields(&doc), "name").widgets[0].clone();
     assert_eq!(turned.rotation, 90);
     let r = turned.rect;
-    // [50 700 250 720] around its center becomes 20 wide and 200 tall.
-    assert!(close(r[0], 140.0) && close(r[1], 610.0) && close(r[2], 160.0) && close(r[3], 810.0), "{r:?}");
+    // The field stays where it was: only its content turns.
+    assert!(r.iter().zip(before).all(|(a, b)| close(*a, b)), "{r:?} moved from {before:?}");
     let widget = doc.get(turned.obj);
     let mk = widget.as_dict().unwrap().get(b"MK").unwrap().as_dict().cloned().unwrap();
     assert!(mk.contains(b"BG") && mk.contains(b"BC") && mk.int(b"R") == Some(90));
     let (_, matrix) = appearance_box(&doc, &turned);
     assert!(matrix.is_some());
-    // 270 stays on the vertical axis, so the rectangle is not swapped again.
+    // 270 keeps the rectangle too.
     set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 270)), ..FieldProps::default() }).unwrap();
     let r270 = field(&fields(&doc), "name").widgets[0].rect;
     assert!(r270.iter().zip(r).all(|(a, b)| close(*a, b)), "{r270:?}");
@@ -3285,18 +3310,26 @@ fn rotated_fields_draw_in_their_quadrant() {
     assert!(text.contains("(Go) Tj") && matrix.is_some(), "{text}");
 }
 
+/// #4296: a tall field turned a quarter keeps its place, and its text is laid out along the long
+/// side (the appearance box is as wide as the field is tall) and turned onto the field.
 #[test]
-fn a_rotation_refused_as_too_small_changes_nothing_else() {
+fn a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it() {
     let mut doc = one_page();
-    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("thin")).unwrap();
-    // 200 x 3: turned a quarter it would be 3 wide, too small to use.
-    let obj = field(&fields(&doc), "thin").widgets[0].obj;
-    doc.update_dict(obj, |d| d.set(b"Rect".to_vec(), Object::Array([50.0, 700.0, 250.0, 703.0].iter().map(|v| Object::Real(*v)).collect()))).unwrap();
-    let props = FieldProps { tooltip: Some("changed".into()), rotation: Some((0, 90)), ..FieldProps::default() };
-    assert!(set_props(&mut doc, "thin", &props).is_err());
-    let f = field(&fields(&doc), "thin").clone();
-    assert_eq!(f.tooltip, None, "the tooltip was written before the rotation was refused");
-    assert_eq!(f.widgets[0].rotation, 0);
+    let rect = [50.0, 600.0, 70.0, 760.0];
+    add_field(&mut doc, 0, rect, &NewField::Text { multiline: false }, Some("tall")).unwrap();
+    set_value(&mut doc, "tall", &FieldValue::Text("Ada".into())).unwrap();
+    let props = FieldProps { tooltip: Some("Name".into()), rotation: Some((0, 90)), ..FieldProps::default() };
+    set_props(&mut doc, "tall", &props).unwrap();
+    let f = field(&fields(&doc), "tall").clone();
+    let w = &f.widgets[0];
+    assert_eq!((w.rotation, f.tooltip.as_deref()), (90, Some("Name")));
+    assert!(w.rect.iter().zip(rect).all(|(a, b)| close(*a, b)), "the field moved: {:?} -> {:?}", rect, w.rect);
+    let (bbox, matrix) = appearance_box(&doc, w);
+    assert!(close(bbox[2], 160.0) && close(bbox[3], 20.0), "the text is laid out across the field, not up it: {bbox:?}");
+    let m = matrix.unwrap();
+    // (x, y) -> (20 - y, x): the box's 160 pt run goes up the field.
+    assert!(close(m[1], 1.0) && close(m[2], -1.0) && close(m[4], 20.0), "{m:?}");
+    assert!(ap(&doc, w).contains("(Ada) Tj"));
 }
 
 #[test]
@@ -6545,6 +6578,26 @@ fn a_read_only_button_is_not_turned_on_by_number() {
     assert_eq!(on_widgets(&doc, "r").0, [true, false, false]);
     set_value(&mut doc, "r", &FieldValue::Widget(2)).unwrap();
     assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// A reset of named fields costs the same per field however many are named: resetting 60,000
+/// fields by name is not 3.6 billion name comparisons.
+#[test]
+fn resetting_many_named_fields_is_not_quadratic() {
+    const N: usize = 60_000;
+    let kids: String = (0..N).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Fields [{kids}] >>"),
+    ];
+    objs.extend((0..N).map(|i| format!("<< /FT /Tx /T (f{i}) /V (a) /DV (a) >>")));
+    let mut doc = document(&objs);
+    let names: Vec<String> = (0..N).map(|i| format!("f{i}")).collect();
+    let started = std::time::Instant::now();
+    assert_eq!(reset(&mut doc, Some(&names)).unwrap(), 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert!(matches!(reset(&mut doc, Some(&["f0".to_string(), "nope".to_string()])), Err(FormError::NoSuchField(n)) if n == "nope"));
 }
 
 /// Two check box fields of two kids each: `pair` with the on states `A` and `B` (and `/DV /B`),
