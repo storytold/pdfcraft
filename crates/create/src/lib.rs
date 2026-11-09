@@ -92,6 +92,26 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
     Ok(doc)
 }
 
+/// A document whose pages hold ready-made content: one `(width, height, resources, content)`
+/// tuple per page, in page order. Empty content vectors make blank pages. The OCR Verify
+/// screen's editable-text output builds its pages this way.
+pub fn from_contents(pages: &[(f64, f64, Dict, Vec<u8>)]) -> Result<Document, CreateError> {
+    if pages.is_empty() || pages.len() > 10_000 {
+        return Err(CreateError::Invalid("invalid page count".into()));
+    }
+    if pages.iter().any(|(w, h, _, _)| !(w.is_finite() && h.is_finite() && (3.0..=MAX_SIDE).contains(w) && (3.0..=MAX_SIDE).contains(h))) {
+        return Err(CreateError::Invalid("invalid page size".into()));
+    }
+    let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
+    for (w, h, resources, content) in pages {
+        let content = if content.is_empty() { None } else { Some(content.clone()) };
+        tree.add(&mut doc, *w, *h, resources.clone(), content);
+    }
+    tree.finish(&mut doc)?;
+    Ok(doc)
+}
+
 // ── images ──────────────────────────────────────────────────────────────────────────────────
 
 /// An image ready to embed: its XObject dictionary, encoded data, optional soft mask, the ICC
@@ -261,7 +281,8 @@ fn jp2_boxes(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
             },
             n => (8, n),
         };
-        let end = i.saturating_add(len as usize).min(b.len());
+        // `len as usize` would truncate on 32-bit targets and put the end before the payload.
+        let end = i.saturating_add(usize::try_from(len).unwrap_or(usize::MAX)).min(b.len());
         if len < head as u64 || end <= i {
             break;
         }
@@ -408,7 +429,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     // The decoded size comes from the header alone, so a file of a few bytes can claim any
     // size: keep the ceiling, and ask for the memory fallibly (a failed allocation would abort
     // the whole app, and no `catch_unwind` stops that).
-    let size = reader.output_buffer_size().filter(|n| *n <= MAX_DECODED_BYTES).ok_or_else(|| bad("image too large".into()))?;
+    // Flate expands at most 1032:1 and decoding at most 32:1 more (1-bit palette to RGBA), so a
+    // file cannot honestly hold more than that: refuse a header the bytes cannot back before
+    // zero-filling a buffer of its size. The slack keeps tiny real images out of the check.
+    let size = reader
+        .output_buffer_size()
+        .filter(|n| *n <= MAX_DECODED_BYTES && *n <= bytes.len().saturating_mul(PNG_MAX_EXPANSION).saturating_add(PNG_SLACK))
+        .ok_or_else(|| bad("image too large".into()))?;
     let mut buf = Vec::new();
     buf.try_reserve_exact(size).map_err(|_| bad("not enough memory for this image".into()))?;
     buf.resize(size, 0);
@@ -496,12 +523,140 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
 }
 
+fn le16(b: &[u8], at: usize) -> Option<u16> {
+    b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
+}
+
+/// How a PCX image holds its pixels: bits per plane and planes.
+#[derive(Clone, Copy, PartialEq)]
+enum PcxLayout {
+    /// One byte per pixel per colour: each scanline has a red, a green and a blue row.
+    Rgb,
+    /// One byte per pixel, an index into the palette after the image (grey without one).
+    Indexed,
+    /// One bit per pixel in each of 1 to 4 planes, an index into the header's palette.
+    Bits(usize),
+}
+
+impl PcxLayout {
+    fn of(bits: u8, planes: usize) -> Option<PcxLayout> {
+        match (bits, planes) {
+            (8, 3) => Some(PcxLayout::Rgb),
+            (8, 1) => Some(PcxLayout::Indexed),
+            (1, 1..=4) => Some(PcxLayout::Bits(planes)),
+            _ => None,
+        }
+    }
+}
+
+/// The palette of a PCX image, and where its run-length coded scanlines end. An 8-bit image ends
+/// with a 0x0C byte and 256 colours; a one-plane bit image is black and white whatever its header
+/// holds; other bit images use the 16 colours at byte 16.
+fn pcx_palette(bytes: &[u8], layout: PcxLayout) -> (Vec<u8>, usize) {
+    match layout {
+        PcxLayout::Rgb => (Vec::new(), bytes.len()),
+        PcxLayout::Indexed => match bytes.len().checked_sub(769).filter(|at| *at >= 128 && bytes.get(*at) == Some(&0x0C)) {
+            Some(at) => (bytes.get(at + 1..).unwrap_or_default().to_vec(), at),
+            None => ((0..=255u8).flat_map(|v| [v, v, v]).collect(), bytes.len()),
+        },
+        PcxLayout::Bits(1) => (vec![0, 0, 0, 255, 255, 255], bytes.len()),
+        PcxLayout::Bits(_) => (bytes.get(16..64).unwrap_or_default().to_vec(), bytes.len()),
+    }
+}
+
+/// The `rows` scanlines of `line` bytes each, decoded. A run may cross from one plane's row into the
+/// next, but not out of its scanline.
+fn pcx_scanlines(mut body: &[u8], rows: usize, line: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(rows.checked_mul(line)?).ok()?;
+    for row in 1..=rows {
+        let end = row * line;
+        while out.len() < end {
+            let (&c, rest) = body.split_first()?;
+            body = rest;
+            if c < 0xC0 {
+                out.push(c);
+                continue;
+            }
+            let (&value, rest) = body.split_first()?;
+            body = rest;
+            let count = usize::from(c & 0x3F);
+            if count > end - out.len() {
+                return None;
+            }
+            out.resize(out.len() + count, value);
+        }
+    }
+    Some(out)
+}
+
+/// The RGB samples of the `w` pixels of scanline `row` (planes `stride` bytes apart).
+fn pcx_row(out: &mut Vec<u8>, row: &[u8], w: usize, stride: usize, layout: PcxLayout, palette: &[u8]) {
+    let at = |i: usize| row.get(i).copied().unwrap_or(0);
+    for x in 0..w {
+        let index = match layout {
+            PcxLayout::Rgb => {
+                out.extend([at(x), at(stride + x), at(2 * stride + x)]);
+                continue;
+            }
+            PcxLayout::Indexed => usize::from(at(x)),
+            PcxLayout::Bits(planes) => (0..planes).fold(0, |index, k| index | (usize::from(at(k * stride + x / 8) >> (7 - x % 8) & 1) << k)),
+        };
+        out.extend((0..3).map(|c| palette.get(index * 3 + c).copied().unwrap_or(0)));
+    }
+}
+
+/// A PCX image: a 128-byte header (size at 4-11, resolution at 12 and 14, plane count at 65, bytes
+/// per plane row at 66), then run-length coded scanlines, each holding one row of every plane.
+fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
+    let bad = |m: &str| CreateError::Image(name.into(), m.into());
+    let header = bytes.get(..128).ok_or_else(|| bad("a damaged PCX header"))?;
+    let word = |at: usize| le16(header, at).unwrap_or(0);
+    let byte = |at: usize| header.get(at).copied().unwrap_or(0);
+    let (bits, planes, stride) = (byte(3), usize::from(byte(65)), usize::from(word(66)));
+    let (Some(w), Some(h)) = (word(8).checked_sub(word(4)), word(10).checked_sub(word(6))) else {
+        return Err(bad("a damaged PCX header"));
+    };
+    let (w, h) = (usize::from(w) + 1, usize::from(h) + 1);
+    if planes == 0 || stride == 0 {
+        return Err(bad("a damaged PCX header"));
+    }
+    let layout = PcxLayout::of(bits, planes).ok_or_else(|| bad("this PCX plane layout is not supported"))?;
+    if stride < (w * usize::from(bits)).div_ceil(8) {
+        return Err(bad("a damaged PCX header"));
+    }
+    let line = planes * stride;
+    if line.saturating_mul(h) > MAX_DECODED_BYTES || w.saturating_mul(h).saturating_mul(3) > MAX_DECODED_BYTES {
+        return Err(bad("unusual PCX image size"));
+    }
+    let (palette, end) = pcx_palette(bytes, layout);
+    let body = bytes.get(128..end).unwrap_or_default();
+    let scanlines = pcx_scanlines(body, h, line).ok_or_else(|| bad("a damaged PCX body"))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(w * h * 3).map_err(|_| bad("not enough memory for this image"))?;
+    for row in scanlines.chunks_exact(line) {
+        pcx_row(&mut data, row, w, stride, layout, &palette);
+    }
+    let dpi = (f64::from(word(12)), f64::from(word(14)));
+    let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
+    let mut d = Dict::new();
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let px = (u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0));
+    Ok(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px, dpi })
+}
+
 /// Largest GIF logical screen, in pixels (4096×4096).
 const MAX_GIF_PIXELS: u64 = 1 << 24;
 
 /// Most decoded bytes one TIFF page or PNG may take: room for the 768 MiB CMYK poster in #665,
 /// twice over.
 const MAX_DECODED_BYTES: usize = 2 << 30;
+
+/// Most a PNG's decoded size can exceed its file size: Flate's 1032:1 times the 32:1 of
+/// expanding a 1-bit palette to RGBA, plus a fixed allowance for small files.
+const PNG_MAX_EXPANSION: usize = 1032 * 32;
+const PNG_SLACK: usize = 1 << 20;
 
 /// Most decoded bytes all the pages of one TIFF may take together: its pages stay in memory until
 /// they are embedded, and many small directories can share one compressed strip. Saturates to the
@@ -603,7 +758,13 @@ pub enum SourceKind {
 }
 
 /// File extensions Create converts to PDF (images and plain text).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
+pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
+
+/// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8
+/// bits per plane. `pcx` says when the rest of the header isn't one it can read.
+fn is_pcx(bytes: &[u8]) -> bool {
+    bytes.first() == Some(&0x0A) && matches!(bytes.get(1), Some(0 | 2..=5)) && bytes.get(2) == Some(&1) && matches!(bytes.get(3), Some(1 | 8))
+}
 
 /// A classic TIFF or a BigTIFF (version 43), in either byte order.
 fn is_tiff(bytes: &[u8]) -> bool {
@@ -620,6 +781,7 @@ fn is_image(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         || is_tiff(bytes)
         || is_gif(bytes)
+        || is_pcx(bytes)
         // JPEG 2000: a JP2 file or a raw codestream.
         || bytes.starts_with(JP2_SIGNATURE)
         || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
@@ -655,6 +817,8 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
         Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
+    } else if is_pcx(bytes) {
+        Ok(vec![pcx(name, bytes)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
         Ok(vec![jpx(name, bytes)?])
     } else {
