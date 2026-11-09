@@ -71,3 +71,13 @@ fn leaving_snapshot_clears_every_tab() {
     assert!(h.state().views[1].area_pick.is_none(), "the tab on screen");
     assert!(h.state().views[0].area_pick.is_none(), "the other tab");
 }
+
+/// A change to the page list leaves no area behind: its page index would name another page.
+#[test]
+fn a_document_change_puts_the_area_away() {
+    let mut h = harness();
+    h.state_mut().views[0].area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
+    let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
+    h.state_mut().views[0].document_changed(&info);
+    assert!(h.state().views[0].area_pick.is_none());
+}

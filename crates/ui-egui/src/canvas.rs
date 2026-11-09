@@ -1214,6 +1214,10 @@ impl DocView {
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
+        // A Snapshot area names a page by its index and a rectangle on it: after pages were
+        // deleted or moved it would outline, print and save a different page.
+        self.area_pick = None;
+        self.area_choice = None;
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;
