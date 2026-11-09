@@ -17,7 +17,7 @@
 //!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
 //!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
-//!   print settings.
+//!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one; store LZW-compressed streams with Flate instead.
@@ -29,6 +29,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod form_actions;
 pub mod fragments;
 mod images;
 mod links;
@@ -49,6 +50,8 @@ pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub enum OptimizeError {
     #[error("the document has no page tree")]
     NoPages,
+    #[error("object {0} nests or chains its form actions too deeply, or the document holds too many actions, to discard them")]
+    ActionLimit(ObjRef),
     #[error("the document's encryption requires PDF {required} or later (chosen: PDF {chosen})")]
     IncompatibleEncryption { required: &'static str, chosen: &'static str },
     #[error(transparent)]
@@ -197,6 +200,8 @@ pub struct Settings {
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
     pub discard_print_settings: bool,
+    /// Remove form submission, import and reset actions; the fields and links that ran them stay.
+    pub discard_form_actions: bool,
     /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
     /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
@@ -233,6 +238,7 @@ impl Default for Settings {
             discard_alternate_images: true,
             discard_tags: false,
             discard_print_settings: false,
+            discard_form_actions: false,
             flate_unencoded: true,
             object_streams: true,
             lzw_to_flate: true,
@@ -297,6 +303,8 @@ pub struct Report {
     pub alternate_images: usize,
     pub tags_removed: bool,
     pub print_settings: usize,
+    /// Form submission, import and reset actions removed.
+    pub form_actions: usize,
     pub streams_compressed: usize,
     /// Streams whose LZW compression was replaced with Flate (Clean Up).
     pub lzw_streams: usize,
@@ -425,6 +433,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
             _ => {}
         }
+    }
+    if settings.discard_form_actions {
+        report.form_actions = form_actions::discard(doc)?;
     }
     if settings.remove_invalid_links {
         let (l, b) = links::remove_invalid(doc, &pages)?;

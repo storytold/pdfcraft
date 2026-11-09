@@ -847,6 +847,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         form,
         generation,
         info,
+        prepare_tab_order,
         prefs,
         preparing,
         redact_mark,
@@ -900,7 +901,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::link_ui::paint(painter, &xf, i, info, doc_links, view, pointer);
     }
     if preparing {
-        crate::prepare::paint_page(tool_cx, form, view);
+        crate::prepare::paint_page(tool_cx, form, prepare_tab_order.unwrap_or_default(), view);
         if let Some(preview) = &table_preview {
             crate::field_table_ui::paint_preview(painter, &xf, i, preview);
         }

@@ -219,14 +219,22 @@ pub(crate) fn page_form(
         body.extend(format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0)).bytes());
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
-    if !xobjects.is_empty() {
-        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
-    }
+    // With no appearance added the form keeps the page's own Resources, shared by reference,
+    // rather than a deep copy per printed page.
+    let resources = match page.dict.get(b"Resources") {
+        Some(r) if k == 0 && doc.resolve(r).as_dict().is_some() => r.clone(),
+        _ => {
+            if !xobjects.is_empty() {
+                res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            }
+            Object::Dict(res)
+        }
+    };
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array(crop.iter().map(|v| Object::Real(*v)).collect()));
-    d.set(b"Resources".to_vec(), Object::Dict(res));
+    d.set(b"Resources".to_vec(), resources);
     if let Some(g) = page.dict.get(b"Group") {
         d.set(b"Group".to_vec(), g.clone());
     }

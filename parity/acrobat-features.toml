@@ -550,8 +550,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/ui-egui/tests/it/recovery.rs::a_running_instances_autosaves_are_not_offered_to_a_second_instance", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path"]
-notes = "A running instance holds an exclusively locked instance file in the recovery folder and names it in its snapshots, so a second instance neither offers nor discards what the first is autosaving (#2166); the OS releases the lock when the process dies. Where the folder can't be written or the platform has no file locks, snapshots are offered as before."
+evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/ui-egui/tests/it/recovery.rs::a_running_instances_autosaves_are_not_offered_to_a_second_instance", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path", "crates/ui-egui/src/persist/recovery.rs::the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path", "crates/ui-egui/src/persist/recovery.rs::an_oversized_sidecar_is_not_read", "crates/ui-egui/src/persist/recovery.rs::a_snapshot_that_is_not_a_regular_file_is_refused_at_once"]
+notes = "A recovered document keeps its original path only as a suggestion: the first Save asks where, starting there, and the file chosen is its file from then on, since anyone who can write the recovery folder can name any file in a sidecar (#3923); sidecars longer than 64 KiB are not read, and their snapshot is offered without metadata. A running instance holds an exclusively locked instance file in the recovery folder and names it in its snapshots, so a second instance neither offers nor discards what the first is autosaving (#2166); the OS releases the lock when the process dies. Where the folder can't be written or the platform has no file locks, snapshots are offered as before."
 
 [[feature]]
 id = "core.encrypted-autosave"
@@ -1706,8 +1706,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.pin_folder"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::home_shows_welcome_and_tools", "crates/ui-egui/tests/it/folders.rs::a_pinned_folder_lists_its_newest_pdfs_on_home", "crates/ui-egui/tests/it/folders.rs::clicking_a_pinned_pdf_opens_it_and_adds_it_to_recent", "crates/ui-egui/tests/it/folders.rs::pinned_folders_survive_a_restart"]
-notes = "Desktop: folders pinned to Home (File ▸ Pin folder to Home…, up to 8) list their newest PDFs, read on a worker thread and refreshed every few seconds while Home shows; a folder that can't be read (moved, offline synced drive) stays pinned and says so. Pinned folders are local paths, so a cloud drive works through its synced folder (iCloud Drive, OneDrive, Dropbox). Not yet: subfolders, search within a pinned folder, the web build."
+evidence = ["crates/ui-egui/tests/it/ui.rs::home_shows_welcome_and_tools", "crates/ui-egui/tests/it/folders.rs::a_pinned_folder_lists_its_newest_pdfs_on_home", "crates/ui-egui/tests/it/folders.rs::clicking_a_pinned_pdf_opens_it_and_adds_it_to_recent", "crates/ui-egui/tests/it/folders.rs::pinned_folders_survive_a_restart", "crates/ui-egui/tests/it/folders.rs::a_pinned_folder_collapses_to_its_heading_and_stays_collapsed_after_a_restart", "crates/ui-egui/tests/it/control.rs::control_collapses_and_expands_a_pinned_folder"]
+notes = "Desktop: folders pinned to Home (File ▸ Pin folder to Home…, up to 8) list their newest PDFs, read on a worker thread and refreshed every few seconds while Home shows; a folder that can't be read (moved, offline synced drive) stays pinned and says so. Each folder collapses to its heading, and stays collapsed across restarts. Pinned folders are Home-view settings, not a document's, so the engine tools have none; the control channel folds them (`ui.set folder-collapsed <folder>=on|off`) and `ui.state` lists them. Pinned folders are local paths, so a cloud drive works through its synced folder (iCloud Drive, OneDrive, Dropbox). Not yet: subfolders, search within a pinned folder, the web build."
 
 [[feature]]
 id = "view.all-tools"
@@ -3914,8 +3914,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.cloud"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::cloud_paths_bulge_outwards_either_way_round", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "polygon with a cloudy border (/BE /S /C, /IT /PolygonCloud)"
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::cloud_paths_bulge_outwards_either_way_round", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/annot/src/tests.rs::cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes", "crates/annot/src/tests.rs::a_cloudy_square_follows_rd_left_top_right_bottom", "crates/annot/src/tests.rs::plain_squares_and_circles_are_drawn_inside_rect_less_rd"]
+notes = "polygon with a cloudy border (/BE /S /C, /IT /PolygonCloud). Cloudy borders other PDFs carry are drawn too (ISO 32000-2 Table 169): on squares, circles and text boxes as well as polygons, with the /BS width and dashes, inside /Rect less /RD (left, top, right, bottom), where plain squares and circles without an appearance are drawn too (Table 180); /I defaults to 0, which draws the border plain. Not yet: a cloudy callout keeps its own appearance only, and the bump size is PdfCraft's own (the standard leaves it open)."
 
 [[feature]]
 id = "comment.area-highlight"
@@ -4082,8 +4082,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_set_status"]
-evidence = ["crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent", "crates/engine/src/tests.rs::comments_are_added_drawn_threaded_and_undone"]
-notes = "status replies (/State, /StateModel Review), shown as a badge"
+evidence = ["crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent", "crates/engine/src/tests.rs::comments_are_added_drawn_threaded_and_undone", "crates/annot/src/tests.rs::status_and_checkmark_replies_are_hidden_and_chain_per_reviewer", "crates/render/src/inspect/model.rs::review_states_are_each_reviewers_latest_through_chains", "crates/render/src/inspect/model.rs::a_status_on_a_reply_and_its_chain_stay_the_replys", "crates/render/src/inspect/model.rs::states_follow_references_not_repeated_names", "crates/automation/tests/it/automation.rs::review_statuses_are_per_reviewer_through_tools", "crates/automation/tests/it/automation.rs::statuses_set_on_a_reply_chain_on_that_reply_through_tools", "crates/ui-egui/tests/it/comments.rs::the_panel_shows_each_reviewers_status_and_only_my_checkmark"]
+notes = "Status replies (/State, /StateModel Review) are written Hidden because a state reply records a state, not a note (ISO 32000-2 12.5.6.3: the state is kept 'in a separate text annotation'), and a reviewer's next change replies to their previous one (12.5.6.3: 'in reply to the previous reply for a given user'). Each reviewer's latest status shows as its own badge with their name (a state is 'for the specified user'), a status set back to None stays shown (None is a state, Table 174), and checkmarks (/StateModel Marked, 'marked by the user', Table 174) show only for the current author; comment_list reports statuses and marked_by. Tested with synthetic files. States are found by /IRT object reference, not /NM: a state reply sets the state of the first annotation up its /IRT chain that is not itself a state reply (12.5.6.3: /IRT 'shall refer to the original annotation'), so a status set on a reply stays that reply's and comment_list reports it there. Still missing: the shared-review Resolve and Mark as Unread (Document Cloud)."
 
 [[feature]]
 id = "comment.checkmark"
@@ -5288,11 +5288,11 @@ title = "Show tab numbers"
 area = "F"
 tier = "P2"
 milestone = "M6"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/prepare.rs::tab_numbers_follow_fill_order_without_dirtying_the_document", "crates/ui-egui/tests/it/control.rs::form_tab_numbers_can_be_shown_and_captured_through_the_control_channel", "crates/ui-egui/tests/it/forms.rs::tab_and_shift_tab_follow_widget_order_across_pages"]
+notes = "The GUI's Prepare a form ▸ Show tab numbers overlays each visible, fillable widget with its 1-based position in the order used by Tab and Shift+Tab; repeated widgets receive separate numbers. This is a view-only toggle and does not dirty the PDF. Missing: headless engine and automation access to the setting."
 
 [[feature]]
 id = "form.preview-form"
@@ -5459,7 +5459,7 @@ milestone = "M12"
 status = "partial"
 commands = ["file.open"]
 tools = ["doc_open", "form_fill", "js_run"]
-evidence = ["crates/js/src/tests.rs::arithmetic_strings_and_comparisons_follow_formcalc_rules", "crates/js/src/tests.rs::built_in_functions_cover_the_common_set", "crates/js/src/tests.rs::control_flow_variables_and_functions_work", "crates/js/src/tests.rs::form_objects_resolve_assign_and_record_effects", "crates/js/src/tests.rs::hostile_formcalc_scripts_end_with_an_error_and_bounded_output", "crates/js/src/tests.rs::formcalc_values_results_and_errors_stay_bounded", "crates/engine/src/tests.rs::dynamic_xfa_forms_run_formcalc_scripts", "crates/engine/src/tests.rs::hostile_formcalc_scripts_cannot_hang_or_bloat_the_document", "crates/engine/src/tests.rs::a_formcalc_calculate_result_is_cut_before_it_is_saved", "crates/js/src/tests.rs::formcalc_message_box_keeps_its_title_icon_and_buttons"]
+evidence = ["crates/js/src/tests.rs::arithmetic_strings_and_comparisons_follow_formcalc_rules", "crates/js/src/tests.rs::built_in_functions_cover_the_common_set", "crates/js/src/tests.rs::control_flow_variables_and_functions_work", "crates/js/src/tests.rs::form_objects_resolve_assign_and_record_effects", "crates/js/src/tests.rs::hostile_formcalc_scripts_end_with_an_error_and_bounded_output", "crates/js/src/tests.rs::formcalc_values_results_and_errors_stay_bounded", "crates/js/src/tests.rs::a_two_digit_year_splits_its_century_at_30", "crates/engine/src/tests.rs::dynamic_xfa_forms_run_formcalc_scripts", "crates/engine/src/tests.rs::hostile_formcalc_scripts_cannot_hang_or_bloat_the_document", "crates/engine/src/tests.rs::a_formcalc_calculate_result_is_cut_before_it_is_saved", "crates/js/src/tests.rs::formcalc_message_box_keeps_its_title_icon_and_buttons"]
 notes = "a native FormCalc interpreter (crates/js/src/formcalc.rs) over the same form table, effects and budgets as the XFA JavaScript model: expressions and FormCalc coercions, var, if/while/for/foreach/func, accessors ($, $host, $form, $record, $layout, $event, xfa., .., [n], [*], _name instance managers) and the arithmetic, logical, string, date/time, financial and unit built-ins. Bounded: steps and loop iterations, statement and expression nesting, operator/accessor chain length, strings (1 MiB; messages and thrown errors clipped to 4 KiB, field values and calculate results to 64 KiB, noted; copying and comparing long strings is charged to the step budget, so it ends on wasm, which has no clock), lists (each object once), clamped dates, the instance cap, and a deadline the script itself honours after the engine stops waiting. Missing: locale-aware pictures beyond simple number and date ones, Format/Parse time and text pictures, Get/Post/Put (refused), $template/$connectionSet, user-defined functions across scripts, a cap on a script's total memory (each string and list is capped, but many variables can each hold one), real Uuid() values (deterministic, from the step count) and the wall clock on wasm (Date() reads 1970-01-01 and Time() midnight there), and checking against Acrobat on real Designer forms beyond the fixtures. $host.messageBox keeps its title, icon and buttons; it answers OK (1) for now (#4291)."
 
 [[feature]]
@@ -5471,8 +5471,8 @@ milestone = "M12"
 status = "partial"
 commands = ["file.open", "file.save", "form.export_data", "form.import_data"]
 tools = ["doc_open", "form_fill", "doc_save", "doc_export_data", "doc_import_data", "form_set_image"]
-evidence = ["crates/xfa/src/tests.rs::the_datasets_packet_is_written_from_the_fields_and_read_back", "crates/xfa/src/tests.rs::a_date_is_read_from_the_data_in_its_data_picture", "crates/xfa/src/tests.rs::scripts_read_a_date_as_iso_whatever_its_data_picture_writes", "crates/engine/src/tests.rs::xfa_dates_are_written_and_read_back_in_their_data_picture", "crates/engine/src/tests.rs::each_xfa_date_field_is_written_in_its_own_data_picture_and_a_partial_one_keeps_iso", "crates/xfa/src/tests.rs::som_paths_name_the_template_field_their_numbers_count_to", "crates/xfa/src/tests.rs::a_refreshed_field_takes_its_value_from_its_own_template_field", "crates/xfa/src/tests.rs::a_date_its_data_picture_cant_hold_is_written_as_iso", "crates/xfa/src/tests.rs::data_fills_the_fields_and_adds_rows", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/xfa/src/tests.rs::data_paths_leave_areas_out", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them", "crates/xfa/src/tests.rs::data_exports_as_datasets_xml_or_an_xdp_and_imports_from_any_of_them", "crates/xfa/src/tests.rs::a_picture_chosen_for_an_image_field_is_kept_in_the_data_with_its_content_type", "crates/engine/src/tests.rs::xfa_data_exports_imports_and_pictures_round_trip_through_the_session", "crates/engine/src/tests.rs::xfa_data_import_adds_and_removes_rows_of_a_dynamic_form", "crates/automation/tests/it/automation.rs::xfa_data_files_export_and_import_through_tools"]
-notes = "the datasets packet inside the PDF: read on open (values, dates in ISO form, or in the field's data picture (`<bind><picture>`, such as date{YYYYMMDD}) when it has one holding a whole date (one without a day, such as date{YYYYMM}, keeps ISO, as does a date the picture can't hold, such as 2050 in a two-digit year), each field its own even beside same-named siblings, which saving writes them in too, while scripts still read the ISO date as rawValue, as another viewer gives it, check and radio states, extra rows for repeating subforms) and rewritten after every form edit from the fields' SOM paths (/PCSom), with areas left out of data paths as Adobe binds them. Export Data writes it as XML (the data alone, rooted at the form's root data node, as Acrobat does) or an XDP with the whole datasets and a reference to the PDF; Import Data takes an XDP, datasets or data XML file (or a bare data document) as the form's whole data, keeping data descriptions, lays a dynamic form out again from it (rows added and removed, more than 50 rows reported) and runs its calculations, undoable; a static form's fields take the data and the rest are emptied; the file's data is re-serialized with the packet's own prefix and every packet rewrite is parsed back before it is written; XFDF/FDF/CSV still go the AcroForm way. Files are UTF-8, UTF-16 or ISO-8859-1, at most 16 MB and 64 levels deep; pictures at most 8 MB (PNG, JPEG, GIF, BMP, TIFF). Pictures chosen for image fields are kept in the data as base64 with xfa:contentType, as Designer saves them. Missing: explicit bind refs, data descriptions are kept but not checked, no data connection (WSDL/ODBC)"
+evidence = ["crates/xfa/src/tests.rs::the_datasets_packet_is_written_from_the_fields_and_read_back", "crates/xfa/src/tests.rs::a_date_is_read_from_the_data_in_its_data_picture", "crates/xfa/src/tests.rs::scripts_read_a_date_as_iso_whatever_its_data_picture_writes", "crates/engine/src/tests.rs::xfa_dates_are_written_and_read_back_in_their_data_picture", "crates/engine/src/tests.rs::each_xfa_date_field_is_written_in_its_own_data_picture_and_a_partial_one_keeps_iso", "crates/xfa/src/tests.rs::som_paths_name_the_template_field_their_numbers_count_to", "crates/xfa/src/tests.rs::a_refreshed_field_takes_its_value_from_its_own_template_field", "crates/xfa/src/tests.rs::a_date_its_data_picture_cant_hold_is_written_as_iso", "crates/xfa/src/tests.rs::a_two_digit_year_splits_its_century_at_30", "crates/xfa/src/tests.rs::data_fills_the_fields_and_adds_rows", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/xfa/src/tests.rs::data_paths_leave_areas_out", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them", "crates/xfa/src/tests.rs::data_exports_as_datasets_xml_or_an_xdp_and_imports_from_any_of_them", "crates/xfa/src/tests.rs::a_picture_chosen_for_an_image_field_is_kept_in_the_data_with_its_content_type", "crates/engine/src/tests.rs::xfa_data_exports_imports_and_pictures_round_trip_through_the_session", "crates/engine/src/tests.rs::xfa_data_import_adds_and_removes_rows_of_a_dynamic_form", "crates/automation/tests/it/automation.rs::xfa_data_files_export_and_import_through_tools"]
+notes = "the datasets packet inside the PDF: read on open (values, dates in ISO form, or in the field's data picture (`<bind><picture>`, such as date{YYYYMMDD}) when it has one holding a whole date (one without a day, such as date{YYYYMM}, keeps ISO, as does a date the picture can't hold, such as 2030 in a two-digit year, which holds 1930 to 2029 as XFA pictures split the century at 30), each field its own even beside same-named siblings, which saving writes them in too, while scripts still read the ISO date as rawValue, as another viewer gives it, check and radio states, extra rows for repeating subforms) and rewritten after every form edit from the fields' SOM paths (/PCSom), with areas left out of data paths as Adobe binds them. Export Data writes it as XML (the data alone, rooted at the form's root data node, as Acrobat does) or an XDP with the whole datasets and a reference to the PDF; Import Data takes an XDP, datasets or data XML file (or a bare data document) as the form's whole data, keeping data descriptions, lays a dynamic form out again from it (rows added and removed, more than 50 rows reported) and runs its calculations, undoable; a static form's fields take the data and the rest are emptied; the file's data is re-serialized with the packet's own prefix and every packet rewrite is parsed back before it is written; XFDF/FDF/CSV still go the AcroForm way. Files are UTF-8, UTF-16 or ISO-8859-1, at most 16 MB and 64 levels deep; pictures at most 8 MB (PNG, JPEG, GIF, BMP, TIFF). Pictures chosen for image fields are kept in the data as base64 with xfa:contentType, as Designer saves them. Missing: explicit bind refs, data descriptions are kept but not checked, no data connection (WSDL/ODBC)"
 
 [[feature]]
 id = "form.xfa-flatten"
@@ -7059,8 +7059,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.file"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::text_is_wrapped_and_paginated", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
-notes = "Helvetica 11 pt on US Letter; form feeds start pages"
+evidence = ["crates/create/src/tests.rs::text_is_wrapped_and_paginated", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/create/src/tests.rs::text_with_cyrillic_is_set_in_the_bundled_face", "crates/engine/src/tests.rs::cyrillic_text_files_and_comment_summaries_read_back_as_typed"]
+notes = "Helvetica 11 pt on US Letter; text with letters Helvetica can't draw (Cyrillic, Greek, Central European) is set whole in the bundled Inter face, embedded once; text Inter can't draw either (CJK, Arabic, Hebrew, Thai) is refused, naming the line and character; form feeds start pages"
 
 [[feature]]
 id = "create.from-markdown"
@@ -7678,11 +7678,11 @@ title = "Discard form submit, import and reset actions"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::form_submit_import_and_reset_actions_are_discarded_and_the_fields_stay", "crates/optimize/tests/optimize.rs::a_discarded_form_action_hands_its_place_to_the_actions_after_it", "crates/optimize/tests/optimize.rs::a_form_action_listed_twice_in_a_chain_gives_way_both_times", "crates/optimize/tests/optimize.rs::a_shared_additional_actions_dictionary_is_cleaned_for_each_field_that_uses_it", "crates/optimize/tests/optimize.rs::shared_indirect_actions_and_next_arrays_are_cleaned_once_and_stay_shared", "crates/optimize/tests/optimize.rs::deep_nesting_stops_the_optimization_only_when_a_form_action_is_past_the_limit", "crates/automation/tests/it/automation.rs::optimizing_discards_form_actions_through_tools"]
+notes = "PDF Optimizer ▸ Discard Objects, off by default. Removes /SubmitForm, /ImportData and /ResetForm actions from link, widget and bookmark /A, catalog /OpenAction, every /AA trigger and /Next chains; the actions after a removed one still run in order. An object that holds a form action more than 64 direct objects deep, chains form actions more than 64 deep, or makes the walk look at more than 100,000 action values, or a document that makes it look at more than 1,000,000 in all, stops the optimization with an error. Not changed: JavaScript that calls submitForm or resetForm (Discard all links, actions and JavaScript removes the JavaScript in links, widgets, /AA triggers, /OpenAction and the document's scripts), and XFA form submissions."
 
 [[feature]]
 id = "optimize.flatten-form-fields"
@@ -8225,8 +8225,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::page_selection", "crates/automation/tests/it/automation.rs::printing_through_tools"]
-notes = "all, current, ranges with labels and open ends"
+evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::a_number_in_parentheses_names_the_page_at_that_position", "crates/automation/tests/it/automation.rs::printing_through_tools"]
+notes = "all, current, ranges with labels and open ends; (n) names the nth page whatever its label (ISO 32000-2 §12.4.2: labels and page indices need not coincide), alone or as a range end; labels are looked up first, so a page labelled exactly \"(n)\" keeps that name. The same parser serves Combine files ranges. Organize Pages range selection still takes positions only, without labels or (n)."
 
 [[feature]]
 id = "print.odd-even-reverse"
@@ -8237,8 +8237,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::odd_and_even_pages_are_page_numbers_not_places_in_the_range", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools"]
-notes = "Odd and even are page numbers, as Acrobat counts them (Adobe Acrobat DC Help, 11/28/2019, Options in the Print dialog box, p. 515: a range of 2, 7–10 with Even Pages Only prints pages 2, 8 and 10), for a typed range, picked thumbnails and the current page; Reverse turns the chosen pages round (#3984). Not yet: with page labels, odd and even still count page numbers (a document whose front matter is numbered i, ii, iii… keeps label 2 among the odd pages when it is page 5); the Acrobat help consulted doesn't say how Acrobat counts there, and the other Print-dialog behaviours #3984 mentions are open."
+evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::odd_and_even_pages_are_page_numbers_not_places_in_the_range", "crates/print/src/tests.rs::odd_and_even_count_positions_on_a_labelled_document", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools"]
+notes = "Odd and even are page numbers, as Acrobat counts them (Adobe Acrobat DC Help, 11/28/2019, Options in the Print dialog box, p. 515: a range of 2, 7–10 with Even Pages Only prints pages 2, 8 and 10), for a typed range, picked thumbnails and the current page; Reverse turns the chosen pages round (#3984). With page labels, odd and even count page positions, not the numbers in the labels: page indices are fixed and consecutive while labels can restart, repeat, use letters or carry no number at all (ISO 32000-2 §12.4.2), so with front matter labelled i–iii the page labelled 1 (the fourth) is even. The other Print-dialog behaviours #3984 mentions are open."
 
 [[feature]]
 id = "print.scaling"
@@ -8390,11 +8390,11 @@ title = "Page setup"
 area = "L"
 tier = "P1"
 milestone = "M10"
-status = "partial"
-commands = ["print.dialog"]
-tools = ["doc_print"]
-evidence = ["crates/ui-egui/tests/it/print.rs::custom_papers_and_the_paper_remembered_for_a_printer", "crates/ui-egui/src/workflows/print_paper.rs::the_paper_is_remembered_per_printer_only_when_asked", "crates/ui-egui/src/workflows/print_paper.rs::settings_are_read_as_untrusted", "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own"]
-notes = "In the Print dialog, as the rest of printing is (no separate Page Setup window): Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable; 'Remember this paper for <printer>' at Print time keeps the paper for that printer (or Save as PDF) and the dialog starts with it. doc_print takes sizes such as 8.5x14in or 210x297mm. Missing: margins, and the dialog's other choices (orientation, two-sided, sizing and so on) remembered per printer."
+status = "planned"
+commands = []
+tools = []
+evidence = []
+notes = ""
 
 [[feature]]
 id = "print.print-ready-pdf"
@@ -9248,9 +9248,9 @@ tier = "P2"
 milestone = "M12"
 status = "planned"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["accessibility_layout_table_to_blocks"]
+evidence = ["crates/a11y/src/layout_table.rs::a_label_and_value_table_becomes_divs_and_paragraphs", "crates/a11y/src/layout_table.rs::what_the_cells_hold_stays_and_a_table_in_a_cell_stays_a_table", "crates/a11y/src/layout_table.rs::direct_rows_and_cells_are_converted_in_place", "crates/automation/tests/it/automation.rs::a_layout_table_becomes_blocks_through_automation"]
+notes = "Headless only so far: accessibility_layout_table_to_blocks turns a layout table into Div and P tags in one undoable step (cells holding tags become Div, nested tables stay, Table attributes go). The editor itself (header cells, Scope, Headers/IDs, spans) and a Tags panel command remain planned."
 
 [[feature]]
 id = "a11y.alt-text-workflow"
