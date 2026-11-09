@@ -6,8 +6,9 @@
 //! dropped, and every positioning operator stays, so the lines after it keep their places
 //! (`Td`, `T*` and friends move from the line matrix, which showing text doesn't change).
 //!
-//! The new text uses the line's own font when every character has a code and a glyph in it;
-//! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
+//! The new text uses the line's own font when every character has a code and a glyph in it.
+//! Otherwise the words the font can show keep it and only the others are set in Helvetica
+//! (WinAnsi), run by run, and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ mod regions;
 #[path = "text_session.rs"]
 mod session;
 pub use fallback::strip_subset_tag;
-use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
 pub use session::TextSession;
 
 mod blocks;
@@ -42,7 +43,7 @@ pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use blocks::{paragraph_separator, row_break};
+use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
 use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
@@ -55,12 +56,12 @@ use fallback::{
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
-use lines::page_dict;
 pub(crate) use lines::{
     ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
     joined, resource_dict, rewritten_contents, splice,
 };
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
+use lines::{page_dict, word_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
 pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
@@ -132,6 +133,9 @@ pub struct TextLine {
     /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
     /// (#2529). Meaningless otherwise.
     soft_gap: usize,
+    /// The `/PCEdLine` marked-content sequence a replacement mixing fonts wrote the line in
+    /// (see [`fallback::continues_font`]).
+    edited: Option<usize>,
 }
 
 impl TextLine {
