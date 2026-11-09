@@ -62,6 +62,12 @@ static PUNJABI_GLYPHS: LazyLock<String> = LazyLock::new(|| {
         .collect()
 });
 
+/// Bounded Gurmukhi coverage required by the interface, independent of installed font selection.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn punjabi_required_glyphs() -> &'static str {
+    &PUNJABI_GLYPHS
+}
+
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
 
@@ -262,7 +268,12 @@ impl Lang {
     /// The language's name in English, used by [`picker_name`](Self::picker_name) when this
     /// build's fonts cannot draw [`name`](Self::name).
     pub fn english_name(self) -> &'static str {
-        match self.code() {
+        Self::english_name_for_code(self.code())
+    }
+
+    /// English picker name independent of whether this build embeds the language's catalog.
+    pub(crate) fn english_name_for_code(code: &'static str) -> &'static str {
+        match code {
             "en" => "English",
             "ja" => "Japanese",
             "zh-hans" => "Simplified Chinese",

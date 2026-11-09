@@ -405,7 +405,13 @@ pub(crate) fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage
     }
     match crate::i18n::Lang::from_code(l.code) {
         Some(language) => language.picker_name(drawable),
-        None => l.name,
+        None => {
+            if drawable(l.name) {
+                l.name
+            } else {
+                crate::i18n::Lang::english_name_for_code(l.code)
+            }
+        }
     }
 }
 
@@ -1060,6 +1066,19 @@ mod tests {
 #[cfg(test)]
 mod punjabi_date_tests {
     use super::*;
+
+    /// Catalog availability must not decide whether a date-language label has a readable fallback.
+    #[test]
+    fn review_regression_catalog_free_date_names_are_readable() {
+        eprintln!("Hindi interface catalog present: {}", crate::i18n::Lang::from_code("hi").is_some());
+        let hi = pdfcraft_engine::dates::date_language("hi").unwrap();
+        assert_eq!(date_language_picker_name(hi, |_| false), "Hindi");
+        assert_eq!(date_language_picker_name(hi, |_| true), hi.name);
+        let options = date_language_options(|_| false);
+        assert_eq!(options.iter().find(|(l, _)| l.code == "hi").unwrap().1, "Hindi");
+        let pa = pdfcraft_engine::dates::date_language("pa-guru").unwrap();
+        assert_eq!(date_language_picker_name(pa, |_| false), "Punjabi (Gurmukhi; English date names)");
+    }
 
     #[test]
     fn dates_follow_engine_and_disclose_english_names() {

@@ -102,10 +102,31 @@ pub fn devanagari_fallback() -> Option<Arc<FontData>> {
 
 /// The installed Gurmukhi face, read once with the usual size/face limits and glyph validation.
 /// `None` when system fonts are disabled or no candidate fits; interface activation still checks
-/// complete active-stack coverage. This face is used only at runtime, never embedded or copied.
+/// complete active-stack coverage. Prefer a face covering that requirement; retain the first
+/// partial fallback only if none does. This face is used only at runtime, never embedded or copied.
 pub fn gurmukhi_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
-    CACHE.get_or_init(|| script_fallback(&gurmukhi_candidates(), GURMUKHI_PROBE)).clone()
+    CACHE.get_or_init(|| gurmukhi_from_candidates(&gurmukhi_candidates())).clone()
+}
+
+/// Select the installed Gurmukhi fallback from the ordered, bounded discovery list.
+fn gurmukhi_from_candidates(candidates: &[PathBuf]) -> Option<Arc<FontData>> {
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        return None;
+    }
+    let mut first_partial = None;
+    for path in candidates {
+        let Some(mut data) = read(path, GURMUKHI_PROBE, MAX_BYTES) else { continue };
+        if let Some(index) = face_with_text(data.bytes(), crate::i18n::punjabi_required_glyphs()) {
+            Arc::make_mut(&mut data).index = index;
+            return Some(data);
+        }
+        first_partial.get_or_insert(path);
+    }
+    // Keep the old partial face when other active faces can complete its coverage. Remember its
+    // path, not its bytes: at most one MAX_BYTES buffer is retained while searching later files.
+    // Re-read once through the same validation rather than retaining two large font buffers.
+    first_partial.and_then(|path| read(path, GURMUKHI_PROBE, MAX_BYTES))
 }
 
 /// The installed fallback face for Telugu, read once. `None` when it is turned off or no
@@ -499,9 +520,77 @@ fn face_with(bytes: &[u8], c: char) -> Option<u32> {
     (0..MAX_FACES).find(|&index| skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| font.charmap().map(c).is_some()))
 }
 
+/// First face covering the complete bounded script requirement, within the existing face cap.
+fn face_with_text(bytes: &[u8], text: &str) -> Option<u32> {
+    use skrifa::MetadataProvider as _;
+    if text.is_empty() || text.chars().take(129).count() > 128 {
+        return None;
+    }
+    (0..MAX_FACES).find(|&index| {
+        skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| {
+            let map = font.charmap();
+            text.chars().all(|c| map.map(c).is_some())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contributor-original cmap-only sfnt bytes test coverage selection, never rendering/shaping.
+    fn coverage_font(text: &str) -> Vec<u8> {
+        let chars: std::collections::BTreeSet<_> = text.chars().collect();
+        let mut cmap = Vec::new();
+        for v in [0u16, 1, 3, 10] {
+            cmap.extend(v.to_be_bytes());
+        }
+        cmap.extend(12u32.to_be_bytes());
+        for v in [12u16, 0] {
+            cmap.extend(v.to_be_bytes());
+        }
+        for v in [16 + 12 * chars.len() as u32, 0, chars.len() as u32] {
+            cmap.extend(v.to_be_bytes());
+        }
+        for (i, c) in chars.into_iter().enumerate() {
+            for v in [c as u32, c as u32, i as u32 + 1] {
+                cmap.extend(v.to_be_bytes());
+            }
+        }
+        let mut font = vec![0, 1, 0, 0, 0, 1, 0, 16, 0, 0, 0, 0];
+        font.extend(b"cmap");
+        for v in [0u32, 28, cmap.len() as u32] {
+            font.extend(v.to_be_bytes());
+        }
+        font.extend(cmap);
+        font
+    }
+
+    /// A valid single-letter probe cannot hide a later face covering the required Gurmukhi set.
+    #[test]
+    fn review_regression_incomplete_gurmukhi_does_not_shadow_complete_face() {
+        let required = crate::i18n::punjabi_required_glyphs();
+        assert!(required.contains('ਕ') && required.contains('ੰ'));
+        let partial = coverage_font("ਕ");
+        let complete = coverage_font(required);
+        assert_eq!(face_with(&partial, GURMUKHI_PROBE), Some(0));
+        assert_eq!(face_with(&partial, 'ੰ'), None);
+        let dir = std::env::temp_dir().join(format!("pdfcraft-coverage-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let a = dir.join("partial.ttf");
+        let b = dir.join("complete.ttf");
+        std::fs::write(&a, &partial).unwrap();
+        std::fs::write(&b, &complete).unwrap();
+        if installed_faces_switched_off() {
+            assert!(gurmukhi_from_candidates(&[a, b]).is_none(), "disabled selection must reject even a covering fixture");
+            return;
+        }
+        let picked = gurmukhi_from_candidates(&[a.clone(), b]).expect("a covering candidate exists");
+        assert_eq!(face_with(picked.bytes(), 'ੰ'), Some(0), "the later complete face must be considered");
+        let partial = gurmukhi_from_candidates(&[a]).expect("preserve a partial face when no complete face exists");
+        assert_eq!(face_with(partial.bytes(), GURMUKHI_PROBE), Some(0));
+        assert_eq!(face_with(partial.bytes(), 'ੰ'), None);
+    }
 
     #[test]
     fn configured_candidates_preserve_names_order_and_existing_paths() {
@@ -853,7 +942,8 @@ mod tests {
             return;
         };
         assert!(data.bytes().len() as u64 <= MAX_BYTES);
-        assert_eq!(face_with(data.bytes(), GURMUKHI_PROBE), Some(data.index));
+        use skrifa::MetadataProvider as _;
+        assert!(skrifa::FontRef::from_index(data.bytes(), data.index).unwrap().charmap().map(GURMUKHI_PROBE).is_some());
         assert!(Arc::ptr_eq(&data, &gurmukhi_fallback().expect("cached face")));
         eprintln!("Gurmukhi cached runtime face: {} bytes, index {}", data.bytes().len(), data.index);
     }

@@ -368,12 +368,21 @@ fn redaction_body(ui: &mut egui::Ui, footer: RedactionFooter<'_>, content: impl 
     let scroll_all = height < footer_height + 80.0;
     let body = |ui: &mut egui::Ui| {
         let list_h = if scroll_all { f32::INFINITY } else { (height - footer_height - ui.spacing().item_spacing.y).max(0.0) };
-        egui::ScrollArea::new([false, !scroll_all])
+        let list = egui::ScrollArea::new([false, !scroll_all])
             .id_salt("redaction-tools")
             .auto_shrink([false, scroll_all])
             .min_scrolled_height(0.0)
             .max_height(list_h)
             .show(ui, content);
+        // The disabled inner area consumes scroll targets even on disabled axes.
+        // Reveal only newly focused list widgets after it closes, so wheel scrolling wins later.
+        if scroll_all
+            && let Some(response) = ui.memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id))
+            && response.gained_focus()
+            && list.inner_rect.contains_rect(response.rect)
+        {
+            response.scroll_to_me(None);
+        }
         footer.show(ui)
     };
     if scroll_all {
@@ -635,5 +644,76 @@ lines",
         assert!(buttons[1].top() > bounds.bottom() + 100.0, "wheel must stay away from focused footer: {:?}", observed[100]);
         let (bounds, buttons, focus) = observed[119];
         assert!(focus[0] && bounds.contains_rect(buttons[0]), "a new keyboard focus transition must reveal Apply: {:?}", observed[119]);
+    }
+
+    /// Real Tab/Shift+Tab navigation reveals a clipped tool row and does not fight later wheel input.
+    #[test]
+    fn review_regression_short_pane_reveals_keyboard_tool_focus() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..160 {
+            let events = if [1, 3, 5, 7, 125].contains(&frame) {
+                tab(false)
+            } else if frame == 30 {
+                tab(true)
+            } else if frame == 90 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, -500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 141.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 125.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let mut row = None;
+                    let buttons = super::redaction_body(
+                        ui,
+                        super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply every redaction", "Clear every mark"] },
+                        |ui| {
+                            for i in 0..3 {
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(180.0, 34.0), egui::Sense::click());
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Tool {i}")));
+                                if resp.gained_focus() {
+                                    resp.scroll_to_me(None);
+                                }
+                                if i == 2 {
+                                    row = Some((rect, resp.has_focus()));
+                                }
+                            }
+                            ui.allocate_space(egui::vec2(10.0, 500.0));
+                        },
+                    );
+                    observed.push((bounds, row.unwrap(), buttons[0].rect, buttons[0].has_focus()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for i in [25, 65, 120, 155] {
+            println!("focus frame {i}: {:?}", observed[i]);
+        }
+        assert!(observed[25].3, "Tab must reach Apply before reverse traversal");
+        let (bounds, (row, focus), _, _) = observed[65];
+        assert!(focus, "Shift+Tab must focus the last tool");
+        assert!(bounds.contains_rect(row), "newly focused tool must be revealed: {bounds:?} {row:?}");
+        let (bounds, (row, focus), _, _) = observed[120];
+        assert!(focus && row.bottom() < bounds.top(), "wheel input must retain focus and stay away");
+        assert!(observed[155].3 && observed[155].0.contains_rect(observed[155].2), "Tab returns visibly to Apply");
     }
 }
