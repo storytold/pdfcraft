@@ -424,7 +424,7 @@ pub(crate) struct NumberedLatin1Names;
 pub(crate) enum NumberedEncoding {
     /// ISO 8859-1: what the numbered names of a text font give (`/C246` is `ö`, `/C169` `©`).
     Latin1,
-    /// The Symbol font's built-in encoding (ISO 32000-2 Annex D.6), for a copy of Symbol named
+    /// The Symbol font's built-in encoding (ISO 32000-2 Annex D.5), for a copy of Symbol named
     /// with a `Sym` ending (`AdvPSSym`, Advent 3B2's Symbol): `/C176` is `°` there too, but
     /// `/C211` is `©` (copyrightserif), not `Ó`, and `/C97` is `α`.
     Symbol,
@@ -435,7 +435,7 @@ pub(crate) enum NumberedEncoding {
     Ascii,
 }
 
-/// The font's name without its subset tag (`ABCDEF+`, ISO 32000-2 §9.6.4).
+/// The font's name without its subset tag (`ABCDEF+`, ISO 32000-2 §9.9.2).
 fn untagged(base: &str) -> &str {
     match base.split_once('+') {
         Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,

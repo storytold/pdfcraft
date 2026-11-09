@@ -144,7 +144,7 @@ fn numbered_latin1_names_fill_the_recovered_layer_only() {
 
 /// Rule 1's numbers are codes of the font's own encoding, not always Latin-1. A copy of Symbol
 /// named with a `Sym` ending reads them through the Symbol font's built-in encoding (ISO
-/// 32000-2 Annex D.6): `/C211` is `©` (copyrightserif), not `Ó`; a font named `…Symbols` still
+/// 32000-2 Annex D.5): `/C211` is `©` (copyrightserif), not `Ó`; a font named `…Symbols` still
 /// recovers nothing. A further encoding plane of a font
 /// (`AdvTT5843c571+20`) recovers nothing: its `/C172` is `€`, not `¬`, while the text font of
 /// the same name reads Latin-1. An Advent 3B2 PostScript text font (`AdvPSTim`) recovers its
