@@ -10,15 +10,15 @@
   **two conflicts** (`crates/annot/src/lib.rs`, `crates/engine/src/lib.rs`,
   both export lists), each resolved by hand; §4 records them. The branch is 0
   behind and `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: the Split/Combine dialog wiring (feat:
-  Split and Combine dialogs go through the room's page operations) on
-  `eb40e16d0` (docs: record page split and combine) on `362f9c72b` (feat:
+- Local head before this STATUS commit: the Split/Combine dialog wiring
+  (`e097b8e39`, feat: send Split and Combine from a session as page operations)
+  on `eb40e16d0` (docs: record page split and combine) on `362f9c72b` (feat:
   split/combine pages as server-ordered operations) on `a6577074a` (docs: the
   rebase record) on `5b76f7e99` (refactor: the `apply_edit` dispatcher, which
   the merged `ui-egui` needed to stay under the clippy complexity limit) on
-  `4a691c53a` (style: the rustfmt wrap of the two merged export lists) — 74
-  commits on `d2139e58a`. Commits named below and in §4 by their pre-rebase
-  hashes are mapped in the rebase section of §4.
+  `4a691c53a` (style: the rustfmt wrap of the two merged export lists) — 75
+  commits on `d2139e58a` (76 with this STATUS commit). Commits named below and
+  in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
 - PR #6622 on GitHub still has the pushed head `4eea573be` and reports
   `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` (observed 2026-11-09,
   13:59Z and 14:33Z). The `MERGEABLE` an earlier session saw belongs to the
@@ -348,7 +348,7 @@ commit result, and a commit button for owner/editor.
 
 ### Split and Combine dialogs inside a room — §5 p.3 / §6.6 (2026-11-09, local; not pushed)
 
-This commit on `eb40e16d0`. Limitation 3 left the Split/Combine dialogs exporting
+`e097b8e39` on `eb40e16d0`. Limitation 3 left the Split/Combine dialogs exporting
 files locally, so in a session they changed nothing on the shared document. They
 now go through the page operations of §3.1.5, and the file workflow runs only
 when no session owns the document.
