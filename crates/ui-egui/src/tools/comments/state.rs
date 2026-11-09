@@ -279,6 +279,9 @@ impl CommentView {
         if self.selected.is_none() {
             self.selected = self.also.pop();
         }
+        if self.member.is_some_and(|((mp, mi), (gp, gi))| Some((gp, gi)) != self.selected || !same_slot(mp, mi)) {
+            self.member = None;
+        }
         if self.editing.as_ref().is_some_and(|(p, i, _)| !same_slot(*p, *i)) {
             self.editing = None;
             self.editor_focus = None;
