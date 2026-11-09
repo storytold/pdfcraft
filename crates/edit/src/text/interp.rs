@@ -218,9 +218,139 @@ pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
+/// A convex part of the page, in page space: the corners of a convex polygon, in order. With fewer
+/// than three corners it covers nothing.
+pub(super) type Region = Vec<[f64; 2]>;
+
+/// A clip, as the union of the convex regions it leaves visible: one for each rectangle of its
+/// path. With no parts it leaves nothing visible.
+pub(super) type Clip = Vec<Region>;
+
+/// The most corners a clip region keeps. Each intersection with a four-cornered clip can add
+/// corners, so past this a region becomes its bounding box: still all it held, and a stream that
+/// sets clip after clip stays bounded.
+const MAX_REGION_CORNERS: usize = 32;
+
+/// The most parts a clip keeps. Clips intersect part by part, so past this its parts become one,
+/// the box around them: still all they held, and the work stays bounded.
+const MAX_CLIP_PARTS: usize = 16;
+
+/// `r` (`[x0, y0, x1, y1]`, either way round) under `m`, keeping its shape when `m` turns or
+/// skews it. A rectangle of no area is a region that covers nothing, however thin a rectangle
+/// with area is; `None` when a corner, or its measure, is not finite.
+pub(super) fn region(m: &Matrix, r: [f64; 4]) -> Option<Region> {
+    let corners: Region = [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]
+        .into_iter()
+        .map(|(x, y)| {
+            let (x, y) = m.apply(x, y);
+            [x, y]
+        })
+        .collect();
+    let finite = corners.iter().flatten().all(|v| v.is_finite()) && twice_area(&corners).is_finite() && perimeter(&corners).is_finite();
+    finite.then(|| if encloses_area(&corners) { corners } else { Vec::new() })
+}
+
+/// The polygon's signed area, doubled: positive when its corners run anticlockwise (y up).
+/// Measured from its first corner, so that far from the origin it keeps its precision.
+fn twice_area(p: &[[f64; 2]]) -> f64 {
+    let Some(o) = p.first() else { return 0.0 };
+    p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| (a[0] - o[0]) * (b[1] - o[1]) - (b[0] - o[0]) * (a[1] - o[1])).sum()
+}
+
+fn perimeter(p: &[[f64; 2]]) -> f64 {
+    p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1])).sum()
+}
+
+/// Whether the polygon encloses any area: its area against the square of its perimeter, so the
+/// answer is the same at any scale and a thin box still has one.
+fn encloses_area(p: &[[f64; 2]]) -> bool {
+    let around = perimeter(p);
+    p.len() >= 3 && twice_area(p).abs() > 1e-12 * around * around
+}
+
+/// The four corners of the box around `points`.
+fn bounding<'a>(points: impl Iterator<Item = &'a [f64; 2]>) -> Region {
+    let b = points.fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
+}
+
+/// The part of `a` inside `b`, both convex (Sutherland-Hodgman: `a` cut by each edge of `b`). Clips
+/// in force intersect, so text shows only where all of them let it through. Regions that share no
+/// area (apart, or meeting only along an edge) leave an empty one, as does an empty `a` or `b`.
+pub(super) fn intersect(a: &Region, b: &Region) -> Region {
+    if a.len() < 3 || b.len() < 3 {
+        return Vec::new();
+    }
+    let turn = twice_area(b).signum();
+    let mut out = a.clone();
+    for (p, q) in b.iter().zip(b.iter().cycle().skip(1)) {
+        // Positive on the side of the edge `p` → `q` that `b` lies on.
+        let inside = |v: &[f64; 2]| turn * ((q[0] - p[0]) * (v[1] - p[1]) - (q[1] - p[1]) * (v[0] - p[0]));
+        let cut = std::mem::take(&mut out);
+        for (s, e) in cut.iter().zip(cut.iter().cycle().skip(1)) {
+            let (ds, de) = (inside(s), inside(e));
+            if ds >= 0.0 {
+                out.push(*s);
+            }
+            // The edge crosses the line: `ds - de` is not zero, as one is negative and one is not.
+            if (ds >= 0.0) != (de >= 0.0) {
+                let t = ds / (ds - de);
+                out.push([s[0] + t * (e[0] - s[0]), s[1] + t * (e[1] - s[1])]);
+            }
+        }
+    }
+    if !encloses_area(&out) {
+        return Vec::new();
+    }
+    if out.len() > MAX_REGION_CORNERS {
+        out = bounding(out.iter());
+    }
+    out
+}
+
+/// The clip that leaves visible only what both `a` and `b` do: each part of one intersected with
+/// each part of the other.
+pub(super) fn clip_within(a: &Clip, b: &Clip) -> Clip {
+    let mut out: Clip = a.iter().flat_map(|p| b.iter().map(move |q| intersect(p, q))).filter(|r| !r.is_empty()).collect();
+    if out.len() > MAX_CLIP_PARTS {
+        out = vec![bounding(out.iter().flatten())];
+    }
+    out
+}
+
+/// Whether the box `r` shows through `clip`: through any of its parts.
+pub(super) fn clip_shows(r: [f64; 4], clip: &Clip) -> bool {
+    clip.iter().any(|part| shows(r, part))
+}
+
+/// Whether the box `r` (`[x0, y0, x1, y1]`) and `region` share some area, by the separating axis
+/// test: two convex shapes are apart exactly when their shadows on some axis, one of the box's or
+/// a normal of one of the region's edges, do not overlap. Touching is not sharing.
+pub(super) fn shows(r: [f64; 4], region: &Region) -> bool {
+    if region.len() < 3 {
+        return false;
+    }
+    let corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
+    let apart = |axis: [f64; 2]| {
+        let shadow = |points: &[[f64; 2]]| {
+            points.iter().map(|p| p[0] * axis[0] + p[1] * axis[1]).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+        };
+        let ((a0, a1), (b0, b1)) = (shadow(&corners), shadow(region));
+        a1 <= b0 || b1 <= a0
+    };
+    // An edge of no length (two corners in one place) has no normal to test.
+    let normals = region.iter().zip(region.iter().cycle().skip(1)).map(|(p, q)| [p[1] - q[1], q[0] - p[0]]).filter(|n| n[0] != 0.0 || n[1] != 0.0);
+    !([[1.0, 0.0], [0.0, 1.0]].into_iter().chain(normals).any(apart))
+}
+
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
+    /// The clip in force, if any, as what it leaves visible: the intersection of every
+    /// rectangular content-stream clip (`re` `W`/`W*` `n`, ISO 32000-2 §8.5.4) and every enclosing
+    /// form's `/BBox` ([`super::lines`]), each in the shape its matrix gives it. `q`/`Q` save and
+    /// restore it along with the rest of `Ts`.
+    pub(super) clip: Option<Clip>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
@@ -506,6 +636,7 @@ impl Carry {
     pub(super) fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
+            clip: None,
             fill: Vec::new(),
             font: None,
             face: None,
@@ -860,10 +991,56 @@ pub(super) fn interpret(
     // with no properties dict (a file saved before this was tracked, or by another writer) reads
     // as 1, the single space a rejoin always used before #2529.
     let mut soft_gap = 1usize;
+    // A pending path of `x y w h re`s, and whether a `W`/`W*` has marked it as the path that `n`
+    // turns into the new clip (ISO 32000-2 §8.5.4) -- the common "set a rectangular clip" idiom.
+    // The path is `Some(None)` once one of its rectangles can't be read, and then clips nothing.
+    // Each rectangle is a part of the clip; a path of more than `MAX_CLIP_PARTS` keeps the box
+    // around them, which still holds them all. Any other operator between `re` and `n` ends the
+    // idiom: the clip is not read then.
+    let mut pending_clip: Option<Option<Vec<[f64; 4]>>> = None;
+    let mut clip_pending = false;
     for (i, op) in ops.iter().enumerate() {
         // A gap's space carries only into a `Tj` or `TJ` right after it.
         if !matches!(op.op.as_slice(), b"Tj" | b"TJ") {
             carry.gap_space = false;
+        }
+        match op.op.as_slice() {
+            b"re" => {
+                let rect = op.nums::<4>().map(|[x, y, w, h]| [x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]);
+                pending_clip = Some(match (pending_clip.take(), rect) {
+                    (None, Some(rect)) => Some(vec![rect]),
+                    (Some(Some(mut path)), Some(rect)) => {
+                        if path.len() >= MAX_CLIP_PARTS {
+                            path = vec![path.iter().fold(rect, |all, r| union(all, *r))];
+                        } else {
+                            path.push(rect);
+                        }
+                        Some(path)
+                    }
+                    _ => None,
+                });
+            }
+            b"W" | b"W*" => clip_pending = pending_clip.is_some(),
+            b"n" => {
+                if clip_pending && let Some(Some(path)) = pending_clip.take() {
+                    // A rectangle past what a matrix can hold leaves the clip unread. One of no
+                    // area is a part that shows nothing, so a clip of no area hides everything.
+                    let parts: Option<Clip> = path.iter().map(|r| region(&ts.ctm, *r)).collect();
+                    if let Some(parts) = parts {
+                        let new: Clip = parts.into_iter().filter(|part| !part.is_empty()).collect();
+                        ts.clip = Some(match &ts.clip {
+                            Some(old) => clip_within(old, &new),
+                            None => new,
+                        });
+                    }
+                }
+                pending_clip = None;
+                clip_pending = false;
+            }
+            _ => {
+                pending_clip = None;
+                clip_pending = false;
+            }
         }
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
