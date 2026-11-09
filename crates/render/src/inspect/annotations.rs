@@ -118,6 +118,16 @@ impl<'a> Inspector<'a> {
         let mut comments_full = false;
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
+            // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
+            // a font or other dictionary a page lists among its annotations isn't one, and neither is
+            // one whose `/Type` isn't a name at all. A null or dangling `/Type` counts as absent
+            // (§7.3.9: a null value is the same as leaving the entry out).
+            if let Ok(t) = d.get(b"Type").map(|t| self.resolve(t))
+                && !matches!(t, Object::Null | Object::Reference(_))
+                && t.as_name().ok() != Some(b"Annot".as_slice())
+            {
+                continue;
+            }
             let Some(subtype) = self.name(d, b"Subtype") else { continue };
             if subtype == "FileAttachment"
                 && let Ok(fs) = d.get(b"FS")
