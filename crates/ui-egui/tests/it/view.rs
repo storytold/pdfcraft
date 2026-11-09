@@ -853,6 +853,32 @@ fn scroll_regression_key_interrupt_retains_current_wheel_input() {
     assert!((distance - base).abs() < 0.5, "new wheel input survives a simultaneous key: {distance}");
 }
 
+/// macOS hands scroll events to the window under the pointer however unfocused it is; the viewer
+/// scrolled them until 0.18.2 gated the wheel on window keyboard focus. One harness per case, so
+/// both three-notch bursts start from rest and burst acceleration cannot differ between them.
+#[test]
+fn scroll_regression_wheel_scrolls_the_unfocused_window_under_the_pointer() {
+    let run = |focused: bool| {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        h.input_mut().focused = focused;
+        let mut moved = 0.0;
+        for _ in 0..3 {
+            h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+            moved += scroll_over(&mut h, 2);
+        }
+        moved
+    };
+    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    let unfocused = run(false);
+    assert!(unfocused > base, "the wheel scrolls the unfocused window under the pointer: moved {unfocused}, base {base}");
+    let focused = run(true);
+    assert!(focused > base, "the focused window still scrolls: moved {focused}, base {base}");
+    assert!((focused - unfocused).abs() < 1.0, "keyboard focus changes no wheel distance: focused {focused}, unfocused {unfocused}");
+}
+
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the
 /// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
 /// Used by wheel and non-macOS glide tests below.
