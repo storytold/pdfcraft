@@ -25,6 +25,10 @@ finish-args:
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
+  # Screen readers: AccessKit asks the accessibility bus (org.a11y.Bus) whether one is running
+  # and publishes the window there over AT-SPI. Without it the sandbox hides the bus and the
+  # app is invisible to Orca and other assistive technology (#4612).
+  - --talk-name=org.a11y.Bus
   # Printing: lpstat/lp (the cups-client module) reach the host's CUPS through its socket and
   # find driverless network printers through Avahi (`lpstat -e`). Without these the Print
   # dialog lists no printers.
