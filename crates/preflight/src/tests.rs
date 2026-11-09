@@ -1857,3 +1857,306 @@ fn set_state_no_op_and_named_actions_are_checked_wherever_actions_are() {
         assert_eq!(kept, place != "a page's /AA", "{place}: {}", String::from_utf8_lossy(&bytes));
     }
 }
+
+/// 6.2.10: without a PDF/A output intent, a page whose resources can paint transparently names its
+/// blending colour space in its `/Group`. Transparency is found through graphics states, images,
+/// transparency groups, nested form XObjects, Type 3 fonts, patterns and annotation appearances.
+#[test]
+fn a_page_with_transparency_and_no_output_intent_names_its_blending_space() {
+    // With `intent`, the catalog has a PDF/A output intent, its profile the last object.
+    let blending = |intent: bool, page_extra: &str, resources: &str, extra: &[&str]| -> Vec<String> {
+        let profile = extra.len() + 4;
+        let intents =
+            format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile {profile} 0 R >>]");
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {} >>", if intent { intents.as_str() } else { "" });
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << {resources} >> {page_extra} >>");
+        let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        if intent {
+            objs.push(
+                "<< /N 3 /Length 0 >>
+stream
+
+endstream",
+            );
+        }
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    let gs = |entries: &str| format!("/ExtGState << /G << {entries} >> >>");
+    for (what, resources, extra) in [
+        ("fill alpha", gs("/ca 0.5"), vec![]),
+        ("stroke alpha", gs("/CA 0.25"), vec![]),
+        ("blend mode", gs("/BM /Darken"), vec![]),
+        ("blend mode array", gs("/BM [/Multiply /Normal]"), vec![]),
+        ("soft mask", gs("/SMask << /S /Luminosity /G 4 0 R >>"), vec![form("")]),
+        (
+            "image soft mask",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec![
+                "<< /Subtype /Image /Width 1 /Height 1 /SMask 5 0 R /Length 0 >>\nstream\n\nendstream".to_owned(),
+                "<< /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 0 >>\nstream\n\nendstream".to_owned(),
+            ],
+        ),
+        (
+            "SMaskInData",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec!["<< /Subtype /Image /Width 1 /Height 1 /SMaskInData 1 /Length 0 >>\nstream\n\nendstream".to_owned()],
+        ),
+        ("transparency group", "/XObject << /Fm 4 0 R >>".to_owned(), vec![form("/Group << /S /Transparency >>")]),
+        (
+            "nested form",
+            "/XObject << /Fm 4 0 R >>".to_owned(),
+            vec![form("/Resources << /XObject << /In 5 0 R >> >>"), form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>")],
+        ),
+        (
+            "Type 3 font",
+            "/Font << /T3 4 0 R >>".to_owned(),
+            vec!["<< /Type /Font /Subtype /Type3 /Resources << /ExtGState << /G << /CA 0.5 >> >> >> >>".to_owned()],
+        ),
+        ("tiling pattern", "/Pattern << /P 4 0 R >>".to_owned(), vec![form("/PatternType 1 /Resources << /ExtGState << /G << /BM /Screen >> >> >>")]),
+        ("shading pattern", "/Pattern << /P << /PatternType 2 /ExtGState << /ca 0.5 >> >> >>".to_owned(), vec![]),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert_eq!(blending(false, "", &resources, &extra), said, "{what}");
+        // A page group with a blending colour space, or a PDF/A output intent, satisfies the rule.
+        assert!(
+            blending(false, "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>", &resources, &extra).is_empty(),
+            "{what}: page /CS"
+        );
+        assert_eq!(blending(false, "/Group << /S /Transparency >>", &resources, &extra), said, "{what}: page group without /CS");
+        assert!(blending(true, "", &resources, &extra).is_empty(), "{what}: output intent");
+    }
+    // Annotation appearances, as one stream or a dictionary of streams by state.
+    let annot = |ap: &str| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /AP << /N {ap} >> >>");
+    assert_eq!(blending(false, "/Annots [4 0 R]", "", &[&annot("5 0 R"), &form("/Group << /S /Transparency >>")]), said, "appearance");
+    assert_eq!(
+        blending(false, "/Annots [4 0 R]", "", &[&annot("<< /On 5 0 R /Off 6 0 R >>"), &form(""), &form("/Group << /S /Transparency >>")]),
+        said,
+        "appearance states"
+    );
+    // Opaque painting needs no blending colour space: alpha 1, Normal or Compatible blending, no
+    // soft mask, an image without one, a form that is no transparency group.
+    for (what, resources, extra) in [
+        ("opaque", gs("/CA 1 /ca 1.0 /BM /Normal /SMask /None"), vec![]),
+        ("compatible", gs("/BM [/Compatible /Darken]"), vec![]),
+        (
+            "image",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec!["<< /Subtype /Image /Width 1 /Height 1 /SMaskInData 0 /Length 0 >>\nstream\n\nendstream".to_owned()],
+        ),
+        (
+            "plain form, its resources cycling back to itself",
+            "/XObject << /Fm 4 0 R >>".to_owned(),
+            vec![form("/Resources << /XObject << /Me 4 0 R >> >>")],
+        ),
+        (
+            "Type 1 font",
+            "/Font << /F 4 0 R >>".to_owned(),
+            vec!["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Resources << /ExtGState << /G << /ca 0.5 >> >> >> >>".to_owned()],
+        ),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert!(blending(false, "", &resources, &extra).is_empty(), "{what}");
+    }
+}
+
+/// 6.2.10: a graphics state's blend mode, or each name of a blend mode array, is one ISO 32000-1
+/// 11.3.5 defines, whether the graphics state is an object of its own or written in a page's
+/// resources.
+#[test]
+fn blend_modes_are_the_ones_iso_32000_1_defines() {
+    let modes = |resources: &str, extra: &[&str]| -> Vec<String> {
+        let page = format!(
+            "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << {resources} >> >>"
+        );
+        let mut objs: Vec<&str> =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let custom = ["A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define"];
+    assert_eq!(modes("/ExtGState << /G 4 0 R >>", &["<< /BM /Custom >>"]), custom, "an object of its own");
+    assert_eq!(modes("/ExtGState << /G << /BM /Custom >> >>", &[]), custom, "written in the resources");
+    assert_eq!(modes("/ExtGState << /G << /BM [/Multiply /Custom] >> >>", &[]), custom, "in an array");
+    let all = "/Normal /Compatible /Multiply /Screen /Overlay /Darken /Lighten /ColorDodge /ColorBurn /HardLight /SoftLight /Difference /Exclusion /Hue /Saturation /Color /Luminosity";
+    assert!(modes(&format!("/ExtGState << /G << /BM [{all}] >> >>"), &[]).is_empty());
+}
+
+/// 6.2.10's blending colour space is one PDF/A accepts without an output intent: not null, and
+/// not a device space unless the page gives it a default (6.2.4.3). An output intent stands in
+/// for it only with a profile.
+#[test]
+fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
+    let page_said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
+    let check = |catalog_extra: &str, page_extra: &str, extra: &[&str]| -> Vec<String> {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R {page_extra} >>");
+        let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let alpha = "/ExtGState << /G << /ca 0.5 >> >>";
+    let page = |group: &str, colour_spaces: &str| format!("/Group << /S /Transparency {group} >> /Resources << {alpha} {colour_spaces} >>");
+    assert_eq!(check("", &page("/CS null", ""), &[]), page_said, "a null /CS");
+    assert_eq!(check("", &page("/CS 9 0 R", ""), &[]), page_said, "a /CS naming no object");
+    // A device space needs a default of as many components (ISO 32000-1 8.6.5.6).
+    let cmyk_profile = "<< /N 4 /Length 0 >>\nstream\n\nendstream";
+    let cal = |family: &str| format!("[/{family} << /WhitePoint [0.9505 1 1.089] >>]");
+    for (device, default, space) in [
+        ("DeviceGray", "DefaultGray", cal("CalGray")),
+        ("DeviceRGB", "DefaultRGB", cal("CalRGB")),
+        ("DeviceCMYK", "DefaultCMYK", "[/ICCBased 4 0 R]".to_owned()),
+    ] {
+        assert_eq!(check("", &page(&format!("/CS /{device}"), ""), &[cmyk_profile]), page_said, "{device}");
+        let defaults = format!("/ColorSpace << /{default} {space} >>");
+        assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[cmyk_profile]).is_empty(), "{device} with {default}");
+        let null = format!("/ColorSpace << /{default} null >>");
+        assert_eq!(check("", &page(&format!("/CS /{device}"), &null), &[cmyk_profile]), page_said, "{device} with a null {default}");
+    }
+    let wrong = format!("/ColorSpace << /DefaultGray {} >>", cal("CalRGB"));
+    assert_eq!(check("", &page("/CS /DeviceGray", &wrong), &[]), page_said, "DeviceGray with a CalRGB default");
+    // Only CalGray, CalRGB and gray, RGB or CMYK ICCBased spaces blend (ISO 32000-1 11.3.4).
+    assert!(check("", &page("/CS [/CalGray << /WhitePoint [0.9505 1 1.089] >>]", ""), &[]).is_empty(), "CalGray");
+    let icc = |n: u8, data: &str| format!("<< /N {n} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert!(check("", &page("/CS [/ICCBased 4 0 R]", ""), &[&icc(3, "")]).is_empty(), "an ICC profile of three components");
+    for (what, cs, extra) in [
+        ("Indexed", "/CS [/Indexed /DeviceRGB 1 <000000FFFFFF>]".to_owned(), vec![]),
+        ("CalRGB without its dictionary", "/CS [/CalRGB]".to_owned(), vec![]),
+        ("CalGray without a white point", "/CS [/CalGray << >>]".to_owned(), vec![]),
+        ("CalRGB with a short white point", "/CS [/CalRGB << /WhitePoint [0.9505 1] >>]".to_owned(), vec![]),
+        ("CalRGB with a zero white point", "/CS [/CalRGB << /WhitePoint [0 0 0] >>]".to_owned(), vec![]),
+        ("CalGray with a white point whose Y isn't 1", "/CS [/CalGray << /WhitePoint [0.9505 0.5 1.089] >>]".to_owned(), vec![]),
+        ("CalRGB with a non-number in its white point", "/CS [/CalRGB << /WhitePoint [0.9505 1 /Z 1.089] >>]".to_owned(), vec![]),
+        ("Lab", "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]".to_owned(), vec![]),
+        (
+            "Separation",
+            "/CS [/Separation /Spot /DeviceCMYK 4 0 R]".to_owned(),
+            vec!["<< /FunctionType 2 /Domain [0 1] /C1 [0 0 0 1] /N 1 >>".to_owned()],
+        ),
+        ("an ICC profile of two components", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(2, "")]),
+        ("a Lab ICC profile", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(3, &format!("{}Lab ", "\0".repeat(16)))]),
+        (
+            "an ICC profile of one component whose header says RGB",
+            "/CS [/ICCBased 4 0 R]".to_owned(),
+            vec![icc(1, &format!("{}RGB ", "\0".repeat(16)))],
+        ),
+        ("a pattern space", "/CS /Pattern".to_owned(), vec![]),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert_eq!(check("", &page(&cs, ""), &extra), page_said, "{what}");
+    }
+    // A null soft mask is none: an otherwise opaque graphics state is not transparency.
+    assert!(check("", "/Resources << /ExtGState << /G << /SMask null >> >> >>", &[]).is_empty(), "/SMask null");
+    let intent = |profile: &str| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) {profile} >>]");
+    let opaque_group = format!("/Resources << {alpha} >>");
+    assert_eq!(check(&intent("/DestOutputProfile null"), &opaque_group, &[]), page_said, "a null profile");
+    assert_eq!(check(&intent(""), &opaque_group, &[]), page_said, "no profile");
+    assert!(check(&intent("/DestOutputProfile 4 0 R"), &opaque_group, &["<< /N 3 /Length 0 >>\nstream\n\nendstream"]).is_empty(), "a profile");
+    // Private data is no graphics state: a /BM there is not a blend mode.
+    assert!(check("/PieceInfo << /App << /Private << /BM /Bookkeeping >> >> >>", "", &[]).is_empty(), "/PieceInfo");
+}
+
+/// A form XObject first reached at the depth limit, where its resources go unread, is read again
+/// when a shallower place names it, so what it holds is not missed.
+#[test]
+fn transparency_reached_first_too_deep_is_found_from_a_shallower_place() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // A chain of 32 forms, objects 4 to 35, the last naming form 36, which holds a translucent
+    // graphics state; the page names the chain first and form 36 after it.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 4 0 R /B 36 0 R >> >> >>".to_owned(),
+    ];
+    for n in 4..=35 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// 6.2.10: an unknown blend mode is reported on the page whose resources reach it, as the
+/// transparency issue is, each page once.
+#[test]
+fn an_unknown_blend_mode_names_its_page() {
+    let page = "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G 5 0 R >> >> >>";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        page,
+        "<< /BM /Custom >>",
+    ];
+    let found: Vec<(String, Option<usize>)> =
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| (i.message, i.page)).collect();
+    assert_eq!(found, [("A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define".to_owned(), Some(1))]);
+}
+
+/// A `/BM` array of many unknown names gathers a bounded number of them.
+#[test]
+fn unknown_blend_mode_names_are_capped() {
+    let names: String = (0..1000).map(|k| format!("/Custom{k} ")).collect();
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G << /BM [/Multiply {names}] >> >> >> >>"
+    );
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said.len(), 32);
+    assert_eq!(said.first().map(String::as_str), Some("A graphics state uses the blend mode Custom0, which ISO 32000-1 doesn't define"));
+}
+
+/// Pages that share a form read it once: the next page takes what was found under it from
+/// [`transparency::Shared`] in one read, and still reports it.
+#[test]
+fn pages_sharing_a_form_read_it_once() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    let pages = 50;
+    let first_form = 3 + pages;
+    let kids: String = (0..pages).map(|k| format!("{} 0 R ", 3 + k)).collect();
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 200] >>")];
+    for _ in 0..pages {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Resources << /XObject << /F {first_form} 0 R >> >> >>"));
+    }
+    // A chain of ten forms, each with twenty graphics states, the last one translucent.
+    let gstates: String = (0..20).map(|k| format!("/G{k} << /CA 1 >> ")).collect();
+    for n in 0..10 {
+        let next = if n < 9 { format!("/XObject << /X {} 0 R >>", first_form + n + 1) } else { "/ExtGState << /T << /ca 0.5 >> >>".to_owned() };
+        objs.push(form(&format!("/Resources << /ExtGState << {gstates} >> {next} >>")));
+    }
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&objs, "");
+    let list = pdfcraft_model::pages(&doc);
+    let mut shared = transparency::Shared::default();
+    let reads: Vec<usize> = list.iter().map(|p| transparency::page_reads(&doc, &p.dict, &mut shared)).collect();
+    assert!(reads.first().is_some_and(|&n| n > 200), "the first page reads the chain: {reads:?}");
+    assert!(reads.iter().skip(1).all(|&n| n == 2), "the others its resources and the form: {reads:?}");
+    let said = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").count();
+    assert_eq!(said, pages, "every page has transparency");
+}
+
+/// A form whose reading stopped at the depth limit on one page is not kept as read: a page that
+/// names it from a shallower place reads what lies below it.
+#[test]
+fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // Page 1 (object 3) names a chain of 33 forms, objects 5 to 37, whose last holds a translucent
+    // graphics state beyond the depth limit; page 2 (object 4) names form 20, from which it is near.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 5 0 R >> >> >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 20 0 R >> >> >>".to_owned(),
+    ];
+    for n in 5..=36 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
