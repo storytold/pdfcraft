@@ -491,26 +491,24 @@ fn parse_indirect_in(
             Some(Object::Ref(r)) => resolve_length(*r),
             _ => None,
         };
-        let valid = |len: i64| -> bool {
-            if len < 0 {
-                return false;
-            }
-            let end = start.saturating_add(len as usize);
-            if end > data.len() {
-                return false;
-            }
-            let mut after = Lexer::new(data, end);
-            after.eat_keyword(b"endstream")
-        };
-        // A /Length that fits in the file, for a stream whose `endstream` is missing or misspelt.
+        // A /Length that fits in the file (not negative, and no wrap on a 32-bit target).
         let fits = declared.and_then(|l| usize::try_from(l).ok()).filter(|l| start.checked_add(*l).is_some_and(|end| end <= data.len()));
-        let len = match declared {
-            Some(l) if valid(l) => l as usize,
+        // What follows the /Length bytes, white space aside.
+        let after = |len: usize| {
+            let mut after = Lexer::new(data, start.saturating_add(len));
+            after.skip_ws();
+            data.get(after.pos..).unwrap_or_default()
+        };
+        let len = match fits {
+            // The /Length ends at `endstream`, or where it would be: misspelt (`endstrea`), or
+            // left out before `endobj` or the end of the file. The stream is the bytes its /Length
+            // gives, "how many bytes of the PDF file are used for the stream's data" (ISO 32000-2
+            // §7.3.8.2), as other readers take it. A producer that wrote `endstrea` after every
+            // stream lost every font and every page's content, and searching on would run into a
+            // later object's `endstream`.
+            Some(l) if after(l).is_empty() || after(l).starts_with(b"endstrea") || after(l).starts_with(b"endobj") => l,
             // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery). With none
-            // left in the file, a /Length that fits is the stream's extent, "how many bytes of the
-            // PDF file are used for the stream's data" (ISO 32000-2 §7.3.8.2), as other readers
-            // take it: a producer that wrote `endstrea` after every stream lost every font and
-            // every page's content.
+            // left in the file, a /Length that fits is still the stream's extent.
             _ => match find_endstream(data, start, endstreams) {
                 Some(end) => end - start,
                 None => fits.ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?,
@@ -681,6 +679,52 @@ mod tests {
         }
         assert!(parse_indirect(b"7 0 obj\n<< /Length 6 >>\nstream\nHELLO", 0, &|_| None).is_err(), "past the file");
         assert!(parse_indirect(b"7 0 obj\n<< >>\nstream\nHELLO\nendstrea\nendobj\n", 0, &|_| None).is_err(), "no /Length");
+    }
+
+    /// A stream ending in `endstrea` is its /Length even when a later object does have an
+    /// `endstream`: the search for one would otherwise run on into that object and take its
+    /// header and data as this stream's.
+    #[test]
+    fn a_stream_without_endstream_is_not_read_into_a_later_one() {
+        let data = b"7 0 obj\n<< /Length 5 >>\nstream\r\nHELLO\r\nendstrea\rendobj\r\n8 0 obj\n<< /Length 5 >>\nstream\nWORLD\nendstream\nendobj\n";
+        let second = data.windows(7).position(|w| w == b"8 0 obj").unwrap();
+        for (offset, want) in [(0, &b"HELLO"[..]), (second, b"WORLD")] {
+            let (_, o) = parse_indirect(data, offset, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected at {offset}") };
+            assert_eq!(&s.raw[..], want, "at {offset}");
+        }
+        // Through the loader's shared index of `endstream` offsets as well.
+        let index = EndstreamIndex::new();
+        let (_, o) = parse_indirect_in(data, None, 0, &|_| None, Some(&index)).unwrap();
+        let Object::Stream(s) = o else { panic!("stream expected") };
+        assert_eq!(&s.raw[..], b"HELLO");
+    }
+
+    /// Without an `endstream`, the /Length is trusted as written when it fits, also when it is
+    /// wrong, and an indirect one is resolved first; one that doesn't fit, a negative one and one
+    /// too large for any file are errors rather than wrapped into a short read.
+    #[test]
+    fn a_stream_without_endstream_takes_its_length_only_when_it_fits() {
+        let stream = |length: &str, tail: &str| format!("7 0 obj\n<< /Length {length} >>\nstream\nHELLO{tail}");
+        let raw = |pdf: &str, lookup: &dyn Fn(ObjRef) -> Option<i64>| match parse_indirect(pdf.as_bytes(), 0, lookup) {
+            Ok((_, Object::Stream(s))) => Ok(s.raw.to_vec()),
+            Ok((_, other)) => panic!("{pdf:?} is {other:?}"),
+            Err(e) => Err(e),
+        };
+        let none = |_: ObjRef| None;
+        // Wrong but fitting: the bytes it gives, not the bytes up to `endstrea`.
+        assert_eq!(raw(&stream("3", "\nendstrea\nendobj\n"), &none).unwrap(), b"HEL");
+        // Exactly to the end of the file, and nothing at all.
+        assert_eq!(raw(&stream("5", ""), &none).unwrap(), b"HELLO");
+        assert_eq!(raw(&stream("0", "\nendstrea\nendobj\n"), &none).unwrap(), b"");
+        // Indirect, resolved through the lookup.
+        let lookup = |r: ObjRef| (r == ObjRef::new(9, 0)).then_some(4);
+        assert_eq!(raw(&stream("9 0 R", "\nendstrea\nendobj\n"), &lookup).unwrap(), b"HELL");
+        assert!(raw(&stream("9 0 R", "\nendstrea\nendobj\n"), &none).is_err(), "an unresolved /Length");
+        // One past the end, negative, the largest integer and one beyond it.
+        for length in ["6", "-1", "-9223372036854775808", "9223372036854775807", "18446744073709551621"] {
+            assert!(raw(&stream(length, ""), &none).is_err(), "/Length {length}");
+        }
     }
 
     #[test]
