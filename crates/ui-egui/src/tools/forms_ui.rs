@@ -14,7 +14,7 @@ use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform, SignTab};
 use crate::page_cursor::Layer;
 use crate::page_router::{Hit, Owner, PagePress};
 
@@ -256,6 +256,17 @@ fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
+fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+}
+
+/// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
+/// overlap, the one painted last is on top.
+pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Option<&'a str> {
+    tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
+}
+
 /// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
@@ -265,19 +276,22 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 }
 
 /// The form widget under `p` on `page`: the one hit test of the fields, for the cursor and the
-/// press. Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
-/// button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], allowed: bool, p: Pos2) -> Option<Hit> {
+/// press. It is the first widget under the pointer in the form's order, except on a sign tab
+/// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
+/// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
+/// text, is a button, not text to select.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
-    let (field, f, widget, w) = form.iter().enumerate().find_map(|(fi, f)| {
-        f.widgets
-            .iter()
+    let under = |only: Option<&str>| {
+        form.iter()
             .enumerate()
-            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(wi, w)| (fi, f, wi, w))
-    })?;
+            .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+    };
+    // A tab lies inside its field's widget, so that widget is under the pointer too.
+    let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;
     let icon = match (usable(f, w, allowed), f.kind) {
         (false, _) => egui::CursorIcon::NotAllowed,
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
