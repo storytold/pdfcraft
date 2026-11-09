@@ -207,7 +207,11 @@ fn the_manifest_has_digests_and_counts_but_no_plaintext() {
 #[test]
 fn survivors_do_not_echo_the_text_either() {
     let mut doc = marked(Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (SECRETVALUE) >>".to_vec()], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"SECRETVALUE".to_vec()))))
+        .unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     assert!(!proof.passed());
     for shown in [proof.to_text(), format!("{proof:?}")] {
         assert!(!shown.contains(SECRET), "{shown}");
@@ -224,7 +228,13 @@ fn numeric_only_tj_is_not_glyph_carrying() {
 fn a_survivor_in_the_info_dictionary() {
     let mut doc =
         marked(Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (Report SECRETVALUE) /Author (Someone) >>".to_vec()], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    doc.update_dict(ObjRef::new(7, 0), |d| {
+        d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"Report SECRETVALUE".to_vec())));
+    })
+    .unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     assert_eq!(surface(&proof, Surface::Info).verdict, Verdict::Survivor);
     assert_eq!(proof.entries[0].status, Status::Failed);
     assert!(!proof.passed());
@@ -234,7 +244,11 @@ fn a_survivor_in_the_info_dictionary() {
 fn a_survivor_in_xmp() {
     let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta><dc:title>Quarterly &amp; SECRET&#86;ALUE</dc:title></x:xmpmeta>");
     let mut doc = marked(Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Metadata".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     assert_eq!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
 }
@@ -245,7 +259,11 @@ fn a_long_numeric_reference_in_xmp_is_a_survivor() {
     // same, and is swept the same.
     let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta><dc:title>&#x00000000053;ECRET&#x0000000056;ALUE</dc:title></x:xmpmeta>");
     let mut doc = marked(Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Metadata".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     assert_eq!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
 }
@@ -855,14 +873,23 @@ fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     let content = b"BT /F1 10 Tf 10 200 Td (SECRETVALUE) Tj ET BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET";
     let spec = Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (SECRETVALUE) >>".to_vec()], ..Spec::default() };
     let mut doc = marked_content(content, spec);
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"SECRETVALUE".to_vec()))))
+        .unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     assert_eq!(surface(&proof, Surface::Info).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
 
     // Likewise an XMP packet and an annotation string.
     let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta>SECRETVALUE</x:xmpmeta>");
     let mut doc = marked_content(content, Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    assert_eq!(surface(&run(&mut doc).1, Surface::Xmp).verdict, Verdict::Survivor);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Metadata".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
+    assert_eq!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor);
     let annot = b"<< /Type /Annot /Subtype /Text /Rect [200 200 220 220] /Contents (SECRETVALUE) >>".to_vec();
     let mut doc = marked_content(content, Spec { page: "/Annots [7 0 R]", extra: vec![annot], ..Spec::default() });
     assert_eq!(surface(&run(&mut doc).1, Surface::ObjectStrings).verdict, Verdict::Survivor);
