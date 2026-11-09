@@ -58,6 +58,14 @@
   touching the room. The marker now keeps both numberings (the room's and the
   cabinet's), so a resolution survives the publication that follows and the
   metric `pdfcraft_collab_conflicts_resolved_total` counts it. Not pushed.
+- **§5 p.2 / limitation 2's remainder (line endings, font size, note
+  properties) is done locally in `c400147b3`** (§4, §6.2): `annotation.update`
+  carries `/LE` in its style object, and two new addressable operations cover
+  the rest — `annotation.font_size` over `Edit::FontSizeAnnotation` and
+  `annotation.info` (author, subject, note icon) over `Edit::SetAnnotationInfo`,
+  each with a compare-and-set undo and a refusal that changes neither the
+  document nor the version. Nothing was pushed: the fork, PR #6622 and its body
+  still describe `81035bf2`.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -71,8 +79,8 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
-| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`) and its before/expect CAS; the review-state names of a status reply |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`) and their before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
@@ -231,6 +239,24 @@ build enables the feature with `trunk build --release --features collab`.
     version `400`; another file's token, a viewer's role or no room is
     refused; none of them changes the room. `/metrics` gains
     `pdfcraft_collab_conflicts_resolved_total`.
+20. **A comment property is its own addressable operation, not a hidden part of
+    a restyle.** Line endings stay inside `annotation.update` because they are
+    part of the look the comment bar sets in one choice; font size
+    (`annotation.font_size`) and author/subject/icon (`annotation.info`) are
+    separate actions because the engine edits are separate (`Edit::FontSizeAnnotation`,
+    `Edit::SetAnnotationInfo`) and each can fail on its own. Making them one big
+    edit would need a new engine edit that duplicates three validations; making
+    them fields of the restyle would make a font-size change and a colour change
+    one undo step even when the interface did not ask for that. A Comment
+    Properties batch is several operations in one history group, so it still
+    undoes as one step.
+21. **The wire's `null` removes a name; an empty string is a mistake.** A
+    comment may have no `/T` or `/Subj`, and the undo of setting one must put
+    "no author" back, which an empty string cannot express without changing the
+    file. So `null` removes the entry (the engine deletes the key), an empty
+    string is `invalid`, and `Props` reads "no author" as `""` for the
+    compare-and-set. Without this the undo of a name on a file-originated
+    comment would silently leave the new name in place.
 
 ## 3. Running it
 
@@ -605,6 +631,85 @@ arm in `comment_page` for `Edit::RestyleAnnotation`; clippy with `--features
 collab` is green on it). The branch is 53 commits ahead of `origin/main`
 `ca9e3c2c3` and 0 behind; nothing was pushed, so PR #6622 still describes
 `81035bf2`.
+
+### Line endings, font size and comment properties — §5 p.2 / limitation 2 (2026-11-09, local; not pushed)
+
+`c400147b3` on `44ff6d3be`. The restyle slice (`ce5c38798`, below) left three
+gaps: a style edit that carried line endings was refused whole, and the font
+size and the author/subject/note-icon changes (`Edit::FontSizeAnnotation`,
+`Edit::SetAnnotationInfo`) were not shared at all, so Comment Properties ▸ OK
+was refused whenever it touched them. All three are ordinary merge operations
+now:
+
+- **`annotation.update` carries `/LE`.** `StyleUpdate::endings` (two names for a
+  line or polyline, one for a callout — `"none"`, `"square"`, `"circle"`,
+  `"diamond"`, `"open_arrow"`, `"closed_arrow"`, `"butt"`, `"r_open_arrow"`,
+  `"r_closed_arrow"`, `"slash"`) travels in the same `style` object, and the
+  engine's `Restyle` gained the same field, so `pdfcraft_annot::restyle` still
+  applies the whole look all-or-nothing (it validates the pair before the first
+  mutation and restores the dictionary on a later failure). `expect`/`before`
+  compare the pair; a note, or the wrong number of endings, is `invalid` before
+  anything changes.
+- **`annotation.font_size`** (`{"action":"annotation.font_size","size":14.0,
+  "expect":10.0}`) addresses a text box, typewriter text or callout by `/NM` and
+  applies `Edit::FontSizeAnnotation`: 1–400 pt, the box regrows for the wrapped
+  text, the accepted operation carries `size` and `before` (the previous
+  number), and the undo is `size = before`, `expect = size`. A comment without
+  `/DA`, a non-numeric or out-of-range size and a locked comment are
+  `invalid`/`unsupported` before the edit.
+- **`annotation.info`** (`{"action":"annotation.info","info":{"author":"ada",
+  "subject":"Review","icon":"help"}}`) applies `Edit::SetAnnotationInfo` with the
+  same all-or-nothing discipline: all 14 note icons by name, `author`/`subject`
+  for any comment, an icon only for a sticky note. A string sets the property,
+  `null` removes it (`/T`, `/Subj`), an empty string is refused so a request
+  never wipes a name by accident; the accepted operation carries `info` and
+  `before` (previous values of exactly the named fields, `null` for one the
+  comment did not have), and the undo is `info = before`, `expect = info`.
+- **The engine has the same guarantees.** `pdfcraft_annot::set_info` now puts the
+  dictionary back when a note's appearance cannot be redrawn (it used to leave
+  `/T`, `/Subj` or `/Name` changed), and an empty author or subject removes the
+  entry instead of writing an empty string, so the undo of a name the comment
+  did not have is expressible on the wire.
+- **Comment Properties ▸ OK still undoes as one step.** A batch of
+  `StyleAnnotation`/`FillAnnotation`/`BorderColorAnnotation`/
+  `BorderShapeAnnotation`/`FontSizeAnnotation`/`SetAnnotationInfo` on one comment
+  becomes one operation per kind (`annotation.update` →
+  `annotation.font_size` → `annotation.info`), in one history group; a batch
+  with anything else is still refused whole. A single style edit and an unfilled
+  `SetAnnotationInfo` are refused on the client too, so nothing the room would
+  reject is sent.
+- Refusals do not move the version, write no journal line and are answered only
+  to the sender; a stranger's later change to the same property makes the undo
+  `conflict` (`retryable: false`) and leaves their value in place.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-annot` | `a_style_update_round_trips_and_says_what_it_clears` (endings in the payload and the engine restyle), `line_endings_are_named_and_counted`, `a_style_update_refuses_a_property_the_comment_does_not_have` (one ending for a callout, two for a line, none for a note), `before_records_only_what_the_update_names_and_the_undo_checks_it` (endings CAS), `a_font_size_update_round_trips_and_is_bounded`, `an_info_update_round_trips_and_refuses_an_empty_name` (null clears, empty is refused, icon is a note's) |
+| `collab-pdf` | `an_update_sets_line_endings_with_the_rest_of_the_look` (before, CAS conflict, replay on a fresh replica), `endings_on_a_comment_that_has_none_change_nothing` (version unmoved, colour unchanged), `a_font_size_update_resizes_text_and_undoes_as_one_operation` (before, replay, stale undo refused without a change), `an_info_update_sets_the_note_icon_and_the_names_or_changes_nothing` (before with `null`, empty subject and an icon on a rectangle refused, undo removes the subject again, replay) |
+| `collab-client-pdf` | `a_style_edit_the_comment_cannot_carry_is_refused_on_this_side_too`, `line_endings_travel_with_the_style_and_their_undo_names_the_pair`, `a_font_size_and_an_info_change_become_operations_with_cas_inverses`, `a_mixed_properties_batch_becomes_one_operation_per_kind` (order, shared target, mixed batch refused) |
+| `collab-ws` e2e | `two_clients_change_line_endings_and_undo_them`, `two_clients_resize_text_and_rename_a_note_and_undo_them` (font size and info, each with the undo from the accepted operation on both replicas), `a_refused_style_detail_and_a_stale_undo_change_nothing` (four refusals, version unmoved; a stale size undo is `conflict` and the other user's 22 pt stays) |
+
+Gates at `c400147b3` (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **195**: proto 12, server 27 + bin 31, hub 5, client 13, client-pdf 23, session 5, ws 8 unit, pdf 34, annot 18, daemon 3 (`conflict_resolve` 1, `crash_recovery` 1, `publication_retry` 1) + **e2e 16** |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **16/16** (two new) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+
+What this does **not** cover: the full `ui-egui` suite was not re-run (the only
+UI change is none — the new operations are reached through the existing
+`Edit::FontSizeAnnotation`/`Edit::SetAnnotationInfo` arms of `ops_for_edit`;
+clippy with the feature compiles it); `PartOpacity` and moving/resizing a comment
+inside the same Comment Properties batch are still refused whole (they are not
+operation kinds yet), so a dialog change that includes them fails as before; and
+nothing was run against a real cabinet or in a browser.
 
 ### Page insert and duplicate — §5 p.3 (2026-11-09, local; not pushed)
 
@@ -1189,14 +1294,17 @@ Ordered by the risk they pose to production.
    `FreehandHighlight`, `TextBox`, `Typewriter`, palette `Stamp`, `Mark` and
    `Note` with their style (colour, opacity, width, fill, border).
    `annotation.update` (`ce5c38798`, §4) shares the restyle of an existing
-   comment — colour, opacity, line width, fill, border colour and shape — as one
-   operation with a compare-and-set undo, and `annotation.reply` carries a
-   review state (`/State`) whose reply is named by the client and survives
-   delete/restore. Drawn and typed signatures, custom stamps, redaction marks
-   and attachments are still refused with `unsupported` (RFC §3.1.1); line
-   endings (`/LE`), font size, note icon and author/subject changes are not
-   shared yet (`Edit::FontSizeAnnotation`, `Edit::SetAnnotationInfo` and a style
-   edit carrying `endings` are refused whole).
+   comment — colour, opacity, line width, fill, border colour and shape, and
+   line endings (`/LE`, `c400147b3`) — as one operation with a
+   compare-and-set undo; `annotation.font_size` shares the font size of a text
+   box, typewriter text or callout, and `annotation.info` the author, subject
+   and note icon, each as its own addressable operation with the same CAS undo
+   (`c400147b3`, §4); `annotation.reply` carries a review state (`/State`)
+   whose reply is named by the client and survives delete/restore. Drawn and
+   typed signatures, custom stamps, redaction marks and attachments are still
+   refused with `unsupported` (RFC §3.1.1). What is still not shared inside a
+   comment: part opacity, moving/resizing a comment and reshaping a line or
+   polygon — a Comment Properties batch that carries them is refused whole.
 3. **Structural coverage.** Page rotate, move, delete and restore, and now
    insert and duplicate (§4, `b13933e9b`). An insert or a duplicate carries the
    page as a one-page PDF inside the operation (base64, ≤
@@ -1355,11 +1463,14 @@ Tests: the round-trip and two-client scenarios are listed in §4. **Done since
 (`ce5c38798`, §4):** the restyle of an existing comment (`annotation.update`:
 colour, opacity, width, fill, border colour/shape, one all-or-nothing edit with
 a CAS undo) and status replies (`annotation.reply` with `state` → `/State` +
-`/StateModel /Review`, named by the client, restored as a status reply). What
-is still open here: line endings (`/LE`), font size, note icon and
-author/subject (`SetAnnotationInfo`), and the same typed envelope for
-`AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
-would need the blob channel).
+`/StateModel /Review`, named by the client, restored as a status reply).
+**Done since (`c400147b3`, §4):** line endings (`/LE`) in the same style
+object, the font size (`annotation.font_size`) and a comment's author/subject/
+note icon (`annotation.info`), each its own addressable operation with a CAS
+undo. What is still open here: part opacity, moving/resizing a comment,
+reshaping a line/polygon, and the same typed envelope for `AddCustomStamp` if
+the cabinet ever needs it (it references an XObject, so it would need the blob
+channel).
 
 ### 6.3 Web host bridge — done in this branch (local, not pushed)
 
