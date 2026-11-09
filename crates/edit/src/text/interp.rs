@@ -496,7 +496,7 @@ impl Shown {
     /// offset across it (for upright text: the user-space x, x and y). A vertical run goes along
     /// its column instead, the way the pen moves: for upright text down, with the column's x
     /// across.
-    fn span(&self) -> ((f64, f64), f64, f64, f64) {
+    pub(super) fn span(&self) -> ((f64, f64), f64, f64, f64) {
         let m = self.tm.then(&self.state.ctm);
         let dir = match self.state.vertical {
             Some(w1) => direction(&Matrix([m.0[2] * w1.signum(), m.0[3] * w1.signum(), 0.0, 0.0, 0.0, 0.0])),
@@ -523,6 +523,12 @@ impl Pen {
     pub(super) fn after(s: &Shown) -> Self {
         let (dir, _, end, across) = s.span();
         Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
+    }
+
+    /// A combining mark drawn back over the letter before it doesn't take the pen back: the next
+    /// letter continues the word from where that letter ended, not from the mark.
+    pub(super) fn after_mark(self, before: &Pen) -> Self {
+        Pen { end: self.end.max(before.end), ..self }
     }
 
     /// Whether `s` could continue the same line on geometry alone: on the same baseline (within

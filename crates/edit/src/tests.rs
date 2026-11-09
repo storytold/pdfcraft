@@ -8244,6 +8244,77 @@ fn a_lam_alef_glyph_mapped_to_two_letters_keeps_them_in_typing_order() {
     }
 }
 
+/// Synthetic codes A س, B م, D a damma (no advance) and space, for lines drawn the way Word
+/// draws Arabic: one show per glyph or per run, each placed with its own text matrix.
+fn arabic_marks_page(content: &str) -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 4 beginbfchar \
+         <20> <0020> <41> <0633> <42> <0645> <44> <064F> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68)
+        .map(|c| match c {
+            32 => "250",
+            68 => "0",
+            _ => "500",
+        })
+        .collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream("", content),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// Word draws a haraka just before the letter it sits on (drawn left to right, the mark comes
+/// first and is placed over the letter after it). Read as following the glyph before it, every
+/// mark moved one letter on (تُعَدُّ read as تعُدَ ُّ), and an edit wrote it there.
+#[test]
+fn a_mark_drawn_before_the_letter_it_sits_on_stays_on_that_letter() {
+    // Drawn left to right: م at 72, the damma at 78.6 (over س), then س at 78.
+    let word = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 6.6 -0.48 Td (D) Tj -0.6 0.48 Td (A) Tj ET";
+    // Drawn after its letter instead, and placed back over it: the order the editor writes.
+    let after = "BT /F1 12 Tf 72 700 Td [(B) (A) 250 (D)] TJ ET";
+    // Placed just left of its letter's start, and at its start (Word, Arial).
+    let left = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 5.52 0.72 Td (D) Tj 0.48 -0.72 Td (A) Tj ET";
+    let at = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 6 -1.8 Td (D) Tj 0 1.8 Td (A) Tj ET";
+    // Drawn after the letter it sits on, near that letter's start, with a letter after it.
+    let between = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (A) Tj 1.2 0 Td (D) Tj 4.8 0 Td (B) Tj ET";
+    for (content, expected) in [(word, "سُم"), (left, "سُم"), (at, "سُم"), (after, "سُم"), (between, "مسُ")] {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected], "{content}");
+            assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "{content}");
+        }
+    }
+}
+
+/// Word writes a right-to-left line that it splits into runs (a word in another language, a
+/// justified space) run by run in typing order, so each run starts left of the one before. They
+/// are one line: read apart, a paragraph fell into pieces, cut inside words.
+#[test]
+fn runs_of_a_right_to_left_line_written_in_typing_order_make_one_line() {
+    // Typed "سمم سس": the run سمم is drawn at the right (as م م س, glyph by glyph), then the
+    // space, narrowed with its own Tc, then سس. Word justifies runs with Tc of a few thousandths
+    // of an em: -0.036 on the first, 0.048 on the last (as at 12 pt in a Word file).
+    let content = "BT /F1 12 Tf -0.036 Tc 1 0 0 1 87 700 Tm (B) Tj 6 0 Td (B) Tj 6 0 Td (A) Tj ET \
+                   BT /F1 12 Tf -2.5 Tc 1 0 0 1 84 700 Tm ( ) Tj ET \
+                   BT /F1 12 Tf 0.048 Tc 1 0 0 1 72 700 Tm (AA) Tj ET";
+    let doc = arabic_marks_page(content);
+    for doc in [&doc, &reopen(&doc)] {
+        let lines = text::text_lines(doc, 0).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
+    }
+}
+
 #[test]
 fn multi_glyph_rtl_actual_text_keeps_its_own_reading_order() {
     // Two encoded glyphs are a logical span, even if their replacement looks like a ligature.

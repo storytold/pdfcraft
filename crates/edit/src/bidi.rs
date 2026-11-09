@@ -63,7 +63,7 @@ fn is_digit(c: char) -> bool {
 }
 
 /// Combining marks that ride on the character before them.
-fn is_mark(c: char) -> bool {
+pub(crate) fn is_mark(c: char) -> bool {
     is_hebrew_mark(c)
         || matches!(
             u32::from(c),

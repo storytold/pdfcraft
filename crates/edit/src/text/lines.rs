@@ -460,8 +460,12 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
-    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
+    let shown = rtl_runs_in_drawing_order(interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?);
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
+    // Marks drawn on their own, waiting for the letter they sit on (see `MarkFirst`), and where
+    // the last letter drawn lies along its baseline.
+    let mut marks: Option<MarkFirst> = None;
+    let mut last_letter: Option<(f64, f64)> = None;
     for mut s in shown {
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a
         // separate logical line. Put its letters into visual order before joining the
@@ -504,7 +508,16 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             if spaced {
                 l.text.push(' ');
             }
-            l.text.push_str(&s.text);
+            // Marks drawn just before this letter, over it, follow it instead.
+            let held = marks.filter(|m| !spaced && m.sit_on(&s)).map_or(0, |m| m.len);
+            let at = l.text.len().saturating_sub(held);
+            match (held > 0 && l.text.is_char_boundary(at)).then(|| l.text.split_off(at)) {
+                Some(held) => {
+                    l.text.push_str(&s.text);
+                    l.text.push_str(&held);
+                }
+                None => l.text.push_str(&s.text),
+            }
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
@@ -567,7 +580,26 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         {
             pen.across = before.across;
         }
+        let only_marks = !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark);
+        if joins
+            && only_marks
+            && let Some((_, before)) = last
+        {
+            pen = pen.after_mark(&before);
+        }
         last = Some((si, pen));
+        let (_, start, end, _) = s.span();
+        if only_marks {
+            marks = Some(match marks {
+                Some(m) if joins => MarkFirst { len: m.len.saturating_add(s.text.len()), ..m },
+                _ => MarkFirst { len: s.text.len(), at: start, size: s.size, before: last_letter },
+            });
+        } else {
+            marks = None;
+            if s.text.chars().any(|c| !c.is_whitespace()) {
+                last_letter = Some((start.min(end), start.max(end)));
+            }
+        }
     }
     // Content streams draw right-to-left lines in visual order; the editor works in typing order.
     for l in lines.iter_mut().filter(|l| !l.logical_order) {
@@ -588,8 +620,120 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     Ok(lines)
 }
 
+/// Combining marks drawn as runs of their own, before the letter they sit on. Word draws a haraka
+/// or a Hebrew point that way: the mark first, placed over the letter drawn right after it. Read
+/// as riding on the letter before it, every mark moved one letter on (تُعَدُّ read as تعُدَ ُّ).
+#[derive(Clone, Copy)]
+struct MarkFirst {
+    /// The marks' length in bytes at the end of the line's text.
+    len: usize,
+    /// Where the first mark sits along the baseline, and its size.
+    at: f64,
+    size: f64,
+    /// The extent of the letter drawn before the marks, along the baseline.
+    before: Option<(f64, f64)>,
+}
+
+impl MarkFirst {
+    /// Whether the marks sit on `s`, one right-to-left letter, rather than on the letter before:
+    /// a mark is placed from its letter's origin, so it belongs to the one whose start it is
+    /// nearer. (A writer that draws the mark after its letter puts it at that letter's start.)
+    fn sit_on(&self, s: &Shown) -> bool {
+        let (_, start, end, _) = s.span();
+        let (lo, hi) = (start.min(end), start.max(end));
+        let letter = s.text.chars().next().is_some_and(|c| crate::bidi::is_rtl(c) && !crate::bidi::is_mark(c));
+        let near = (self.at - lo).abs();
+        s.glyph_count == 1
+            && letter
+            && self.at > lo - self.size.max(1.0) * 0.3
+            && self.at < hi
+            && self.before.is_none_or(|(before, _)| near < (self.at - before).abs())
+    }
+}
+
+/// Word writes a right-to-left line that it splits into runs (a word in another language, a
+/// justified space, a run of digits) run by run in typing order: each run is drawn left to
+/// right, but starts left of the run before. Lines are read in drawing order, left to right, so
+/// such a chain of runs is put back into that order: it then reads as one line, turned into
+/// typing order as a whole. A run is one text object (Word draws some glyph by glyph); only runs
+/// in one font and size are a chain, and runs with left-to-right letters are never reordered.
+fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
+    // The text objects, as ranges of `shown`.
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, s) in shown.iter().enumerate() {
+        match runs.last_mut() {
+            Some(run) if shown.get(run.start).is_some_and(|first| first.bt == s.bt) => run.end = i.saturating_add(1),
+            _ => runs.push(i..i.saturating_add(1)),
+        }
+    }
+    // A run's first show (its font, size and baseline) and its extent along the baseline.
+    let extent = |run: &std::ops::Range<usize>| -> Option<(&Shown, f64, f64)> {
+        let members = shown.get(run.clone())?;
+        let first = members.first()?;
+        let (lo, hi) = members.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+            let (_, start, end, _) = s.span();
+            (lo.min(start).min(end), hi.max(start).max(end))
+        });
+        let alike = members.iter().all(|s| {
+            s.font == first.font
+                && (s.size - first.size).abs() < 0.01
+                && s.state.vertical.is_none()
+                && !s.logical_order
+                && !s.text.chars().any(|c| c.is_alphabetic() && !crate::bidi::is_rtl(c))
+        });
+        (alike && lo.is_finite() && hi.is_finite()).then_some((first, lo, hi))
+    };
+    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
+        let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent(a), extent(b)) else { return false };
+        let (da, _, _, xa) = fa.span();
+        let (db, _, _, xb) = fb.span();
+        let size = fa.size.max(1.0);
+        fa.font == fb.font
+            && (fa.size - fb.size).abs() < 0.01
+            && (da.0 - db.0).abs() < 1e-3
+            && (da.1 - db.1).abs() < 1e-3
+            && (xa - xb).abs() < size * 0.3
+            && sb < sa - size * 0.05
+            && eb <= sa + size * 0.3
+            && sa - eb < size * 1.5
+    };
+    let mut order: Vec<std::ops::Range<usize>> = Vec::with_capacity(runs.len());
+    let mut i = 0;
+    while i < runs.len() {
+        let mut j = i.saturating_add(1);
+        while let (Some(a), Some(b)) = (runs.get(j.saturating_sub(1)), runs.get(j)) {
+            if !leftward(a, b) {
+                break;
+            }
+            j = j.saturating_add(1);
+        }
+        let chain = runs.get(i..j).unwrap_or_default();
+        let rtl = chain.iter().any(|run| shown.get(run.clone()).unwrap_or_default().iter().any(|s| s.text.chars().any(crate::bidi::is_rtl)));
+        if chain.len() > 1 && rtl {
+            order.extend(chain.iter().rev().cloned());
+        } else {
+            order.extend(chain.iter().cloned());
+        }
+        i = j;
+    }
+    if order.iter().zip(&runs).all(|(a, b)| a == b) {
+        return shown;
+    }
+    let mut slots: Vec<Option<Shown>> = shown.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(slots.len());
+    for run in order {
+        for slot in slots.get_mut(run).unwrap_or_default() {
+            out.extend(slot.take());
+        }
+    }
+    out
+}
+
 /// Joining independent text objects is safe only when they use the same text and graphics
 /// transforms and spacing. In particular, a nearby rotated label isn't part of this line.
+///
+/// Spacing doesn't change what a run of spaces shows: Word narrows a justified space with its
+/// own `Tc`, and that space is still part of the line around it.
 fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
     let within = |a: &[f64], b: &[f64], tolerance: f64| a.iter().zip(b).all(|(a, b)| (a - b).abs() < tolerance);
     let same = |a: &[f64], b: &[f64]| within(a, b, 1e-6);
@@ -597,11 +741,15 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
     // Spacing that differs by less than a thousandth of an em, the unit glyph widths are given in,
     // can't be seen. Some producers still write it (`0.0001 Tc` on one word of a line).
     let em = shown.state.size.abs() / 1000.0;
+    // Word justifies a right-to-left line run by run, with a `Tc` of a few thousandths of an em
+    // on some runs (-0.036 and 0.048 at 12 pt): too little to see, and the runs are one line.
+    let rtl = line.text.chars().chain(shown.text.chars()).any(crate::bidi::is_rtl);
+    let em = if rtl { em * 10.0 } else { em };
     line.scope == shown.scope
         && line.paint == shown.paint
         && same(&line.origin.tm[..4], &shown.tm.0[..4])
         && same(&line.origin.ctm, &shown.state.ctm.0)
-        && within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], em.max(1e-6))
+        && (shown.text.chars().all(char::is_whitespace) || within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], em.max(1e-6)))
         && same(&[a.scale, a.rise], &[b.scale, b.rise])
         && a.fill.len() == b.fill.len()
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)
