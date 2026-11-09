@@ -1402,8 +1402,9 @@ fn glyph_component(part: &str) -> Option<String> {
     if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
         return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
     }
-    // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
-    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    // `from_str_radix` accepts a leading `+` and lowercase digits, and the glyph list
+    // specification's digits are uppercase only (`uni20ac` names nothing), so they are checked.
+    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
     if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && hexish(h)) {
         let mut s = String::new();
         for i in (0..hex.len()).step_by(4) {
@@ -1558,6 +1559,21 @@ mod encoding_tests {
         let mut enc = Dict::new();
         enc.set(b"Differences".to_vec(), Object::Array(items));
         Object::Dict(enc)
+    }
+
+    /// The glyph list specification's hex forms: `uni` and groups of exactly four uppercase
+    /// digits, `u` and four to six.
+    #[test]
+    fn glyph_names_take_uppercase_hex_in_whole_groups() {
+        assert_eq!(glyph_text("uni20ac"), None, "the specification's hex digits are uppercase");
+        assert_eq!(glyph_text("u1f600"), None);
+        assert_eq!(glyph_text("uni65"), None, "`uni` takes groups of exactly four digits");
+        assert_eq!(glyph_text("u65"), None, "`u` takes four to six digits");
+        assert_eq!(glyph_text("u0010FFFF"), None);
+        assert_eq!(glyph_text("uni0065").as_deref(), Some("e"));
+        assert_eq!(glyph_text("u0065").as_deref(), Some("e"), "`u` and four digits");
+        assert_eq!(glyph_text("u1F600").as_deref(), Some("\u{1f600}"), "`u` and five");
+        assert_eq!(glyph_text("u10FFFF").as_deref(), Some("\u{10ffff}"), "`u` and six, the last code point");
     }
 
     #[test]
