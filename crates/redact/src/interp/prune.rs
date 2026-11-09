@@ -287,7 +287,8 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         }
         let mut pruned = false;
         // What each page draws through this dictionary, worked out once for all the names.
-        let drawn: Vec<_> = if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
+        let drawn: Vec<_> =
+            if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
         for n in names {
             match any_draws(&drawn, &n) {
                 Some(true) => {}
