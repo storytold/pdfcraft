@@ -38,16 +38,18 @@ impl PdfCraftApp {
         // The window shows the active document's name (or title, if it asks for that), with •
         // while it has unsaved changes, as the other Craft apps write it (#3640). Unsaved means
         // what closing would ask about, so a draft not yet applied counts too.
-        let dirty = self.active.is_some_and(|i| self.has_unsaved_work(i));
+        // In split view it names the main pane's document.
+        let front = self.pane_front(panes::Place::Main);
+        let dirty = front.is_some_and(|i| self.has_unsaved_work(i));
         let mark = if dirty { " •" } else { "" };
         let titled = |name: Option<String>| {
             name.or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
                 .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name}{mark} — PdfCraft"))
         };
-        let title = titled(self.active.and_then(|i| crate::canvas::tab_label(self, i)));
+        let title = titled(front.and_then(|i| crate::canvas::tab_label(self, i)));
         // The web page's title is what an embedding host reads to tell which file opened, so it
         // names the file even when the document asks to show its own title.
-        let page_title = titled(self.active.and_then(|i| self.views.get(i)).and_then(|v| self.session.get(v.id)).map(|d| d.name.clone()));
+        let page_title = titled(front.and_then(|i| self.views.get(i)).and_then(|v| self.session.get(v.id)).map(|d| d.name.clone()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -65,6 +67,7 @@ impl PdfCraftApp {
     /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
         Self {
+            panes: Default::default(),
             session: Session::new(),
             status_captions_lang: None,
             views: Vec::new(),
@@ -137,6 +140,7 @@ impl PdfCraftApp {
             reload_changed_files: true,
             update_check_at_start: true,
             show_secured_notice: true,
+            text_links: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
@@ -276,6 +280,7 @@ impl PdfCraftApp {
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
+            recovered_paths: Default::default(),
             last_autosave: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
@@ -329,6 +334,7 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+            hairlines_draft: Default::default(),
         }
     }
 
@@ -469,6 +475,11 @@ impl eframe::App for PdfCraftApp {
         storage.set_string("pdfcraft", self.persist());
     }
 
+    /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.updates.exiting();
+    }
+
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
     ///
@@ -604,8 +615,16 @@ impl PdfCraftApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
+                // Combine from File Explorer's PDF menu, also handed to the running app: the dialog
+                // it opens has to be seen, so the window comes to the front as for Open.
+                #[cfg(not(target_arch = "wasm32"))]
+                OsEvent::Combine(paths) => {
+                    self.combine_paths(&paths);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 #[cfg(target_arch = "wasm32")]
-                OsEvent::Open(_) => {}
+                OsEvent::Open(_) | OsEvent::Combine(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
@@ -722,6 +741,7 @@ impl PdfCraftApp {
                 view.pending_pick = None;
             }
         }
+        panes::frame(self);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
@@ -786,14 +806,7 @@ impl PdfCraftApp {
             if self.mode == Mode::AllTools && self.all_tools_full {
                 all_tools_ui::show(self, ui);
             } else {
-                match self.active {
-                    None if self.combine_showing() => combine_ui::page(self, ui),
-                    None => home::show(self, ui),
-                    Some(index) => match compare_ui::side_by_side(self, index) {
-                        Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
-                        None => canvas::document_area(self, index, ui),
-                    },
-                }
+                panes::page_area(self, ui);
             }
         });
         self.process_pending_edits();
