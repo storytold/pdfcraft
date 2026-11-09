@@ -141,6 +141,7 @@ fn warning_bit(warning: InterpreterWarning) -> u8 {
         InterpreterWarning::ImageDecodeFailure => 2,
         InterpreterWarning::ContentTruncated => 4,
         InterpreterWarning::ColorFallback => 8,
+        InterpreterWarning::Type3WidthsMissing => 16,
     }
 }
 
@@ -151,6 +152,7 @@ fn warnings_in(bits: u8) -> impl Iterator<Item = InterpreterWarning> {
         InterpreterWarning::ImageDecodeFailure,
         InterpreterWarning::ContentTruncated,
         InterpreterWarning::ColorFallback,
+        InterpreterWarning::Type3WidthsMissing,
     ]
     .into_iter()
     .filter(move |warning| bits & warning_bit(*warning) != 0)
