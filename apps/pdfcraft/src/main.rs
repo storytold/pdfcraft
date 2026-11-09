@@ -237,9 +237,18 @@ fn main() -> eframe::Result {
     let startup::Arguments { files, options, control_file, create_images, combine, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs). Linux X11
-    // sessions keep server-side decorations, so only a Wayland session gets app-drawn controls.
-    let window_controls =
-        if cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty()) { decorations::app_drawn() } else { None };
+    // sessions keep server-side decorations, so only a Wayland session gets app-drawn controls
+    // by default. An explicit app title-bar override is honored before that gate, so it also
+    // applies on X11 and FreeBSD.
+    let titlebar_override = cfg!(all(unix, not(target_os = "macos")))
+        && std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) == Some("app");
+    let window_controls = if titlebar_override
+        || (cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty()))
+    {
+        decorations::app_drawn()
+    } else {
+        None
+    };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -947,5 +956,51 @@ mod x11_decorations_tests {
             "X11 Linux must keep server-side decorations for tiling; app-drawn decorations must be gated, not enabled unconditionally on Linux: {}",
             assignment.trim()
         );
+    }
+
+    #[test]
+    fn titlebar_override_is_honored_before_the_wayland_gate() {
+        let source = include_str!("main.rs");
+        // Everything before the top-level test modules is product code.
+        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
+        let override_pos = product.find("PDFCRAFT_TITLEBAR");
+        let wayland_pos = product.find("WAYLAND_DISPLAY");
+        let decorations_pos = product.find("decorations::");
+        assert!(product.contains("decorations::app_drawn()"), "main no longer calls decorations::app_drawn()");
+        // The explicit PDFCRAFT_TITLEBAR=app override lives inside app_drawn(), so main
+        // must consult it before the Wayland gate; otherwise X11/FreeBSD never reach it
+        // and keep system decorations even when app-drawn was asked for. A decorations
+        // helper consulted before the gate counts the same way, as does dropping the
+        // gate in main and letting app_drawn() decide (its default stays system on X11).
+        let honored_before_gate = match (override_pos, wayland_pos) {
+            (Some(override_pos), Some(wayland_pos)) => override_pos < wayland_pos,
+            (Some(_), None) => true,
+            (None, Some(wayland_pos)) => decorations_pos.is_some_and(|pos| pos < wayland_pos),
+            (None, None) => true,
+        };
+        assert!(
+            honored_before_gate,
+            "PDFCRAFT_TITLEBAR=app must be checked before the Wayland gate in main, so the override is honored on X11/FreeBSD while system decorations stay the default (override at {override_pos:?}, Wayland gate at {wayland_pos:?})"
+        );
+        if wayland_pos.is_some() {
+            let mut assignment = String::new();
+            for line in product.lines() {
+                if assignment.is_empty() && !line.contains("let window_controls") {
+                    continue;
+                }
+                assignment.push_str(line);
+                assignment.push('\n');
+                if line.contains(';') {
+                    break;
+                }
+            }
+            if !assignment.is_empty() {
+                assert!(
+                    assignment.contains("None"),
+                    "system decorations must stay the X11 default when the override is absent: {}",
+                    assignment.trim()
+                );
+            }
+        }
     }
 }
