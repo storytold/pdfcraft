@@ -108,6 +108,16 @@ impl DocView {
         self.current = page;
     }
 
+    /// The end of the document (End): the last page, scrolled to its bottom as far as the view
+    /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
+    /// page's top.
+    pub fn go_to_end(&mut self) {
+        self.go_to_page(usize::MAX);
+        // A fraction past a page's top scrolls as far as the content allows (`goto`, clamped when
+        // applied), so the whole page down to its bottom edge.
+        self.goto = Some((self.current, 1.0));
+    }
+
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
@@ -407,21 +417,23 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    // First and last page: Home and End, or Shift+Ctrl+Page Up / Up Arrow and Shift+Ctrl+Page Down /
-    // Down Arrow (*Adobe Acrobat Help*, 2019, "Keys for navigating a PDF", p. 83). These take the
-    // key from the page turning and scrolling below.
-    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
-    let to_end = command && shift && (key(Key::PageDown) || key(Key::ArrowDown));
-    let to_start = command && shift && (key(Key::PageUp) || key(Key::ArrowUp));
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434; *Adobe Acrobat Help*, 2019,
+    // "Keys for navigating a PDF", p. 83). These take the key from the page turning and
+    // scrolling below.
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    let to_start = pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp));
+    let to_end = pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown));
     if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
     if key(Key::End) || to_end {
-        view.go_to_page(usize::MAX);
+        view.go_to_end();
     }
     if to_end || to_start {
         return;
     }
+    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
     // Full screen: Space and Enter go forward a page, and Shift+Enter and Backspace back
     // (*Adobe Acrobat Help*, 2019, "Read a document in Full Screen mode", p. 66: "To go to the
     // previous page, press Shift+Enter"). The arrows and Page Up / Page Down already turn pages
