@@ -879,7 +879,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     // drawing that later `resize_ink` and `erase_ink` refuse to read.
     let points: usize = kept.iter().map(Vec::len).sum();
     if points > MAX_STORED_INK_POINTS {
-        return Err(AnnotError::Invalid(format!("the drawing has more than {MAX_STORED_INK_POINTS} points")));
+        return Err(AnnotError::Invalid(format!("erasing would leave a drawing with more than {MAX_STORED_INK_POINTS} points")));
     }
     let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);
