@@ -87,6 +87,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "pinned_folders_collapsed": self.pinned.collapsed,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
@@ -104,6 +105,9 @@ impl PdfCraftApp {
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "ask_to_lock_signatures": self.ask_to_lock_signatures,
             "fill_text_size": self.fill_text_size,
+            "fill_text_border": self.fill_text_default.width,
+            "fill_text_border_color": self.fill_text_default.color,
+            "fill_text_border_shape": self.fill_text_default.shape.name(),
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -117,9 +121,19 @@ impl PdfCraftApp {
                     "tool": t.command(),
                     "color": s.color,
                     "opacity": s.opacity,
+                    "fill_opacity": s.fill_opacity,
+                    "text_opacity": s.text_opacity,
                     "width": s.width,
                     "fill": s.fill,
+                    "border_color": s.border_color,
+                    "border_shape": s.border_shape.name(),
                 }))
+                .collect::<Vec<_>>(),
+            // Default font sizes of new text boxes and callouts (#5767).
+            "comment_font_sizes": self
+                .comment_prefs
+                .font_sizes()
+                .map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size }))
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
@@ -138,6 +152,7 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
@@ -148,9 +163,13 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
+        // settings written then would turn this off unasked.
+        v["update_check_at_start"] = self.update_check_at_start.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -220,10 +239,17 @@ impl PdfCraftApp {
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }
+        if let Some(on) = v["update_check_at_start"].as_bool() {
+            self.update_check_at_start = on;
+        }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
         }
+        if let Some(on) = v["text_links"].as_bool() {
+            self.text_links = on;
+        }
         self.pinned.restore(&v["pinned_folders"]);
+        self.pinned.restore_collapsed(&v["pinned_folders_collapsed"]);
         if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
             let mut tools = Vec::new();
             for item in items {
@@ -283,6 +309,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
+        // flags); unknown or malformed values keep the defaults.
+        self.ocr_draft.apply_pref(&v["ocr"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -306,6 +335,26 @@ impl PdfCraftApp {
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;
         }
+        if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
+            self.fill_text_default.width = width;
+        }
+        if let Some(shape) = v["fill_text_border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+            self.fill_text_default.shape = shape;
+        }
+        // `null` is a saved "the text's colour"; a missing or malformed one keeps the setting.
+        match v.get("fill_text_border_color") {
+            Some(serde_json::Value::Null) => self.fill_text_default.color = None,
+            Some(c) => {
+                if let Some(c) = rgb_triple(c) {
+                    self.fill_text_default.color = Some(c.map(|x| x.clamp(0.0, 1.0)));
+                }
+            }
+            None => {}
+        }
+        // Fill & Sign text starts from the saved border.
+        self.fill_text_border = self.fill_text_default.width;
+        self.fill_text_border_color = self.fill_text_default.color;
+        self.fill_text_border_shape = self.fill_text_default.shape;
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -354,6 +403,8 @@ impl PdfCraftApp {
                 if let Some(o) = e["opacity"].as_f64() {
                     self.comment_prefs.set_opacity(tool, o);
                 }
+                // The fill's and text's own opacities, where saved (older settings have none).
+                self.comment_prefs.set_part_opacity(tool, e["fill_opacity"].as_f64(), e["text_opacity"].as_f64());
                 if let Some(w) = e["width"].as_f64() {
                     self.comment_prefs.set_width(tool, w);
                 }
@@ -368,6 +419,30 @@ impl PdfCraftApp {
                     let mut s = self.comment_prefs.style(tool);
                     s.fill = fill;
                     self.comment_prefs.set_style(tool, s);
+                }
+                // `"border_color": null` is a saved "Same as text", which clears a tool's own border
+                // colour; a missing or malformed one keeps it.
+                match e.get("border_color") {
+                    Some(serde_json::Value::Null) => self.comment_prefs.set_border_color(tool, None),
+                    Some(c) => {
+                        if let Some(c) = rgb_triple(c) {
+                            self.comment_prefs.set_border_color(tool, Some(c));
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+                    self.comment_prefs.set_border_shape(tool, shape);
+                }
+            }
+        }
+        // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
+        // the tool's own.
+        if let Some(sizes) = v["comment_font_sizes"].as_array() {
+            for e in sizes {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(size) = e["font_size"].as_f64() {
+                    self.comment_prefs.set_font_size(tool, size);
                 }
             }
         }

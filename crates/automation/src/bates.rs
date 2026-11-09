@@ -8,6 +8,8 @@ use super::json::Args;
 use super::paths::read_input;
 use super::{Arc, Automation, Path, PathBuf};
 
+const MAX_BATES_BYTES: u64 = 512 * 1024 * 1024;
+
 struct FilePlan {
     input: String,
     source: PathBuf,
@@ -26,19 +28,23 @@ impl Automation {
         }
         let start = match args.0.get("start_number") {
             None | Some(Value::Null) => 1,
-            Some(value) => value
-                .as_u64()
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| ToolError::InvalidArgs("start_number must be a whole number of at least 1".into()))?,
+            Some(value) => {
+                value.as_u64().filter(|n| *n >= 1).ok_or_else(|| ToolError::InvalidArgs("start_number must be an integer of at least 1".into()))?
+            }
         };
         let digits = args.opt_int("digits")?.unwrap_or(6);
         let digits =
             u8::try_from(digits).ok().filter(|d| (1..=12).contains(d)).ok_or_else(|| ToolError::InvalidArgs("digits must be from 1 to 12".into()))?;
         let prefix = args.opt_str("prefix")?.unwrap_or("");
         let suffix = args.opt_str("suffix")?.unwrap_or("");
-        // `#` separates the token's fields and `>>` ends it: either would cut the token short.
-        if prefix.len() > 128 || suffix.len() > 128 || [prefix, suffix].iter().any(|s| s.contains('#') || s.contains(">>")) {
-            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 bytes and cannot contain # or >>".into()));
+        if prefix.chars().count() > 128
+            || suffix.chars().count() > 128
+            || prefix.contains('#')
+            || suffix.contains('#')
+            || prefix.contains(">>")
+            || suffix.contains(">>")
+        {
+            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 characters and cannot contain # or >>".into()));
         }
         let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
 
@@ -70,16 +76,7 @@ impl Automation {
             targets.push((output.to_string(), target));
             passwords.push(entry.get("password").and_then(Value::as_str).map(str::to_owned));
         }
-        let input_paths: std::collections::HashSet<_> = sources.iter().map(|(_, path)| path.clone()).collect();
-        let mut output_paths = std::collections::HashSet::new();
-        for (name, path) in &targets {
-            if input_paths.contains(path) {
-                return Err(failed(format!("output {name} names an input file; choose a separate output path")));
-            }
-            if !output_paths.insert(path.clone()) {
-                return Err(failed(format!("two files use the same output path: {name}")));
-            }
-        }
+        check_unique_outputs(&targets, dry_run)?;
 
         let mut plans = Vec::with_capacity(files.len());
         let mut next = start;
@@ -88,13 +85,13 @@ impl Automation {
             let size = std::fs::metadata(input_path).map_err(failed)?.len();
             input_bytes = input_bytes
                 .checked_add(size)
-                .filter(|total| *total <= 512 * 1024 * 1024)
+                .filter(|total| *total <= MAX_BATES_BYTES)
                 .ok_or_else(|| failed("combined Bates input exceeds the 512 MiB safety limit"))?;
             let bytes = read_input(input_path)?;
             input_bytes = input_bytes
                 .saturating_sub(size)
                 .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-                .filter(|total| *total <= 512 * 1024 * 1024)
+                .filter(|total| *total <= MAX_BATES_BYTES)
                 .ok_or_else(|| failed("combined Bates input exceeds the 512 MiB safety limit"))?;
             let display_name = input_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let password = passwords.get(index).and_then(Option::as_deref);
@@ -106,7 +103,8 @@ impl Automation {
                 return Err(failed(format!("{input_name} has no pages to number")));
             }
             let count = u64::try_from(pages).map_err(|_| failed(format!("page count is too large for {input_name}")))?;
-            let last = next.checked_add(count.saturating_sub(1)).ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
+            let last_offset = count.checked_sub(1).ok_or_else(|| failed(format!("{input_name} has no pages to number")))?;
+            let last = next.checked_add(last_offset).ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
             plans.push(FilePlan {
                 input: input_name.clone(),
                 source: input_path.clone(),
@@ -116,7 +114,7 @@ impl Automation {
                 first: next,
                 last,
             });
-            if index + 1 < sources.len() {
+            if index + 1 < files.len() {
                 next = last.checked_add(1).ok_or_else(|| failed(format!("Bates sequence overflows after {input_name}")))?;
             }
         }
@@ -163,12 +161,14 @@ impl Automation {
             let result = applied.and_then(|()| self.session.save_full_bytes(id));
             match result {
                 Ok(bytes) => {
-                    let total = output_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-                    if total > 512 * 1024 * 1024 {
-                        results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":"combined Bates output exceeds the 512 MiB safety limit"}));
-                    } else {
+                    let candidate = output_bytes
+                        .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                        .filter(|total| *total <= MAX_BATES_BYTES);
+                    if let Some(total) = candidate {
                         output_bytes = total;
                         staged.push((plan.output.clone(), bytes));
+                    } else {
+                        results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":"combined Bates output exceeds the 512 MiB safety limit"}));
                     }
                 }
                 Err(error) => results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":error.to_string()})),
@@ -198,8 +198,125 @@ impl Automation {
     }
 }
 
+fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<()> {
+    if targets.len() < 2 {
+        return Ok(());
+    }
+
+    // Probe exact basenames in a directory under each canonical parent, so the filesystem applies its own name rules.
+    let mut groups: std::collections::HashMap<PathBuf, (PathBuf, Vec<(String, std::ffi::OsString)>)> = std::collections::HashMap::new();
+    for (name, target) in targets {
+        let parent = target.parent().ok_or_else(|| failed(format!("output has no parent directory: {name}")))?;
+        let identity = parent.canonicalize().map_err(failed)?;
+        let probe_name = output_probe_name(target).map_err(failed)?;
+        groups.entry(identity.clone()).or_insert_with(|| (identity, Vec::new())).1.push((name.clone(), probe_name));
+    }
+
+    if dry_run {
+        // Dry runs cannot probe the volume: Windows uses a conservative case-insensitive comparison,
+        // while Unix preserves case, so unusual case-sensitive Windows or case-insensitive Unix volumes can differ.
+        for (_, (_, names)) in groups {
+            for (index, (name, candidate)) in names.iter().enumerate() {
+                if names.iter().take(index).any(|(_, prior)| same_output_name(prior, candidate)) {
+                    return Err(failed(format!("two files use the same output path: {name}")));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    for (_, (parent, names)) in groups {
+        match tempfile::tempdir_in(&parent) {
+            Ok(probes) => {
+                for (name, probe_name) in names {
+                    let probe = probes.path().join(probe_name);
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+                        Ok(file) => drop(file),
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                            return Err(failed(format!("two files use the same output path: {name}")));
+                        }
+                        Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
+                    }
+                }
+            }
+            #[cfg(windows)]
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => probe_files_for_resolved_outputs(&parent, names)?,
+            Err(error) => return Err(failed(error)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn probe_files_for_resolved_outputs(parent: &Path, names: Vec<(String, std::ffi::OsString)>) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    let mut probes = Vec::with_capacity(names.len());
+    for (name, probe_name) in names {
+        let probe = parent.join(probe_name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true).share_mode(0).custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+        match options.open(&probe) {
+            Ok(file) => probes.push(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(failed(format!("two files use the same output path: {name}")));
+            }
+            Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
+        }
+    }
+    drop(probes);
+    Ok(())
+}
+
+fn same_output_name(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        fn key(name: &std::ffi::OsStr) -> Vec<u32> {
+            std::char::decode_utf16(name.encode_wide())
+                .map(|decoded| match decoded {
+                    Ok(character) => {
+                        let mut uppercase = character.to_uppercase();
+                        match (uppercase.next(), uppercase.next()) {
+                            (Some(single), None) => single as u32,
+                            _ => character as u32,
+                        }
+                    }
+                    Err(error) => 0x11_0000 + u32::from(error.unpaired_surrogate()),
+                })
+                .collect()
+        }
+        key(left) == key(right)
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "output has no file name"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let is_verbatim = path.components().any(|component| matches!(component, std::path::Component::Prefix(prefix) if matches!(prefix.kind(), std::path::Prefix::Verbatim(_) | std::path::Prefix::VerbatimUNC(_, _) | std::path::Prefix::VerbatimDisk(_))));
+        let mut wide: Vec<u16> = name.encode_wide().collect();
+        if !is_verbatim {
+            while wide.last().is_some_and(|unit| *unit == u16::from(b'.') || *unit == u16::from(b' ')) {
+                wide.pop();
+            }
+        }
+        Ok(std::ffi::OsString::from_wide(&wide))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(name.to_os_string())
+    }
+}
+
 /// Publish a PDF atomically while refusing a target created by another process after preflight.
-fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| failed("output has no parent directory"))?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
     temp.write_all(bytes).map_err(failed)?;
@@ -211,4 +328,105 @@ fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
             failed(error.error)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_unique_outputs;
+
+    #[test]
+    fn dry_run_path_check_creates_no_probe_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.pdf");
+        let targets = vec![("first.pdf".into(), path.clone()), ("second.pdf".into(), path)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dry_run_detects_output_parent_aliases_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+        let first = dir.path().join("same.pdf");
+        let second = alias.join("same.pdf");
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn long_output_names_fit_in_probe_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join(format!("{}.pdf", "a".repeat(220)));
+        let second = dir.path().join(format!("{}.pdf", "b".repeat(220)));
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_probe_paths_preserve_non_utf8_names() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join(std::ffi::OsString::from_vec(vec![b'o', 0xff]));
+        let second = dir.path().join(std::ffi::OsString::from_vec(vec![b'o', 0xfe]));
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_probe_names_trim_only_non_verbatim_paths() {
+        use std::ffi::OsString;
+        use std::path::Path;
+
+        let normal = Path::new(r"C:\root\report.pdf. ");
+        assert_eq!(super::output_probe_name(normal).unwrap(), OsString::from("report.pdf"));
+
+        let verbatim = Path::new(r"\\?\C:\root\report.pdf. ");
+        assert_eq!(super::output_probe_name(verbatim).unwrap(), OsString::from("report.pdf. "));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dry_run_detects_case_only_output_collisions_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("Case.pdf");
+        let second = dir.path().join("CASE.pdf");
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn permission_denied_child_directory_uses_delete_on_close_file_probes() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let identity = Command::new("whoami.exe").args(["/user", "/fo", "csv", "/nh"]).output().unwrap();
+        assert!(identity.status.success());
+        let identity = String::from_utf8(identity.stdout).unwrap();
+        let sid = identity.split('"').nth(3).unwrap();
+        let acl = Command::new("icacls.exe").arg(dir.path()).arg("/deny").arg(format!("*{sid}:(AD)")).status().unwrap();
+        assert!(acl.success());
+
+        // Where the deny entry does not bind the test's own account (it did not on CI's Windows image),
+        // there is no denied folder to probe.
+        if !matches!(tempfile::tempdir_in(dir.path()), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied) {
+            return;
+        }
+        let direct_probe = dir.path().join("direct-probe");
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&direct_probe).unwrap();
+        drop(file);
+        std::fs::remove_file(&direct_probe).unwrap();
+
+        let targets = vec![("first.pdf".into(), dir.path().join("first.pdf")), ("second.pdf".into(), dir.path().join("second.pdf"))];
+        assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }

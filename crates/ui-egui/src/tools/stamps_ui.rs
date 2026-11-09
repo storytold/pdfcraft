@@ -1,11 +1,15 @@
 //! Custom stamps (Add a stamp ▸ Custom stamps ▸ Create): a PDF page or an image saved in the
 //! user's stamp library under a category and a name, then placed like any stamp.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use egui::{Align, Layout};
 use serde::{Deserialize, Serialize};
 
+use crate::canvas::{DocView, PageToolContext};
+use crate::page_cursor::Layer;
 use crate::theme::{self, Tokens};
 use crate::{Dialog, PdfCraftApp, QuickTool, widgets};
 
@@ -23,7 +27,14 @@ pub struct CustomStamp {
     pub page: usize,
     #[serde(with = "b64")]
     pub data: Arc<Vec<u8>>,
+    /// A line under the picture, filled in when the stamp is placed (#1741): `{name}`,
+    /// `{date}` and `{time}` become the author and now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
 }
+
+/// The line a new dynamic custom stamp offers: what the built-in dynamic stamps write.
+pub const DEFAULT_LINE: &str = "By {name} at {time}, {date}";
 
 mod b64 {
     use std::sync::Arc;
@@ -41,6 +52,63 @@ mod b64 {
     }
 }
 
+/// The Stamp tool on one page: a click that nobody holds (`free`) places stamp `kind` centred on
+/// it, upright as the page is shown. `true` once one is placed.
+pub(crate) fn place(cx: PageToolContext<'_>, kind: pdfcraft_engine::StampKind, by_line: &str, author: &str, free: bool, view: &mut DocView) -> bool {
+    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
+    let (Some(p), Some(page_info)) = (ptr.within(xf.rect), info.pages.get(page)) else { return false };
+    view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    if !(free && resp.clicked()) {
+        return false;
+    }
+    let (vx, vy) = xf.screen_to_view(p);
+    let (w, h) = kind.size();
+    let a = page_info.view_to_user((f64::from(vx) - w / 2.0) as f32, (f64::from(vy) - h / 2.0) as f32);
+    let b = page_info.view_to_user((f64::from(vx) + w / 2.0) as f32, (f64::from(vy) + h / 2.0) as f32);
+    let rect = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
+    let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.to_owned());
+    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+    view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: author.to_owned(),
+    }));
+    true
+}
+
+/// A custom stamp on one page: a click that nobody holds (`free`) places `stamp` centred on it, at
+/// its natural size (the engine sizes it), with its `line` filled in now (#1741). `true` once one
+/// is placed.
+pub(crate) fn place_custom(
+    cx: PageToolContext<'_>,
+    stamp: &CustomStamp,
+    line: &Option<String>,
+    author: &str,
+    free: bool,
+    view: &mut DocView,
+) -> bool {
+    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
+    let (Some(p), Some(page_info)) = (ptr.within(xf.rect), info.pages.get(page)) else { return false };
+    view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    if !(free && resp.clicked()) {
+        return false;
+    }
+    let (vx, vy) = xf.screen_to_view(p);
+    let u = page_info.view_to_user(vx, vy);
+    let (x, y) = (f64::from(u[0]), f64::from(u[1]));
+    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
+        page,
+        rect: [x, y, x, y],
+        name: stamp.name.clone(),
+        file: pdfcraft_engine::MarkFile { name: stamp.file.clone(), bytes: stamp.data.clone(), page: stamp.page },
+        author: author.to_owned(),
+        line: line.clone(),
+    });
+    true
+}
+
 /// The Create Custom Stamp dialog: the chosen file, its category and name.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StampDraft {
@@ -48,6 +116,9 @@ pub struct StampDraft {
     pub data: Arc<Vec<u8>>,
     pub category: String,
     pub name: String,
+    /// Add a line filled in when the stamp is placed, and its template.
+    pub dynamic: bool,
+    pub line: String,
 }
 
 pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
@@ -81,8 +152,15 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
         ui.add(crate::widgets::line(&mut d.name).desired_width(200.0)).labelled_by(l.id);
         ui.end_row();
     });
+    ui.add_space(8.0);
+    // A dynamic stamp (#1741): a line under the picture, filled in when it is placed.
+    ui.add(widgets::checkbox(&mut d.dynamic, tl!("Add a line filled in when the stamp is placed")));
+    if d.dynamic {
+        ui.add(crate::widgets::line(&mut d.line).desired_width(320.0).char_limit(pdfcraft_engine::MAX_STAMP_LINE));
+        ui.label(egui::RichText::new(tl!("{name}, {date} and {time} become your name, the date and the time.")).small().color(t.text_muted));
+    }
     ui.add_space(12.0);
-    let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty();
+    let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty() && (!d.dynamic || !d.line.trim().is_empty());
     let (mut save, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
@@ -145,7 +223,7 @@ impl PdfCraftApp {
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                        .add_filter_any_case(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                         .set_title(tl!("Select a file for the stamp"));
                     self.ask_one(crate::pickers::Ask::File(dialog), None, read);
                 }
@@ -163,14 +241,22 @@ impl PdfCraftApp {
         }
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();
         let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
-        self.stamp_draft = crate::stamps_ui::StampDraft { file, data: Arc::new(bytes), category, name };
+        self.stamp_draft = crate::stamps_ui::StampDraft { file, data: Arc::new(bytes), category, name, dynamic: false, line: DEFAULT_LINE.into() };
         self.dialog = Some(Dialog::CreateStamp);
     }
 
     /// Save the dialog's stamp in the library and choose it.
     pub(crate) fn save_custom_stamp(&mut self) {
         let d = std::mem::take(&mut self.stamp_draft);
-        self.custom_stamps.push(CustomStamp { category: d.category.trim().into(), name: d.name.trim().into(), file: d.file, page: 0, data: d.data });
+        let line = d.dynamic.then(|| d.line.trim().to_string()).filter(|l| !l.is_empty());
+        self.custom_stamps.push(CustomStamp {
+            category: d.category.trim().into(),
+            name: d.name.trim().into(),
+            file: d.file,
+            page: 0,
+            data: d.data,
+            line,
+        });
         self.quick_tool = QuickTool::CustomStamp(self.custom_stamps.len() - 1);
     }
 }
