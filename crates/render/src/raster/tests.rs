@@ -8821,6 +8821,10 @@ mod symbolic_truetype_cmap;
 // length gives (vendored hayro-interpret patch 83).
 mod truetype_loca_format;
 
+// An Arial (#5889) or Times New Roman (#6449) the PDF doesn't embed draws the glyphs its codes
+// name.
+mod non_embedded_arial;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
