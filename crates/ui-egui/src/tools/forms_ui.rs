@@ -1201,7 +1201,8 @@ fn scroll_bar(ui: &egui::Ui, track: Rect, shown: usize, n: usize, st: &mut Choic
     let thumb = Rect::from_min_size(egui::pos2(trough.min.x, thumb_at(st.first)), vec2(side, thumb_len));
     let t = ui.interact(thumb, id.with("thumb"), egui::Sense::drag());
     let pointer = ui.input(|i| i.pointer.interact_pos());
-    if t.drag_started() {
+    // The primary button only: a right-button drag moves nothing (AGENTS.md "Page presses").
+    if t.drag_started_by(egui::PointerButton::Primary) {
         st.grab = pointer.map(|q| q.y - thumb.min.y);
     }
     if t.dragged()
