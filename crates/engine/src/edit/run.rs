@@ -92,6 +92,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
+        // Converting the appearances of comments and form fields changes them too, which
+        // content changes alone do not allow.
+        Edit::ConvertColours { settings, .. } if settings.annotations && !(p.modify() && p.annotate()) => {
+            Err(EditError::NotPermitted(if p.modify() { "comments" } else { "changes to the document" }))
+        }
         // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
         // document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
@@ -103,6 +108,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::AddPrinterMarks { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
@@ -138,6 +144,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
+        | Edit::ConvertColours { .. }
+        | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -221,12 +229,16 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
+    pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
+    pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
@@ -240,12 +252,34 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What the edit's applied redactions left as it was that still holds the removed text.
+    pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
+    /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
+    /// removed the catalog's XMP packet.
+    pub(crate) redaction_identification: pdfcraft_redact::Identification,
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
 }
 
 impl EditCtx {
+    /// The field highlight (`app.runtimeHighlight`) the edit's next script reads: the field
+    /// scripts' runner holds it while there is one (its scripts change it there), else the edit.
+    pub(crate) fn highlight(&self) -> bool {
+        self.js.as_ref().map_or(self.highlight, |js| js.doc.highlight)
+    }
+
+    /// A script changed the field highlight: both script runtimes of the edit read the new one,
+    /// so a later edit of a batch sees it whichever kind of script it runs.
+    pub(crate) fn set_highlight(&mut self, on: bool) {
+        self.highlight = on;
+        if let Some(js) = self.js.as_mut() {
+            js.doc.highlight = on;
+        }
+    }
+
+    /// The context for one edit: `now` (the session's clock) dates it, and with `salt` seeds the
+    /// ids it makes.
     pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -262,9 +296,11 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_unchanged: false,
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
@@ -272,6 +308,8 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_elsewhere: None,
+            redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
         }
     }
@@ -614,6 +652,23 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
+        Edit::ConvertColours { pages, settings } => {
+            let mut recolour = |doc: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, t: pdfcraft_edit::ColourTarget| {
+                let target = match t {
+                    pdfcraft_edit::ColourTarget::Gray => pdfcraft_optimize::ImageTarget::Gray,
+                    pdfcraft_edit::ColourTarget::Rgb => pdfcraft_optimize::ImageTarget::Rgb,
+                    pdfcraft_edit::ColourTarget::Cmyk => pdfcraft_optimize::ImageTarget::Cmyk,
+                };
+                pdfcraft_optimize::recolour_image(doc, s, target)
+            };
+            let done = pdfcraft_edit::convert_colours(doc, pages, settings, &mut recolour)?;
+            if done.colours == 0 && done.images == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
+            }
+        }
+        Edit::EditAttachmentDescription { key, description } => {
+            pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
+        }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
             // the caret's `/NM` (#2666).
@@ -675,12 +730,26 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
+            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
+            } else {
+                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
+            };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
-            ran.map_err(EditError::Invalid)?;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            let on = run.highlight;
+            cx.set_highlight(on);
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = embed_image(doc, name, image)?;
@@ -808,6 +877,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::LayoutTableToBlocks { object } => {
             a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
+        Edit::AddPrinterMarks { pages, settings, replace } => {
+            pdfcraft_edit::add_printer_marks(doc, pages, settings, *replace)?;
+        }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
             pdfcraft_edit::add_header_footer(doc, pages, settings, *replace, &pdfcraft_edit::Context { date })?;
@@ -882,7 +954,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = report.overlays;
+            cx.redaction_elsewhere = Some(report.still_holding);
+            cx.redaction_identification = report.identification;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;
@@ -999,6 +1074,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            // A form-script event runs on its own: in a batch, its scripts and those the batch's
+            // value edits run afterwards (change, exit) would interleave, an exit running twice.
+            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+            }
             for e in edits {
                 run_edit(doc, e, cx)?;
             }
