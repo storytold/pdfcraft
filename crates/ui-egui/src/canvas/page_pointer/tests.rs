@@ -587,9 +587,14 @@ const PAGE_HITS_ASKERS: [(&str, &str, &str); 5] = [
 const COMMENT_POINT_TESTS: [&str; 2] = [".comment_at(", "PageCx::comment_at("];
 
 /// The functions that ask which comment lies under a point: (file, function, why).
-const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
+const COMMENT_POINT_TESTERS: [(&str, &str, &str); 4] = [
     ("tools/comments/input.rs", "hit", "the comments' hit test"),
-    ("tools/comments/input.rs", "context_hit", "the comments' hit test for a right-click"),
+    (
+        "tools/comments/state.rs",
+        "click_target",
+        "the comments' hit tests' lookup: a group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) stands for its primary",
+    ),
+    ("tools/comments/state.rs", "picked", "which group subordinate a click selected its primary through, when the click is acted on"),
     ("tools/comments/paint.rs", "paint_page", "a redaction mark shows its fill under the pointer with every tool, as comments' tips show"),
 ];
 

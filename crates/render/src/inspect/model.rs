@@ -320,8 +320,9 @@ pub struct Annotation {
     /// names the first comment on every page `fitz-A0`. `None` when `/IRT` leads to no listed
     /// comment ([`link_replies`]).
     pub parent: Option<(usize, usize)>,
-    /// `/RT /Group`: grouped with the annotation `/IRT` points at (Replace Text's caret with its
-    /// strikeout) rather than a reply to it.
+    /// `/RT /Group` (ISO 32000-2 §12.5.6.2, Table 172): with a `parent`, a subordinate of the
+    /// group whose primary `/IRT` points at, not a reply ([`Self::is_group_member`]). Its own
+    /// text, author, colour and dates are ignored; see [`group_primaries`].
     pub grouped: bool,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
@@ -348,6 +349,66 @@ pub struct Annotation {
     pub points: Vec<[f32; 2]>,
 }
 
+/// How far [`group_primaries`] follows `/IRT` from a group subordinate to its primary.
+pub const MAX_GROUP_DEPTH: usize = 64;
+
+/// For each annotation of `all`, the position in `all` of the primary of the group it is a
+/// subordinate of ([`Annotation::is_group_member`], ISO 32000-2 §12.5.6.2), or `None` when it is
+/// not one. The group's attributes, its comment and its replies are the primary's. A subordinate
+/// of a subordinate leads to the first non-subordinate up the `/IRT` chain. Expects links
+/// [`link_replies`] settled: a subordinate whose chain loops or names nothing listed has lost its
+/// `parent` there and is a comment of its own, as such a reply is. One still on a subordinate
+/// after [`MAX_GROUP_DEPTH`] steps has no primary (`None`) and is listed under no comment.
+pub fn group_primaries(all: &[Annotation]) -> Vec<Option<usize>> {
+    let mut at: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, a) in all.iter().enumerate() {
+        at.entry((a.page, a.index)).or_insert(i);
+    }
+    let primary = |start: usize| -> Option<usize> {
+        let mut i = start;
+        for _ in 0..MAX_GROUP_DEPTH {
+            let a = all.get(i)?;
+            if !a.is_group_member() {
+                return Some(i);
+            }
+            i = *at.get(&a.parent?)?;
+        }
+        None
+    };
+    all.iter().enumerate().map(|(i, a)| if a.is_group_member() { primary(i) } else { None }).collect()
+}
+
+/// Give a group's StrikeOut primary with no text of its own (`/Contents` missing or empty) the
+/// text of its first Caret subordinate that has some. A reader ignores a subordinate's
+/// `/Contents` (ISO 32000-2 §12.5.6.2), but Replace Text groups written by earlier PdfCraft builds
+/// made the strikeout the primary, with no text, and kept the replacement only on the caret:
+/// without this they would list as a comment with no text. A primary's own text always wins, no
+/// other subordinate lends its text, and no other kind of primary borrows one. Only the listing
+/// changes, not the file.
+pub fn fill_group_text(all: &mut [Annotation]) {
+    if !all.iter().any(Annotation::is_group_member) {
+        return;
+    }
+    let primaries = group_primaries(all);
+    let lacks_text = |p: usize| all.get(p).is_some_and(|a| a.subtype == "StrikeOut" && a.contents.as_deref().is_none_or(str::is_empty));
+    // Keyed by the primary's position: the first caret with text per primary wins (an empty one
+    // lends nothing), and each primary is written once, so the order of the map does not matter.
+    let mut texts: HashMap<usize, String> = HashMap::new();
+    for (a, p) in all.iter().zip(&primaries) {
+        if let (Some(p), Some(text), "Caret") = (*p, a.contents.as_ref(), a.subtype.as_str())
+            && !text.is_empty()
+            && lacks_text(p)
+        {
+            texts.entry(p).or_insert_with(|| text.clone());
+        }
+    }
+    for (p, text) in texts {
+        if let Some(primary) = all.get_mut(p) {
+            primary.contents = Some(text);
+        }
+    }
+}
+
 impl Annotation {
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
@@ -364,6 +425,13 @@ impl Annotation {
     /// nowhere: not as a card, on the page or in a count.
     pub fn is_comment(&self) -> bool {
         !self.is_reply() && self.state.is_none()
+    }
+
+    /// A subordinate of a group (`/RT /Group` with an `/IRT` that leads to a listed comment, ISO
+    /// 32000-2 §12.5.6.2): part of its primary's comment ([`group_primaries`]), neither a comment
+    /// of its own nor one of its replies. Expects links [`link_replies`] settled.
+    pub fn is_group_member(&self) -> bool {
+        self.grouped && self.is_reply()
     }
 
     /// Whether this annotation's `/IRT` points at `other`.
@@ -470,6 +538,18 @@ pub fn link_replies(annotations: &mut [Annotation]) {
             a.parent = None;
         }
     }
+    // A group is one page's (Acrobat reads it so): a subordinate whose primary is on another page
+    // is a comment of its own, with its own author and text, rather than part of that group or a
+    // reply to it. ISO 32000-2 §12.5.6.2 doesn't limit a group to a page, but Acrobat (desktop and
+    // iPad) and PDF-XChange all delete the primary without such a subordinate, and Acrobat desktop
+    // lists it on its own. Keep in step with
+    // `pdfcraft_annot::summaries`.
+    for a in annotations.iter_mut() {
+        if a.grouped && a.parent.is_some_and(|(page, _)| page != a.page) {
+            a.parent = None;
+            a.in_reply_to = None;
+        }
+    }
 }
 
 /// The comment each reply's thread starts from, by the reply's page and `/Annots` position: a
@@ -521,6 +601,12 @@ impl<'a> ReviewStates<'a> {
         // costs one walk, not one per reply.
         let mut reaches: HashMap<(usize, usize), Option<(usize, usize)>> = HashMap::new();
         let mut by_target: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
+        // A state set on a group subordinate is the group's, its primary's (ISO 32000-2 §12.5.6.2).
+        let primary_of: HashMap<(usize, usize), (usize, usize)> = all
+            .iter()
+            .zip(group_primaries(all))
+            .filter_map(|(a, p)| all.get(p?).map(|p| ((a.page, a.index), (p.page, p.index))))
+            .collect();
         for r in all.iter().filter(|a| a.state.is_some()) {
             let (mut path, mut seen, mut up) = (vec![(r.page, r.index)], HashSet::from([(r.page, r.index)]), r.parent);
             let target = loop {
@@ -541,7 +627,7 @@ impl<'a> ReviewStates<'a> {
             for key in path {
                 reaches.insert(key, target);
             }
-            if let Some(t) = target {
+            if let Some(t) = target.map(|t| primary_of.get(&t).copied().unwrap_or(t)) {
                 by_target.entry(t).or_default().push(r);
             }
         }
@@ -789,6 +875,24 @@ mod review_state_tests {
         assert!(states.statuses(r).is_empty() && states.marked_by(r, "Dan"));
         assert_eq!(states.statuses(rr), [("Dan", "Rejected"), ("Eve", "Completed")]);
         assert!(states.history(by_name(&all, "s1")).is_empty(), "a state reply has no states of its own");
+    }
+
+    /// §12.5.6.2: a group is one comment, its primary's, so a status set on a subordinate is the
+    /// group's; one set on an ordinary reply stays the reply's.
+    #[test]
+    fn a_status_on_a_group_subordinate_is_the_groups() {
+        let mut all = listed(&[
+            ("p", None, "Alice", None),
+            ("sub", Some("p"), "Bob", None),
+            ("s", Some("sub"), "Dan", Some("Accepted")),
+            ("r", Some("p"), "Carol", None),
+            ("rs", Some("r"), "Eve", Some("Rejected")),
+        ]);
+        all[1].grouped = true;
+        let states = ReviewStates::new(&all);
+        assert_eq!(states.statuses(by_name(&all, "p")), [("Dan", "Accepted")]);
+        assert!(states.history(by_name(&all, "sub")).is_empty());
+        assert_eq!(states.statuses(by_name(&all, "r")), [("Eve", "Rejected")]);
     }
 
     /// States follow object references, not `/NM`: two comments with the same `/NM` (some writers

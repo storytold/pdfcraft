@@ -179,7 +179,21 @@ impl Automation {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
+        // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) lists as its primary, with the primary's
+        // attributes: the subordinates are neither comments nor replies, only its `group`.
+        let mut members: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
+        for (m, p) in all.iter().zip(pdfcraft_render::group_primaries(&all)) {
+            if let Some(p) = p.and_then(|p| all.get(p)) {
+                members.entry((p.page, p.index)).or_default().push(m);
+            }
+        }
         let view = |c: &Annotation| -> Value {
+            let group: Vec<Value> = members
+                .get(&(c.page, c.index))
+                .into_iter()
+                .flatten()
+                .map(|m| json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype }))
+                .collect();
             let mut v = json!({
                 "id": c.name,
                 "page": c.page + 1,
@@ -191,6 +205,7 @@ impl Automation {
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
+                "group": group,
             });
             // A text box's or typed text's oval or circle (a rectangle is not reported).
             if c.subtype == "FreeText"
@@ -225,10 +240,11 @@ impl Automation {
         // Every reply under the comment its thread starts from, at any depth, in document order:
         // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
         // drop it. Parents are found by reference, as `/NM` need not be unique. Status and
-        // checkmark replies are read through `review` instead.
+        // checkmark replies are read through `review` instead. A group subordinate is in no
+        // thread, and a reply to one is the group's, its primary's.
         let tops = pdfcraft_render::thread_tops(&all);
         let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
-        for r in all.iter().filter(|r| r.state.is_none()) {
+        for r in all.iter().filter(|r| r.state.is_none() && !r.is_group_member()) {
             let Some(&top) = tops.get(&(r.page, r.index)) else { continue };
             threads.entry(top).or_default().push(r);
         }

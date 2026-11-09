@@ -5164,6 +5164,85 @@ fn comment_summary_includes_replies_to_replies() {
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
 }
 
+/// ISO 32000-2 §12.5.6.2: a group subordinate (`/RT /Group`) is part of its primary's comment,
+/// not a reply: the summary leaves it out and writes the replies to it as the comment's.
+#[test]
+fn comment_summary_leaves_group_members_out_and_keeps_their_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "MEMBER_TEXT".into(), author: "Bob".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "REPLY_TO_MEMBER".into(), author: "Carol".into() }).unwrap();
+    let mut all = s.get(id).unwrap().info.annotations.clone();
+    all.iter_mut().find(|a| a.contents.as_deref() == Some("MEMBER_TEXT")).unwrap().grouped = true;
+    let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+    assert!(!text.contains("MEMBER_TEXT") && !text.contains("Bob"), "{text}");
+    assert!(text.lines().any(|l| l == "    REPLY_TO_MEMBER"), "the reply is the comment's, one level in: {text}");
+}
+
+/// The summary follows `/IRT` down from a comment at most 64 steps, group subordinates included:
+/// a reply under a longer chain of subordinates is left out, one under a short chain is written,
+/// and a subordinate listed at its own primary's position (a loop, from a malformed listing)
+/// ends the walk.
+#[test]
+fn comment_summary_follows_a_group_chain_a_bounded_number_of_steps() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    let top = s.get(id).unwrap().info.annotations.iter().find(|a| a.is_comment()).unwrap().clone();
+    let at = |a: &pdfcraft_render::Annotation| (a.page, a.index);
+    let under = |index: usize, parent: (usize, usize), grouped: bool, text: &str| pdfcraft_render::Annotation {
+        index,
+        parent: Some(parent),
+        grouped,
+        contents: Some(text.into()),
+        ..top.clone()
+    };
+    for (members, written) in [(10, true), (100, false)] {
+        let mut all = vec![top.clone()];
+        let mut up = at(&top);
+        for k in 0..members {
+            let m = under(1000 + k, up, true, "MEMBER");
+            up = at(&m);
+            all.push(m);
+        }
+        all.push(under(5000, up, false, "DEEP_REPLY"));
+        let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+        assert_eq!(text.contains("DEEP_REPLY"), written, "{members}: {text}");
+        assert!(!text.contains("MEMBER"), "{members}: {text}");
+    }
+    let looped = vec![top.clone(), under(top.index, at(&top), true, "LOOP")];
+    let text = comment_summary("doc.pdf", &looped, SummarySort::Page);
+    assert!(!text.contains("LOOP"), "{text}");
+}
+
+/// Deleting a group's primary removes the subordinate's `/IRT` in the same edit, as Acrobat does:
+/// the subordinate lists as a comment of its own and keeps `/RT /Group`. One undo puts the group
+/// back, `/IRT` included.
+#[test]
+fn deleting_a_group_primary_releases_its_member_in_one_undo_step() {
+    let bytes = pdf_with_annots(&[
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /NM (primary) /Contents (PRIMARY_TEXT) >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [60 60 90 90] /NM (member) /IRT 4 0 R /RT /Group >>",
+    ]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("group.pdf", None, Arc::new(bytes), None).unwrap();
+    let names = |s: &Session| -> Vec<(Option<String>, bool, bool)> {
+        s.get(id).unwrap().info.annotations.iter().map(|a| (a.name.clone(), a.is_comment(), a.is_group_member())).collect()
+    };
+    // Listed by top edge: the Circle is the higher one.
+    let grouped = vec![(Some("member".into()), false, true), (Some("primary".into()), true, false)];
+    assert_eq!(names(&s), grouped);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(names(&s), [(Some("member".into()), true, false)], "a comment of its own");
+    let member = |s: &Session| {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        cos.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().cloned().unwrap()
+    };
+    assert!(member(&s).get(b"IRT").is_none() && member(&s).name(b"RT") == Some(b"Group".as_slice()), "{:?}", member(&s));
+    s.undo(id).unwrap();
+    assert_eq!(names(&s), grouped, "one undo puts the group back");
+    assert!(member(&s).reference(b"IRT").is_some());
+}
+
 #[test]
 fn reading_colors_set_and_invalidated() {
     let (mut s, id) = session_with(1);

@@ -1,6 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{
-    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies, state_or_default,
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, fill_group_text, link_replies,
+    state_or_default,
 };
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
@@ -234,6 +235,7 @@ impl<'a> Inspector<'a> {
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
         link_replies(&mut info.annotations);
+        fill_group_text(&mut info.annotations);
     }
 
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`

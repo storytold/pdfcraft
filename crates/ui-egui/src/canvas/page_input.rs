@@ -405,7 +405,7 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
         };
-        comments::context(hits.pcx, comment, view);
+        comments::context(hits.pcx, p, comment, view);
     }
     if let Some(Owner::PrepareField { field, widget }) = context {
         crate::prepare::context(hits.form, field, widget, view);

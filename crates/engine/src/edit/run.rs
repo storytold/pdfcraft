@@ -611,7 +611,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
-            // One `/NM` each: the strikeout is grouped under the caret, and XFDF names that link by
+            // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
             // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
             pdfcraft_annot::add_text_replacement(
