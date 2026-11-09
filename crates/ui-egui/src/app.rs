@@ -469,14 +469,7 @@ impl eframe::App for PdfCraftApp {
     }
 
     /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
-    #[cfg(feature = "glow")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.updates.exiting();
-    }
-
-    /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
-    #[cfg(not(feature = "glow"))]
-    fn on_exit(&mut self) {
         self.updates.exiting();
     }
 

@@ -9,11 +9,6 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
-[features]
-# Every app that turns on eframe's `glow` turns this on too: `eframe::App::on_exit` takes a GL
-# context under that feature.
-glow = ["eframe/glow"]
-
 [dependencies]
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
@@ -34,7 +29,8 @@ pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
+# `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
