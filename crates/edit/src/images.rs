@@ -49,7 +49,7 @@ pub struct PageImage {
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
     /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
-    op: usize,
+    pub(crate) op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
     clips: Vec<ClipPath>,
@@ -1668,10 +1668,11 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                 return Err(EditError::Invalid("only grouped Form artwork can be ungrouped".into()));
             }
             let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-            let translucent = crate::ungroup::translucent_at(doc, &res, &ops, img.op);
             let space = crate::ungroup::page_blend_space(doc, &p.dict);
-            let (inline, mut merged, patterns) =
-                crate::ungroup::ungroup_ops(doc, &res, img.name.as_bytes(), translucent, space.as_ref(), Matrix(img.matrix))?;
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, &ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget).map_err(|r| r.error)?;
             if !patterns.is_empty() {
                 let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
                 for (name, copy) in patterns {
@@ -1881,6 +1882,24 @@ fn crop_image_impl(
     let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+/// The `Do` of each image `indexes` (from [`page_images`]) on `page`, as an index among the
+/// page's joined operators: what Copy takes of them.
+pub(crate) fn image_ops(doc: &Document, page: usize, indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+    if indexes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let images = page_images(doc, page)?;
+    indexes
+        .iter()
+        .map(|i| {
+            images
+                .get(*i)
+                .map(|image| image.op)
+                .ok_or_else(|| EditError::Invalid("a selected image no longer exists; select the objects again".into()))
+        })
+        .collect()
 }
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.

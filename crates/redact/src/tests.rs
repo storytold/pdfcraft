@@ -2405,6 +2405,165 @@ fn an_unreadable_mark_on_another_page_does_not_stop_the_selected_page() {
     assert!(!content(&doc, 0).contains("1234"));
 }
 
+/// The quad over "1234" in `AB1234CD` (x 20–40) and the one over "CD" (x 40–50).
+const OVER_1234: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+const OVER_CD: [f64; 8] = [40.0, 110.0, 50.0, 110.0, 40.0, 95.0, 50.0, 95.0];
+
+/// `AB1234CD` with one mark whose `/QuadPoints` is `quads`, whose `/Rect` is `rect` (removed when
+/// `None`) and which has a fill (`/IC`) only when `fill` is set.
+fn quad_mark(quads: Vec<Object>, rect: Option<[i64; 4]>, fill: bool) -> (Document, ObjRef) {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+        if let Some(r) = rect {
+            d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Int(*v)).collect()));
+        } else {
+            d.remove(b"Rect");
+        }
+        if !fill {
+            d.remove(b"IC");
+        }
+    })
+    .unwrap();
+    (doc, m.obj)
+}
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// An all-NaN quad folded to `[MAX, MAX, MIN, MIN]`: a finite, inverted box that passed as a
+/// readable area. Without a fill the mark was applied and removed nothing; with one the overlay
+/// failed. With no `/Rect` either, the mark has no area and apply refuses it.
+#[test]
+fn an_all_nan_quad_without_a_rect_is_refused_not_applied_as_nothing() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), None, fill);
+        assert!(marks(&doc).is_empty(), "fill {fill}: the NaN quad is no area");
+        assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)), "fill {fill}");
+        assert!(content(&doc, 0).contains("(AB1234CD) Tj"), "fill {fill}: nothing changed");
+    }
+}
+
+/// With a usable `/Rect`, an all-NaN mark redacts exactly the `/Rect`.
+#[test]
+fn an_all_nan_quad_falls_back_to_the_rect() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), Some([20, 95, 40, 110]), fill);
+        assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]], "fill {fill}");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 4), "fill {fill}");
+        assert!(!content(&doc, 0).contains("1234"), "fill {fill}");
+    }
+}
+
+/// One NaN among finite entries made `f64::min`/`max` ignore it and fold the other three corners:
+/// a quad the document never described. Such a quad is unusable.
+#[test]
+fn a_quad_with_one_nan_entry_is_unusable() {
+    let mut q = OVER_1234;
+    q[0] = f64::NAN;
+    let (mut doc, _) = quad_mark(reals(&q), None, false);
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    // Next to a usable quad, only that one applies.
+    let (mut doc, _) = quad_mark(reals(&[q, OVER_CD].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// A name in the middle of `/QuadPoints` was dropped, which moved every later coordinate into the
+/// wrong slot and folded the first quad to a box over most of the page.
+#[test]
+fn a_non_number_entry_drops_its_quad_without_shifting_the_rest() {
+    let mut quads = reals(&[OVER_1234, OVER_CD].concat());
+    quads[2] = Object::name("oops");
+    let (mut doc, _) = quad_mark(quads, None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// Twelve entries are one quad and half of another: only the whole one applies.
+#[test]
+fn a_trailing_partial_quad_is_ignored() {
+    let (mut doc, _) = quad_mark(reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(4));
+}
+
+/// Finite quads redact what they always did, one box each, and the `/Rect` is not consulted.
+#[test]
+fn finite_quads_redact_their_areas_as_before() {
+    let (mut doc, _) = quad_mark(reals(&[OVER_1234, OVER_CD].concat()), Some([0, 0, 1, 1]), true);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0], [40.0, 95.0, 50.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 6));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// The boxes a reader's quads outline, or its `/Rect` when it has none (as the comment outlines
+/// fall back to it).
+fn outline(quads: &[[f32; 8]], rect: [f32; 4]) -> Vec<[f32; 4]> {
+    if quads.is_empty() {
+        return vec![rect];
+    }
+    quads
+        .iter()
+        .map(|q| {
+            let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+            let (lo, hi) = (|v: [f32; 4]| v.into_iter().fold(f32::MAX, f32::min), |v: [f32; 4]| v.into_iter().fold(f32::MIN, f32::max));
+            [lo(xs), lo(ys), hi(xs), hi(ys)]
+        })
+        .collect()
+}
+
+/// The outline the comment list draws (`pdfcraft_annot::summaries`, and the inspector's listing
+/// of the saved file) is the area apply removes, for malformed `/QuadPoints` too. The readers
+/// used to disagree: the summaries and the inspector read non-numbers as zeros, apply dropped
+/// them.
+#[test]
+fn the_outline_shown_is_the_area_apply_removes() {
+    // (entries, whether a saved file can say them: PDF syntax has no NaN). `forty` is an indirect
+    // number, which every reader follows.
+    let cases = |forty: ObjRef| -> Vec<(Vec<Object>, bool)> {
+        let mut name_inside = reals(&[OVER_1234, OVER_CD].concat());
+        name_inside[2] = Object::name("oops");
+        let mut by_reference = reals(&OVER_1234);
+        by_reference[2] = Object::Ref(forty);
+        let mut one_nan = OVER_1234;
+        one_nan[5] = f64::NAN;
+        let mut one_huge = OVER_1234;
+        one_huge[5] = 4e38;
+        vec![
+            (reals(&[OVER_1234, OVER_CD].concat()), true),
+            (name_inside, true),
+            (reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), true),
+            (by_reference, true),
+            (vec![Object::name("oops"); 8], true),
+            (reals(&[one_nan, OVER_CD].concat()), false),
+            (reals(&[one_huge, OVER_CD].concat()), true),
+            (reals(&[f64::NAN; 8]), false),
+        ]
+    };
+    for i in 0.. {
+        let (mut doc, obj) = quad_mark(Vec::new(), Some([20, 95, 40, 110]), true);
+        let forty = doc.add(Object::Int(40));
+        let Some((quads, saved)) = cases(forty).into_iter().nth(i) else { break };
+        doc.update_dict(obj, |d| d.set(b"QuadPoints".to_vec(), Object::Array(quads))).unwrap();
+        let applied: Vec<[f32; 4]> = marks(&doc)[0].rects.iter().map(|r| r.map(|v| v as f32)).collect();
+        let summary = pdfcraft_annot::summaries(&doc).into_iter().find(|s| s.subtype == "Redact").unwrap();
+        assert_eq!(outline(&summary.quads, summary.rect), applied, "case {i}: comment summaries");
+        if saved {
+            let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let info = pdfcraft_render::inspect(Arc::new(bytes), None).unwrap();
+            let listed = info.annotations.iter().find(|a| a.subtype == "Redact").unwrap();
+            assert_eq!(outline(&listed.quads, listed.rect), applied, "case {i}: inspector");
+        }
+    }
+}
+
 /// A document with something in every hidden-information category.
 fn hidden_fixture() -> Document {
     let content = b"BT /F1 10 Tf 10 100 Td (Visible) Tj 3 Tr (Hidden) Tj 0 Tr ET BT /F1 10 Tf 500 500 Td (Offpage) Tj ET /OC /L1 BDC BT /F1 10 Tf 10 50 Td (Layer) Tj ET EMC";
@@ -2692,6 +2851,73 @@ fn a_remove_hidden_copy_gets_a_new_identifier() {
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], vec![0x11; 16], "the copy keeps the source's first identifier string");
     assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
+}
+
+/// Links, actions and JavaScripts takes the scripts out of bookmarks that stay: an item that runs
+/// JavaScript loses its action, a jump with a script chained after it keeps only the jump, and a
+/// plain jump is left alone.
+#[test]
+fn bookmarks_that_stay_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>".to_vec(),
+        // 6 runs a script, 7 jumps and then runs one, 8 only jumps; 9 the script
+        b"<< /Title (Runs) /Parent 5 0 R /Next 7 0 R /A 9 0 R >>".to_vec(),
+        b"<< /Title (Jumps then runs) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [3 0 R /Fit] /Next 9 0 R >> >>".to_vec(),
+        b"<< /Title (Jumps) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 2)]);
+    let item = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    assert!(!item(6).contains(b"A"), "{:?}", item(6));
+    let jump = |n: u32| item(n).get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    assert_eq!((jump(7).name(b"S"), jump(7).contains(b"D"), jump(7).contains(b"Next")), (Some(&b"GoTo"[..]), true, false));
+    assert_eq!(jump(8).name(b"S"), Some(&b"GoTo"[..]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(7).any(|w| w == b"(Jumps)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
+}
+
+/// A damaged outline may reach an item only backwards (`/Last`, `/Prev`, `/Parent`). The full save
+/// keeps that item all the same, so its script goes too.
+#[test]
+fn bookmarks_reached_only_backwards_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    // /First and /Next reach only 6; 7, 8 and 9 hang off its /Last, /Prev and /Parent and share script 10
+    let mut doc = outlined_document(vec![
+        b"<< /Title (Reached) /Last 7 0 R /Prev 8 0 R /Parent 9 0 R >>".to_vec(),
+        b"<< /Title (Last) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Prev) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Parent) /A 10 0 R >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 3)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 3)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"(Parent)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
+}
+
+/// Outline items written in place count towards the outline budget too: 60,000 items with an inline
+/// child each are 120,000 items, so the outline is refused rather than walked past the budget.
+#[test]
+fn an_outline_past_the_budget_with_inline_items_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let mut doc = outlined_document(items);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 1)));
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
 }
 
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
@@ -4353,4 +4579,30 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// Private data takes an image's prepress data too: its OPI link to the original file and its
+/// alternate images, which can be the unedited original.
+#[test]
+fn private_data_takes_opi_links_and_alternate_images() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q /Fm Do"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Alternates [<< /Image 7 0 R /DefaultForPrinting true >>]",
+            b"SHOWNIMAGE!",
+        ),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /OPI << /1.3 << /Type /OPI /Version 1.3 /F (OPISERVERPATH.tif) >> >>", b""),
+        stream("/Type /XObject /Subtype /Image /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"ALTERNATEORIGINAL"),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::PrivateData), Some((Hidden::PrivateData, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 2)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"SHOWNIMAGE!"), "the image the page shows stays");
+    assert!(!has(b"ALTERNATEORIGINAL"), "the alternate image survived the save");
+    assert!(!has(b"OPISERVERPATH"), "the OPI link survived the save");
 }

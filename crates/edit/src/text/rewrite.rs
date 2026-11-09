@@ -1,4 +1,4 @@
-use super::blocks::{BlockStyle, TextBlock, paragraph_separator, wrap};
+use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
     Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
@@ -42,7 +42,7 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
-    let text = text.replace(['\n', '\r'], " ");
+    let text = text.replace(row_break, " ");
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
@@ -240,7 +240,7 @@ fn choose_rewrite_path(
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
     let has_special_text = text.is_some_and(|draft| {
-        draft.contains(['\n', '\r'])
+        draft.contains(row_break)
             || pdfcraft_fonts::source_shaping::required(draft)
             || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
     });
@@ -259,14 +259,14 @@ fn choose_rewrite_path(
 }
 
 /// The paragraph's text for writing back: explicit line breaks stay (#1443), and so does each typed
-/// U+0020 space: a run of them is not folded into one (#4199, #3797). `\r\n` and a lone `\r` are
-/// breaks too; other white space is written as one space.
+/// U+0020 space: a run of them is not folded into one (#4199, #3797). Every [`row_break`] is a break
+/// too; other white space is written as one space.
 fn paragraph_text(text: &str) -> String {
     text.replace("\r\n", "\n")
         .chars()
         .map(|c| match c {
-            '\r' => '\n',
-            c if c != '\n' && paragraph_separator(c) => ' ',
+            c if row_break(c) => '\n',
+            c if paragraph_separator(c) => ' ',
             c => c,
         })
         .collect()
@@ -749,18 +749,24 @@ struct ParaStyle {
     k: f64,
 }
 
-/// Spacing and scaling (text state), with the chosen values.
-fn paragraph_style(o: &Origin, style: &BlockStyle) -> Result<(String, ParaStyle), EditError> {
+/// Spacing and scaling (text state), with the chosen values. `phrase` is the size an OCR phrase
+/// is drawn at when none is chosen, in place of its first word's own (#3313).
+fn paragraph_style(o: &Origin, style: &BlockStyle, phrase: Option<f64>) -> Result<(String, ParaStyle), EditError> {
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
     // The size in text space: points ÷ the text-to-user scale.
-    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1));
+    let size = style.size.or(phrase).map_or(old_size, |pt| (pt / k).max(0.1));
     let mut state = o.state.clone();
     if let Some(c) = style.char_spacing {
         state.char_spacing = c / k;
     }
     if let Some(sc) = style.scale {
         state.scale = (sc / 100.0).clamp(0.1, 10.0);
+    }
+    // At the phrase's size, the first word's text matrix still carries its own width: scale it
+    // back, so the line is as wide as the scan whatever size OCR guessed for that word.
+    if phrase.is_some() && style.size.is_none() && style.scale.is_none() {
+        state.scale = (state.scale * old_size / size).clamp(0.1, 10.0);
     }
     Ok((font_name, ParaStyle { state, size, old_size, k }))
 }
@@ -842,7 +848,7 @@ pub(crate) fn rewrite_block_from(
     let o = &first.origin;
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
-    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style)?;
+    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style, b.phrase_size())?;
     let source = source_font(doc, &fonts_res, &font_name, first, &flat, style);
     let reuse = source.reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.
@@ -1111,6 +1117,36 @@ fn vertical_encoding(doc: &Document, font: &Dict) -> Result<bool, EditError> {
     Err(EditError::Invalid("the text encoding is nested too deeply".into()))
 }
 
+/// The text-showing operators of paragraphs `indexes` (from [`group_blocks`] of the page's
+/// lines), as indexes among the page's joined operators. `editable`: refuse a line that can't be
+/// edited (moving rewrites its operators; copying takes them as they are).
+pub(crate) fn paragraph_ops(doc: &Document, page: usize, indexes: &[usize], editable: bool) -> Result<std::collections::BTreeSet<usize>, EditError> {
+    let mut selected = std::collections::BTreeSet::new();
+    if indexes.is_empty() {
+        return Ok(selected);
+    }
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    for index in indexes {
+        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
+        for line in &b.lines {
+            let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
+            if editable {
+                l.ensure_editable()?;
+            }
+            selected.extend(l.ops.iter().copied());
+        }
+    }
+    Ok(selected)
+}
+
+/// Where each text-showing operator of `ops` (a page's joined operators, drawn with `resources`)
+/// starts its glyphs: the text matrix there, and its rendering mode (`Tr`).
+pub(crate) fn show_starts(doc: &Document, ops: &[Op], resources: &Dict) -> Result<HashMap<usize, (Matrix, i64)>, EditError> {
+    let shown = interpret(doc, ops, resources, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    Ok(shown.into_iter().map(|s| (s.op, (s.tm, s.state.render_mode))).collect())
+}
+
 /// Translate paragraphs together without re-encoding glyphs, changing fonts or reflowing.
 /// Numeric TJ offsets and text rise temporarily move each selected show operation, then
 /// restore both advances and rise. The PDF reader advances the original glyph bytes itself:
@@ -1121,17 +1157,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     }
     let p = page_dict(doc, page)?;
     let streams = content_streams(doc, &p.dict)?;
-    let lines = text_lines(doc, page)?;
-    let blocks = group_blocks(&lines);
-    let mut selected = std::collections::BTreeSet::new();
-    for index in indexes {
-        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
-        for line in &b.lines {
-            let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
-            l.ensure_editable()?;
-            selected.extend(l.ops.iter().copied());
-        }
-    }
+    let selected = paragraph_ops(doc, page, indexes, true)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let pieces = joined(&streams);

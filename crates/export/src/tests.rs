@@ -137,7 +137,7 @@ fn word_table_cell_widths_follow_the_columns_they_span() {
             vec![cell("All", 3)],
             vec![cell("First", 1)],
         ],
-        ruled: false,
+        ruled: None,
     };
     let xml = docx_table(&table);
     assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
@@ -245,6 +245,61 @@ pub(crate) fn part(zip: &[u8], name: &str) -> String {
         i = data + size;
     }
     panic!("{name} missing")
+}
+
+/// The PDF's language (`/Lang`) is the default language of the Word document's text, in the
+/// attribute Word keeps for its script, and the HTML page's. No language, or one that is not a
+/// well formed tag, leaves both files as they were.
+#[test]
+fn word_and_html_take_the_documents_language() {
+    let pages = [page()];
+    let styles = |lang| part(&docx_with_language(&pages, "Report", lang), "word/styles.xml");
+    let defaults = |lang: &str| format!("<w:docDefaults><w:rPrDefault><w:rPr>{lang}</w:rPr></w:rPrDefault></w:docDefaults>");
+    assert!(styles(Some("bg-BG")).contains(&defaults("<w:lang w:val=\"bg-BG\"/>")), "{}", styles(Some("bg-BG")));
+    assert!(styles(Some(" en-GB ")).contains("<w:lang w:val=\"en-GB\"/>"), "the tag is trimmed");
+    assert!(styles(Some("zh-Hant-TW")).contains(&defaults("<w:lang w:eastAsia=\"zh-Hant-TW\"/>")), "East Asian text");
+    assert!(styles(Some("ja")).contains("<w:lang w:eastAsia=\"ja\"/>"), "East Asian text");
+    assert!(styles(Some("ar-EG")).contains(&defaults("<w:lang w:bidi=\"ar-EG\"/>")), "right-to-left text");
+    assert!(styles(Some("HE")).contains("<w:lang w:bidi=\"HE\"/>"), "right-to-left text");
+    // A script subtag decides over the language; private use names no script.
+    assert!(styles(Some("pa-Arab-PK")).contains("<w:lang w:bidi=\"pa-Arab-PK\"/>"), "Punjabi in Arabic script");
+    assert!(styles(Some("sr-Latn")).contains("<w:lang w:val=\"sr-Latn\"/>"), "Serbian in Latin script");
+    assert!(styles(Some("zh-Latn")).contains("<w:lang w:val=\"zh-Latn\"/>"), "Chinese in Latin script");
+    assert!(styles(Some("en-x-arab")).contains("<w:lang w:val=\"en-x-arab\"/>"), "private use");
+    assert!(styles(Some("az-Latn-x-arab")).contains("<w:lang w:val=\"az-Latn-x-arab\"/>"), "private use");
+    assert!(html_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
+    // A tag longer than 35 characters is still a tag.
+    let long = "en-US-u-ca-gregory-nu-latn-co-phonebk";
+    assert!(styles(Some(long)).contains(&format!("<w:lang w:val=\"{long}\"/>")), "{long}");
+    assert!(html_with_language(&pages, "Report", Some(long)).contains(&format!("<html lang=\"{long}\">")), "{long}");
+    let too_long = format!("en{}", "-abcdefgh".repeat(29));
+    // Private use takes one-character subtags.
+    assert!(html_with_language(&pages, "Report", Some("en-x-a-b")).contains("<html lang=\"en-x-a-b\">"));
+    for lang in [
+        None,
+        Some(""),
+        Some("  "),
+        Some("bg_BG"),
+        Some("b"),
+        Some("bulg-BG"),
+        Some("bg--BG"),
+        Some("bg-"),
+        Some("en-x"),
+        Some("en-a"),
+        Some("en-a-x-private"),
+        Some("en-US-u-ca-x"),
+        Some("en-US-abcdefghi"),
+        Some(too_long.as_str()),
+        Some("en-\"x\""),
+        Some("1a-BG"),
+        Some("\u{431}\u{433}-BG"),
+    ] {
+        assert!(docx_with_language(&pages, "Report", lang) == docx(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_with_language(&pages, "Report", lang), html(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_simple_with_language(&pages, "Report", lang), html_simple(&pages, "Report"), "{lang:?}");
+    }
+    // The simple export leaves out styling, not the language.
+    assert!(html_simple_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
 }
 
 #[test]
@@ -887,7 +942,7 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     ];
     let (found, consumed) = tables(&blocks, &grid);
     assert_eq!(found.len(), 1);
-    assert!(found[0].ruled);
+    assert_eq!(found[0].ruled, Some([true; 4]), "the grid's frame is ruled on every side");
     assert_eq!(found[0].rows.len(), 2);
     assert!(consumed.iter().all(|used| *used));
     let p = Page { width: 320.0, height: 300.0, blocks: blocks.clone(), rules: grid, ..Page::default() };
@@ -898,4 +953,313 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     assert!(tables(&blocks, &[]).0.is_empty(), "alignment alone does not make two by two a table");
     let underlines = [[20.0, 245.0, 300.0, 245.0]];
     assert!(tables(&blocks, &underlines).0.is_empty(), "a rule between the rows alone is no grid");
+}
+
+/// A grid drawn with inside lines only gets inside borders in Word, not a box the page never
+/// draws; an outer line far from the table (a page rule) is not its frame.
+#[test]
+fn a_ruled_table_gets_outer_borders_only_where_the_page_draws_them() {
+    let blocks = vec![
+        block("Name", 25.0, 250.0, 55.0, 261.0),
+        block("Value", 165.0, 250.0, 195.0, 261.0),
+        block("Alpha", 25.0, 225.0, 55.0, 236.0),
+        block("One", 165.0, 225.0, 185.0, 236.0),
+    ];
+    let inside = vec![[20.0, 245.0, 300.0, 245.0], [160.0, 220.0, 160.0, 270.0]];
+    let (found, _) = tables(&blocks, &inside);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].ruled, Some([false; 4]));
+    let xml = docx_table(&found[0]);
+    for edge in ["insideH", "insideV"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"single\"")), "{xml}");
+    }
+    for edge in ["top", "left", "bottom", "right"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"nil\"/>")), "{xml}");
+    }
+
+    let mut ruled_top = inside.clone();
+    ruled_top.push([20.0, 270.0, 300.0, 270.0]);
+    ruled_top.push([0.0, 500.0, 320.0, 500.0]);
+    ruled_top.push([0.0, 0.0, 320.0, 0.0]);
+    assert_eq!(tables(&blocks, &ruled_top).0[0].ruled, Some([true, false, false, false]), "only the top line near the table frames it");
+}
+
+/// A line of 10 pt text from `x0` to `x1` whose box starts at `y0`: 12 pt tall, so lines 14 pt
+/// apart leave 2 pt between their boxes.
+fn line(t: &str, x0: f64, x1: f64, y0: f64) -> Block {
+    Block { size: 10.0, ..block(t, x0, y0, x1, y0 + 12.0) }
+}
+
+/// The text of each flowing paragraph Word gets for a page of `blocks`.
+fn word_texts(blocks: Vec<Block>) -> Vec<String> {
+    let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+    let xml = part(&docx(&[p], "Lines"), "word/document.xml");
+    word_paragraphs(&xml).into_iter().map(|runs| runs.into_iter().map(|(t, _)| t).collect()).collect()
+}
+
+/// A sentence over three lines, as the reading blocks give it: split at each style change, a
+/// bold name in the first line and a slanted name in the second whose box leans 2.5 pt into the
+/// comma after it (#4158). The next paragraph follows after paragraph space.
+fn wrapped_sentence() -> Vec<Block> {
+    vec![
+        line("The parties to this lease are the owner,", 72.0, 262.0, 700.0),
+        Block { bold: true, ..line("Harbour Lane Properties", 265.0, 400.0, 700.0) },
+        line(", of 4 Quay Street, and the", 400.5, 540.0, 700.0),
+        line("tenant named in the schedule,", 72.0, 215.0, 686.0),
+        Block { italic: true, ..line("Blue Finch Studio", 218.0, 312.0, 686.0) },
+        line(", who agree as follows to rent the upper", 309.5, 538.0, 686.0),
+        line("rooms for the whole of the term.", 72.0, 230.0, 672.0),
+        line("Rent is paid monthly in advance.", 72.0, 230.0, 640.0),
+    ]
+}
+
+/// #4158: a sentence that wraps onto the next line after a change of style is one paragraph in
+/// every format, its lines joined by a word space.
+#[test]
+fn a_sentence_that_wraps_after_a_style_change_is_one_paragraph() {
+    let sentence = "The parties to this lease are the owner, Harbour Lane Properties, of 4 Quay Street, and the tenant named in the \
+schedule, Blue Finch Studio, who agree as follows to rent the upper rooms for the whole of the term.";
+    assert_eq!(word_texts(wrapped_sentence()), [sentence, "Rent is paid monthly in advance."]);
+    let p = Page { width: 612.0, height: 792.0, blocks: wrapped_sentence(), ..Page::default() };
+    let h = html(std::slice::from_ref(&p), "Lease");
+    assert_eq!(h.matches("<p>").count(), 2, "{h}");
+    assert!(
+        h.contains(
+            "<p>The parties to this lease are the owner, <strong>Harbour Lane Properties</strong>, of 4 Quay Street, and the tenant \
+named in the schedule, <em>Blue Finch Studio</em>, who agree as follows to rent the upper rooms for the whole of the term.</p>"
+        ),
+        "{h}"
+    );
+    let r = rtf(std::slice::from_ref(&p));
+    assert_eq!(r.matches("{\\pard").count(), 2, "{r}");
+    let md = markdown(std::slice::from_ref(&p));
+    assert_eq!(md.trim().split("\n\n").count(), 2, "{md}");
+    assert!(md.contains("of 4 Quay Street, and the tenant named in the schedule, "), "{md}");
+    // On a slide the last of the paragraphs set largest is the title; the sentence is one paragraph.
+    let s = part(&pptx(std::slice::from_ref(&p), "Lease"), "ppt/slides/slide1.xml");
+    let slide: Vec<String> =
+        s.split("<a:p>").skip(1).map(|p| p.split("<a:t>").skip(1).filter_map(|t| t.split_once("</a:t>").map(|(t, _)| t)).collect()).collect();
+    assert!(slide.iter().any(|p| p == sentence), "{s}");
+}
+
+/// A slanted word's box leans into the word after it by about a quarter of its size, so that
+/// word still runs on from it; text that starts further back is drawn over the text before it,
+/// not after it.
+#[test]
+fn a_slanted_word_that_leans_into_the_next_stays_in_its_line() {
+    let leaning = vec![
+        line("named in the schedule,", 72.0, 180.0, 700.0),
+        Block { italic: true, ..line("Blue Finch Studio", 183.0, 276.0, 700.0) },
+        line(", who agree", 273.5, 330.0, 700.0),
+    ];
+    assert_eq!(word_texts(leaning), ["named in the schedule, Blue Finch Studio, who agree"]);
+    let over = vec![line("A label", 72.0, 120.0, 700.0), line("over another", 115.0, 180.0, 700.0)];
+    assert_eq!(word_texts(over), ["A label", "over another"]);
+}
+
+/// A line runs on into the next only when it reaches the right edge of the text and the next
+/// starts just below at the same left edge, in the same size. A line that ends a sentence or ends
+/// short, and a next line that is a heading, a list item, indented or after paragraph space, keep
+/// their paragraph break. Each case is a page of its own.
+#[test]
+fn a_paragraph_breaks_where_its_line_does_not_run_on() {
+    let full = "The tenant keeps the rooms, the stairs and the shared yard clean and in good repair";
+    let next = "throughout the term of the lease";
+    let first = |t: &str| line(t, 72.0, 540.0, 700.0);
+    let second = |t: &str| line(t, 72.0, 240.0, 686.0);
+    assert_eq!(word_texts(vec![first(full), second(next)]), [format!("{full} {next}")]);
+    assert_eq!(word_texts(vec![first("Изпълнителят поддържа сървърите и мрежата на"), second("възложителя в работно състояние")]).len(), 1);
+    // Chinese and Japanese wrap between characters: their lines join without a space. Korean
+    // spaces its words, so its lines join with one.
+    let zh = ("本合同自双方签字之日起生效，有效期", "为一年，期满前一个月双方协商续签事宜");
+    assert_eq!(word_texts(vec![first(zh.0), second(zh.1)]), [format!("{}{}", zh.0, zh.1)]);
+    assert_eq!(
+        word_texts(vec![first("この契約は双方が署名した日から"), second("一年間有効とする")]),
+        ["この契約は双方が署名した日から一年間有効とする"]
+    );
+    assert_eq!(word_texts(vec![first("임차인은 방과 계단을 깨끗하게"), second("유지합니다")]), ["임차인은 방과 계단을 깨끗하게 유지합니다"]);
+    let heading = |b: Block| Block { bold: true, ..b };
+    for (why, blocks) in [
+        ("a sentence ends", vec![first(&format!("{full}.")), second(next)]),
+        ("a sentence ends in quotes", vec![first("Страните се договориха „за срок от една година.“"), second(next)]),
+        ("a Chinese sentence ends", vec![first("本合同自双方签字之日起生效。"), second(zh.1)]),
+        ("a Japanese sentence ends in quotes", vec![first("「この契約は一年間有効ですか？」"), second("双方が署名した日から")]),
+        ("the line ends short", vec![line(next, 72.0, 240.0, 700.0), line(full, 72.0, 540.0, 686.0)]),
+        ("paragraph space", vec![first(full), line(next, 72.0, 240.0, 676.0)]),
+        ("an indent", vec![first(full), line(next, 90.0, 258.0, 686.0)]),
+        ("a larger size", vec![first(full), Block { size: 12.0, ..second(next) }]),
+        ("a numbered item", vec![first(full), second("2. The tenant pays the rent")]),
+        ("a lettered item", vec![first(full), second("а) поддръжка на сървърите")]),
+        ("a bulleted item", vec![first(full), second("• the stairs")]),
+        ("a heading below", vec![first(full), heading(second("Rent and deposit"))]),
+        ("a heading above", vec![heading(first("Obligations of the tenant")), second(next)]),
+    ] {
+        assert_eq!(word_texts(blocks).len(), 2, "{why}");
+    }
+}
+
+/// Two columns of text, the right one set half a line lower: a full line in one column never runs
+/// on into the line of the other just below it, though the right column's lines reach the page's
+/// right edge and the left column's start at its left.
+#[test]
+fn a_line_never_runs_on_into_the_other_column() {
+    let left = ["The tenant keeps the rooms and the", "stairs clean and in good repair for", "the whole of the term of the lease"];
+    let right = ["The landlord keeps the roof and the", "outer walls sound and dry for the", "whole of the term of the lease too"];
+    let mut blocks = Vec::new();
+    for (n, (l, r)) in left.iter().zip(right).enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line(l, 72.0, 290.0, y));
+        blocks.push(line(r, 322.0, 540.0, y - 7.0));
+    }
+    let paragraphs = word_texts(blocks);
+    for line in left.iter().chain(&right) {
+        assert!(paragraphs.iter().any(|p| p.contains(line)), "{line}: {paragraphs:?}");
+    }
+    for p in &paragraphs {
+        assert!(!(left.iter().any(|l| p.contains(l)) && right.iter().any(|r| p.contains(r))), "{p:?} mixes the columns");
+    }
+}
+
+/// A poem quoted between paragraphs keeps its lines: they stop well short of the right edge the
+/// prose around it reaches, so none of them is a full line that wraps.
+#[test]
+fn a_poem_keeps_its_lines() {
+    let poem = [
+        "The kettle sings beside the door",
+        "the cat is curled upon the chair",
+        "and rain runs down the window glass",
+        "while evening settles on the stair",
+    ];
+    let prose = "The tenant may read aloud in the shared garden on summer evenings, as in the verse below";
+    let mut blocks = vec![line(prose, 72.0, 540.0, 720.0)];
+    for (n, (t, end)) in poem.iter().zip([236.0, 230.0, 248.0, 232.0]).enumerate() {
+        blocks.push(line(t, 90.0, end, 696.0 - 14.0 * n as f64));
+    }
+    let mut expected = vec![prose];
+    expected.extend(poem);
+    assert_eq!(word_texts(blocks), expected);
+}
+
+#[test]
+fn list_items_are_told_from_text() {
+    for item in ["• item", "\u{F0B7} item", "- item", "\u{2013} item", "* item", "1. Term", "12) Rent", "3.", "a) rooms", "а) стаи"] {
+        assert!(list_item(item), "{item}");
+    }
+    for text in ["1.5 kg of", "2026. Year", "i.e. this", "т.е. така", "38 rooms", "Rent 12)", "1234) many", ""] {
+        assert!(!list_item(text), "{text}");
+    }
+}
+
+/// Wrapped lines join on hostile boxes and sizes without a panic, and never lose a line's text.
+#[test]
+fn joining_lines_survives_hostile_boxes() {
+    let mut blocks = Vec::new();
+    for (i, v) in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0, 1e300].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * i as f64;
+        blocks.push(Block { size: v, ..line(&format!("size {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rect: [v, y, 540.0, y + 12.0], ..line(&format!("left {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rect: [72.0, v, v, y + 12.0], ..line(&format!("box {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rotation: v, ..line(&format!("turn {i}"), 72.0, 540.0, y) });
+    }
+    let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+    let outputs = [
+        html(std::slice::from_ref(&p), "Hostile"),
+        rtf(std::slice::from_ref(&p)),
+        part(&pptx(std::slice::from_ref(&p), "Hostile"), "ppt/slides/slide1.xml"),
+        word_texts(p.blocks.clone()).concat(),
+    ];
+    for output in outputs {
+        for b in &p.blocks {
+            assert!(output.contains(&b.text), "{} was lost", b.text);
+        }
+    }
+}
+
+/// A bulleted list as Word and LibreOffice draw one: each bullet a block of its own in a symbol
+/// font, a tab stop before its item's text, between a lead-in line and the next paragraph.
+fn bulleted_list(bullet: &str) -> Vec<Block> {
+    let mut blocks = vec![line("The tenant looks after:", 72.0, 180.0, 700.0)];
+    for (n, (text, end)) in
+        [("the stairs and the landing;", 230.0), ("the shared yard and its gate;", 240.0), ("the bins, every week.", 200.0)].into_iter().enumerate()
+    {
+        let y = 686.0 - 14.0 * n as f64;
+        blocks.push(line(bullet, 90.0, 94.6, y));
+        blocks.push(line(text, 108.0, end, y));
+    }
+    blocks.push(line("Rent is paid monthly in advance.", 72.0, 230.0, 630.0));
+    blocks
+}
+
+/// A bulleted list whose bullets are blocks of their own is one paragraph per item, each item's
+/// text after its bullet, in every format: not a two-column table of bullets and text. The
+/// Symbol and Wingdings bullets Word writes count, and so does a dash that opens its line.
+#[test]
+fn a_bulleted_list_is_paragraphs_not_a_table() {
+    for bullet in ["•", "\u{F0B7}", "\u{F0A7}", "\u{2013}"] {
+        let p = Page { width: 612.0, height: 792.0, blocks: bulleted_list(bullet), ..Page::default() };
+        let (found, _) = tables(&p.blocks, &[]);
+        assert!(found.is_empty(), "{bullet}: {found:?}");
+        let items = ["the stairs and the landing;", "the shared yard and its gate;", "the bins, every week."].map(|t| format!("{bullet} {t}"));
+        let mut expected = vec!["The tenant looks after:".to_string()];
+        expected.extend(items.iter().cloned());
+        expected.push("Rent is paid monthly in advance.".into());
+        assert_eq!(word_texts(p.blocks.clone()), expected, "{bullet}");
+        let h = html(std::slice::from_ref(&p), "List");
+        assert!(!h.contains("<table>") && items.iter().all(|i| h.contains(&format!("<p>{i}</p>"))), "{bullet}: {h}");
+        assert!(!rtf(std::slice::from_ref(&p)).contains("\\trowd"), "{bullet}");
+        let s = part(&pptx(std::slice::from_ref(&p), "List"), "ppt/slides/slide1.xml");
+        assert!(!s.contains("<a:tbl>"), "{bullet}: {s}");
+    }
+}
+
+/// A dash in a table row stands for "none": it is a cell like the others, not a bullet, so the
+/// table keeps all its rows.
+#[test]
+fn a_dash_in_a_table_row_stays_a_cell() {
+    let mut blocks = Vec::new();
+    for (n, (name, first, second)) in [("Apples", "\u{2013}", "5"), ("Pears", "3", "4"), ("Plums", "2", "6")].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line(name, 72.0, 110.0, y));
+        blocks.push(line(first, 200.0, 205.0, y));
+        blocks.push(line(second, 225.0, 230.0, y));
+    }
+    let (found, consumed) = tables(&blocks, &[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].rows.len(), 3, "{found:?}");
+    assert!(consumed.iter().all(|used| *used), "{consumed:?}");
+}
+
+/// A bullet is never a table cell, even when its items carry a second column such as an amount:
+/// every item keeps its bullet in front of its text.
+#[test]
+fn a_bullet_is_never_a_table_cell() {
+    let mut blocks = Vec::new();
+    for (n, (item, amount)) in [("apples", "5 kg"), ("pears", "4 kg"), ("plums", "2 kg")].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line("•", 90.0, 94.6, y));
+        blocks.push(line(item, 108.0, 140.0, y));
+        blocks.push(line(amount, 300.0, 325.0, y));
+    }
+    let (found, _) = tables(&blocks, &[]);
+    assert!(found.iter().flat_map(|t| &t.rows).flatten().all(|cell| cell.text != "•"), "{found:?}");
+    let paragraphs = word_texts(blocks);
+    for item in ["• apples", "• pears", "• plums"] {
+        assert!(paragraphs.iter().any(|p| p.starts_with(item)), "{item}: {paragraphs:?}");
+    }
+}
+
+/// Every item of a long list keeps its bullet, though all the items' texts start at one tab stop.
+#[test]
+fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
+    let mut blocks = Vec::new();
+    for n in 0..150 {
+        let y = 2200.0 - 14.0 * f64::from(n);
+        blocks.push(line("\u{F0B7}", 90.0, 94.6, y));
+        blocks.push(line(&format!("item {n};"), 108.0, 160.0, y));
+    }
+    let (found, _) = tables(&blocks, &[]);
+    assert!(found.is_empty(), "{found:?}");
+    let paragraphs = word_texts(blocks);
+    assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
+    assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
 }
