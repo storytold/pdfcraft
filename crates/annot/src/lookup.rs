@@ -76,9 +76,11 @@ pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError
 /// `pages` without those whose `/Annots` is an indirect array an earlier page already lists. For a
 /// consumer that visits each annotation once however often it is listed: a shared array is then
 /// copied and scanned once, not once per page that names it.
-pub(crate) fn with_distinct_annots(doc: &Document, pages: Vec<ObjRef>) -> Vec<ObjRef> {
+pub(crate) fn with_distinct_annots<'a>(doc: &'a Document, pages: Vec<ObjRef>) -> impl Iterator<Item = ObjRef> + 'a {
     let mut seen = std::collections::HashSet::new();
-    pages.into_iter().filter(|p| doc.get(*p).as_dict().and_then(|d| d.reference(b"Annots")).is_none_or(|r| seen.insert(r.num))).collect()
+    // Lazy: a caller that stops at the first answer (a visible Fill & Sign annotation on page 1)
+    // does not read the later pages or grow the set for them.
+    pages.into_iter().filter(move |p| doc.get(*p).as_dict().and_then(|d| d.reference(b"Annots")).is_none_or(|r| seen.insert(r.num)))
 }
 
 /// The entries of a page's `/Annots` (references or inline dictionaries).
