@@ -104,7 +104,8 @@ fn removal_writes_what_it_wrote_with_the_full_scan() {
         let mut after = hidden_fixture();
         let new = remove_hidden(&mut after, &which);
         assert_eq!(new, old, "{which:?}");
-        let save = SaveOptions::default();
+        // Removal gives the file a new identifier, salted at random unless the caller pins it.
+        let save = SaveOptions { id_entropy: Some([7; 16]), ..SaveOptions::default() };
         assert!(write_full(&after, &save).unwrap() == write_full(&before, &save).unwrap(), "{which:?}: the saved files differ");
     }
 }

@@ -677,6 +677,61 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     remove_counted(doc, which, &counts, false)
 }
 
+/// Take off every page the annotations the chosen categories remove (with `fields`, the widgets
+/// flattening kept), and the actions of those that stay when links, actions and scripts go.
+fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> Result<(), RedactError> {
+    // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
+    // ones, and ones with nothing to draw), which still hold their field's value and parent.
+    let drop_annot = |a: &Dict| -> bool {
+        let s = a.name(b"Subtype").unwrap_or(b"");
+        (which.contains(&Hidden::Comments) && is_comment(s))
+            || (fields && s == b"Widget")
+            || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
+            || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
+    };
+    // The annotations to remove, on every page first, so a pop-up listed on another page than
+    // its parent goes with it.
+    let pages = pdfcraft_model::pages(doc);
+    let removed: std::collections::HashSet<ObjRef> = pages
+        .iter()
+        .flat_map(|p| annots_of(doc, &p.dict))
+        .filter_map(|a| a.as_ref())
+        .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
+        .collect();
+    for p in pages {
+        let list = annots_of(doc, &p.dict);
+        let mut kept = Vec::new();
+        for a in list {
+            let Some(r) = a.as_ref() else {
+                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
+                    kept.push(a);
+                }
+                continue;
+            };
+            let d = doc.get(r).as_dict().cloned().unwrap_or_default();
+            let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
+            if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
+                continue;
+            }
+            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
+                doc.update_dict(r, |d| {
+                    d.remove(b"AA");
+                    d.remove(b"A");
+                })?;
+            }
+            kept.push(a);
+        }
+        doc.update_dict(p.obj, |d| {
+            if kept.is_empty() {
+                d.remove(b"Annots");
+            } else {
+                d.set(b"Annots".to_vec(), Object::Array(kept));
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// [`remove_hidden`] with `counts` from a scan of at least the categories in `which`. With
 /// `every_page`, every page's annotation list is rewritten even when no chosen category changes
 /// it, as removal did before it skipped that work; tests compare the two.
@@ -717,59 +772,11 @@ pub(crate) fn remove_counted(
     } else {
         std::collections::HashSet::new()
     };
-    // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
-    // ones, and ones with nothing to draw), which still hold their field's value and parent.
-    let drop_annot = |a: &Dict| -> bool {
-        let s = a.name(b"Subtype").unwrap_or(b"");
-        (which.contains(&Hidden::Comments) && is_comment(s))
-            || (fields && s == b"Widget")
-            || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
-            || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
-    };
-    // The annotations to remove, on every page first, so a pop-up listed on another page than
-    // its parent goes with it.
-    let pages = if annotations { pdfcraft_model::pages(doc) } else { Vec::new() };
-    let removed: std::collections::HashSet<ObjRef> = pages
-        .iter()
-        .flat_map(|p| annots_of(doc, &p.dict))
-        .filter_map(|a| a.as_ref())
-        .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
-        .collect();
-    for p in pages {
-        let list = annots_of(doc, &p.dict);
-        let mut kept = Vec::new();
-        for a in list {
-            let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
-                    kept.push(a);
-                }
-                continue;
-            };
-            let d = doc.get(r).as_dict().cloned().unwrap_or_default();
-            let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
-            if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
-                continue;
-            }
-            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
-                doc.update_dict(r, |d| {
-                    d.remove(b"AA");
-                    d.remove(b"A");
-                })?;
-            }
-            kept.push(a);
-        }
-        doc.update_dict(p.obj, |d| {
-            if kept.is_empty() {
-                d.remove(b"Annots");
-            } else {
-                d.set(b"Annots".to_vec(), Object::Array(kept));
-            }
-        })?;
-    }
-    // A tagged PDF's structure tree still points at the removed links, comments and flattened
-    // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
-    // text and field values included.
     if annotations {
+        drop_page_annotations(doc, which, fields)?;
+        // A tagged PDF's structure tree still points at the removed links, comments and flattened
+        // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
+        // text and field values included.
         let still = listed_annotations(doc);
         let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&still).copied().collect();
         crate::tags::drop_object_refs(doc, &gone)?;
