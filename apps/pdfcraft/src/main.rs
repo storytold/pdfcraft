@@ -236,8 +236,10 @@ fn main() -> eframe::Result {
     let may_hand_off = startup.may_hand_off();
     let startup::Arguments { files, options, control_file, create_images, combine, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
-    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs). Linux X11
+    // sessions keep server-side decorations, so only a Wayland session gets app-drawn controls.
+    let window_controls =
+        if cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty()) { decorations::app_drawn() } else { None };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -914,3 +916,36 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod x11_decorations_tests {
+    // Issue #3467: on X11 (for example Muffin) the window manager draws the frame and
+    // tracks edge and corner drags for half and quarter tiling. Enabling app-drawn
+    // decorations unconditionally on Linux removes that server-side frame, so `main`
+    // may only do so when the session is gated to a frameless Wayland desktop.
+    #[test]
+    fn x11_linux_keeps_server_side_decorations_for_tiling() {
+        let source = include_str!("main.rs");
+        // Everything before the top-level test modules is product code.
+        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
+        let mut assignment = String::new();
+        for line in product.lines() {
+            if assignment.is_empty() && !line.contains("let window_controls") {
+                continue;
+            }
+            assignment.push_str(line);
+            assignment.push('\n');
+            if line.contains(';') {
+                break;
+            }
+        }
+        assert!(!assignment.is_empty(), "main no longer chooses the window controls");
+        let lower = assignment.to_ascii_lowercase();
+        let gated = ["linux", "wayland", "x11"].iter().any(|token| lower.contains(token));
+        assert!(
+            !assignment.contains("decorations::app_drawn()") || gated,
+            "X11 Linux must keep server-side decorations for tiling; app-drawn decorations must be gated, not enabled unconditionally on Linux: {}",
+            assignment.trim()
+        );
+    }
+}
