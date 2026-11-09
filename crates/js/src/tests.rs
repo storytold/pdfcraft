@@ -650,8 +650,10 @@ fn divisions_do_not_add_up_to_a_refusal() {
 #[test]
 fn boa_rejects_what_the_nesting_guard_drops() {
     for s in ["var r = /)/;", "var r = /(/;", "var r = /a)(b/;", "var r = /a\n/;", "var r = /a\\\n/;", "var s = 'a\nb';", "var s = \"a\rb\";"] {
-        let o = go(s, &Event::field("Calculate", "a", ""));
+        // Rejected while boa reads the script, before the line in front of it runs.
+        let o = go(&format!("console.println('ran');\n{s}"), &Event::field("Calculate", "a", ""));
         assert!(o.error.as_deref().is_some_and(|e| !e.contains("nested too deeply")), "{s:?}: {:?}", o.error);
+        assert!(o.console.is_empty(), "{s:?} was rejected only when it ran: {:?}", o.console);
     }
     for s in ["var r = /[(]/;", "var r = /\\)/;", "var r = /[)]/;", "var s = 'a\\\nb';", "var s = 'a\u{2028}b';"] {
         let o = go(s, &Event::field("Calculate", "a", ""));
