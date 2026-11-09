@@ -389,6 +389,19 @@ fn the_calculate_tab_shows_and_edits_a_custom_calculation_script() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.get_by_value(js).type_text(edited);
     h.run_steps(2);
+    // A paste that would take it past 256 KiB is refused, and the box keeps what was typed.
+    let refusal = "A script edited here can be at most 256 KiB long; that change wasn't made.";
+    assert!(h.query_by_label(refusal).is_none());
+    let boxes = |h: &Harness<'static, PdfCraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::MultilineTextInput).filter_map(|n| n.value()).collect::<Vec<_>>()
+    };
+    assert_eq!(boxes(&h), [edited]);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+    h.run_steps(1);
+    h.event(egui::Event::Paste("x".repeat(300 * 1024)));
+    h.run_steps(2);
+    assert!(h.query_by_label(refusal).is_some(), "the refusal is said");
+    assert_eq!(boxes(&h), [edited], "the box keeps what was typed");
     ok(&mut h);
     assert_eq!(script(&h), (Calculate::None, Some(edited.to_owned())));
     // "Value is not calculated" removes it.

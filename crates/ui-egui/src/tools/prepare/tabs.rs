@@ -410,9 +410,24 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
             let note = crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB). It is kept as it is."), &[("kib", &kib)]);
             ui.label(egui::RichText::new(note).small().color(t.text_faint));
         } else {
+            // The box edits a copy: an edit that would take the script past the limit (a large
+            // paste) is refused and said so, rather than hiding the box the user is typing in.
+            let refused = ui.scope_id().with("calc-script-refused");
+            let mut draft = js.clone();
             egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0).show(ui, |ui| {
-                ui.add(crate::widgets::block(js).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0));
+                ui.add(crate::widgets::block(&mut draft).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0));
             });
+            if draft != *js {
+                let too_long = draft.len() > MAX_EDITED_SCRIPT;
+                if !too_long {
+                    *js = draft;
+                }
+                ui.data_mut(|d| d.insert_temp(refused, too_long));
+            }
+            if ui.data(|d| d.get_temp::<bool>(refused)).unwrap_or(false) {
+                let note = tl!("A script edited here can be at most 256 KiB long; that change wasn't made.");
+                ui.label(egui::RichText::new(note).small().color(t.text_faint));
+            }
         }
     }
 }
