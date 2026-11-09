@@ -1,6 +1,6 @@
 use super::create::{
     CALLOUT_SLACK, add_annotation, base_dict, bounds, callout_attach, callout_knee, callout_side, ending_draws, ending_pair, finite, grow,
-    ink_bounds, normalize, num_array, on_side, rect_for, rgb,
+    ink_bounds, normalize, num_array, on_side, polygon_rect, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own_popup, popup_info, text_value};
