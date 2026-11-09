@@ -37,7 +37,7 @@ pub use core::{check_pages, inspect, pretty_date};
 use core::{inspect_structure, spend};
 pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, MAX_GROUP_DEPTH, OutlineItem,
-    PageInfo, PageTransition, RemoteDestination, TransitionStyle, Xfa, fill_group_text, group_primaries, link_replies, thread_tops,
+    PageInfo, PageTransition, RemoteDestination, ReviewStates, TransitionStyle, Xfa, fill_group_text, group_primaries, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
@@ -53,10 +53,6 @@ pub struct DocInfo {
     pub keywords: Option<String>,
     pub creator: Option<String>,
     pub producer: Option<String>,
-    /// `/Info /CreationDate` and `/ModDate` for display ("2026-10-01 12:30", see [`pretty_date`]);
-    /// a value that isn't a PDF date is shown as written.
-    pub created: Option<String>,
-    pub modified: Option<String>,
     /// Custom document properties: `/Info` entries with a key the spec does not name and a text
     /// value, as (name, text), in the dictionary's order (at most 256).
     pub custom: Vec<(String, String)>,

@@ -568,8 +568,10 @@ fn fdf_keeps_replies_and_review_status_on_their_note() {
     // Every cross-reference entry points at its object (other readers trust the table).
     let tail = std::str::from_utf8(&fdf[fdf.windows(5).position(|w| w == b"xref\n").unwrap()..]).unwrap();
     let xref: usize = tail.lines().skip_while(|l| *l != "startxref").nth(1).unwrap().parse().unwrap();
-    assert!(fdf[xref..].starts_with(b"xref\n0 6\n"), "{tail}");
-    for (num, line) in tail.lines().skip(3).take(5).enumerate() {
+    // The root, the four comments and their appearance streams.
+    let count: usize = tail.lines().nth(1).and_then(|l| l.strip_prefix("0 ")).unwrap().parse().unwrap();
+    assert!(fdf[xref..].starts_with(b"xref\n") && count >= 6, "{tail}");
+    for (num, line) in tail.lines().skip(3).take(count - 1).enumerate() {
         let at: usize = line[..10].parse().unwrap();
         assert!(fdf[at..].starts_with(format!("{} 0 obj\n", num + 1).as_bytes()), "object {}: {line}", num + 1);
     }
@@ -1705,6 +1707,43 @@ fn xml_form_import_preserves_text_around_comments_and_instructions() {
     }
 }
 
+/// Page discovery accepts a leaf without /Type, so a comment's nested reference to one must not
+/// carry the page or its content into the export.
+#[test]
+fn fdf_export_nulls_a_nested_link_to_a_page_without_a_type() {
+    let source = {
+        let mut doc = Document::new_empty();
+        let root = doc.root().unwrap();
+        let tree = doc.get(root).as_dict().unwrap().reference(b"Pages").unwrap();
+        let contents = doc.add(pdfcraft_cos::Stream::from_raw(Dict::new(), b"% private-page-content\n".repeat(4_096)));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+        let mut target = Dict::new();
+        target.set(b"Label".to_vec(), PdfString::text("kept"));
+        target.set(b"Target".to_vec(), Object::Ref(page));
+        fdf_note_with_data(&mut doc, Object::Array(vec![Object::Dict(target)]));
+        write_full(&doc, &SaveOptions::default()).unwrap()
+    };
+    let source = Document::open(Arc::new(source)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&source).len(), 1);
+    let bytes = export_fdf(&source, true, false, "source.pdf").unwrap();
+    assert!(bytes.len() < 4_096, "the untyped page's content must stay in the PDF ({} bytes)", bytes.len());
+    let fdf = Document::open(Arc::new(bytes)).unwrap();
+    let data = exported_note_data(&fdf);
+    let target = data.as_array().unwrap()[0].as_dict().unwrap();
+    assert_eq!(target.get(b"Label").unwrap().as_string().unwrap().to_text(), "kept");
+    assert_eq!(*fdf.resolve(target.get(b"Target").unwrap()), Object::Null);
+}
+
 #[test]
 fn fdf_export_nulls_nested_page_links_without_copying_the_source_page_tree() {
     for indirect_type in [false, true] {
@@ -2283,6 +2322,19 @@ fn importing_comments_as_copies_adds_them_on_the_page_with_fresh_names() {
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     assert_eq!(summaries(&other).len(), 4, "the named import replaced its own earlier copy");
+}
+
+/// Comment import never takes the file's field values, whatever the placement (a non-finite
+/// offset, which is ignored, and no page or prefix made it the full import).
+#[test]
+fn comment_import_leaves_field_values_alone() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" rect="10,10,30,30" name="n"/></annots><fields><field name="Name"><value>from the file</value></field></fields></xfdf>"#;
+    for offset in [Some([f64::NAN, 0.0]), None] {
+        let mut doc = one_field_named("Name", "mine");
+        let r = import_comments(&mut doc, xfdf, None, None, offset).unwrap();
+        assert_eq!((r.comments, r.fields), (1, 0), "{offset:?}: {r:?}");
+        assert_eq!(values(&doc), [("Name".to_string(), vec!["mine".to_string()])], "{offset:?}");
+    }
 }
 
 /// Other tools write comments straight into the page's `/Annots` array, without an object of
