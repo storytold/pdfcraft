@@ -231,9 +231,15 @@ impl<'a> Inspector<'a> {
     }
 }
 
-/// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
+/// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs. A
+/// document opened without the password its embedded files need (`/AuthEvent /EFOpen`, ISO
+/// 32000-2 §7.6.6) holds them encrypted: asking for one is an error, never its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
+        // Read through lopdf, which can't read a document opened without its key at all.
+        if pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password).is_ok_and(|d| d.embedded_files_locked()) {
+            return Err("the attachment is encrypted: open the document with its password to read it".into());
+        }
         let options = load_options(password);
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
