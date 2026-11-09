@@ -321,6 +321,7 @@ impl Session {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
@@ -340,6 +341,7 @@ impl Session {
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
@@ -355,6 +357,7 @@ impl Session {
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         let date = if date.is_empty() { self.signing_date() } else { date };
         let cos = writable(&editor.cos)?;
         let stamped = Arc::new(pdfcraft_sign::timestamp_document(&cos, tsa, &date)?);
@@ -384,6 +387,23 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// Refuse to sign a file rebuilt from its object headers and not edited since (#6759). Its page
+/// is drawn from the damaged bytes, which the renderer rebuilds on its own, while signing writes
+/// the object graph rebuilt here in full. The two can disagree (an object one keeps and the other
+/// leaves out, see the repair log), so the signature could cover content the user never saw.
+/// Once the file is saved, or edited, the page shows that rewrite, which is what gets signed.
+fn shows_what_is_signed(d: &Document, cos: &pdfcraft_cos::Document) -> Result<(), EditError> {
+    if !cos.reconstructed() || cos.is_modified() {
+        return Ok(());
+    }
+    if d.is_signed() {
+        return Err(EditError::SignedRewrite("Signing this repaired file".into()));
+    }
+    Err(EditError::Sign(
+        "this file was damaged and was repaired when it was opened: save it first, then sign the saved file, so the signature covers the repaired file the page shows".into(),
+    ))
 }
 
 /// `cos` with its form fields drawn, when the signature about to be made is the document's first

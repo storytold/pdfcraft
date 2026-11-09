@@ -643,8 +643,22 @@ impl Document {
             xref_marks.push(p);
             mark_from = p + 1;
         }
+        // Which object a number keeps follows the renderer's rebuilt table (hayro-syntax
+        // `fallback_xref_map_inner`), so the two read every page alike (#6759): the last real
+        // `N 0 obj` keeps N, whatever headers of other generations come after it; with none, the
+        // last header stands in. Every slot is generation 0, so `N 0 R` reaches the stand-in as
+        // the renderer's does, and the header's own generation still resolves through
+        // `indexed_header_reference`. A body of yet another generation has no slot left (one per
+        // number): `N G R` to it reads as null here though the renderer draws it, so it is noted.
+        // Per number: the generation of the header it keeps, and every generation seen.
+        let mut kept: BTreeMap<u32, (u16, std::collections::BTreeSet<u16>)> = BTreeMap::new();
         for &(num, offset, generation, body) in &headers {
-            entries.insert(num, XrefEntry::InFile { offset, generation });
+            let (held, seen) = kept.entry(num).or_insert_with(|| (generation, std::collections::BTreeSet::new()));
+            seen.insert(generation);
+            if generation == 0 || *held != 0 {
+                *held = generation;
+                entries.insert(num, XrefEntry::InFile { offset, generation: 0 });
+            }
             objstms.push(num);
             // `/XRef` within the 1024 bytes after the header (the first one that is there).
             let first = xref_marks.partition_point(|&p| p < body);
@@ -656,6 +670,19 @@ impl Document {
         }
         if entries.is_empty() {
             return Err(CosError::Syntax { offset: 0, detail: "no objects found".into() });
+        }
+        let left_out: Vec<ObjRef> = kept
+            .iter()
+            .flat_map(|(&num, (held, seen))| seen.iter().filter(move |&&g| g != 0 && g != *held).map(move |&g| ObjRef::new(num, g)))
+            .collect();
+        if !left_out.is_empty() {
+            let named: Vec<String> = left_out.iter().take(8).map(|r| format!("{} {}", r.num, r.generation)).collect();
+            let more = if left_out.len() > 8 { format!(" and {} more", left_out.len() - 8) } else { String::new() };
+            log.push(format!(
+                "rebuilding the cross-reference index left out {} objects that share a number with the object kept for it ({}{more}); references to them read as null",
+                left_out.len(),
+                named.join(", "),
+            ));
         }
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();

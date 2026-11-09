@@ -10382,6 +10382,51 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     assert!(!s.get(id).unwrap().dirty);
 }
 
+/// Whether the first page of document `id`, as displayed, shows the black cover of
+/// [`rebuilt_cover_file`] (at x 10-90, y 10-90 of a 200 pt page; the pixel rows run top down).
+fn shows_the_cover(s: &Session, id: DocId) -> bool {
+    let rgba = displayed_pixels(s, id);
+    rgba.get((150 * 200 + 50) * 4..(150 * 200 + 50) * 4 + 3).is_some_and(|p| p.iter().all(|&c| c < 40))
+}
+
+/// No usable cross-reference data, so the file is rebuilt from object headers. The page draws
+/// `4 0 R`, a black cover; a later `4 1 obj` draws something else.
+fn rebuilt_cover_file() -> Vec<u8> {
+    let mut pdf = String::from(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n\
+         3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>\nendobj\n",
+    );
+    for (generation, content) in [(0, "0 0 0 rg 10 10 80 80 re f"), (1, "1 0 0 rg 120 120 20 20 re f")] {
+        pdf.push_str(&format!("4 {generation} obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()));
+    }
+    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    pdf.into_bytes()
+}
+
+/// #6759: in a rebuilt file, Save and Sign write what the page showed. The page is drawn from
+/// the damaged bytes, so Sign refuses the unedited file until it is saved: from then on the page
+/// shows the rewrite that is signed.
+#[test]
+fn a_rebuilt_file_saves_and_signs_what_its_page_shows() {
+    let (digital_id, _) = test_identity();
+    let opts = || SignOptions { rect: None, ..SignOptions::default() };
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("rebuilt.pdf", None, Arc::new(rebuilt_cover_file()), None).unwrap();
+    assert!(s.get(id).unwrap().repair_log().iter().any(|l| l.contains("rebuilt cross-reference index")));
+    assert!(shows_the_cover(&s, id), "the renderer draws 4 0 obj");
+    let refused = s.sign(id, &digital_id, opts());
+    assert!(matches!(&refused, Err(EditError::Sign(m)) if m.contains("save it first")), "{refused:?}");
+    let saved = s.save_bytes(id).unwrap();
+    s.check_save(id, &saved).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    assert!(shows_the_cover(&s, id), "the saved file keeps the cover the page drew");
+    let signed = s.sign(id, &digital_id, opts()).unwrap();
+    let mut t = Session::new().with_clock(|| 1_800_000_000);
+    let tid = t.open("signed.pdf", None, signed, None).unwrap();
+    assert!(t.get(tid).unwrap().is_signed());
+    assert!(shows_the_cover(&t, tid), "the signed file shows the cover");
+}
+
 /// A one-page document whose only signature field is signed and named with `len` bytes. The
 /// signature field walk reads names of up to 4096 bytes and passes longer ones over.
 fn signed_field_named(len: usize) -> Vec<u8> {

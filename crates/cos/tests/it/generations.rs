@@ -508,3 +508,84 @@ fn accepted_generations_are_the_generations_get_resolves() {
     assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
     agrees(&packed, member.num, &[0]);
 }
+
+const COVER: &str = "0 0 0 rg 10 10 80 80 re f";
+const OTHER: &str = "1 0 0 rg 100 100 20 20 re f";
+
+/// A file with no usable cross-reference data (`startxref` points nowhere), so both cos and the
+/// renderer rebuild it from object headers. The page draws `page_ref`; `bodies` are the
+/// `4 G obj` content streams after it, as (generation, content), in file order (#6759).
+fn rebuilt_page(page_ref: &str, bodies: &[(u16, &str)]) -> Arc<Vec<u8>> {
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n\
+         3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {page_ref} >>\nendobj\n"
+    );
+    for (generation, content) in bodies {
+        pdf.push_str(&format!("4 {generation} obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()));
+    }
+    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    Arc::new(pdf.into_bytes())
+}
+
+/// What the renderer draws on the first page.
+fn drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Option<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).ok()?;
+    let page = oracle.pages().first()?.page_stream()?.to_vec();
+    Some(String::from_utf8_lossy(&page).trim().to_string())
+}
+
+/// The first page's content stream as cos reads it.
+fn drawn_by_cos(doc: &Document) -> Option<String> {
+    let catalog = doc.get(doc.root()?);
+    let pages = doc.resolve(catalog.as_dict()?.get(b"Pages")?);
+    let page = doc.resolve(pages.as_dict()?.get(b"Kids")?.as_array()?.first()?);
+    let contents = doc.resolve(page.as_dict()?.get(b"Contents")?);
+    let Object::Stream(stream) = &*contents else { return None };
+    Some(String::from_utf8_lossy(&stream.raw).trim().to_string())
+}
+
+#[test]
+fn a_rebuilt_index_keeps_the_generation_0_body_the_page_draws() {
+    // A later `4 1 obj` used to take object 4's slot, so `4 0 R` read as null in cos and a full
+    // save wrote null, while the renderer drew the generation-0 cover (#6759).
+    for bodies in [&[(0, COVER), (1, OTHER)][..], &[(1, OTHER), (0, COVER)], &[(0, COVER), (1, OTHER), (2, OTHER)]] {
+        let bytes = rebuilt_page("4 0 R", bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert!(doc.reconstructed());
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        assert_eq!(drawn_by_cos(&Document::open(saved).unwrap()).as_deref(), Some(COVER), "{bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_answers_generation_0_for_an_object_with_only_another_generation() {
+    // The renderer's rebuilt table lets the last header stand in for `N 0 R` when there is no
+    // `N 0 obj` (#5580); cos follows it, and the header's own generation still resolves.
+    for (page_ref, bodies) in
+        [("4 0 R", &[(1, COVER)][..]), ("4 1 R", &[(1, COVER)]), ("4 0 R", &[(1, OTHER), (2, COVER)]), ("4 2 R", &[(1, OTHER), (2, COVER)])]
+    {
+        let bytes = rebuilt_page(page_ref, bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_records_a_body_it_leaves_out() {
+    // One slot holds one body: with `4 0 obj` and `4 1 obj` both live, `4 1 R` reads as null in
+    // cos though the renderer reaches it. The repair log says so (AGENTS.md §5, Fidelity).
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (1, OTHER), (1, OTHER)])).unwrap();
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    let noted: Vec<_> = doc.repair_log().iter().filter(|line| line.contains("left out")).collect();
+    assert_eq!(noted.len(), 1, "{:?}", doc.repair_log());
+    assert!(noted[0].contains("4 1"), "{noted:?}");
+    // Nothing left out, nothing noted.
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (0, OTHER)])).unwrap();
+    assert!(doc.repair_log().iter().all(|line| !line.contains("left out")), "{:?}", doc.repair_log());
+}
