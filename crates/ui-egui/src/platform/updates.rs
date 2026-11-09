@@ -21,7 +21,8 @@ pub(crate) struct Updates {
     updater: Updater,
     /// The Updates dialog is showing.
     pub(crate) open: bool,
-    /// Ask for a newer release at start; the desktop app turns it on, so tests never reach the network.
+    /// Ask for a newer release at start, unless Preferences says not to; the desktop app turns
+    /// it on, so tests never reach the network.
     #[cfg(not(target_arch = "wasm32"))]
     startup_check: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -73,10 +74,12 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(ctx) = self.ctx.clone() else { return };
+            // Settled on the first frame: a preference turned on later waits for the next start.
+            let at_start = std::mem::take(&mut self.updates.startup_check) && self.update_check_at_start;
             let updates = &mut self.updates;
             if std::mem::take(&mut updates.check_requested) {
                 updates.updater.check_now(&ctx);
-            } else if updates.startup_check {
+            } else if at_start {
                 updates.updater.check_at_start(&ctx);
             }
             updates.updater.tick(&ctx);
@@ -110,6 +113,9 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     app.updates.updater.dismiss_status();
                 }
                 CheckResultResponse::CheckAgain => app.updates.check_requested = true,
+                CheckResultResponse::RestartToUpdate => {
+                    app.updates.updater.restart_to_update();
+                }
             }
         }
     }
