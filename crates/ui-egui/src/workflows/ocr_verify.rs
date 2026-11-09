@@ -219,6 +219,15 @@ pub struct Reread {
     pub(crate) progress: Arc<Mutex<RereadProgress>>,
 }
 
+/// What the Verify screen was asked to read while the web build was still downloading the
+/// models ([`OcrVerify::models_landed`] starts it once they are in).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) enum AwaitingModels {
+    Run,
+    Reread { page: usize, region: Option<[f32; 4]> },
+}
+
 /// A re-read's progress: the replacement words once the worker is done, and a cancel request.
 /// A cancelled re-read is discarded when it lands: the page's words stay as they were.
 #[derive(Default)]
@@ -255,6 +264,8 @@ pub struct OcrVerify {
     /// A page or region re-read running on a worker thread: the screen stays live (the review
     /// edits and navigation work) and the reading is applied by [`Self::poll_reread`].
     pub reread: Option<Reread>,
+    /// A run or re-read waiting for the web build's model download.
+    pub(crate) awaiting_models: Option<AwaitingModels>,
     /// The correction text field's current contents.
     pub correction: String,
     /// Where the per-language dictionary files live (`None`: off, e.g. the web build).
@@ -307,6 +318,7 @@ impl Default for OcrVerify {
             cancelled: false,
             progress: None,
             reread: None,
+            awaiting_models: None,
             correction: String::new(),
             dictionary_dir: None,
             dictionary_language: "en".into(),
@@ -919,6 +931,11 @@ impl OcrVerify {
         }
         let Some(doc) = self.doc else { return };
         let settings = self.reread_settings(&app.ocr_draft);
+        #[cfg(target_arch = "wasm32")]
+        if app.web_models_missing(settings.engine) {
+            self.wait_for_models(AwaitingModels::Reread { page, region });
+            return;
+        }
         if let Some(region) = region {
             let Some(info) = app.session.get(doc).and_then(|d| d.info.pages.get(page)) else {
                 app.notify_error("the page is gone");
@@ -971,6 +988,51 @@ impl OcrVerify {
             return;
         }
         self.reread = Some(Reread { page, region, progress });
+    }
+
+    /// The web build is downloading the models: remember what was asked for and say so; it
+    /// starts when they land ([`Self::poll_models`]). Before, the read ran at once and failed
+    /// with the desktop's "set PDFCRAFT_MODELS" message, which means nothing in a browser.
+    #[cfg(target_arch = "wasm32")]
+    fn wait_for_models(&mut self, what: AwaitingModels) {
+        self.awaiting_models = Some(what);
+        self.message = tl!("Downloading the text recognition models…").to_string();
+    }
+
+    /// The web build: start what waited for the models once the download is over.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn poll_models(&mut self, app: &mut PdfCraftApp) {
+        if self.awaiting_models.is_none() {
+            return;
+        }
+        use pdfcraft_engine::ocr::{EngineChoice, engine_unavailable_reason};
+        if engine_unavailable_reason(EngineChoice::Ocrs).is_none() {
+            // The models are in. An engine the browser can never run (Tesseract) says why
+            // rather than waiting for ever.
+            let outcome = engine_unavailable_reason(app.ocr_draft.engine).map_or(Ok(()), Err);
+            self.models_landed(app, outcome);
+        } else if let crate::ocr_web::State::Failed(e) = crate::ocr_web::state() {
+            self.models_landed(app, Err(e));
+        }
+    }
+
+    /// The model download is over: run what waited for it, or say why it can't. Nothing runs
+    /// once the screen is closed.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn models_landed(&mut self, app: &mut PdfCraftApp, outcome: Result<(), String>) {
+        let Some(what) = self.awaiting_models.take() else { return };
+        self.message.clear();
+        if let Err(e) = outcome {
+            self.message = crate::i18n::fmt(tl!("Couldn't download the text recognition models: {e}"), &[("e", &e)]);
+            return;
+        }
+        if !self.open {
+            return;
+        }
+        match what {
+            AwaitingModels::Run => self.start_run(app),
+            AwaitingModels::Reread { page, region } => self.start_reread(app, page, region),
+        }
     }
 
     /// Ask a running re-read to stop and be discarded: when the worker lands, its reading is
@@ -1158,6 +1220,11 @@ impl OcrVerify {
             super::ocr_ui::OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
         let settings = d.settings();
+        #[cfg(target_arch = "wasm32")]
+        if app.web_models_missing(settings.engine) {
+            self.wait_for_models(AwaitingModels::Run);
+            return;
+        }
         let Some(job) = app.session.ocr_job(id, &pages, settings.clone()) else { return };
         let language = job.settings.language.clone();
         let guard = job.guard.clone();
@@ -2574,6 +2641,57 @@ mod tests {
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "the review survives a failed re-read");
         assert_eq!(app.ocr_verify.page(0).expect("page").words.len(), 1, "the words survive");
         assert!(!toast(&mut app).is_empty(), "the failure is said");
+    }
+
+    /// The web build: a Run OCR asked for while the models download runs once they land, rather
+    /// than failing at once with the desktop's "set PDFCRAFT_MODELS" message.
+    #[test]
+    fn a_run_that_waited_for_the_models_starts_when_they_land() {
+        let (mut app, _) = app_review(vec![vec![word("one", Some(95.0))]]);
+        app.ocr_verify.open = true;
+        app.ocr_verify.awaiting_models = Some(AwaitingModels::Run);
+        with_state(&mut app, |v, app| v.models_landed(app, Ok(())));
+        assert_eq!(app.ocr_verify.awaiting_models, None);
+        // The run is inline here: it either read the blank page (no words) or failed for want
+        // of models on this machine. Either way the old review was replaced by a run.
+        let ran = app.ocr_verify.phase == Phase::RecoverableError || app.ocr_verify.page(0).is_some_and(|p| p.words.is_empty());
+        assert!(ran, "the run started: {:?} {}", app.ocr_verify.phase, app.ocr_verify.message);
+    }
+
+    /// The same for a page or region re-read.
+    #[test]
+    fn a_reread_that_waited_for_the_models_starts_when_they_land() {
+        let (mut app, _) = app_review(vec![vec![word("one", Some(95.0))]]);
+        app.ocr_verify.open = true;
+        app.ocr_verify.awaiting_models = Some(AwaitingModels::Reread { page: 0, region: None });
+        with_state(&mut app, |v, app| v.models_landed(app, Ok(())));
+        assert_eq!(app.ocr_verify.awaiting_models, None);
+        assert!(app.ocr_verify.reread.is_some(), "the re-read started");
+    }
+
+    /// A failed download is said in the status line, and nothing runs or changes.
+    #[test]
+    fn a_failed_model_download_is_said_and_nothing_runs() {
+        let (mut app, _) = app_review(vec![vec![word("one", Some(95.0))]]);
+        app.ocr_verify.open = true;
+        app.ocr_verify.awaiting_models = Some(AwaitingModels::Run);
+        with_state(&mut app, |v, app| v.models_landed(app, Err("models/text-detection.onnx: HTTP 404".into())));
+        assert_eq!(app.ocr_verify.awaiting_models, None);
+        assert!(app.ocr_verify.message.contains("Couldn't download") && app.ocr_verify.message.contains("HTTP 404"), "{}", app.ocr_verify.message);
+        assert_eq!(app.ocr_verify.phase, Phase::ReviewReady);
+        assert_eq!(app.ocr_verify.page(0).expect("page").words.len(), 1, "the words are untouched");
+    }
+
+    /// Closing the screen while the models download drops what waited: nothing runs behind it.
+    #[test]
+    fn nothing_waiting_for_the_models_runs_once_the_screen_is_closed() {
+        let (mut app, _) = app_review(vec![vec![word("one", Some(95.0))]]);
+        app.ocr_verify.open = false;
+        app.ocr_verify.awaiting_models = Some(AwaitingModels::Reread { page: 0, region: None });
+        with_state(&mut app, |v, app| v.models_landed(app, Ok(())));
+        assert_eq!(app.ocr_verify.awaiting_models, None);
+        assert!(app.ocr_verify.reread.is_none());
+        assert_eq!(app.ocr_verify.page(0).expect("page").words.len(), 1);
     }
 
     /// A re-read that finds nothing is a typed failure: the words stay, the review stays.
