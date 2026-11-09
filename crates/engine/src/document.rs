@@ -747,10 +747,22 @@ pub(crate) fn shown_under_redactions(
     // A batch can move pages after the marks were collected: a mark is found by the page object it
     // was placed on, not by the index that page had when it was drawn. A page the batch deleted
     // takes its marks with it, so they are not checked against whatever page now holds the index.
-    let page_of = |obj: pdfcraft_cos::ObjRef| model.iter().position(|p| p.obj == obj);
-    let mut marked: Vec<usize> = marks.iter().filter_map(|(obj, _)| page_of(*obj)).collect();
+    // One index, built once: each mark is resolved against it instead of scanning every page,
+    // and the marks are grouped by resolved page in the same pass.
+    let mut index: std::collections::HashMap<pdfcraft_cos::ObjRef, usize> = std::collections::HashMap::new();
+    for (i, p) in model.iter().enumerate() {
+        index.entry(p.obj).or_insert(i);
+    }
+    let mut marked: Vec<usize> = Vec::new();
+    let mut rects_of: std::collections::HashMap<usize, Vec<[f64; 4]>> = std::collections::HashMap::new();
+    for (obj, m) in marks {
+        let Some(&pi) = index.get(obj) else { continue };
+        if !rects_of.contains_key(&pi) {
+            marked.push(pi);
+        }
+        rects_of.entry(pi).or_default().extend(m.rects.iter().map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]));
+    }
     marked.sort_unstable();
-    marked.dedup();
     if marked.is_empty() {
         return Ok(());
     }
@@ -764,6 +776,12 @@ pub(crate) fn shown_under_redactions(
     // Page geometry comes from the document as it is now written: a page moved earlier in the batch
     // brings its own size and rotation with it.
     let pages = pdfcraft_render::inspect(bytes.clone(), password).map_err(|e| EditError::Write(e.to_string()))?.pages;
+    // The model counts one entry per `/Kids` entry; the renderer one per page it draws. If they
+    // disagree, a mark's index could land on another page's text, and the check cannot confirm
+    // the redaction.
+    if pages.len() != model.len() {
+        return Err(RedactError::AmbiguousPages.into());
+    }
     let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
     let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
     let mut residue = 0;
@@ -771,12 +789,7 @@ pub(crate) fn shown_under_redactions(
         let request = pdfcraft_render::RenderRequest { page: pi, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() };
         // A page that cannot be read back cannot be confirmed clean.
         let (Some(info), Some(text)) = (pages.get(pi), renderer.render(request).text) else { return Err(RedactError::Unreadable(pi + 1).into()) };
-        let rects: Vec<[f64; 4]> = marks
-            .iter()
-            .filter(|(obj, _)| page_of(*obj) == Some(pi))
-            .flat_map(|(_, m)| m.rects.iter())
-            .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])])
-            .collect();
+        let rects = rects_of.get(&pi).cloned().unwrap_or_default();
         for glyph in text.glyphs.iter().filter(|g| !g.text.trim().is_empty()) {
             let [x0, y0, x1, y1] = info.view_rect_to_user(glyph.rect).map(f64::from);
             let area = (x1 - x0) * (y1 - y0);

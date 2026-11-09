@@ -40,6 +40,12 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
+    /// The page tree and the renderer count a different number of pages (a page repeated in
+    /// `/Kids`, say), so a mark's page can't be matched to the page the renderer drew.
+    #[error(
+        "the document's page tree and its rendered pages disagree on how many pages there are, so the redaction could not be verified; nothing was changed"
+    )]
+    AmbiguousPages,
     /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
     /// Skipping them would leave the text under them in the file while the others report success.
     #[error(
