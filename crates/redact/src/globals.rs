@@ -10,15 +10,15 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use pdfcraft_cos::{DECODE_PARMS_KEYS, Dict, Document, ImageBudget, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
+use pdfcraft_cos::{CosError, DECODE_PARMS_KEYS, Dict, Document, ImageBudget, MAX_JBIG2_GLOBALS, Object, Stream, reachable_objects};
 
 /// The references followed from `/JBIG2Globals` towards a stream, so that a ring of them ends.
 const MAX_HOPS: usize = 32;
 
 /// The objects a full save would keep, by number: a reference reads the object of its number,
-/// whatever generation it gives.
-pub(crate) fn kept(doc: &Document) -> HashSet<u32> {
-    reachable(doc).into_iter().map(|r| r.num).collect()
+/// whatever generation it gives. Fails only when a full save couldn't number them all.
+pub(crate) fn kept(doc: &Document) -> Result<HashSet<u32>, CosError> {
+    reachable_objects(doc)
 }
 
 /// `o`, or what references lead to from it. A ring of them ends as a reference, which is no dictionary.
@@ -526,7 +526,7 @@ fn matches_left(
 /// when decoding the dictionaries and images would spend more than `images` has left. Such an image may still be drawn, on a page no mark
 /// reached, so it isn't removed, and `doc` is part changed by then: a caller works on a copy it can drop.
 pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut ImageBudget) -> Result<usize, crate::RedactError> {
-    let now = kept(doc);
+    let now = kept(doc)?;
     let mut run = Run::new(RUN_BUDGET);
     let mut dictionaries: HashSet<u32> = HashSet::new();
     // A list the file refers to is added once, however many streams share it.
@@ -610,7 +610,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut Im
             None => stuck += 1,
         }
     }
-    let after = kept(doc);
+    let after = kept(doc)?;
     if dictionaries.iter().any(|n| after.contains(n)) {
         return Err(crate::RedactError::SharedJbig2Globals(stuck));
     }

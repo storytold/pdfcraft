@@ -2,11 +2,13 @@
 //! click an empty signature field), the Sign with a Digital ID / Configure New Digital ID /
 //! Sign as dialogs, the Signatures panel, and the signature message bar.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
 
 use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -20,7 +22,7 @@ mod panel;
 #[cfg(test)]
 use dialog::detail_lines;
 use dialog::graphic_of;
-pub(crate) use dialog::{appearance_labels, dialog};
+pub(crate) use dialog::{appearance_labels, dialog, status_captions};
 pub(crate) use panel::{CertAction, banner, cert_viewer, panel, signature_status_style};
 pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 
@@ -494,7 +496,7 @@ impl PdfCraftApp {
             Some(p) => sign_and_save(self, PathBuf::from(p)),
             #[cfg(not(target_arch = "wasm32"))]
             None => {
-                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
                 let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                 // The signature's page, rectangle and field refer to the document as it is now:
                 // the pick is dropped (with a notice) if it is edited or switched away from
@@ -526,7 +528,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pick_sign_graphic_image(&mut self) {
         let epoch = self.dialog_epoch();
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!("Image"), &["png", "jpg", "jpeg"]);
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch || app.dialog != Some(crate::Dialog::Sign) {
                 return;
@@ -565,6 +567,29 @@ impl PdfCraftApp {
     pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
         self.session.set_trusted_certificates(certs);
         for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
+    /// Draw signature status captions in `lang` ([`status_captions`]) and redraw the pages, once
+    /// per language change: the session rebuilds the documents whose captions it draws.
+    pub(crate) fn apply_status_captions(&mut self, lang: crate::i18n::Lang) {
+        if self.status_captions_lang == Some(lang) {
+            return;
+        }
+        self.status_captions_lang = Some(lang);
+        // Only a document that draws a signature state shows the words: the others keep their
+        // pages, selection and search results.
+        let drawing: Vec<pdfcraft_engine::DocId> = self
+            .views
+            .iter()
+            .map(|v| v.id)
+            .filter(|id| self.session.get(*id).is_some_and(|d| d.signatures.iter().any(|s| s.verdict_shown)))
+            .collect();
+        if !self.session.set_signature_captions(status_captions(lang)) {
+            return;
+        }
+        for view in self.views.iter_mut().filter(|v| drawing.contains(&v.id)) {
             view.invalidate_content();
         }
     }
@@ -712,6 +737,44 @@ mod tests {
         assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
         assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
         assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
+    }
+
+    #[test]
+    fn a_language_change_leaves_documents_without_a_drawn_state_alone() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        let mut app = PdfCraftApp::new();
+        let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
+        app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
+        app.views[0].texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
+        app.apply_status_captions(crate::i18n::Lang::from_code("de").unwrap());
+        assert!(!app.views[0].texts.is_empty(), "its text, selection and search results stay");
+    }
+
+    #[test]
+    fn status_captions_come_whole_from_one_language() {
+        // All three in a language that has them, else all three in English: never a mix. Whether
+        // a face draws them is the sign crate's call.
+        use crate::i18n::{Lang, has};
+        let english = StatusCaptions::default();
+        assert_eq!(status_captions(Lang::EN), english);
+        for lang in Lang::all().filter(|&l| l != Lang::EN) {
+            let whole = [&english.valid, &english.unknown, &english.invalid].into_iter().all(|s| has(lang, s));
+            let said = status_captions(lang);
+            assert_eq!(said != english, whole, "{}: {said:?}", lang.code());
+        }
+    }
+
+    #[test]
+    fn status_captions_reach_the_sign_crate_in_logical_order() {
+        // The sign crate receives the catalogue's logical order and shapes the words itself, so
+        // they are never reversed a second time.
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        let ar = status_captions(crate::i18n::Lang::from_code("ar").unwrap());
+        assert_eq!([ar.valid.as_str(), ar.unknown.as_str(), ar.invalid.as_str()], ["التوقيع صالح", "الصلاحية غير معروفة", "التوقيع غير صالح"]);
     }
 
     #[test]
@@ -880,6 +943,7 @@ mod tests {
             timestamp_time: None,
             status,
             modification: sign::Modification::None,
+            verdict_shown: false,
             details: Vec::new(),
         }
     }

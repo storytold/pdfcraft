@@ -6,6 +6,9 @@
 //!   byte (0 None, 1 Sub, 2 Up, 3 Average, 4 Paeth), whatever the predictor value is.
 //!
 //! A final partial row is decoded as far as its data goes.
+//!
+//! The samples of an image whose rows carry no filter-type byte, although a PNG predictor is
+//! declared, are taken as they are and reported as damage ([`decode`]).
 
 use crate::{Failure, FilterError, Params, Step};
 
@@ -37,16 +40,37 @@ fn layout(p: &Params) -> Result<Layout, String> {
     Ok(Layout { bpc, colors, bpp: (colors * bpc).div_ceil(8), row: bits.div_ceil(8), samples })
 }
 
-/// Undoes the predictor named by `p.predictor` (1 = identity).
-pub(crate) fn decode(p: &Params, data: Vec<u8>, name: &'static str) -> Step {
+/// Undoes the predictor named by `p.predictor` (1 = identity). `rows` is the height of the image
+/// `data` is the samples of, if it is: with a PNG predictor, data of exactly `rows` rows without
+/// their filter-type bytes ([`untagged`]) is given back as it is, as a [`Failure`] whose partial
+/// output is all of it, so that tolerant decoding takes the samples and reports the repair, and
+/// strict decoding refuses them.
+pub(crate) fn decode(p: &Params, data: Vec<u8>, name: &'static str, rows: Option<usize>) -> Step {
     match p.predictor {
         1 => Ok(data),
         2 | 10..=15 => {
             let l = layout(p).map_err(|e| Failure::corrupt(name, e, Vec::new()))?;
-            if p.predictor == 2 { Ok(tiff_decode(&l, data)) } else { png_decode(&l, &data, name) }
+            if p.predictor == 2 {
+                return Ok(tiff_decode(&l, data));
+            }
+            if let Some(rows) = rows.filter(|&rows| untagged(&l, data.len(), rows)) {
+                let detail =
+                    format!("PNG predictor {} declared, but its {rows} rows carry no filter-type bytes: read as unpredicted samples", p.predictor);
+                return Err(Failure::corrupt(name, detail, data));
+            }
+            png_decode(&l, &data, name)
         }
         other => Err(Failure::corrupt(name, format!("invalid Predictor {other}"), Vec::new())),
     }
+}
+
+/// Whether `len` bytes are exactly `rows` rows of `l` without the filter-type byte that starts each
+/// PNG-predicted row (ISO 32000-2 §7.4.4.4), where predicted data would be `rows` × (row + 1): a
+/// writer that declared the predictor and didn't apply it. Read with the predictor, every row's
+/// first sample was taken for a filter type and the image came out a row short and shifted.
+/// PDFium, MuPDF and Poppler read such data as the samples it is.
+fn untagged(l: &Layout, len: usize, rows: usize) -> bool {
+    rows > 0 && l.row > 0 && rows.checked_mul(l.row) == Some(len)
 }
 
 /// Applies the predictor named by `p.predictor` (1 = identity; 15 = per-row optimum).
@@ -213,7 +237,7 @@ mod tests {
     }
 
     fn dec(params: &Params, data: &[u8]) -> Result<Vec<u8>, FilterError> {
-        decode(params, data.to_vec(), "FlateDecode").map_err(|f| f.error)
+        decode(params, data.to_vec(), "FlateDecode", None).map_err(|f| f.error)
     }
 
     #[test]
@@ -262,7 +286,7 @@ mod tests {
 
     #[test]
     fn png_invalid_tag() {
-        let r = decode(&p(10, 1, 8, 2), vec![0, 1, 2, 5, 1, 1], "FlateDecode");
+        let r = decode(&p(10, 1, 8, 2), vec![0, 1, 2, 5, 1, 1], "FlateDecode", None);
         let f = r.err().unwrap();
         assert!(matches!(f.error, FilterError::Corrupt { .. }));
         assert_eq!(f.partial, [1, 2]);

@@ -305,6 +305,85 @@ fn field_flags_reject_values_outside_the_unsigned_32_bit_domain() {
     }
 }
 
+/// A `/Kids` entry that loops back (the field itself, or a field it descends from), or names a root
+/// field that doesn't name this one as its `/Parent`, is not a child (ISO 32000-2 §12.7.3,
+/// Table 224; §12.7.4.1, Table 226). The field keeps its other kids: here its radio buttons.
+#[test]
+fn kids_that_loop_back_or_are_roots_are_not_children() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                   // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),   // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 9 0 R 12 0 R 15 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 7 0 R 8 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),       // 4
+        "<< /FT /Btn /Ff 49152 /T (size) /V /Off /Kids [5 0 R 6 0 R] >>".into(),      // 5 lists itself
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [50 700 65 715] /P 3 0 R /AP << /N << /S 11 0 R /Off 11 0 R >> >> >>".into(), // 6
+        "<< /FT /Btn /Ff 49152 /T (left) /V /Off /Kids [8 0 R 9 0 R] >>".into(),      // 7 lists the root 8
+        "<< /FT /Btn /Ff 49152 /T (right) /V /Off /Kids [7 0 R 12 0 R] >>".into(),    // 8 lists the root 7
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 650 65 665] /P 3 0 R /AP << /N << /A 11 0 R /Off 11 0 R >> >> >>".into(), // 9
+        "<< /T (group) /Kids [13 0 R] >>".into(),                                     // 10
+        "<< /Length 0 >>
+stream
+
+endstream"
+            .into(),                          // 11
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [50 600 65 615] /P 3 0 R /AP << /N << /B 11 0 R /Off 11 0 R >> >> >>".into(), // 12
+        "<< /FT /Tx /T (inner) /Parent 10 0 R /Kids [14 0 R] >>".into(),              // 13
+        "<< /FT /Tx /T (deep) /Parent 13 0 R /Kids [13 0 R 15 0 R] >>".into(),        // 14 lists its parent
+        "<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [50 550 250 570] /P 3 0 R >>".into(), // 15
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let listed: Vec<(&str, FieldKind, Vec<ObjRef>)> =
+        all.iter().map(|f| (f.name.as_str(), f.kind, f.widgets.iter().map(|w| w.obj).collect())).collect();
+    let r = |num| ObjRef::new(num, 0);
+    assert_eq!(
+        listed,
+        [
+            ("size", FieldKind::Radio, vec![r(6)]),
+            ("left", FieldKind::Radio, vec![r(9)]),
+            ("right", FieldKind::Radio, vec![r(12)]),
+            ("group.inner.deep", FieldKind::Text, vec![r(15)]),
+        ]
+    );
+}
+
+/// A page widget whose `/Parent` names a field is one of that field's widgets even when the
+/// field's `/Kids` leave it out: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226). Here
+/// `radio` lists itself and one of its two widgets, and `pair` and `other` list each other (roots,
+/// so not children) and none of their widgets. Each field gets every widget naming it, once.
+#[test]
+fn widgets_naming_a_field_that_does_not_list_them_join_it() {
+    let w = |parent: u32, state: &str, y: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /Rect [50 {y} 65 {}] /P 3 0 R /AP << /N << /{state} 10 0 R /Off 10 0 R >> >> >>",
+            y + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>".into(),                          // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),          // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 11 0 R 12 0 R 13 0 R] >>".into(), // 3
+        w(5, "A", 700),                                                                      // 4: not in 5's /Kids
+        "<< /FT /Btn /Ff 49152 /T (radio) /V /Off /Kids [5 0 R 7 0 R] >>".into(),            // 5
+        "<< /Fields [5 0 R 8 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                     // 6
+        w(5, "B", 650),                                                                      // 7: in 5's /Kids
+        "<< /FT /Btn /Ff 49152 /T (pair) /V /Off /Kids [9 0 R 11 0 R] >>".into(),            // 8 lists the root 9
+        "<< /FT /Btn /Ff 49152 /T (other) /V /Off /Kids [8 0 R] >>".into(),                  // 9 lists the root 8
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                       // 10
+        w(8, "C", 600),                                                                      // 11: in 8's /Kids
+        w(8, "D", 550),                                                                      // 12: not in 8's /Kids
+        w(9, "E", 500),                                                                      // 13: not in 9's /Kids
+    ];
+    let doc = document(&objs);
+    let (all, adopted) = enumerate(&doc);
+    let listed: Vec<(&str, Vec<ObjRef>)> = all.iter().map(|f| (f.name.as_str(), f.widgets.iter().map(|w| w.obj).collect())).collect();
+    let r = |num| ObjRef::new(num, 0);
+    assert_eq!(listed, [("radio", vec![r(7), r(4)]), ("pair", vec![r(11), r(12)]), ("other", vec![r(13)])]);
+    assert_eq!(adopted, 0, "no widget is read as a field of its own");
+    let states: Vec<_> = field(&all, "radio").widgets.iter().filter_map(|w| w.on_state.as_deref()).collect();
+    assert_eq!(states, ["B", "A"]);
+}
+
 /// Some writers leave every field out of `/Fields` and put the widgets only in the page
 /// annotations: the tree walk alone finds nothing, and Acrobat and the browsers fill them anyway.
 /// The pages' widgets are adopted as fields, after the listed tree fields.
@@ -351,6 +430,37 @@ fn fields_listed_only_on_the_pages_are_adopted() {
     let names: Vec<&str> = all.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["listed", "alpha", "beta", "pair"]);
     assert_eq!(adopted_page_fields(&doc), 4);
+}
+
+/// A widget whose `/Parent` names an object the file doesn't hold, or one that isn't a dictionary,
+/// has no parent: the reference reads as `null`, the same as an absent entry (ISO
+/// 32000-2 §7.3.9). It is adopted as a field of its own, under its own name, and can be filled.
+#[test]
+fn a_widget_whose_parent_is_missing_is_a_field_of_its_own() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                       // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 8 0 R] >>".into(),             // 3
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V (Oslo) /Parent 40 0 R /Rect [50 700 250 720] /P 3 0 R >>".into(), // 5 parent not in the file
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),                              // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (zip) /Parent 9 0 R /Rect [50 660 250 680] /P 3 0 R >>".into(), // 7 parent is no dictionary
+        "<< /Type /Annot /Subtype /Widget /Parent 40 0 R /Rect [400 700 415 715] /P 3 0 R >>".into(),                // 8 no /FT or /T: not a field
+        "[1 2 3]".into(),                                                                                            // 9
+    ];
+    let mut doc = document(&objs);
+    assert_combined_matches_legacy(&doc, 2);
+    let all = fields(&doc);
+    let names: Vec<&str> = all.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["city", "zip"]);
+    let city = field(&all, "city");
+    assert_eq!(
+        (city.kind, city.value.as_slice(), city.widgets.len(), city.widgets[0].page),
+        (FieldKind::Text, &["Oslo".to_string()][..], 1, Some(0))
+    );
+    set_value(&mut doc, "zip", &FieldValue::Text("0150".into())).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(field(&fields(&doc), "zip").value, ["0150"]);
 }
 
 /// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
@@ -967,6 +1077,61 @@ fn text_a_field_font_cannot_hold_is_kept_marked_and_redrawn_elsewhere() {
     assert!(need_appearances(&doc));
 }
 
+/// Thai typed into a field whose `/DA` font (Helvetica, WinAnsi) can't hold it is drawn from the
+/// Thai face as Add text draws it: Type 3 glyphs (stream objects of their own, with a ToUnicode
+/// map) beside the field's font, which draws the rest, so every viewer shows the same glyphs. The
+/// `/DA` is kept, nothing is marked and other viewers aren't asked to redraw. The ink of stacked
+/// marks and descenders stays inside the border, an automatic size shrinking to keep it there.
+/// A build without a Thai face refuses the text, saying why, and keeps the old value.
+#[test]
+fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /DA (/Helv 0 Tf 0 g) /V (Ada) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /DA (/Helv 16 Tf 0 g) /Rect [50 600 350 640] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let thai = "ชื่อ: บุญฤทธิ์ น้ำฎู";
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let err = set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap_err();
+        assert!(matches!(&err, FormError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err}");
+        assert_eq!(field(&fields(&doc), "name").value, ["Ada"]);
+        assert!(!need_appearances(&doc) && undrawn_fields(&doc).is_empty());
+        return;
+    }
+    set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "big", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "note", &FieldValue::Text(format!("น้ำฎู {thai}\nปั้น ฎู"))).unwrap();
+    let doc = reopen(&doc);
+    assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
+    let (lo, hi) = (pdfcraft_fonts::shaped_text::thai_reach("ฎู").unwrap()[0], pdfcraft_fonts::shaped_text::thai_reach("น้ำ").unwrap()[1]);
+    for (name, height) in [("name", 20.0), ("big", 40.0), ("note", 100.0)] {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        assert!(!ap.contains('?') && ap.contains("/PCTh1 ") && ap.contains("(: ) Tj"), "{ap}");
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap();
+        let font = fonts.get(b"PCTh1").and_then(|f| f.as_dict()).unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        assert!(String::from_utf8_lossy(&cmap.decoded().unwrap()).contains("<0E190E490E33>"), "น้ำ copies as typed");
+        // The size each line is drawn at, and where: every line's ink is inside the box.
+        let size: f64 = ap.split(" Tf").next().and_then(|s| s.rsplit(' ').next()).and_then(|s| s.parse().ok()).unwrap();
+        let ys: Vec<f64> = ap.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect();
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= height + 1e-3 && bottom + lo * size >= -1e-3, "{name}: {ys:?} at {size} in {height}");
+    }
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
@@ -1519,7 +1684,7 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
         fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
-            ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
+            ScriptResult { rc: true, value: "ran".into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
     let mut doc = one_page();
@@ -1776,6 +1941,59 @@ fn missing_fields_and_built_names_are_flagged() {
     assert_eq!(issues(&reopen(&doc)), expected(vec![MissingField { field: "gone".into() }]));
     let order = calculation_order(&doc, &fields(&doc));
     assert_eq!(order.fields[3].reads, ["qty"], "the names it does know are still read");
+}
+
+/// An order form's rows, as a public one lays them out: an editable drop-down quantity whose blank
+/// option, and starting value, is a single space, a prefilled price, the row's product and a total
+/// over the rows. A blank quantity is 0, so its row is 0; a quantity cleared to nothing on a row
+/// without a price leaves the product nothing to multiply, and it is 0 too, not 1.
+#[test]
+fn an_order_form_with_blank_drop_down_quantities_totals_only_the_chosen_rows() {
+    let tx = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [250 {y} 350 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let qty = |name: &str, y: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 393216 /T ({name}) /Opt [( ) (1) (2) (3)] /V ( ) /Rect [50 {y} 150 {}] /P 3 0 R >>",
+            y + 20
+        )
+    };
+    let prd = |row: u32| {
+        format!("/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"PRD\", new Array \\(\"QTY {row}\", \"price {row}\"\\)\\);) >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        qty("QTY 0", 700),
+        tx("price 0", 700, "/V (605)"),
+        tx("Total 0", 700, &format!("/V (0) {}", prd(0))),
+        qty("QTY 1", 660),
+        tx("price 1", 660, "/V (780)"),
+        tx("Total 1", 660, &format!("/V (0) {}", prd(1))),
+        qty("QTY 2", 620),
+        tx("price 2", 620, ""),
+        tx("Total 2", 620, &format!("/V (0) {}", prd(2))),
+        tx(
+            "Total",
+            580,
+            r#"/V (0) /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\("SUM", new Array \("Total 0", "Total 1", "Total 2"\)\);) >> >>"#,
+        ),
+    ];
+    let mut doc = document(&objs);
+    let totals = |doc: &Document| {
+        let all = fields(doc);
+        ["Total 0", "Total 1", "Total 2", "Total"].map(|n| field(&all, n).value.first().cloned().unwrap_or_default())
+    };
+    recalculate(&mut doc).unwrap();
+    assert_eq!(totals(&doc), ["0", "0", "0", "0"], "every quantity blank: a single space is worth 0");
+    set_value(&mut doc, "QTY 0", &FieldValue::Text("2".into())).unwrap();
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "only the chosen row");
+    set_value(&mut doc, "QTY 2", &FieldValue::Text(String::new())).unwrap();
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "a quantity cleared on a row without a price");
+    let doc = reopen(&doc);
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "kept across a save");
 }
 
 /// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
@@ -2273,6 +2491,332 @@ fn fields_sharing_a_name_take_the_same_value() {
     for f in agree {
         assert_eq!((f.value.as_slice(), f.widgets[0].state.as_deref()), (&["Yes".to_string()][..], Some("Yes")), "check box {}", f.obj.num);
     }
+}
+
+/// A radio group `Group1` whose two kids are fields of their own: each has `/T` (`kid_t`) and,
+/// with `parent`, a `/Parent` naming the group.
+fn radio_kids_with_names(kid_t: [&str; 2], parent: bool) -> Document {
+    let parent = if parent { " /Parent 4 0 R" } else { "" };
+    let kid = |t: &str, state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T ({t}){parent} /V /Off /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),             // 3
+        "<< /FT /Btn /Ff 49152 /T (Group1) /V /Choice2 /Kids [6 0 R 5 0 R] >>".into(), // 4
+        kid(kid_t[0], "Choice1", 50),                                               // 5
+        kid(kid_t[1], "Choice2", 100),                                              // 6
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 7
+    ];
+    document(&objs)
+}
+
+/// A field's fully qualified name is built from its own `/Parent` chain (ISO 32000-2 §12.7.4.2,
+/// Table 226): a kid with `/T` that a field's `/Kids` lists but that has no `/Parent` naming
+/// that field is named on its own, not under the field that lists it.
+#[test]
+fn a_named_kid_without_a_parent_keeps_its_own_name() {
+    let names = |doc: &Document| fields(doc).iter().map(|f| (f.name.clone(), f.obj.num)).collect::<Vec<_>>();
+    let same = radio_kids_with_names(["Group1", "Group1"], false);
+    assert_eq!(names(&same), [("Group1".to_string(), 6), ("Group1".to_string(), 5)]);
+    let other = radio_kids_with_names(["A", "B"], false);
+    assert_eq!(names(&other), [("B".to_string(), 6), ("A".to_string(), 5)]);
+    // With /Parent the kids are the group's children, as before.
+    let nested = radio_kids_with_names(["A", "B"], true);
+    assert_eq!(names(&nested), [("Group1.B".to_string(), 6), ("Group1.A".to_string(), 5)]);
+}
+
+/// Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2): a radio
+/// option that only a later one of them draws can be chosen by the name, and the others turn off.
+#[test]
+fn a_radio_option_of_any_field_sharing_the_name_can_be_chosen() {
+    for parent in [false, true] {
+        let name = if parent { "Group1.Group1" } else { "Group1" };
+        let mut doc = radio_kids_with_names(["Group1", "Group1"], parent);
+        for (choice, on, off) in [("Choice1", 5, 6), ("Choice2", 6, 5), ("Choice1", 5, 6)] {
+            set_value(&mut doc, name, &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("{name} = {choice}: {e}"));
+            doc = reopen(&doc);
+            let st = |n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+            assert_eq!((st(on), st(off)), (Some(choice.as_bytes().to_vec()), Some(b"Off".to_vec())), "{name} = {choice}");
+        }
+        let err = set_value(&mut doc, name, &FieldValue::Radio(Some("Choice3".into()))).unwrap_err();
+        assert!(err.to_string().contains("Choice3"), "{err}");
+    }
+}
+
+/// The same group as a broken save leaves it: the kids carry no `/P` (their page is found through
+/// the page's `/Annots`), and both are drawn on with values that disagree (`/V /Off` with
+/// `/AS /Choice1`, `/V /Choice2` with `/AS /Choice2`). Choosing by the name leaves exactly one
+/// button on, across a save, whichever option it is, and gives every field of the name the
+/// chosen value: both kids and the group listing them.
+#[test]
+fn a_radio_choice_by_the_name_turns_one_button_on_in_kids_without_a_page_that_disagree() {
+    let kid = |state: &str, v: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /V /{v} /AS /{state} /Rect [{x} 700 {} 715] /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Group1) /V /Choice2 /Kids [6 0 R 5 0 R] >>".into(),
+        kid("Choice1", "Off", 50),
+        kid("Choice2", "Choice2", 100),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let mut doc = document(&objs);
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Group1", "Group1"]);
+    assert!(all.iter().flat_map(|f| &f.widgets).all(|w| w.page == Some(0)), "found on the page without /P");
+    assert_eq!((st(&doc, 5), st(&doc, 6)), (Some(b"Choice1".to_vec()), Some(b"Choice2".to_vec())), "both drawn on as read");
+    for (choice, on, off) in [("Choice1", 5, 6), ("Choice2", 6, 5), ("Choice1", 5, 6)] {
+        set_value(&mut doc, "Group1", &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("Group1 = {choice}: {e}"));
+        doc = reopen(&doc);
+        assert_eq!((st(&doc, on), st(&doc, off)), (Some(choice.as_bytes().to_vec()), Some(b"Off".to_vec())), "Group1 = {choice}");
+        // Every field named Group1 has the same value (ISO 32000-2 §12.7.4.2): both kids and the
+        // field listing them, whose /V was a stale Choice2.
+        let v = |n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"V").map(<[u8]>::to_vec));
+        assert_eq!(
+            [v(4), v(5), v(6)],
+            [Some(choice.as_bytes().to_vec()), Some(choice.as_bytes().to_vec()), Some(choice.as_bytes().to_vec())],
+            "Group1 = {choice}"
+        );
+        let values: Vec<Vec<String>> = fields(&doc).into_iter().map(|f| f.value).collect();
+        assert_eq!(values, [vec![choice.to_string()], vec![choice.to_string()]], "Group1 = {choice}");
+    }
+}
+
+/// A radio group whose field dictionary is merged with a zero-area widget and also lists four
+/// widget kids, as some form exporters write it: field and widget may be merged only "when a field
+/// has only a single associated widget annotation" (ISO 32000-2 §12.7.4), so the kids are the
+/// buttons. Two such groups: each lists its four options, and choosing one by the name turns on
+/// exactly that button, across a save, and leaves the other group alone.
+#[test]
+fn a_field_merged_with_a_widget_that_lists_widget_kids_has_the_kids_as_buttons() {
+    const OPTIONS: [&str; 4] = ["Not#20Satisfied", "Somewhat", "Satisfied", "Very#20Satisfied"];
+    let group = |t: &str, first: u32| {
+        let kids: Vec<String> = (first..first + 4).map(|n| format!("{n} 0 R")).collect();
+        format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 0 0] /FT /Btn /Ff 49152 /Kids [{}] /V /Off /T ({t}) >>", kids.join(" "))
+    };
+    let kid = |parent: u32, i: usize, y: u32| {
+        let state = OPTIONS.get(i).copied().unwrap_or("X");
+        let x = 100 + 100 * u32::try_from(i).unwrap_or(0);
+        format!(
+            "<< /Type /Annot /Subtype /Widget /F 4 /FT /Btn /Ff 49152 /Parent {parent} 0 R /Rect [{x} {y} {} {}] /P 3 0 R /AS /Off /AP << /N << /{state} 14 0 R /Off 14 0 R >> >> >>",
+            x + 12,
+            y + 12
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>".into(), // 3
+        group("typeA15[0]", 6),                                                           // 4
+        group("typeA15[1]", 10),                                                          // 5
+    ];
+    objs.extend((0..4).map(|i| kid(4, i, 600))); // 6-9
+    objs.extend((0..4).map(|i| kid(5, i, 560))); // 10-13
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 14
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["typeA15[0]", "typeA15[1]"]);
+    let want: Vec<String> = ["Not Satisfied", "Somewhat", "Satisfied", "Very Satisfied"].map(String::from).to_vec();
+    for f in &all {
+        assert_eq!(f.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), want, "{}", f.name);
+        assert!(f.widgets.iter().all(|w| w.page == Some(0) && w.rect[2] > w.rect[0]), "{}: the kids, on the page", f.name);
+    }
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    for (name, choice, on) in [("typeA15[0]", "Satisfied", 8), ("typeA15[1]", "Very Satisfied", 13), ("typeA15[0]", "Not Satisfied", 6)] {
+        set_value(&mut doc, name, &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("{name} = {choice}: {e}"));
+        doc = reopen(&doc);
+        let first = if name == "typeA15[0]" { 6 } else { 10 };
+        for n in first..first + 4 {
+            let want = if n == on { choice.as_bytes().to_vec() } else { b"Off".to_vec() };
+            assert_eq!(st(&doc, n), Some(want), "{name} = {choice}: widget {n}");
+        }
+    }
+    assert_eq!(st(&doc, 13), Some(b"Very Satisfied".to_vec()), "the other group keeps its choice");
+    let values: Vec<Vec<String>> = fields(&doc).into_iter().map(|f| f.value).collect();
+    assert_eq!(values, [vec!["Not Satisfied".to_string()], vec!["Very Satisfied".to_string()]]);
+}
+
+/// Radio buttons named `2` listed straight in `/Fields`, some fields of their own (`/T (2)`, no
+/// `/Parent`) and some nameless widgets of an unlisted field `2` whose `/Kids` mix both: "A
+/// field's children in the hierarchy may also include widget annotations" (ISO 32000-2 §12.7.4).
+/// Every option is listed under the name `2`, and each, including the nameless widgets', can be
+/// chosen by the name, leaving exactly that button on across a save.
+#[test]
+fn nameless_widgets_of_an_unlisted_field_are_options_of_its_name() {
+    let named = |state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (2) /V /Off /AS /Off /Rect [{x} 700 {} 712] /P 3 0 R /AP << /N << /{state} 9 0 R /Off 9 0 R >> >> >>",
+            x + 12
+        )
+    };
+    let nameless = |state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /AS /Off /Rect [{x} 700 {} 712] /P 3 0 R /AP << /N << /{state} 9 0 R /Off 9 0 R >> >> >>",
+            x + 12
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),                   // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),                   // 3
+        "<< /FT /Btn /Ff 49152 /T (2) /Kids [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),                     // 4 unlisted
+        named("0", 50),                                                                               // 5
+        named("1", 100),                                                                              // 6
+        nameless("2", 150),                                                                           // 7
+        nameless("6", 200),                                                                           // 8
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                // 9
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert!(all.iter().all(|f| f.name == "2"), "{:?}", all.iter().map(|f| &f.name).collect::<Vec<_>>());
+    let mut options: Vec<String> = all.iter().flat_map(|f| &f.widgets).filter_map(|w| w.on_state.clone()).collect();
+    options.sort();
+    assert_eq!(options, ["0", "1", "2", "6"]);
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    for (choice, on) in [("6", 8), ("1", 6), ("2", 7), ("0", 5)] {
+        set_value(&mut doc, "2", &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("2 = {choice}: {e}"));
+        doc = reopen(&doc);
+        for n in 5..=8 {
+            let want = if n == on { choice.as_bytes().to_vec() } else { b"Off".to_vec() };
+            assert_eq!(st(&doc, n), Some(want), "2 = {choice}: widget {n}");
+        }
+    }
+}
+
+/// A kid with `/T` that a field's `/Kids` lists but whose `/Parent` names a different field is
+/// named up that field's chain (ISO 32000-2 §12.7.4.2), not under the field listing it.
+#[test]
+fn a_named_kid_whose_parent_is_another_field_is_named_under_it() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>".into(),                          // 4
+        "<< /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+        "<< /T (Other) /Kids [5 0 R] >>".into(),                                    // 6 unlisted
+    ];
+    let names: Vec<String> = fields(&document(&objs)).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["Other.k"]);
+}
+
+/// A `/Parent` naming an object that is only a reference to the parent field is followed to it,
+/// as document inspection follows it, so both name the kid the same.
+#[test]
+fn a_parent_given_through_an_object_that_is_a_reference_names_the_kid() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>".into(),                          // 4
+        "<< /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+        "7 0 R".into(),                                                             // 6
+        "<< /T (Other) /Kids [5 0 R] >>".into(),                                    // 7
+    ];
+    let names: Vec<String> = fields(&document(&objs)).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["Other.k"]);
+}
+
+/// The two kids of [`radio_kids_with_names`] (`Group1`, no `/Parent`), with the one drawing
+/// `Choice2` (6, read first) or the one drawing `Choice1` (5) read-only.
+fn radio_kids_one_read_only(read_only: u32) -> Document {
+    let kid = |n: u32, state: &str, x: u32| {
+        let ff = if n == read_only { 49153 } else { 49152 };
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff {ff} /T (Group1) /V /Off /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Group1) /Kids [6 0 R 5 0 R] >>".into(),
+        kid(5, "Choice1", 50),
+        kid(6, "Choice2", 100),
+        "<< /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    document(&objs)
+}
+
+/// A radio choice by the name reaches every radio field of that name (ISO 32000-2 §12.7.4.2), so
+/// it is refused when any of them is read-only: the first one, even when a later one draws the
+/// choice, or a later one, even when the first draws it. Nothing is written.
+#[test]
+fn a_radio_choice_by_the_name_is_refused_when_a_field_of_the_name_is_read_only() {
+    for (read_only, choice) in [(6, "Choice1"), (5, "Choice2")] {
+        let mut doc = radio_kids_one_read_only(read_only);
+        let state = |doc: &Document| {
+            [4, 5, 6].map(|n| {
+                doc.get(ObjRef { num: n, generation: 0 }).as_dict().map(|d| (d.name(b"V").map(<[u8]>::to_vec), d.name(b"AS").map(<[u8]>::to_vec)))
+            })
+        };
+        let before = state(&doc);
+        let err = set_value(&mut doc, "Group1", &FieldValue::Radio(Some(choice.into()))).unwrap_err();
+        assert!(matches!(err, FormError::ReadOnly(_)), "{read_only} read-only, {choice}: {err}");
+        assert_eq!(state(&doc), before, "{read_only} read-only, {choice}: nothing written");
+    }
+}
+
+/// A nameless widget listed in `/Fields` that the field before it already claimed is not read a
+/// second time as a nameless field with no buttons.
+#[test]
+fn a_listed_widget_its_parent_claimed_is_read_once() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                         // 3
+        "<< /FT /Tx /T (p) /Kids [5 0 R] >>".into(),                                      // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 4 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+    ];
+    let all = fields(&document(&objs));
+    assert_eq!(all.iter().map(|f| (f.name.as_str(), f.widgets.len())).collect::<Vec<_>>(), [("p", 1)]);
+}
+
+/// A nameless widget listed in `/Fields` whose `/Parent` doesn't list it in its `/Kids` is still
+/// read, as it was before such widgets were read through their parent.
+#[test]
+fn a_listed_widget_its_parent_omits_is_still_read() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (p) /Kids [] >>".into(),                                     // 4 unlisted
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 4 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+    ];
+    let all = fields(&document(&objs));
+    let widgets: Vec<u32> = all.iter().flat_map(|f| &f.widgets).map(|w| w.obj.num).collect();
+    assert_eq!(widgets, [5]);
+}
+
+/// A field merged with its widget whose `/Kids` holds a dictionary that isn't a widget keeps
+/// itself as its one widget: only widget kids replace it (ISO 32000-2 §12.7.4).
+#[test]
+fn a_merged_field_with_a_kid_that_is_not_a_widget_keeps_itself_as_widget() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),                   // 3
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (t) /Rect [50 700 150 715] /P 3 0 R /Kids [5 0 R] >>".into(), // 4
+        "<< /Foo 1 >>".into(),                                                      // 5
+    ];
+    let all = fields(&document(&objs));
+    let widgets: Vec<(u32, [f64; 4])> = all.iter().flat_map(|f| &f.widgets).map(|w| (w.obj.num, w.rect)).collect();
+    assert_eq!(widgets, [(4, [50.0, 700.0, 150.0, 715.0])]);
 }
 
 #[test]
@@ -2933,20 +3477,22 @@ fn recalc_chain_where_script_changes_checkbox() {
                 ScriptResult {
                     rc: true,
                     value: "calc1".into(),
+                    value_set: true,
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
                         read_only: None,
                         required: None,
                         display: None,
+                        rect: None,
                     }],
                     message: None,
                 }
             } else if script == "read_box" {
                 let box_val = fields.iter().find(|f| f.name == "agree").and_then(|f| f.value.first()).cloned().unwrap_or_default();
-                ScriptResult { rc: true, value: format!("box_was_{box_val}"), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: format!("box_was_{box_val}"), value_set: true, changes: Vec::new(), message: None }
             } else {
-                ScriptResult { rc: true, value: String::new(), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: String::new(), value_set: false, changes: Vec::new(), message: None }
             }
         }
     }
@@ -2965,6 +3511,61 @@ fn recalc_chain_where_script_changes_checkbox() {
     let all = fields(&doc);
     assert_eq!(field(&all, "agree").value, ["Yes"], "checkbox was set by script in recalc chain");
     assert_eq!(field(&all, "result").value, ["box_was_Yes"], "second recalc saw the normalized checkbox value");
+}
+
+/// A calculation returning a combo option's display text stores the option's export value in /V
+/// and selects it in /I, as choosing it does.
+#[test]
+fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "Canada"), pair("fr", "France")]))).unwrap();
+    set_field_script(&mut doc, "country", "calculate", Some("France")).unwrap();
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 1);
+    let dict = doc.get(obj).as_dict().cloned().unwrap();
+    assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+    assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    assert_eq!(field(&fields(&doc), "country").value, ["fr"]);
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 0, "the display text names the value it already has");
+}
+
+/// An export value names its own option even when an earlier option shows that text, whether a
+/// calculation or the user sets it.
+#[test]
+fn an_export_value_wins_over_an_earlier_options_display_text() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let mut objs = Vec::new();
+    for (name, y) in [("calculated", 10.0), ("chosen", 40.0)] {
+        let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+        add_field(&mut doc, 0, [10.0, y, 100.0, y + 20.0], &kind, Some(name)).unwrap();
+        let obj = field(&fields(&doc), name).obj;
+        doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "fr"), pair("fr", "France")]))).unwrap();
+        objs.push(obj);
+    }
+    set_field_script(&mut doc, "calculated", "calculate", Some("fr")).unwrap();
+    recalculate_with(&mut doc, &mut Pick).unwrap();
+    set_value(&mut doc, "chosen", &FieldValue::Choice(vec!["fr".into()])).unwrap();
+    for obj in objs {
+        let dict = doc.get(obj).as_dict().cloned().unwrap();
+        assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+        assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    }
 }
 
 #[test]
@@ -3334,6 +3935,97 @@ fn document_scripts_read_each_name_tree_node_once() {
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
 
+#[test]
+fn name_tree_nodes_sharing_one_long_kids_array_queue_it_a_bounded_number_of_times() {
+    // 10,000 nodes share one /Kids array of 210,001 entries: the leaf, every node, and the leaf
+    // 200,000 times more. Queuing that array once per node would hold two billion entries.
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    let action = doc.add(dict(vec![
+        (b"S", Object::Name(b"JavaScript".to_vec())),
+        (b"JS", Object::String(pdfcraft_cos::PdfString::literal("var ready = true;"))),
+    ]));
+    let leaf = doc.add(dict(vec![(b"Names", Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal("init")), Object::Ref(action)]))]));
+    let kids = doc.add(Object::Null);
+    let nodes: Vec<Object> = (0..10_000).map(|_| Object::Ref(doc.add(dict(vec![(b"Kids", Object::Ref(kids))])))).collect();
+    let mut shared = vec![Object::Ref(leaf); 200_000];
+    shared.extend(nodes);
+    shared.push(Object::Ref(leaf));
+    doc.set(kids, Object::Array(shared));
+    let catalog = doc.add(dict(vec![
+        (b"Type", Object::Name(b"Catalog".to_vec())),
+        (b"Names", dict(vec![(b"JavaScript", dict(vec![(b"Kids", Object::Ref(kids))]))])),
+    ]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
+}
+
+#[test]
+fn a_direct_object_in_a_shared_kids_array_is_not_copied_for_every_node() {
+    // 1,000 nodes share one /Kids array that also holds a direct dictionary with a 2 MiB
+    // string. Queued with every node's kids, it would be copied 1,000 times (2 GiB) while the
+    // entry count stayed under its limit. Kids are references, so it is skipped.
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    let action = doc.add(dict(vec![
+        (b"S", Object::Name(b"JavaScript".to_vec())),
+        (b"JS", Object::String(pdfcraft_cos::PdfString::literal("var ready = true;"))),
+    ]));
+    let leaf = doc.add(dict(vec![(b"Names", Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal("init")), Object::Ref(action)]))]));
+    let kids = doc.add(Object::Null);
+    let big = dict(vec![(b"Pad", Object::String(pdfcraft_cos::PdfString::literal("x".repeat(2 << 20))))]);
+    let mut shared = vec![big];
+    shared.extend((0..1_000).map(|_| Object::Ref(doc.add(dict(vec![(b"Kids", Object::Ref(kids))])))));
+    shared.push(Object::Ref(leaf));
+    doc.set(kids, Object::Array(shared));
+    let catalog = doc.add(dict(vec![
+        (b"Type", Object::Name(b"Catalog".to_vec())),
+        (b"Names", dict(vec![(b"JavaScript", dict(vec![(b"Kids", Object::Ref(kids))]))])),
+    ]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
+}
+
+#[test]
+fn a_name_tree_node_listed_under_many_generations_is_read_once() {
+    // `Document::get` finds a node by object number alone, so `4 0 R` and `4 1 R` are one node.
+    // The root lists one under 10,000 generations: read for each, it would list its script
+    // 10,000 times and use up the walk's 10,000 visits before the node listed after it.
+    let kids: Vec<String> = (0..10_000).map(|g| format!("4 {g} R")).collect();
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript 3 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Kids [{} 5 0 R] >>", kids.join(" ")),
+        "<< /Names [(a) 6 0 R] >>".into(),
+        "<< /Names [(b) 6 0 R] >>".into(),
+        "<< /S /JavaScript /JS (var ready = true;) >>".into(),
+    ]);
+    let scripts = document_scripts_named(&doc);
+    assert_eq!(scripts.len(), 2, "{} scripts", scripts.len());
+    let js = "var ready = true;".to_string();
+    assert_eq!(scripts, [("a".to_string(), js.clone()), ("b".to_string(), js)]);
+}
+
+#[test]
+fn name_tree_nodes_sharing_one_names_array_list_its_scripts_once() {
+    // 9,999 nodes share one /Names array. Read for every node, its scripts would be listed 9,999
+    // times: ten million scripts and 1.3 GB when it names 1,000.
+    let nodes: Vec<String> = (0..9_999).map(|i| format!("{} 0 R", i + 6)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript 3 0 R >> >>".to_string(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Kids [{}] >>", nodes.join(" ")),
+        "[(a) 5 0 R (b) 5 0 R]".into(),
+        "<< /S /JavaScript /JS (var ready = true;) >>".into(),
+    ];
+    objs.extend(nodes.iter().map(|_| "<< /Names 4 0 R >>".to_string()));
+    let doc = document(&objs);
+    let scripts = document_scripts_named(&doc);
+    assert_eq!(scripts.len(), 2, "{} scripts", scripts.len());
+    let js = "var ready = true;".to_string();
+    assert_eq!(scripts, [("a".to_string(), js.clone()), ("b".to_string(), js)]);
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).
@@ -3393,6 +4085,55 @@ fn without_need_appearances_only_missing_appearances_are_drawn() {
     assert!(ap(&copy, &field(&all, "f").widgets[0]).contains("(Green) Tj"));
     assert!(ap(&copy, &field(&all, "g").widgets[0]).contains("(Value G) Tj"), "a down appearance alone is no normal one");
     assert!(with_field_appearances(&copy).is_none(), "every widget has one now");
+}
+
+/// ISO 32000-2 12.5.5 and Table 170: a normal appearance is a stream or a subdictionary of
+/// streams chosen by `/AS`. A form XObject's dictionary without its stream (`x`: object 6 says
+/// it is one, but 7.5.7 keeps streams out of object streams, so a writer that packed it there
+/// lost the data), a subdictionary with no `/AS` (`s`), or a state whose entry is no stream
+/// (`u`, the push button `p`, the check box `k`) draws nothing, so these are drawn like widgets
+/// without one: `x` with its `/MK /BC` border at its `/BS /W` of 3, given by reference. A
+/// subdictionary whose `/AS` names a stream (`t`) is the file's own.
+fn appearances_without_a_stream() -> Document {
+    let widget = |n: &str, rest: &str| format!("<< /Type /Annot /Subtype /Widget /T ({n}) /F 4 /P 3 0 R {rest} >>");
+    let tx = "/FT /Tx /V (v) /DA (/Helv 12 Tf 0 g)";
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        "<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 106 14] >>".into(), // 6
+        "<< /W 3 >>".into(),
+        "<< /Length 18 >>\nstream\nBT (old T) Tj ET\nendstream".into(), // 8
+        widget("x", &format!("{tx} /Rect [54 705 160 719] /MK << /BC [0 0 0] /BG [0.88 0.88 0.88] >> /BS 7 0 R /AP << /N 6 0 R >>")),
+        widget("s", &format!("{tx} /Rect [54 680 160 694] /AP << /N << /On 8 0 R >> >>")), // 10
+        widget("t", &format!("{tx} /Rect [54 655 160 669] /AS /On /AP << /N << /On 8 0 R >> >>")),
+        widget("u", &format!("{tx} /Rect [54 630 160 644] /AS /On /AP << /N << /On 6 0 R >> >>")),
+        widget("p", "/FT /Btn /Ff 65536 /DA (/Helv 12 Tf 0 g) /MK << /CA (Go) /BC [0 0 0] >> /Rect [54 600 160 620] /AP << /N 6 0 R >>"),
+        widget(
+            "k",
+            "/FT /Btn /V /Yes /AS /Yes /DA (/ZaDb 0 Tf 0 g) /MK << /CA (4) /BC [0 0 0] >> /Rect [200 700 224 724] /AP << /N << /Yes 6 0 R /Off 8 0 R >> >>",
+        ),
+    ])
+}
+
+#[test]
+fn normal_appearances_that_give_no_stream_are_drawn() {
+    let doc = appearances_without_a_stream();
+    let copy = with_field_appearances(&doc).expect("x, s, u, p and k draw nothing of their own");
+    let all = fields(&copy);
+    let x = ap(&copy, &field(&all, "x").widgets[0]);
+    assert!(x.contains("0.88 0.88 0.88 rg\n0 0 106 14 re f") && x.contains("0 0 0 RG\n3 w\n1.5 1.5 103 11 re S"), "{x}");
+    assert!(x.contains("(v) Tj"), "{x}");
+    for name in ["s", "u"] {
+        assert!(ap(&copy, &field(&all, name).widgets[0]).contains("(v) Tj"), "{name}");
+    }
+    assert!(ap(&copy, &field(&all, "p").widgets[0]).contains("(Go) Tj"));
+    assert!(state_ap(&copy, &field(&all, "k").widgets[0], "Yes").contains("(4) Tj"));
+    let t = |d: &Document| d.get(field(&fields(d), "t").widgets[0].obj).as_dict().and_then(|w| w.get(b"AP").cloned());
+    assert_eq!(t(&copy), t(&doc), "a state with a stream is the file's own");
+    assert!(with_field_appearances(&copy).is_none(), "every widget has a stream now");
 }
 
 /// #3470: refreshing the display copy redraws only the widgets whose inputs changed. Typing in
@@ -3573,6 +4314,149 @@ fn repeated_script_references_share_one_decode_budget() {
     assert_eq!(all.len(), 300);
     let calculate: usize = all.iter().filter_map(|f| f.actions.scripts.calculate.as_ref()).map(String::len).sum();
     assert!(calculate > 0 && calculate <= limit, "{calculate} bytes of field scripts");
+}
+
+/// An unfiltered stream of `body`, as an object of [`document`].
+fn raw_stream(body: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len())
+}
+
+/// 300 fields whose value is one 1 MiB text stream: a reading of the form decodes their values
+/// within one budget, not 300 MiB.
+#[test]
+fn repeated_value_streams_share_one_decode_budget() {
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"x".repeat(1 << 20))];
+    objs.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), 300);
+    let read: usize = all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum();
+    assert!(read > 0 && read <= crate::read::MAX_VALUE_BYTES, "{read} bytes of values");
+    assert_eq!(all[0].value, ["x".repeat(1 << 20)], "the first field still reads its value");
+}
+
+/// Clear form leaves a field as it is when its default is a stream the value budget didn't reach:
+/// 70 fields typed in, whose default is one 1 MiB text stream, keep a value, the first ones
+/// their default and the rest what was typed, none of them emptied.
+#[test]
+fn clear_form_keeps_a_field_whose_default_was_not_read() {
+    let n = 70;
+    let fields_list: String = (0..n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"d".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V (typed) /DV 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let values: Vec<String> = (0..n)
+        .map(|i| {
+            let field = doc.get(ObjRef::new(i as u32 + 3, 0));
+            field.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_default()
+        })
+        .collect();
+    assert!(values.iter().all(|v| !v.is_empty()), "no field is emptied");
+    assert_eq!(values[0], "d".repeat(1 << 20), "the first field goes back to its default");
+    assert_eq!(values[n - 1], "typed", "the last field, whose default wasn't read, keeps its value");
+    // A value the reading didn't decode, with no default, is cleared: it isn't known to be empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"v".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let last = doc.get(ObjRef::new(n as u32 + 2, 0));
+    assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
+}
+
+/// Renaming a field that 300 calculations read through one shared Calculate action, whose script
+/// is a 256 KiB stream, decodes and rewrites that action once, in place: every calculation reads
+/// the new name, and nothing is decoded or written 300 times.
+#[test]
+fn a_rename_rewrites_a_shared_calculation_once() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let js = format!("AFSimple_Calculate(\"SUM\", new Array (\"a\"));{}", " ".repeat(256 << 10));
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        raw_stream(&js),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C 6 0 R >> >>")));
+    let mut doc = document(&objs);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let action = ObjRef::new(6, 0);
+    let renamed = (8..8 + n).all(|i| {
+        let field = doc.get(ObjRef::new(i as u32, 0));
+        field.as_dict().and_then(|d| d.get(b"AA")).and_then(|aa| aa.as_dict()?.get(b"C")?.as_ref()) == Some(action)
+    });
+    assert!(renamed, "every calculation still names the one shared action");
+    let js = doc.get(action).as_dict().and_then(|d| d.get(b"JS")?.as_string().map(PdfString::to_text)).unwrap_or_default();
+    assert!(js.contains("\"qty\"") && !js.contains("\"a\""), "the shared action reads the new name");
+    assert!(js.len() <= MAX_SCRIPT_BYTES, "{} bytes written once", js.len());
+}
+
+/// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
+/// pieces past it read as empty, so their rectangles aren't found.
+#[test]
+fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
+    let piece = format!("%{}\n10 10 20 20 re S\n", "x".repeat(1 << 20));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents [{}] >>", "4 0 R ".repeat(10)),
+        raw_stream(&piece),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes.len(), 10, "one page's allowance reads them all");
+    let mut budget = DecodeBudget::new(4 << 20, 0);
+    let boxes = crate::detect::shapes_within(&doc, 0, &mut budget).boxes.len();
+    assert!((1..=4).contains(&boxes), "{boxes} rectangles read within 4 MiB");
+    assert_eq!(budget.remaining(), 0, "the budget is spent");
+}
+
+/// Field detection keeps at most 256 saved graphics states, and each `Q` still restores its own
+/// `q` past that: a scale set 300 saves deep is gone once they are all restored.
+#[test]
+fn page_shapes_restore_saves_past_the_cap() {
+    let content = format!("{} 2 0 0 2 0 0 cm {} 10 10 20 20 re S", "q ".repeat(300), "Q ".repeat(300));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[10.0, 10.0, 30.0, 30.0]]);
+    // A scale set past the cap and closed by its own `Q` leaves a matrix that can't be known until
+    // the last lost save closes: what is drawn in between isn't reported at the scaled place.
+    let content = format!("{} q 2 0 0 2 0 0 cm Q 10 10 20 20 re S {} 40 40 10 10 re S", "q ".repeat(257), "Q ".repeat(257));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[40.0, 40.0, 50.0, 50.0]]);
+}
+
+/// The PDF/A declaration is read from metadata each filter stage of which decodes within
+/// [`crate::appearances::MAX_XMP_BYTES`], as preflight decodes it: a field drawn with characters its
+/// font lacks decodes no more than that a stage.
+#[test]
+fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
+    let declared = |xmp: String| declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]));
+    let pdfa = |padding: usize| format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
+    assert!(declared(pdfa(1 << 20)));
+    assert!(!declared(pdfa(crate::appearances::MAX_XMP_BYTES)), "metadata past the cap declares nothing");
+    assert!(!declared("<x:xmpmeta><dc:title>pdfaid</dc:title></x:xmpmeta>".into()), "metadata without pdfaid:part declares nothing");
+    // 3.5 MiB stored as hex, then Flate: its stages decode 7 and 3.5 MiB, each within the cap.
+    let xmp = pdfa(7 << 19);
+    let hex: Vec<u8> = xmp.bytes().flat_map(|b| [b"0123456789ABCDEF"[usize::from(b >> 4)], b"0123456789ABCDEF"[usize::from(b & 15)]]).collect();
+    let mut stream = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &hex);
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+    let mut doc = Document::new_empty();
+    let metadata = doc.add(Object::Stream(stream));
+    let catalog = doc.add(Object::Dict([(b"Metadata".to_vec(), Object::Ref(metadata))].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight decodes it");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
@@ -5345,6 +6229,29 @@ fn sorting_keeps_which_of_two_items_with_one_export_value_is_selected() {
 }
 
 #[test]
+fn clearing_a_kids_length_limit_does_not_bring_back_its_parents() {
+    let mut doc = fixture();
+    let city = field(&fields(&doc), "address.city").clone();
+    let parent = doc.get(city.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| d.set(b"MaxLen".to_vec(), Object::Int(3))).unwrap();
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(Some(8)), ..FieldProps::default() }).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").max_len, Some(8));
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let f = field(&fields(&doc), "address.city").clone();
+    assert_eq!(f.max_len, None, "no limit, not the parent's 3");
+    let own = doc.get(f.obj).as_dict().and_then(|d| d.get(b"MaxLen")).and_then(Object::as_int);
+    assert_eq!(own, Some(0), "the kid holds an explicit unlimited of its own");
+    set_value(&mut doc, "address.city", &FieldValue::Text("Absalom".into())).unwrap();
+    assert_eq!(field(&fields(&reopen(&doc)), "address.city").value, ["Absalom"], "not cut to 3 characters");
+    // Without a parent limit, clearing still removes the key.
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(Some(4)), ..FieldProps::default() }).unwrap();
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let name = field(&fields(&doc), "name").clone();
+    assert!(doc.get(name.obj).as_dict().unwrap().get(b"MaxLen").is_none());
+}
+
+#[test]
 fn clearing_a_kids_default_does_not_bring_back_its_parents() {
     let mut doc = fixture();
     let all = fields(&doc);
@@ -5484,4 +6391,36 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+/// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
+/// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
+#[test]
+fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
+    let widget = |name: &str, mk: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({name}) /Rect [50 700 70 720] /P 3 0 R /MK << {mk} >> /BS << /W 1 /S /S >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] >>".into(),
+        widget("cmyk", "/BG [0 0 1 null] /BC [1 0 0 null]"),
+        widget("rgb", "/BG [0 0 1] /BC [1 0 0]"),
+    ];
+    let mut doc = document(&objs);
+    let off = |doc: &mut Document, name: &str| {
+        redraw_field(doc, name).unwrap();
+        let all = fields(doc);
+        let w = field(&all, name).widgets[0].obj;
+        let wd = doc.get(w).as_dict().cloned().unwrap();
+        let n = doc.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(b"Off").expect("an Off appearance");
+        let Object::Stream(s) = &*doc.get(r) else { panic!("Off is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let cmyk = off(&mut doc, "cmyk");
+    assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
+    let rgb = off(&mut doc, "rgb");
+    assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
 }

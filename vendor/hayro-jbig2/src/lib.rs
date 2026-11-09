@@ -75,7 +75,10 @@ pub use error::{
     SegmentError, SymbolError, TemplateError,
 };
 
-use crate::file::{SegmentCount, parse_segments_sequential};
+use crate::file::{
+    FileOrganization, SegmentCount, after_file_header, parse_segments_random_access,
+    parse_segments_sequential,
+};
 use bitmap::Bitmap;
 use decode::CombinationOperator;
 use decode::generic;
@@ -117,7 +120,9 @@ impl<'a> Image<'a> {
     /// Parse an embedded JBIG2 image with optional global segments.
     ///
     /// The file is expected to use the embedded organization defined in
-    /// Annex D.3.
+    /// Annex D.3. PdfCraft patch (17): data that starts with a file header (D.4)
+    /// is read past it, in the organization it declares, as Acrobat and PDFBox
+    /// draw such streams; its segments still count together with the globals'.
     pub fn new_embedded(data: &'a [u8], globals: Option<&'a [u8]>) -> Result<Self> {
         let mut segments = Vec::new();
         let mut count = SegmentCount::default();
@@ -126,8 +131,18 @@ impl<'a> Image<'a> {
             parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
         };
 
-        let mut reader = Reader::new(data);
-        parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+        match after_file_header(data)? {
+            Some((mut reader, FileOrganization::RandomAccess)) => {
+                parse_segments_random_access(&mut reader, &mut segments, &mut count)?;
+            }
+            Some((mut reader, FileOrganization::Sequential)) => {
+                parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+            }
+            None => {
+                let mut reader = Reader::new(data);
+                parse_segments_sequential(&mut reader, &mut segments, &mut count)?;
+            }
+        }
 
         segments.sort_by_key(|seg| seg.header.segment_number);
 
@@ -1034,6 +1049,49 @@ mod tests {
         };
         assert!(!refused(&half), "2^20 segments are allowed");
         assert!(refused(&more), "one more isn't");
+    }
+
+    /// PdfCraft patch: a refinement whose reference is offset right of it reads the reference from
+    /// its first column, where it read the first 32 as 0. So that a context read wrong changes what
+    /// decodes, the refinement is large, and its picture comes from the hash it was coded from: a
+    /// 104 × 12 text instance refined from a 100 × 12 symbol 2 right of it.
+    #[test]
+    fn a_refinement_reads_a_reference_right_of_it_from_its_first_column() {
+        #[derive(Default)]
+        struct Rows(Vec<Vec<u8>>, Vec<u8>);
+        impl Decoder for Rows {
+            fn push_pixel(&mut self, black: bool) {
+                self.1.push(u8::from(black));
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                for _ in 0..8 * chunks {
+                    self.push_pixel(black);
+                }
+            }
+            fn next_line(&mut self) {
+                self.0.push(core::mem::take(&mut self.1));
+            }
+        }
+        fn bit(seed: u32, x: u32, y: u32) -> u8 {
+            let mut h = x.wrapping_mul(0x9E37_79B1).wrapping_add(y.wrapping_mul(0x85EB_CA77)).wrapping_add(seed.wrapping_mul(0xC2B2_AE3D));
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x2C1B_3C6D);
+            h ^= h >> 12;
+            h = h.wrapping_mul(0x297A_2D39);
+            h ^= h >> 15;
+            ((h >> 7) & 1) as u8
+        }
+        // About one pixel in eight: where a refinement differs from its reference.
+        let flipped = |seed: u32, x: u32, y: u32| bit(seed, x, y) & bit(seed + 1, x, y) & bit(seed + 2, x, y);
+        // A symbol of bit(2, ..), and a text instance refined from it, 4 wider with RDX 0.
+        const TEXT: &str = "0000000030000100000013000000680000000c000000000000000042000000000001000001000000b1000003fffdff02fefefe00000001000000013f525ad7118f669a303f1b11efa5210e9765b834b1831c650f3a3d325dbd7317379ea4fb573b09a20c362f065d8f9301e74cbbc50c69910641c0e0eea7c2fd1e831ca1459a943be55ed8e074b426ad7ff1e8d8ff6f1aa44684de5da4b4c3483911604412e00e96a0db6ec7103feb2bc4301ae98d3f9c23078ae72dc46f76e9dfea209d39187f1194f7b9285cd6e7b2dc7abb5def43ff0abe2df554fc55ffac0000000206200101000000af000000680000000c0000000000000000040012ffffffff00000001a96b5febebec5a68693b51f5db25ddf176d4aae89904a71d1690f12888e10b038db723ac59941f76c2844b739ce524d9563f4005e1edbabf2e323e8e9ac1a3b9060587c3010e7d6bcf90c00dbf9000a2f17b1d9b598e01b9158dc16a63f4388a6f647b99dc7118aa09e08d59fba1bc24e3a0f1ebb0cae636b6bedbb65b01945228d3e5d2980a0ad6290c13d2f34f5c861415ffac";
+        let picture: Vec<Vec<u8>> = (0..12)
+            .map(|y| (0..104).map(|x| (if (2..102).contains(&x) { bit(2, x - 2, y) } else { 0 }) ^ flipped(20, x, y)).collect())
+            .collect();
+        let stream: Vec<u8> = (0..TEXT.len() / 2).map(|i| u8::from_str_radix(&TEXT[i * 2..i * 2 + 2], 16).unwrap()).collect();
+        let mut rows = Rows::default();
+        Image::new_embedded(&stream, None).unwrap().decode(&mut rows).unwrap();
+        assert_eq!(rows.0, picture);
     }
 
     /// A dictionary being decoded has what the page may still hold, not all of it: refused only
