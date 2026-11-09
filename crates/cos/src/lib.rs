@@ -25,7 +25,7 @@ mod writer;
 pub use budget::{DecodeBudget, ImageBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS, MAX_REDACTED_IMAGE_PIXELS};
 pub use bytes::Bytes;
 pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
-pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream};
+pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream, TextChars};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
