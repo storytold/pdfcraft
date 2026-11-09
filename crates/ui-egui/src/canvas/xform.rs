@@ -6,6 +6,12 @@ impl DocView {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| xf.rect)
     }
 
+    /// Whether the page full screen shows is wholly in view: no transition playing or waiting for
+    /// its raster, so a click on it reaches what is on it. Always true outside full screen.
+    pub fn presentation_settled(&self) -> bool {
+        self.presentation.is_none() || self.presenter.settled_on(self.current)
+    }
+
     /// The document area on screen.
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_screen
