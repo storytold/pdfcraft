@@ -2969,6 +2969,15 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
         {"input":"a.pdf","output":"a-numbered.pdf"}
     ]);
     let mut a = auto(&dir);
+    for invalid_start in [json!(0), json!(-1), json!(1.5), json!("17")] {
+        let error = err(&mut a, "doc_bates_multi", json!({"files":files,"start_number":invalid_start}));
+        assert!(matches!(error, ToolError::InvalidArgs(_)));
+    }
+    let unicode = ok(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"é".repeat(65),"dry_run":true}));
+    assert_eq!(unicode["files"].as_array().unwrap().len(), 2);
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"CASE>>"})), ToolError::InvalidArgs(_)));
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"suffix":"A>>B"})), ToolError::InvalidArgs(_)));
+
     let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
     assert_eq!(allocation["files"][0]["first"], 50);
     assert_eq!(allocation["files"][0]["last"], 51);
@@ -2987,15 +2996,24 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
     let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
     assert!(overflow.to_string().contains("overflows"));
     assert!(!dir.join("overflow.pdf").exists());
-    // A range may end at u64::MAX itself.
-    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
-    assert_eq!(at_max["files"][0]["last"], u64::MAX);
-    for bad in
-        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+    let max_number =
+        ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"one.pdf","output":"one-numbered.pdf"}],"start_number":u64::MAX,"dry_run":true}));
+    assert_eq!(max_number["files"][0]["first"], u64::MAX);
+    assert_eq!(max_number["files"][0]["last"], u64::MAX);
+
+    #[cfg(windows)]
     {
-        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
-        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+        let collision = err(
+            &mut a,
+            "doc_bates_multi",
+            json!({"files":[
+                {"input":"b.pdf","output":"Case.pdf"},
+                {"input":"a.pdf","output":"CASE.pdf"}
+            ]}),
+        );
+        assert!(collision.to_string().contains("same output path"));
+        assert!(!dir.join("Case.pdf").exists());
     }
 
     use pdfcraft_engine::{Changes, Edit, Protection, Session};
