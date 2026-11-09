@@ -9155,6 +9155,129 @@ fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selectio
     assert!(h.query_by_label("Rotate view clockwise").is_some());
 }
 
+/// A turned picture is its shape, not its bounds: a click in a corner of its bounds, off the
+/// picture and its crop box, is a click away that applies the crop (#6422 review).
+#[test]
+fn a_click_beside_a_turned_picture_in_its_bounds_applies_its_crop() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    let edit = |change| pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change };
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh])));
+    h.run_steps(4);
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::RotateBy(45.0)));
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let c = h.state().views[0].page_screen_rect(0).expect("on screen").center();
+    click_at(&mut h, c);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([mx - 5.0, my - 5.0, mx + 5.0, my + 5.0]));
+    h.run_steps(2);
+
+    let img = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let b = pdfcraft_ui_egui::canvas::image_screen_rect(&img, &xf, &h.state().session.get(id).unwrap().info, 0);
+    // The bounds' top-left corner lies outside the 45° diamond.
+    click_at(&mut h, b.left_top() + egui::vec2(2.0, 2.0));
+    assert!(h.state().views[0].image_selection.is_none(), "a click off the turned picture lets it go");
+    assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].visible_rect, img.visible_rect, "the crop is applied");
+}
+
+/// A picture alone in the middle of a page, empty page around it (#6422).
+fn picture_with_room_around() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let mut image = Dict::new();
+    image.set(b"Type".to_vec(), Object::name("XObject"));
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let image = doc.add(Object::Stream(Stream::flate(image, &[60, 110, 200])));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 100 0 0 80 50 150 cm /Im0 Do Q")));
+    let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let mut xo = Dict::new();
+    xo.set(b"Im0".to_vec(), Object::Ref(image));
+    resources.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+    })
+    .unwrap();
+    write_incremental(&doc, &Default::default()).unwrap()
+}
+
+/// In crop mode a click on the empty page applies the crop and lets the picture go; a click on the
+/// part being cropped away keeps crop mode (#6422).
+#[test]
+fn a_click_away_from_the_picture_applies_its_crop() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("room.pdf", None, picture_with_room_around()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    let doc_id = h.state().views[0].id;
+    let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+
+    click_at(&mut h, at(100.0, 190.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.index == 0), "the picture is selected");
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+    h.run_steps(2);
+    let keep = [full[0], full[1], full[0] + 60.0, full[3]];
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = keep;
+    h.run_steps(2);
+
+    // On the dimmed part of the picture: still cropping, nothing applied.
+    click_at(&mut h, at(135.0, 190.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a click on the picture keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // On a handle, where it reaches past the picture's frame: still cropping.
+    let handle = at(50.0, 190.0) - egui::vec2(6.0, 0.0);
+    click_at(&mut h, handle);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a click on a handle keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // A click pressed on the picture and let go just past its frame: still cropping.
+    let edge = at(150.0, 190.0);
+    h.hover_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drag_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.hover_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drop_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a press on the picture keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // On the empty page: applied, and the picture is let go.
+    click_at(&mut h, at(100.0, 60.0));
+    assert!(h.state().views[0].image_selection.is_none(), "a click away lets the picture go");
+    let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
+    assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "the crop is applied: {visible:?}");
+}
+
 #[test]
 fn crop_action_pills_interactive_and_apply_cancel_reset() {
     let mut png = Vec::new();
@@ -11050,5 +11173,44 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
             preview.iter().zip(committed).all(|(a, b)| a.distance(b) < 1.0),
             "preview jumped after commit/save: clip={clip:?} rotation={rotation}: {preview:?} != {committed:?}"
         );
+    }
+}
+
+#[test]
+fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
+    // Shift-, Ctrl- or Command-clicking away is still a click away: it applies the crop and lets
+    // the picture go, rather than taking the picture into a group and dropping its crop (#6422
+    // review).
+    for mods in [egui::Modifiers::SHIFT, egui::Modifiers::COMMAND] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("room.pdf", None, picture_with_room_around()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+        h.run_steps(3);
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        let doc_id = h.state().views[0].id;
+        let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+        click_at(&mut h, at(100.0, 190.0));
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+        h.run_steps(2);
+        let keep = [full[0], full[1], full[0] + 60.0, full[3]];
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = keep;
+        h.run_steps(2);
+        let p = at(100.0, 60.0);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: mods });
+        h.run_steps(4);
+        assert!(h.state().views[0].image_selection.is_none(), "{mods:?}: the picture is let go");
+        let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
+        assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
     }
 }

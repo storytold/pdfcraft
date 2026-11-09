@@ -265,6 +265,228 @@ fn type3_descriptor_names_the_font_without_changing_its_metrics() {
     assert_eq!(Metrics::from_dict(&doc, &f).base_font, "ExplicitName", "an explicit BaseFont takes precedence");
 }
 
+/// A Type 3 font with `matrix`, `bbox` and one glyph description per entry of `procs`.
+fn type3(doc: &mut Document, matrix: [f64; 6], bbox: [i64; 4], procs: &[&str]) -> Dict {
+    let mut charprocs = Dict::new();
+    for (i, proc) in procs.iter().enumerate() {
+        let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), proc.as_bytes())));
+        charprocs.set(format!("g{i}").into_bytes(), Object::Ref(glyph));
+    }
+    font(
+        doc,
+        vec![
+            ("Subtype", Object::name("Type3")),
+            ("FontMatrix", Object::Array(matrix.iter().map(|&v| Object::Real(v)).collect())),
+            ("FontBBox", Object::Array(bbox.iter().map(|&v| Object::Int(v)).collect())),
+            ("CharProcs", Object::Dict(charprocs)),
+        ],
+    )
+}
+
+/// ISO 32000-2 §9.6.4: a bitmap font whose `/FontBBox` is all zero (no assumption about glyph
+/// sizes) is as high as the boxes its glyphs declare with `d1`, not a fixed 0.6 of the size.
+#[test]
+fn a_type3_font_is_as_high_as_its_d1_glyph_boxes() {
+    let mut doc = Document::new_empty();
+    let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let f = type3(&mut doc, unit, [0, 0, 0, 0], &["100 0 0 0 100 100 d1\nq 100 0 0 100 0 0 cm BI /W 1 /H 1 /IM true ID \x00 EI Q"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (100.0, 0.0));
+    // Shown at `0.12 Tf`, the glyph is 12 points high.
+    assert!((m.ascent * 0.12 - 12.0).abs() < 1e-9);
+
+    // The union of every glyph's box, leading comments and white space allowed; `d0` glyphs
+    // declare none, and a non-numeric operand isn't a box.
+    let f = type3(&mut doc, unit, [0, 0, 0, 0], &["% c\n 50 0 0 -20 40 60 d1", "60 0 d0", "60 0 0 -30 40 x d1", "60 0 0 0 40 80 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (80.0, -20.0));
+
+    // A wrong but non-zero `/FontBBox` (one unit high) gives way to the glyphs.
+    let f = type3(&mut doc, unit, [0, 0, 1, 1], &["100 0 0 -10 100 90 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (90.0, -10.0));
+
+    // No `d1` anywhere: the `/FontBBox` still decides, scaled by the matrix.
+    let f = type3(&mut doc, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0], [0, -300, 1000, 900], &["600 0 d0"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 0.9).abs() < 1e-12 && (m.descent + 0.3).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+}
+
+/// Small glyphs keep their small box: there is no 0.5 em / 0.1 em minimum for `d1` boxes, which
+/// made a 58-point line of 0.15 em glyphs 35 points high. The shape of a scanned-text bitmap
+/// font: matrix 0.0042, `/FontBBox` all zero, `d1` boxes from -8 to 33 units.
+#[test]
+fn small_type3_glyphs_keep_their_d1_height() {
+    let mut doc = Document::new_empty();
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 19 9 33 d1", "26 0 2 -8 24 28 d1", "13 0 0 0 1 1 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && (m.descent + 8.0 * 0.0042).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+    // Glyphs that all sit above the baseline still reach down to it.
+    let f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 19 9 33 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && m.descent == 0.0, "{} {}", m.ascent, m.descent);
+}
+
+/// A font matrix that turns glyph space over (`[1 0 0 -1 0 0]`, drawn under a flipped text
+/// matrix) puts the top of the glyph box at text-space y -top: the box is as high as before,
+/// upside down, not clamped to a sliver.
+#[test]
+fn a_flipped_type3_font_matrix_keeps_the_glyph_height() {
+    let mut doc = Document::new_empty();
+    let flipped = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0];
+    let f = type3(&mut doc, flipped, [-4, -18, 51, 57], &["37 0 2 -1 34 38 d1", "42 0 2 -18 40 38 d1", "46 0 3 -1 42 57 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (18.0, -57.0));
+    let f = type3(&mut doc, flipped, [-4, -18, 51, 57], &[]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (18.0, -57.0), "the /FontBBox, turned over the same way");
+}
+
+/// Glyph descriptions are untrusted: unreadable ones, a box of infinities, a degenerate matrix
+/// and a font with more glyphs than are read all leave finite metrics.
+#[test]
+fn type3_glyph_boxes_are_read_within_bounds() {
+    let mut doc = Document::new_empty();
+    let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    for procs in [&["inf 0 0 -inf 1 inf d1"][..], &["d1"], &["1 2 3 d1"], &[""], &["1 0 0 0 1 0 d1"], &["1e308 0 -1e308 -1e308 1e308 1e308 d1"]] {
+        let f = type3(&mut doc, unit, [0, 0, 0, 0], procs);
+        let m = Metrics::from_dict(&doc, &f);
+        assert!(m.ascent > 0.0 && m.descent < 0.0, "{procs:?}");
+        assert!(m.ascent <= MAX_TYPE3_EXTENT && m.descent >= -MAX_TYPE3_EXTENT, "{procs:?}");
+    }
+    // A matrix with no y scale gives the box no height: the fallback metrics stand.
+    let f = type3(&mut doc, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0, 0, 0, 0], &["1 0 0 0 1 100 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (Metrics::fallback().ascent, Metrics::fallback().descent));
+    // Glyphs past the first MAX_TYPE3_GLYPHS are not read.
+    let mut procs = vec!["1 0 0 0 1 10 d1"; MAX_TYPE3_GLYPHS];
+    procs.push("1 0 0 0 1 1000 d1");
+    let f = type3(&mut doc, unit, [0, 0, 0, 0], &procs);
+    assert_eq!(Metrics::from_dict(&doc, &f).ascent, 10.0);
+}
+
+/// `/Differences` with the glyph names `names` from code 0, set on the Type 3 font `f`.
+fn with_differences(f: &mut Dict, names: &[String]) {
+    let mut items = vec![Object::Int(0)];
+    items.extend(names.iter().map(|n| Object::name(n)));
+    let mut enc = Dict::new();
+    enc.set(b"Differences".to_vec(), Object::Array(items));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
+}
+
+/// The glyph descriptions the encoding reaches are the ones read, since its `/Differences`
+/// "shall specify the complete character encoding" (ISO 32000-2 Table 110): a drawn glyph past
+/// the first [`MAX_TYPE3_GLYPHS`] descriptions still counts.
+#[test]
+fn type3_glyph_boxes_are_read_for_the_glyphs_the_encoding_reaches() {
+    let mut doc = Document::new_empty();
+    let mut procs = vec!["1 0 0 0 1 10 d1"; MAX_TYPE3_GLYPHS + 44];
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    with_differences(&mut f, &[format!("g{}", MAX_TYPE3_GLYPHS + 44), "g0".into()]);
+    assert_eq!(Metrics::from_dict(&doc, &f).ascent, 1000.0);
+}
+
+/// Byte limits on glyph descriptions: one larger than [`MAX_TYPE3_GLYPH_BYTES`] is skipped, its
+/// `d1` box unread, and the rest are read; once the font's [`MAX_TYPE3_FONT_BYTES`] run out,
+/// the boxes read so far may miss glyphs that are drawn, so a nonzero `/FontBBox` stands.
+#[test]
+fn type3_glyph_byte_limits_leave_honest_metrics() {
+    let mut doc = Document::new_empty();
+    let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let pad = |head: &str, len: usize| format!("{head}{}", " ".repeat(len.saturating_sub(head.len())));
+    let oversized = pad("1 0 0 0 1 1000 d1", MAX_TYPE3_GLYPH_BYTES + 100);
+    let procs = [oversized.as_str(), "1 0 0 0 1 3 d1"];
+    let mut f = type3(&mut doc, unit, [0, -2, 10, 5], &procs);
+    with_differences(&mut f, &["g0".into(), "g1".into()]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (3.0, 0.0), "the oversized glyph is skipped, the other read");
+
+    let filler = pad("0 0 m", MAX_TYPE3_GLYPH_BYTES - 1000);
+    let fillers = MAX_TYPE3_FONT_BYTES / (MAX_TYPE3_GLYPH_BYTES - 1000) + 1;
+    let mut procs = vec!["1 0 0 0 1 1 d1"];
+    procs.extend(std::iter::repeat_n(filler.as_str(), fillers));
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, unit, [0, -2, 10, 5], &procs);
+    let names: Vec<String> = (0..procs.len()).map(|i| format!("g{i}")).collect();
+    with_differences(&mut f, &names);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (5.0, -2.0), "the /FontBBox, not the first glyph's box alone");
+}
+
+/// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`
+/// and `/Descent`, which are optional for Type 3 (ISO 32000-2 Table 120).
+#[test]
+fn type3_d1_glyph_boxes_win_over_descriptor_metrics() {
+    let mut doc = Document::new_empty();
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let mut f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 -8 9 33 d1"]);
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"Ascent".to_vec(), Object::Int(891));
+    descriptor.set(b"Descent".to_vec(), Object::Int(-216));
+    let reference = doc.add(Object::Dict(descriptor));
+    f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && (m.descent + 8.0 * 0.0042).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+}
+
+/// A `/Differences` naming more distinct glyphs than [`MAX_TYPE3_GLYPHS`] leaves some unread, so
+/// a nonzero `/FontBBox` stands over the boxes of those read.
+#[test]
+fn type3_glyphs_past_the_limit_leave_the_font_bbox_standing() {
+    let mut doc = Document::new_empty();
+    let mut procs = vec!["1 0 0 0 1 10 d1"; MAX_TYPE3_GLYPHS];
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &procs);
+    let names: Vec<String> = (0..procs.len()).map(|i| format!("g{i}")).collect();
+    with_differences(&mut f, &names);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
+/// `d1` boxes with no height in text space (all flat) give way to a usable `/FontBBox`.
+#[test]
+fn flat_type3_glyph_boxes_give_way_to_the_font_bbox() {
+    let mut doc = Document::new_empty();
+    let f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &["1 0 0 5 1 5 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
+/// A Type 3 font measured from its `/FontBBox` keeps that box through its font matrix over a
+/// descriptor's `/Ascent` and `/Descent`, which would be read as 1000-unit values.
+#[test]
+fn a_type3_font_bbox_wins_over_descriptor_metrics() {
+    let mut doc = Document::new_empty();
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let mut f = type3(&mut doc, small, [0, -50, 100, 200], &[]);
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"Ascent".to_vec(), Object::Int(891));
+    descriptor.set(b"Descent".to_vec(), Object::Int(-216));
+    let reference = doc.add(Object::Dict(descriptor));
+    f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
+    let m = Metrics::from_dict(&doc, &f);
+    // 200 and -50 units at 0.0042, kept at the 0.5 / -0.1 em floor.
+    assert!((m.ascent - 0.84).abs() < 1e-9 && (m.descent + 0.21).abs() < 1e-9, "{} {}", m.ascent, m.descent);
+}
+
+/// An `/Encoding` with a `/BaseEncoding` reaches glyphs its `/Differences` doesn't name, whose
+/// boxes go unread, so a nonzero `/FontBBox` stands over the boxes of those named.
+#[test]
+fn a_type3_base_encoding_leaves_the_font_bbox_standing() {
+    let mut doc = Document::new_empty();
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &["1 0 0 0 1 10 d1", "1 0 0 0 1 1000 d1"]);
+    let mut enc = Dict::new();
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0), Object::name("g0")]));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
 #[test]
 fn simple_fonts_decode_and_encode_through_their_encoding() {
     let mut doc = Document::new_empty();
