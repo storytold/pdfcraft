@@ -2263,6 +2263,93 @@ fn text_links_leave_out_addresses_on_hidden_layers() {
     assert_eq!(created["created"], json!(["https://example.com/shown", "https://example.com/layered"]), "{created}");
 }
 
+/// Table 211), and a link with `/QuadPoints` is active only there (§12.5.6.5, Table 176): both as
+/// link_list and doc_info report them.
+#[test]
+fn links_resolve_relative_addresses_and_report_their_quad_points() {
+    let dir = workdir("link-base-quads");
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /URI << /Base (https://example.com/base/) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 700 300 716] /Border [0 0 0] /A << /S /URI /URI (page.html) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 670 300 686] /QuadPoints [72 670 120 670 120 686 72 686] /Border [0 0 0] /A << /S /URI /URI (https://example.org/q) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 640 300 656] /Border [0 0 0] /A << /S /URI /URI (javascript:alert\\(1\\)) >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("links.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "links.pdf" }))["doc"].as_u64().unwrap();
+    let links = ok(&mut a, "link_list", json!({ "doc": doc }));
+    let [relative, quads, script] = [&links["links"][0], &links["links"][1], &links["links"][2]];
+    assert_eq!(
+        (relative["url"].clone(), relative["resolved_url"].clone()),
+        (json!("page.html"), json!("https://example.com/base/page.html")),
+        "{links}"
+    );
+    assert_eq!(relative.get("active_areas"), None, "{links}");
+    // 792 − 686 = 106 points from the top: only the first word, not the whole rect.
+    assert_eq!(quads["active_areas"], json!([[72.0, 106.0, 120.0, 122.0]]), "{links}");
+    assert_eq!(quads.get("resolved_url"), None, "an absolute address is not resolved");
+    // A base never turns a script into a web address.
+    assert_eq!((script["url"].clone(), script.get("resolved_url")), (json!("javascript:alert(1)"), None), "{links}");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["links"][0]["target"]["uri"], "https://example.com/base/page.html", "{info}");
+}
+
+/// Once inspection's text budget is spent, a relative address stays raw, and the viewer opens it
+/// as written: `link_list` reports that address, not a second resolution against `/URI /Base`.
+#[test]
+fn link_list_reports_the_address_the_viewer_opens_past_the_text_budget() {
+    let dir = workdir("link-base-budget");
+    // Each link spends what the base adds to its address; well past 16 MiB of it in all.
+    let base = format!("https://example.com/{}/", "b".repeat(8000));
+    let count = (16 << 20) / base.len() + 20;
+    let annots = "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Border [0 0 0] /A 4 0 R >> ".repeat(count);
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /URI << /Base ({base}) >> >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>");
+    let objs = [catalog.as_str(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", page.as_str(), "<< /S /URI /URI (p.html) >>"];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("links.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "links.pdf" }))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "link_list", json!({ "doc": doc }));
+    let links = listed["links"].as_array().unwrap();
+    assert_eq!(links.len(), count);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let opened = info["links"].as_array().unwrap();
+    assert_eq!(opened.len(), count);
+    let resolved = format!("{base}p.html");
+    assert_eq!(links[0]["resolved_url"], json!(resolved), "the first links resolve");
+    assert_eq!(opened[0]["target"]["uri"], json!(resolved));
+    // Past the budget the viewer keeps (and opens) the raw address; the listing says so.
+    let last = count - 1;
+    assert_eq!(opened[last]["target"]["uri"], json!("p.html"));
+    assert_eq!((links[last]["url"].clone(), links[last].get("resolved_url")), (json!("p.html"), None));
+}
+
 #[test]
 fn bookmarks_from_structure_through_tools() {
     let dir = workdir("bookmarks-structure");
@@ -3091,6 +3178,113 @@ fn form_fill_picks_one_of_radio_buttons_sharing_an_on_state() {
         assert!(matches!(a.call("form_fill", &json!({ "doc": doc, "values": { "pick": bad } })), Err(ToolError::InvalidArgs(_))), "{bad}");
     }
 }
+
+/// `form_fill` ticks one kid of a check box whose kids have different on states by naming it
+/// (ISO 32000-2 §12.7.5.2.3, Table 230), and `form_fields` lists the names and the ticked one.
+#[test]
+fn form_fill_ticks_one_kid_of_a_check_box_by_its_on_state() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (pair) /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 26 266] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 56 266] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("check-box-kids");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!((&before["fields"][0]["options"], &before["fields"][0]["checked"]), (&json!(["A", "B"]), &Value::Null), "{before}");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": "A" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": "B" } }));
+    let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!((&after["fields"][0]["value"], &after["fields"][0]["checked"]), (&json!(true), &json!("B")), "{after}");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": false } }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["checked"], Value::Null);
+}
+
+/// The options `form_fields` reports fill back through `form_fill` to the kid they name, also
+/// where one kid's `/Opt` export is the other kid's on state: B exports `(A)`, and filling `A`
+/// still ticks the kid whose on state is A (ISO 32000-2 §12.7.5.2.3, Table 230).
+#[test]
+fn form_fill_round_trips_the_reported_options_of_a_check_box_with_a_crossed_export() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (pair) /V /Off /Opt [(x) (A)] /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 26 266] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 56 266] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>
+stream
+
+endstream",
+    ];
+    let dir = workdir("check-box-crossed-export-fill");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let options = before["fields"][0]["options"].clone();
+    assert_eq!(options, json!(["A", "B"]), "{before}");
+    for option in ["A", "B"] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": option } }));
+        let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        assert_eq!(after["fields"][0]["checked"], json!(option), "filling {option}: {after}");
+    }
+}
+
+/// `form_fields` on a check box's kids: one option per distinct on state, named by its `/Opt`
+/// export unless two states share one, and `checked` follows the kid whose `/AS` is on, which
+/// ISO 32000-2 §12.7.5.2.3 makes decide where `/AS` and `/V` differ.
+#[test]
+fn form_fields_lists_a_check_box_by_on_state_and_reports_the_kid_that_is_on() {
+    // Each kid is (on state, /AS).
+    let listed = |name: &str, field: &str, (sa, asa): (&str, &str), (sb, asb): (&str, &str)| {
+        let kid = |on: &str, state: &str, x: u32| {
+            format!(
+                "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /{state} /Rect [{x} 250 {} 266] /P 3 0 R /AP << /N << /{on} 8 0 R /Off 8 0 R >> >> >>",
+                x + 16
+            )
+        };
+        let (wa, wb) = (kid(sa, asa, 10), kid(sb, asb, 40));
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+            field,
+            &wa,
+            &wb,
+            "<< /Length 0 >>\nstream\n\nendstream",
+        ];
+        let dir = workdir(name);
+        std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+        let r = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        (r["fields"][0]["options"].clone(), r["fields"][0]["checked"].clone())
+    };
+    // Kids sharing the on state Yes tick together, whatever their exports: not two options.
+    let shared =
+        listed("check-box-shared-state", "<< /FT /Btn /T (pair) /V /Off /Opt [(x) (y)] /Kids [6 0 R 7 0 R] >>", ("Yes", "Off"), ("Yes", "Off"));
+    assert_eq!(shared, (Value::Null, Value::Null));
+    // /V names B, but A's /AS is on: A is the one ticked.
+    let differ = listed("check-box-as-wins", "<< /FT /Btn /T (pair) /V /B /Kids [6 0 R 7 0 R] >>", ("A", "A"), ("B", "Off"));
+    assert_eq!(differ, (json!(["A", "B"]), json!("A")));
+    // Two on states with one export: the states name the options.
+    let same = listed("check-box-same-export", "<< /FT /Btn /T (pair) /V /B /Opt [(x) (x)] /Kids [6 0 R 7 0 R] >>", ("A", "Off"), ("B", "B"));
+    assert_eq!(same, (json!(["A", "B"]), json!("B")));
+    // B's export is A's on state, so naming it would tick A: the states name the options.
+    let crossed = listed("check-box-crossed-export", "<< /FT /Btn /T (pair) /V /B /Opt [(x) (A)] /Kids [6 0 R 7 0 R] >>", ("A", "Off"), ("B", "B"));
+    assert_eq!(crossed, (json!(["A", "B"]), json!("B")));
+}
+
 /// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
 /// resets through the tools, and the leniency shows up as a repair note.
 #[test]
@@ -5223,6 +5417,28 @@ fn redact_apply_reports_the_identification_written_back() {
         ]),
         "{r}"
     );
+}
+
+#[test]
+fn applying_redactions_proposes_the_name_with_redacted() {
+    let dir = workdir("redact-save-as");
+    std::fs::write(dir.join("memo.txt"), "Call 555-123-4567 today").unwrap();
+    let mut a = auto(&dir);
+    let made = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": made, "path": "contract.pdf" }));
+    let original = std::fs::read(dir.join("contract.pdf")).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "contract.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "phone" }));
+    let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    assert_eq!(r["save_as"], "contract_Redacted.pdf");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": r["save_as"] }));
+    assert_eq!(std::fs::read(dir.join("contract.pdf")).unwrap(), original, "the opened file is left as it was");
+    let bytes = std::fs::read(dir.join("contract_Redacted.pdf")).unwrap();
+    assert!(!bytes.windows(4).any(|w| w == b"4567"), "the copy has no trace of the number");
+    // Redacting the redacted copy again proposes the same name, with one suffix.
+    let copy = ok(&mut a, "doc_open", json!({ "path": "contract_Redacted.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": copy, "find": "today" }));
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": copy }))["save_as"], "contract_Redacted.pdf");
 }
 
 #[test]
@@ -10039,6 +10255,38 @@ fn doc_info_describes_set_layer_links() {
         })
     );
     assert_eq!(info["layers"], json!([{ "name": "Red", "visible": true, "initial": true }, { "name": "Green", "visible": false, "initial": false }]));
+    // No /Order: the Layers panel presents none (ISO 32000-2 Table 99), though both are layers.
+    assert_eq!(info["layer_order"], json!([]));
+}
+
+/// `doc_info`'s `layer_order` follows the default configuration's /Order (ISO 32000-2 Table 99):
+/// a group by its 1-based position in `layers` and its name, a nested array one level deeper,
+/// a label that starts one, and a group /Order does not list left out.
+#[test]
+fn doc_info_lists_the_layer_order_tree() {
+    let dir = workdir("layer-order");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R 6 0 R 7 0 R] /D << /Order [6 0 R [(Inks) 4 0 R [5 0 R]]] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /OCG /Name (Red) >>",
+        "<< /Type /OCG /Name (Green) >>",
+        "<< /Type /OCG /Name (Blue) >>",
+        "<< /Type /OCG /Name (Unlisted) >>",
+    ]);
+    std::fs::write(dir.join("order.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "order.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(
+        info["layer_order"],
+        json!([
+            { "depth": 0, "layer": 3, "name": "Blue" },
+            { "depth": 0, "label": "Inks" },
+            { "depth": 1, "layer": 1, "name": "Red" },
+            { "depth": 2, "layer": 2, "name": "Green" },
+        ])
+    );
 }
 
 mod close_argument_tests {
