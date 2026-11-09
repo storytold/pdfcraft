@@ -218,6 +218,122 @@ fn replies_and_status_thread_onto_the_parent() {
     assert_eq!(text(&all[2], b"Contents"), "Accepted set by Bob");
 }
 
+/// A state reply records a state, not a note (ISO 32000-2 §12.5.6.3: the state is kept "in a
+/// separate text annotation"), so it is written Hidden; a reviewer's next change replies to their
+/// previous state reply ("Additional state changes shall be made by adding text annotations in
+/// reply to the previous reply for a given user"). Another reviewer's state, and another state
+/// model, start their own chain on the comment.
+#[test]
+fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
+    let mut doc = fixture();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let carol = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Carol", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let mark = set_marked(&mut doc, 0, 0, true, "Bob", &meta("m1")).unwrap();
+    let unmark = set_marked(&mut doc, 0, 0, false, "Bob", &meta("m2")).unwrap();
+    let doc = reopen(&doc);
+    let p = page_refs(&doc).unwrap()[0];
+    let entries = annots(&doc, p);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    for i in [first, carol, second, mark, unmark] {
+        assert_eq!(all[i].int(b"F"), Some(30), "hidden, printable, no zoom, no rotate: {i}");
+    }
+    assert_eq!(all[first].reference(b"IRT"), Some(at(0)));
+    assert_eq!(all[carol].reference(b"IRT"), Some(at(0)), "another reviewer starts on the comment");
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "Bob's change replies to Bob's last status");
+    assert_eq!(all[mark].reference(b"IRT"), Some(at(0)), "a checkmark is its own chain");
+    assert_eq!(all[unmark].reference(b"IRT"), Some(at(mark)));
+    // A reply that isn't a state stays visible.
+    let mut doc = doc;
+    let r = add_reply(&mut doc, 0, 0, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_eq!(list(&doc, 0)[r].int(b"F"), Some(28));
+}
+
+/// Review on #4126: a history has no length limit. The 70th change still replies to the 69th,
+/// and a reviewer whose name was typed with spaces continues their own chain.
+#[test]
+fn a_long_status_history_keeps_chaining_to_the_latest() {
+    let mut doc = fixture();
+    let mut prev: Option<usize> = None;
+    for i in 0..70 {
+        let state = if i % 2 == 0 { ReviewState::Accepted } else { ReviewState::Rejected };
+        let at = set_review_state(&mut doc, 0, 0, state, "Bob", &meta(&format!("s{i}"))).unwrap();
+        if let Some(p) = prev {
+            let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+            assert_eq!(list(&doc, 0)[at].reference(b"IRT"), entries[p].as_ref(), "change {i}");
+        }
+        prev = Some(at);
+    }
+    let padded = set_review_state(&mut doc, 0, 0, ReviewState::Completed, " Bob ", &meta("pad")).unwrap();
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    assert_eq!(list(&doc, 0)[padded].reference(b"IRT"), prev.and_then(|p| entries[p].as_ref()));
+    // Listed newest first, the first reply read walks the whole chain at once.
+    let latest = entries[padded].as_ref();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut reversed = entries.clone();
+    reversed.reverse();
+    set_annots(&mut doc, p, reversed).unwrap();
+    let next = set_review_state(&mut doc, 0, 71, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), latest);
+}
+
+/// Review on #4126: a reply with `/StateModel` but no `/State` has the model's default state
+/// (ISO 32000-2 Table 175), for the reader as for the writer: it is Bob's latest status, None,
+/// and his next change replies to it.
+#[test]
+fn a_state_model_without_a_state_is_the_default_state() {
+    let mut doc = fixture();
+    let bare = add_reply(&mut doc, 0, 0, "", "Bob", &meta("bare")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, p)[bare].as_ref().unwrap();
+    doc.update_dict(r, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Review"));
+        d.set(b"F".to_vec(), Object::Int(30));
+    })
+    .unwrap();
+    let summary = summaries(&doc).into_iter().find(|s| s.index == bare).unwrap();
+    assert_eq!(summary.state.as_deref(), Some("None"));
+    let next = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), Some(r));
+
+    // A model PdfCraft doesn't know isn't a state: a status replying to such a reply is about
+    // that reply, not about the comment, so Bob's next change on the comment starts afresh.
+    let mut doc = fixture();
+    let other = add_reply(&mut doc, 0, 0, "", "Ann", &meta("other")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let o = annots(&doc, p)[other].as_ref().unwrap();
+    // Nor is a `/State` the readers can't read, such as a number (review on #4126).
+    doc.update_dict(o, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Other"));
+        d.set(b"State".to_vec(), Object::Int(5));
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == other).unwrap().state, None);
+    set_review_state(&mut doc, 0, other, ReviewState::Rejected, "Bob", &meta("on-other")).unwrap();
+    let fresh = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("fresh")).unwrap();
+    assert_eq!(list(&doc, 0)[fresh].reference(b"IRT"), annots(&doc, p)[0].as_ref());
+}
+
+/// A third change replies to the second, not the first; and Bob's status on another comment
+/// is never the one his next change on this comment replies to.
+#[test]
+fn a_reviewers_chain_continues_from_their_latest_status_on_that_comment() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let elsewhere = set_review_state(&mut doc, 0, note, ReviewState::Cancelled, "Bob", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let third = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("s4")).unwrap();
+    let doc = reopen(&doc);
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(all[elsewhere].reference(b"IRT"), Some(at(note)));
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "not Bob's status on the note");
+    assert_eq!(all[third].reference(b"IRT"), Some(at(second)), "the latest, not the first");
+}
+
 #[test]
 fn delete_takes_popup_and_reply_chain() {
     let mut doc = fixture();
@@ -1319,6 +1435,44 @@ fn urls_are_found_after_length_changing_lowercase() {
     assert_eq!(range, 21..39, "range is in source-character indices");
 }
 
+/// Review on #4472: an address inside one written with another scheme isn't taken out of it
+/// (`ftp://www.example.com` opened as `http://www.example.com`), and brackets that pair up
+/// inside an address belong to it.
+#[test]
+fn urls_keep_their_written_scheme_and_paired_brackets() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    for s in
+        ["ftp://www.example.com/pub", "file://www.example.com/x", "javascript:www.example.com", "ftp://user@example.com/x", "smb://a@example.org/s"]
+    {
+        assert_eq!(found(s), Vec::<String>::new(), "{s}");
+    }
+    assert_eq!(found("mailto:someone@example.com and (www.example.com)"), ["mailto:someone@example.com", "http://www.example.com"]);
+    assert_eq!(found("See https://en.wikipedia.org/wiki/Mercury_(planet)."), ["https://en.wikipedia.org/wiki/Mercury_(planet)"]);
+    assert_eq!(found("(https://example.com/a_(b)_c)"), ["https://example.com/a_(b)_c"]);
+    assert_eq!(found("https://example.com/a(b c"), ["https://example.com/a"]);
+    // Deeply nested or unbalanced brackets end the address without trouble.
+    let deep = format!("https://example.com/{}x{}", "(".repeat(10_000), ")".repeat(9_999));
+    assert_eq!(found(&deep), ["https://example.com/"]);
+}
+
+/// Review on #4472: brackets that never close in text without spaces (`https://a/(` again and
+/// again) made each address in it read the rest of the text, then start again one character on,
+/// a pass over the page per address. Each is read 2,048 characters at most now, and the
+/// addresses around them are still found. A run of address characters longer than that is no
+/// address.
+#[test]
+fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
+    let started = std::time::Instant::now();
+    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
+    assert_eq!(found(&long), ["http://www.after.org"]);
+    let fits = format!("https://example.com/{}", "a".repeat(2000));
+    assert_eq!(found(&fits), std::slice::from_ref(&fits));
+}
+
 #[test]
 fn url_scheme_and_www_match_case_insensitively() {
     let t: Vec<char> = "HTTP://Example.COM".chars().collect();
@@ -1727,6 +1881,190 @@ fn malformed_optional_interior_color_does_not_hide_shape_strokes() {
     let content = ap_content(&display, &rendered);
     assert!(content.contains("1 0 0 RG") && content.contains(" re\nS\n"), "the stroke remains drawable without a fill: {content}");
     assert!(list(&doc, 0)[0].get(b"AP").is_none(), "display generation leaves the source document unchanged");
+}
+
+/// Any value may be given by reference (ISO 32000-2 §7.3.10). A Square whose border style
+/// dictionary (Table 168), colour and dash array are indirect objects is drawn with them, not
+/// with the 1 pt solid default; a reference cycle inside `/BS` is not followed for ever.
+#[test]
+fn indirect_border_style_and_colour_are_drawn() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /P 3 0 R /Rect [20 20 180 180] /BS 5 0 R /C 6 0 R >>",
+        b"<< /Type /Border /W 7 0 R /S /D /D 8 0 R /Self 5 0 R >>",
+        b"[0 0 1]",
+        b"6",
+        b"[4 2]",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the square gets a display appearance");
+    let shown = list(&display, 0).remove(0);
+    let content = ap_content(&display, &shown);
+    assert!(content.contains("0 0 1 RG\n6 w\n[4 2] 0 d\n"), "the indirect /BS, /W, /D and /C are used: {content}");
+    assert!(content.contains("23 23 154 154 re"), "the 6 pt border is inset by half its width: {content}");
+    assert_eq!(shown.get(b"BS"), Some(&Object::Ref(ObjRef::new(5, 0))), "the display copy keeps the reference");
+    assert_eq!(shown.get(b"P"), Some(&Object::Ref(ObjRef::new(3, 0))));
+    let props = props(&doc, 0, 0).expect("props");
+    assert_eq!(props.width, Some(6.0), "the properties show the width drawn");
+}
+
+/// A followed reference the builder can't draw (a cloudy border effect on a square, which it
+/// leaves alone) keeps the drawing made without it instead of none.
+#[test]
+fn an_undrawable_indirect_value_keeps_the_plain_drawing() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /BE 5 0 R /C [1 0 0] >>",
+        b"<< /S /C /I 1 >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the square is still drawn");
+    let shown = list(&display, 0).remove(0);
+    assert!(ap_content(&display, &shown).contains("1 0 0 RG\n1 w\n"));
+}
+
+/// Following references copies a bounded number of values: an indirect array past the budget
+/// stays a reference (and the comment is not drawn from it), a chain that never ends is not
+/// followed, and links to other objects are never copied.
+#[test]
+fn direct_values_are_bounded() {
+    let mut doc = fixture();
+    let huge = doc.add(Object::Array(vec![Object::Int(0); (1 << 16) + 1]));
+    let chain = doc.add(Object::Null);
+    doc.set(chain, Object::Ref(chain));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Rect".to_vec(), Object::Ref(doc.add(num_array(&[0.0, 0.0, 10.0, 10.0]))));
+    d.set(b"Vertices".to_vec(), Object::Ref(huge));
+    d.set(b"IC".to_vec(), Object::Ref(chain));
+    d.set(b"Popup".to_vec(), Object::Ref(huge));
+    let direct = crate::draw::with_direct_values(&doc, &d);
+    assert_eq!(direct.get(b"Rect").and_then(Object::as_array).map(Vec::len), Some(4), "a small array is followed");
+    assert_eq!(direct.get(b"Vertices"), Some(&Object::Ref(huge)), "over the budget: left as a reference");
+    assert_eq!(direct.get(b"IC"), Some(&Object::Ref(chain)), "a chain of references is left alone");
+    assert_eq!(direct.get(b"Popup"), Some(&Object::Ref(huge)), "a link is not copied");
+    let mut plain = Dict::new();
+    plain.set(b"W".to_vec(), Object::Int(2));
+    assert!(matches!(crate::draw::with_direct_values(&doc, &plain), std::borrow::Cow::Borrowed(_)), "nothing to follow: no copy");
+}
+
+/// A new width for a comment whose border style is an indirect object (§7.3.10) keeps that
+/// dictionary's other entries (a dashed style stays dashed) and leaves the shared object alone.
+#[test]
+fn new_width_keeps_an_indirect_border_style() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /BS 5 0 R /C [1 0 0] >>",
+        b"<< /W 6 /S /D /D [4 2] >>",
+    ]);
+    set_style(&mut doc, 0, 0, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = list(&doc, 0).remove(0);
+    let bs = d.get(b"BS").and_then(Object::as_dict).expect("a direct /BS");
+    assert_eq!(bs.get(b"W").and_then(Object::as_f64), Some(3.0));
+    assert_eq!(bs.name(b"S"), Some(b"D".as_slice()), "the dashed style is kept");
+    assert!(ap_content(&doc, &d).contains("3 w\n[4 2] 0 d\n"));
+    let shared = doc.get(ObjRef::new(5, 0));
+    assert_eq!(shared.as_dict().and_then(|b| b.get(b"W")).and_then(Object::as_f64), Some(6.0), "the shared object is unchanged");
+}
+
+/// A colour given by reference (`/C 6 0 R`, §7.3.10) is read by the properties and the edits as
+/// the display draws it: the properties show it, the appearance can be restyled and filled.
+#[test]
+fn an_indirect_colour_reads_and_restyles_as_drawn() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /C 5 0 R /IC 6 0 R >>",
+        b"[0 0 1]",
+        b"[1 1 0]",
+    ]);
+    let p = props(&doc, 0, 0).expect("props");
+    assert_eq!((p.color, p.fill, p.restylable), (Some([0.0, 0.0, 1.0]), Some([1.0, 1.0, 0.0]), true));
+    set_style(&mut doc, 0, 0, StyleChange::new(None, None, Some(3.0), None), &meta("")).expect("restylable");
+    set_fill(&mut doc, 0, 0, Some([0.0, 1.0, 0.0]), &meta("")).expect("fillable");
+    let d = list(&doc, 0).remove(0);
+    let content = ap_content(&doc, &d);
+    assert!(content.contains("0 0 1 RG") && content.contains("0 1 0 rg") && content.contains("3 w"), "{content}");
+}
+
+/// References are followed into everything they point at, and all of it is counted: a referenced
+/// array of two arrays of 40,000 numbers is over the per-annotation budget. One display pass
+/// copies at most [`crate::draw::PASS_BUDGET`] values in all, so an array many annotations point
+/// at is not copied again for each of them.
+#[test]
+fn following_references_is_bounded_per_value_and_per_pass() {
+    let mut doc = fixture();
+    let inner = Object::Array(vec![Object::Int(0); 40_000]);
+    let nested = doc.add(Object::Array(vec![inner.clone(), inner]));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Junk".to_vec(), Object::Ref(nested));
+    let direct = crate::draw::with_direct_values(&doc, &d);
+    assert!(direct.get(b"Junk") == Some(&Object::Ref(nested)), "80,003 values: left as a reference");
+
+    let shared = doc.add(Object::Array(vec![Object::Int(0); 60_000]));
+    d.set(b"Junk".to_vec(), Object::Ref(shared));
+    let mut pass = crate::draw::PASS_BUDGET;
+    let copies = (0..100).filter(|_| matches!(crate::draw::with_direct_values_within(&doc, &d, &mut pass), std::borrow::Cow::Owned(_))).count();
+    assert_eq!(copies, crate::draw::PASS_BUDGET / 60_001, "copies stop when the pass budget is spent");
+}
+
+/// Finding an object too large to copy costs the walk that found it out: an array of two arrays
+/// of 40,000 numbers that many annotations point at is walked about 40,000 values deep before it
+/// is rejected, and that is charged to the annotation and to the pass, so after a bounded number
+/// of such walks the pass has no room left to walk it again. A reference to it repeated in one annotation
+/// is not walked again in full, and a small referenced colour after it is still read.
+#[test]
+fn a_rejected_large_object_is_charged_to_the_budgets() {
+    let mut doc = fixture();
+    let inner = Object::Array(vec![Object::Int(0); 40_000]);
+    let nested = doc.add(Object::Array(vec![inner.clone(), inner]));
+    let red = doc.add(Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)]));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Junk".to_vec(), Object::Array(vec![Object::Ref(nested); 1_000]));
+    d.set(b"C".to_vec(), Object::Ref(red));
+    let mut pass = crate::draw::PASS_BUDGET;
+    let direct = crate::draw::with_direct_values_within(&doc, &d, &mut pass);
+    assert_eq!(direct.get(b"C"), Some(&Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)])));
+    let charged = crate::draw::PASS_BUDGET - pass;
+    assert!((40_000..=crate::draw::INLINE_BUDGET).contains(&charged), "the rejected walk is charged once: {charged}");
+    d.set(b"Junk".to_vec(), Object::Ref(nested));
+    for _ in 0..crate::draw::PASS_BUDGET / 40_000 {
+        crate::draw::with_direct_values_within(&doc, &d, &mut pass);
+    }
+    assert!(pass < 40_000, "after {} annotations the pass has no room for another full walk: {pass}", crate::draw::PASS_BUDGET / 40_000 + 1);
+}
+
+/// `/RD` is optional (ISO 32000-2 Table 177): a callout without it has its text box at `/Rect`
+/// and is drawn, box, text and leader line. A callout line and `/RD` given by reference are read too.
+#[test]
+fn callout_without_rd_is_drawn() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 300 160] /CL [20 20 60 60 100 130] /LE /OpenArrow /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (callout) >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [10 200 300 300] /CL 7 0 R /RD 8 0 R /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (indirect) >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [10 300 300 390] /CL [5 305 10 350] /RD [1 2] /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (bad) >>",
+        b"[15 205 40 250 100 250]",
+        b"[90 0 0 0]",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the callouts get a display appearance");
+    let shown = list(&display, 0);
+    let plain = ap_content(&display, &shown[0]);
+    assert!(plain.contains("1 1 0 rg\n100 100 200 60 re f"), "the yellow box fills /Rect: {plain}");
+    assert!(plain.contains("20 20 m\n60 60 l\n100 130 l\nS"), "the leader line: {plain}");
+    assert!(plain.contains("(callout) Tj"), "the text: {plain}");
+    let indirect = ap_content(&display, &shown[1]);
+    assert!(indirect.contains("100 200 200 100 re f") && indirect.contains("15 205 m"), "indirect /CL and /RD: {indirect}");
+    assert!(shown[2].get(b"AP").is_none(), "a malformed /RD is still not guessed at");
 }
 
 /// #3175: viewers draw a note without an appearance as a fixed-size icon at the upper-left corner
@@ -2864,6 +3202,366 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(!long.contains(&"w".repeat(257)));
 }
 
+/// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
+/// PdfCraft can't draw it.
+fn built(body: &str) -> Option<String> {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        body.as_bytes(),
+    ]);
+    let d = list(&doc, 0).into_iter().next().unwrap();
+    crate::appearance::build(&doc, &d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// The x and y range a drawing's path covers: its points, and each curve's middle (a curve's
+/// control points lie outside it, so they aren't counted).
+fn extent(ops: &str) -> [f64; 4] {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let mut at = (0.0, 0.0);
+    let add = |p: (f64, f64), b: &mut [f64; 4]| *b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    for line in ops.lines() {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        let Some((op, nums)) = t.split_last() else { continue };
+        let v: Vec<f64> = nums.iter().filter_map(|n| n.parse().ok()).collect();
+        match (*op, v.as_slice()) {
+            ("m" | "l", [x, y]) => {
+                at = (*x, *y);
+                add(at, &mut b);
+            }
+            ("c", [x1, y1, x2, y2, x3, y3]) => {
+                let mid = ((at.0 + 3.0 * x1 + 3.0 * x2 + x3) / 8.0, (at.1 + 3.0 * y1 + 3.0 * y2 + y3) / 8.0);
+                add(mid, &mut b);
+                at = (*x3, *y3);
+                add(at, &mut b);
+            }
+            _ => {}
+        }
+    }
+    b
+}
+
+/// ISO 32000-2 §12.5.4, Table 169: a cloudy border (`/BE /S /C`) applies to squares, circles,
+/// polygons and (PDF 1.6) text boxes, honours the `/BS` width and dashes, and its intensity
+/// `/I` defaults to 0. Squares, circles and text boxes without an appearance were not drawn at
+/// all, so a reviewer's marks vanished; intensity 0 (or none) drew a cloud on polygons.
+#[test]
+fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
+    let base = "/Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 >>";
+    for kind in ["Square", "Circle"] {
+        let ops = built(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
+        assert!(ops.matches(" c\n").count() > 8 && !ops.contains(" re\n"), "{kind} as bumps: {ops}");
+        let e = extent(&ops);
+        assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 300.0 && e[3] <= 250.0, "{kind} stays in /Rect: {e:?}");
+    }
+    let dashed = built(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(dashed.contains("[6 3] 0 d") && dashed.contains(" c\n"), "dashes honoured: {dashed}");
+    let text = built(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(text.contains(" c\n") && text.contains("(Look here) Tj"), "a cloud around the text: {text}");
+    let dashed_text = built(
+        "<< /Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 /S /D /D [4 2] >> /Subtype /FreeText /DA (0 g /Helv 10 Tf) /Contents (x) /BE << /S /C /I 1 >> >>",
+    )
+    .unwrap();
+    assert!(dashed_text.contains("[4 2] 0 d"), "a text box's cloud is dashed too: {dashed_text}");
+    // Intensity 0, or none: a plain border (the default is 0).
+    for be in ["<< /S /C /I 0 >>", "<< /S /C >>", "<< /S /S /I 2 >>"] {
+        let square = built(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
+        assert!(square.contains(" re\n") && !square.contains(" c\n"), "{be}: {square}");
+        let polygon =
+            built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
+                .unwrap();
+        assert!(!polygon.contains(" c\n"), "{be}: polygon edges stay straight: {polygon}");
+    }
+    let cloudy_polygon =
+        built("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
+            .unwrap();
+    assert!(cloudy_polygon.contains(" c\n"));
+    // A cloudy callout is still left to its own appearance.
+    assert!(
+        built(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
+    );
+}
+
+/// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates
+/// of Rect and those of the square or circle, respectively"; a cloudy square's bumps sit on that
+/// inner square.
+#[test]
+fn a_cloudy_square_follows_rd_left_top_right_bottom() {
+    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [20 40 30 25] >>")
+        .unwrap();
+    // The corners of the inner square are path points: left 120, bottom 125, right 270, top 260.
+    for corner in ["120 125", "270 125", "270 260", "120 260"] {
+        assert!(ops.contains(corner), "corner {corner} in {ops}");
+    }
+}
+
+/// Review on #4195: without `/RD`, a small cloudy square still keeps its bumps inside `/Rect`.
+/// Its edges are short enough that each rounds to a single bump about three radii long, which
+/// bulges further than one radius. An `/RD` leaving less than that margin is widened to it, so
+/// the cloud stays inside `/Rect` too.
+#[test]
+fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
+    for side in [40.0, 48.8, 60.0, 82.0] {
+        let ops = built(&format!(
+            "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
+            x = 100.0 + side
+        ))
+        .unwrap_or_else(|| panic!("side {side} is drawn"));
+        let e = extent(&ops);
+        assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 101.0 + side && e[3] <= 101.0 + side, "side {side}: {e:?}");
+    }
+    let small_rd =
+        built("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
+    let e = extent(&small_rd);
+    assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 201.0 && e[3] <= 201.0, "/RD [1 1 1 1] keeps the cloud inside /Rect: {e:?}");
+}
+
+/// ISO 32000-2 Table 180: `/RD` gives the differences between `/Rect` and "the actual boundaries
+/// of the underlying square or circle", so a plain square or circle (no cloudy border) is drawn
+/// inside `/Rect` less `/RD` (left, top, right, bottom) too, its stroke centred half the width
+/// inside that box. An `/RD` that isn't four finite non-negative numbers, or leaves no box, is
+/// ignored and the shape fills `/Rect` as before.
+#[test]
+fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
+    let square = |rd: &str| built(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
+    // Rect + 15 + 1.5 on every side: a 67 × 67 square from 116.5.
+    assert!(square("/RD [15 15 15 15]").contains("116.5 116.5 67 67 re"), "{}", square("/RD [15 15 15 15]"));
+    // Left 10, top 40, right 20, bottom 30: the box is 110..180 × 130..160.
+    assert!(square("/RD [10 40 20 30]").contains("111.5 131.5 67 27 re"), "{}", square("/RD [10 40 20 30]"));
+    for ignored in ["", "/RD [-1 0 0 0]", "/RD [1 2 3]", "/RD [60 0 60 0]", "/RD [0 50 0 49.5]", "/RD (x)"] {
+        assert!(square(ignored).contains("101.5 101.5 97 97 re"), "{ignored}: {}", square(ignored));
+    }
+    let circle = built("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
+    // The ellipse starts at its rightmost point: 200 - 15 - 1.5, at mid-height.
+    assert!(circle.starts_with("1 0 0 RG\n3 w\n183.5 150 m"), "{circle}");
+}
+
+/// The circles and rectangles PdfCraft draws write no `/RD`, so their appearance is unchanged by
+/// it: the stroke still sits half its width inside `/Rect`.
+#[test]
+fn pdfcraft_rectangles_and_ellipses_still_fill_their_rect() {
+    let mut doc = fixture();
+    let rect = [10.0, 10.0, 110.0, 60.0];
+    for shape in [Shape::Rectangle { rect }, Shape::Oval { rect }] {
+        let oval = matches!(shape, Shape::Oval { .. });
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("r")).unwrap();
+        let d = list(&doc, 0).remove(i);
+        assert!(!d.contains(b"RD"));
+        let w = appearance::border_width(&d);
+        let ap = ap_content(&doc, &d);
+        let r: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+        let expected = if oval {
+            format!("{} {} m", n(r[2] - w / 2.0), n((r[1] + r[3]) / 2.0))
+        } else {
+            format!("{} {} {} {} re", n(r[0] + w / 2.0), n(r[1] + w / 2.0), n(r[2] - r[0] - w), n(r[3] - r[1] - w))
+        };
+        assert!(ap.contains(&expected), "{expected} in {ap}");
+    }
+}
+
+/// Review on #4195: a polygon reshaped with `/BE /S /C` and no `/I` (or `/I 0`) is a plain one,
+/// as its appearance is drawn (Table 169: intensity 0 is no cloud), so its `/Rect` gets no room
+/// for bumps; with an intensity above 0 it does.
+#[test]
+fn a_reshaped_polygon_pads_its_rect_only_for_a_drawn_cloud() {
+    // `/BE << /S /C >>` with `/I` when given; no `/BE` at all for `None`.
+    let reshaped = |be: Option<Option<i64>>| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: false };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        if let Some(intensity) = be {
+            let mut b = pdfcraft_cos::Dict::new();
+            b.set(b"S".to_vec(), Object::name("C"));
+            if let Some(i) = intensity {
+                b.set(b"I".to_vec(), Object::Int(i));
+            }
+            doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(b))).unwrap();
+        }
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let plain = reshaped(None);
+    for be in [None, Some(0)] {
+        assert_eq!(reshaped(Some(be)), plain, "/I {be:?}: no cloud drawn, no room for one");
+    }
+    let cloudy = reshaped(Some(Some(1)));
+    assert!(cloudy[0] < plain[0] && cloudy[2] > plain[2], "room for the bumps: {cloudy:?} around {plain:?}");
+}
+
+/// Review on #4195: a reshaped polygon whose cloud has intensity 2 gets room for its bumps at
+/// that intensity. With room only for intensity 1, the bumps on a 200 pt edge reached past
+/// `/Rect` and the appearance's `/BBox` clipped them.
+#[test]
+fn a_reshaped_intensity_two_cloud_stays_inside_its_rect() {
+    let mut doc = fixture();
+    let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+    let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+    let mut be = pdfcraft_cos::Dict::new();
+    be.set(b"S".to_vec(), Object::name("C"));
+    be.set(b"I".to_vec(), Object::Int(2));
+    doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(be))).unwrap();
+    set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+    let d = &list(&doc, 0)[i];
+    let bbox = rect(d);
+    // Every point along the drawn bumps, with half the 2 pt line, is inside `/Rect`.
+    let content = ap_content(&doc, d);
+    let (mut at, mut lowest, mut leftmost) = ((0.0, 0.0), f64::MAX, f64::MAX);
+    for line in content.lines() {
+        let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        if line.ends_with(" m") && v.len() == 2 {
+            at = (v[0], v[1]);
+        } else if line.ends_with(" c") && v.len() == 6 {
+            for step in 0..=20 {
+                let t = f64::from(step) / 20.0;
+                let u = 1.0 - t;
+                let (a, b, c, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                lowest = lowest.min(a * at.1 + b * v[1] + c * v[3] + e * v[5]);
+                leftmost = leftmost.min(a * at.0 + b * v[0] + c * v[2] + e * v[4]);
+            }
+            at = (v[4], v[5]);
+        }
+    }
+    assert!(lowest < 100.0 - 8.0, "the bumps bulge below the bottom edge: {lowest}");
+    assert!(lowest - 1.0 >= bbox[1], "the bottom bumps ({lowest}) and the line fit in /Rect {bbox:?}");
+    assert!(leftmost - 1.0 >= bbox[0], "the left bumps ({leftmost}) and the line fit in /Rect {bbox:?}");
+}
+
+/// Review on #4195: a reshaped polygon gets room for the border it is drawn with. With no `/BS`,
+/// a `/Border [0 0 5]` is drawn 5 pt wide (`appearance::border_width`), so the new `/Rect` is the
+/// one `/BS /W 5` gets; it was sized for a 1-pt border, and the cloud's outer bumps were clipped.
+#[test]
+fn a_reshaped_polygon_has_room_for_the_border_it_is_drawn_with() {
+    let reshaped = |border: &[u8], width: Object| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.remove(b"BS");
+            if border == b"BS" {
+                let mut bs = pdfcraft_cos::Dict::new();
+                bs.set(b"W".to_vec(), width);
+                d.set(b"BS".to_vec(), Object::Dict(bs));
+            } else {
+                d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), width]));
+            }
+        })
+        .unwrap();
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let bs = reshaped(b"BS", Object::Int(5));
+    assert_eq!(reshaped(b"Border", Object::Int(5)), bs, "the same 5-pt border, the same room");
+    assert_ne!(reshaped(b"BS", Object::Int(1)), bs, "a 1-pt border needs less");
+}
+
+/// Every number a drawing writes, which must all be finite.
+fn drawn_numbers(ops: &str) -> Vec<f64> {
+    ops.split_whitespace().filter(|t| t.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')).filter_map(|t| t.parse().ok()).collect()
+}
+
+/// Review on #4195: a cloud around a zero-size, inverted, sliver or huge `/Rect`, at any border
+/// width and any `/BE /I` (tiny, negative, far above Table 169's 2), is either drawn inside
+/// `/Rect` with finite numbers and a bounded number of bumps, or not built at all, never a
+/// panic, a division by zero or a NaN.
+#[test]
+fn hostile_cloud_sizes_widths_and_intensities_draw_inside_rect_or_not_at_all() {
+    let rects = [
+        "0 0 0 0",
+        "100 100 100 100",
+        "100 100 100.5 300",
+        "100 100 101 101",
+        "300 250 100 100",
+        "100 100 300 250",
+        "100 100 110 110",
+        "-1000000000000000 -1000000000000000 1000000000000000 1000000000000000",
+        "0 0 99999999999999999999999 1",
+        &format!("0 0 {} 100", "9".repeat(400)),
+        &format!("-{n} -{n} {n} {n}", n = "9".repeat(308)),
+    ];
+    let (mut drawn, mut refused) = (0, 0);
+    for rect in rects {
+        let r: Vec<f64> = rect.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let bounds = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
+        for width in ["0", "0.001", "2", "1000000", "-3"] {
+            for intensity in ["0.0000001", "2", "1000000000000000000000000000000", "-1"] {
+                for kind in ["Square", "Circle", "FreeText"] {
+                    let body = format!(
+                        "<< /Type /Annot /Subtype /{kind} /Rect [{rect}] /C [1 0 0] /BS << /W {width} >> /BE << /S /C /I {intensity} >> /DA (0 g /Helv 10 Tf) /Contents (x) >>"
+                    );
+                    let Some(ops) = built(&body) else {
+                        refused += 1;
+                        continue;
+                    };
+                    drawn += 1;
+                    assert!(!ops.contains("NaN") && !ops.contains("inf"), "{body}: {ops}");
+                    assert!(drawn_numbers(&ops).iter().all(|v| v.is_finite()), "{body}");
+                    assert!(ops.matches(" c\n").count() <= crate::appearance::MAX_CLOUD_BUMPS + 8, "{body}: bumps are capped");
+                    // A cloud (intensity above 0); a negative one is a plain border (Table 169).
+                    if !intensity.starts_with('-') && ops.contains(" c\n") {
+                        let e = extent(&ops);
+                        let slack = 0.5 + 1e-9 * (bounds[2] - bounds[0]).abs().max((bounds[3] - bounds[1]).abs());
+                        assert!(
+                            e[0] >= bounds[0] - slack && e[1] >= bounds[1] - slack && e[2] <= bounds[2] + slack && e[3] <= bounds[3] + slack,
+                            "{body}: the cloud {e:?} stays in /Rect"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(drawn > 0 && refused > 0, "both outcomes are exercised: {drawn} drawn, {refused} refused");
+}
+
+/// Review on #4195: a cloud around a rotated rectangle (a polygon turned 45°, its corners in
+/// either order) bulges outwards the same way and stays inside its `/Rect`, and `cloud_path`
+/// itself takes a zero, negative, infinite or NaN bump size and repeated corners without
+/// dividing by zero.
+#[test]
+fn a_cloud_around_a_rotated_rectangle_bulges_outwards_either_way_round() {
+    let ccw = "150 100 200 150 150 200 100 150";
+    let cw = "150 100 100 150 150 200 200 150";
+    let extents: Vec<[f64; 4]> = [ccw, cw]
+        .iter()
+        .map(|v| {
+            let ops = built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [80 80 220 220] /C [1 0 0] /Vertices [{v}] /BE << /S /C /I 1 >> >>"))
+                .unwrap();
+            assert!(ops.contains(" c\n"), "{ops}");
+            let e = extent(&ops);
+            assert!(e[0] >= 80.0 && e[1] >= 80.0 && e[2] <= 220.0 && e[3] <= 220.0, "inside /Rect: {e:?}");
+            // Each bump's middle lies outside the turned square |x − 150| + |y − 150| = 50.
+            let mut at = (0.0, 0.0);
+            for line in ops.lines() {
+                let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                if line.ends_with(" m") && v.len() == 2 {
+                    at = (v[0], v[1]);
+                } else if line.ends_with(" c") && v.len() == 6 {
+                    let mid = ((at.0 + 3.0 * v[0] + 3.0 * v[2] + v[4]) / 8.0, (at.1 + 3.0 * v[1] + 3.0 * v[3] + v[5]) / 8.0);
+                    assert!((mid.0 - 150.0).abs() + (mid.1 - 150.0).abs() > 50.0 + 1.0, "the bump at {mid:?} bulges outwards");
+                    at = (v[4], v[5]);
+                }
+            }
+            e
+        })
+        .collect();
+    for k in 0..4 {
+        assert!((extents[0][k] - extents[1][k]).abs() < 0.5, "the same cloud either way round: {extents:?}");
+    }
+    let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    for r in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e-300, 1e300] {
+        let path = crate::appearance::cloud_path(&square, r);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "r {r}: {path}");
+        assert!(path.ends_with("h\n"));
+    }
+    for pts in [vec![], vec![(5.0, 5.0)], vec![(5.0, 5.0); 4], vec![(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (0.0, 0.0)]] {
+        let path = crate::appearance::cloud_path(&pts, 2.0);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "{pts:?}: {path}");
+    }
+}
+
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
@@ -3125,8 +3823,10 @@ fn a_referenced_colour_is_listed_like_a_direct_one() {
 }
 
 /// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
-/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
-/// doesn't follow it and draws no appearance, as for any colour it can't read.
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The display
+/// and the properties follow the reference (`draw::with_direct_values`) and draw and
+/// read it black; the comment list, which follows only a `/C` given whole by reference, reads no
+/// colour rather than cyan.
 #[test]
 fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
     let doc = document_of(&[
@@ -3137,11 +3837,375 @@ fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
         b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
         b"1",
     ]);
-    let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
+    let display = with_missing_appearances(&doc).expect("both squares get a fallback appearance");
     let squares = list(&display, 0);
-    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
-    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
-    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
+    let black = ap_content(&display, &squares[0]);
+    assert!(black.contains("0 0 0 RG") && !black.contains("0 1 1 RG"), "CMYK black, no cyan stand-in: {black}");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), Some([0.0, 0.0, 0.0]));
+    assert_ne!(summaries(&doc)[0].color, Some([0.0, 1.0, 1.0]), "nor cyan in the comment list");
+}
+
+/// A text markup annotation is drawn over its `/QuadPoints` (ISO 32000-2 Table 182), and an
+/// appearance is mapped onto `/Rect` (§12.5.5). A highlight whose `/Rect` lies beside its text
+/// (here written with its corners swapped, as a real file has it) got an appearance cut to that
+/// `/Rect`, so nothing showed. The display copy's appearance and `/Rect` now take in the
+/// quadrilaterals; a markup whose `/Rect` already holds them keeps it.
+#[test]
+fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [335.1 370.83 324.6 471.78] /C [1 1 0] /QuadPoints [370 287 471 287 370 277 471 277] >>",
+        b"<< /Type /Annot /Subtype /Underline /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [100 120 200 120 100 100 200 100] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [50 50 150 70] /C [1 1 0] /QuadPoints [60 68 140 68 60 52 140 52] >>",
+        b"<< /Type /Annot /Subtype /StrikeOut /Rect [10 10 20 20] /C [1 0 0] /QuadPoints [100 220 200 220 100 200 200 200] >>",
+        b"<< /Type /Annot /Subtype /Squiggly /Rect [10 10 20 20] /C [0 1 0] /QuadPoints [100 320 200 320 100 300 200 300] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [-1e30 20 1e30 20 -1e30 10 1e30 10] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [-1e308 10 1e308 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the markups need an appearance");
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    let bbox = |d: &Dict| {
+        let n = d.get(b"AP").map(|a| display.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).unwrap();
+        let obj = display.get(n);
+        let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+        nums_of(&s.dict, b"BBox")
+    };
+    assert_eq!(rect(&shown[0]), [324.6, 277.0, 471.0, 471.78], "the highlight's /Rect takes in its text");
+    assert_eq!(bbox(&shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
+    // Half the underline's width (0.07 × 20 / 2) past the quad.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 200.7, 120.7], "an underline's too");
+    assert_eq!(bbox(&shown[1]), rect(&shown[1]));
+    assert_eq!(rect(&shown[2]), [50.0, 50.0, 150.0, 70.0], "a /Rect that holds the quads stays as it is");
+    assert_eq!(rect(&shown[3]), [10.0, 10.0, 200.7, 220.7], "a strikeout's too");
+    assert_eq!(bbox(&shown[3]), rect(&shown[3]));
+    assert_eq!(rect(&shown[4]), [10.0, 10.0, 200.5, 320.5], "a squiggly's too");
+    assert_eq!(bbox(&shown[4]), rect(&shown[4]));
+    assert_eq!(rect(&shown[5]), [0.0, 10.0, 612.0, 20.0], "quads far past the page reach only as far as it shows");
+    // A /Rect too wide for its width to be a number keeps its size: the on-page quad above it
+    // doesn't make it taller.
+    assert_eq!(rect(&shown[6]), [-1e308, 10.0, 1e308, 20.0], "an overflowing /Rect is not widened");
+    assert_eq!(rect(&list(&doc, 0)[0]), [335.1, 370.83, 324.6, 471.78], "the source document is unchanged");
+}
+
+/// The box widens over the quads the markup is drawn over, read as every `/QuadPoints` reader
+/// reads them (`pdfcraft_geom::quad_points::usable_quads`): an indirect array or entry is
+/// followed, and a malformed quad or trailing partial one is skipped while the others still widen
+/// the box, so what is drawn is not cut to `/Rect`.
+#[test]
+fn text_markup_reach_reads_quads_like_the_drawing() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints 7 0 R >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 /oops 120 100 100 200 100 100 220 200 220 100 200 200 200 1 2 3] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 8 0 R 100] >>",
+        b"[100 120 200 120 100 100 200 100]",
+        b"200",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the markups need an appearance");
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.0, 120.0], "an indirect array widens the box");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 200.0, 220.0], "the usable quad still widens it");
+    assert_eq!(ap_bbox(&display, &shown[1]), rect(&shown[1]));
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 200.0, 120.0], "an indirect entry is followed");
+}
+
+/// `n` copies of the quadrilateral `[100 120 200 120 100 100 200 100]`, as `/QuadPoints`.
+fn repeated_quads(n: usize) -> String {
+    format!("[{}]", vec!["100 120 200 120 100 100 200 100"; n].join(" "))
+}
+
+/// The `/BBox` of `d`'s normal appearance in `doc`.
+fn ap_bbox(doc: &Document, d: &Dict) -> Vec<f64> {
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
+    let obj = doc.get(n);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    nums_of(&s.dict, b"BBox")
+}
+
+/// The widened box stops at the page's visible region (its crop box, ISO 32000-2 §14.11.2), and
+/// quadrilaterals wholly outside it widen nothing. A markup with more than
+/// `appearance::MAX_MARKUP_QUADS` quadrilaterals keeps its `/Rect`. An annotation with an
+/// appearance of its own, and one that isn't text markup, keep theirs whatever `/QuadPoints` say.
+#[test]
+fn text_markup_reach_stops_at_the_page_and_the_quad_cap() {
+    let cap = appearance::MAX_MARKUP_QUADS;
+    let at_cap = format!("<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints {} >>", repeated_quads(cap));
+    let past_cap = format!("<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints {} >>", repeated_quads(cap + 1));
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 380 500 380 100 360 500 360] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [400 500 450 500 400 480 450 480] >>",
+        at_cap.as_bytes(),
+        past_cap.as_bytes(),
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] /AP << /N 10 0 R >> >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [100 120 200 120 100 100 200 100] >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the markups need an appearance");
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 300.0, 380.0], "the box stops at the crop box");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 20.0, 20.0], "quads off the page widen nothing");
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 200.0, 120.0], "as many quads as the cap widen the box");
+    assert_eq!(rect(&shown[3]), [10.0, 10.0, 20.0, 20.0], "more quads than the cap keep the /Rect");
+    assert_eq!(ap_bbox(&display, &shown[3]), rect(&shown[3]));
+    assert_eq!(rect(&shown[4]), [10.0, 10.0, 20.0, 20.0], "a markup with an appearance of its own keeps its /Rect");
+    assert_eq!(
+        shown[4].get(b"AP").map(|a| display.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))),
+        Some(ObjRef::new(10, 0)),
+        "and its appearance"
+    );
+    assert_eq!(rect(&shown[5]), [10.0, 10.0, 20.0, 20.0], "a square is not text markup");
+    assert_eq!(ap_bbox(&display, &shown[5]), rect(&shown[5]));
+}
+
+/// A restyle (the edit path, `set_appearance`) redraws a text markup over its quadrilaterals and
+/// saves the `/Rect` its appearance covers, as far as the page shows, since the appearance is
+/// mapped onto `/Rect` (ISO 32000-2 §12.5.5). A markup whose `/Rect` already holds its quads keeps
+/// that `/Rect` as written, swapped corners and all.
+#[test]
+fn restyled_text_markup_saves_the_rect_its_appearance_covers() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [335.1 370.83 324.6 471.78] /C [1 1 0] /QuadPoints [370 287 471 287 370 277 471 277] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [150 70 50 50] /C [1 1 0] /QuadPoints [60 68 140 68 60 52 140 52] >>",
+        b"<< /Type /Annot /Subtype /Underline /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [500 120 700 120 500 100 700 100] >>",
+    ]);
+    for index in 0..3 {
+        set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    }
+    let saved = reopen(&doc);
+    let shown = list(&saved, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [324.6, 277.0, 471.0, 471.78], "the saved /Rect takes in the highlighted text");
+    assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&saved, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
+    assert_eq!(rect(&shown[1]), [150.0, 70.0, 50.0, 50.0], "a /Rect that holds the quads is kept as written");
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 612.0, 120.7], "the saved /Rect stops at the page");
+    assert_eq!(ap_bbox(&saved, &shown[2]), rect(&shown[2]));
+}
+
+/// A one-page document whose page lists `annots` (objects 4 on) and the display copy
+/// `with_missing_appearances` draws for it.
+fn displayed(annots: &[&[u8]]) -> (Document, Document) {
+    let kids: Vec<String> = (0..annots.len()).map(|i| format!("{} 0 R", i + 4)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" "));
+    let mut objs: Vec<&[u8]> =
+        vec![b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", page.as_bytes()];
+    objs.extend_from_slice(annots);
+    let doc = document_of(&objs);
+    let display = with_missing_appearances(&doc).expect("the annotations need an appearance");
+    (doc, display)
+}
+
+/// Ink strokes (`/InkList`, ISO 32000-2 Table 185) outside an ink annotation's `/Rect` are drawn:
+/// the display copy's `/Rect` and `/BBox` take in the strokes and half their width. Shaped like
+/// the pencil marks of `issue13447.pdf`, whose `/Rect` has x and y swapped. An ink annotation
+/// whose `/Rect` holds its points keeps it, even where its wide stroke reaches past it.
+#[test]
+fn ink_whose_strokes_reach_past_its_rect_is_drawn_through_them() {
+    let (doc, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Ink /Rect [109.25 260.01 21.25 313.51] /BS << /W 3 >> /C [1 0 0] /InkList [[260 502.75 300 537 330 520] [280 510]] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [0 0 100 100] /BS << /W 30 >> /C [1 0 0] /InkList [[10 10 90 90]] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    // The smooth curve rises past its highest point (537) to 537.33; half the width (1.5) more.
+    assert_rect_near(&rect(&shown[0]), [21.25, 260.01, 331.5, 538.825], "the ink's /Rect takes in its strokes");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("260 502.75 m"), "the stroke is drawn");
+    assert_eq!(rect(&shown[1]), [0.0, 0.0, 100.0, 100.0], "a /Rect that holds the points stays as it is");
+    assert_eq!(rect(&list(&doc, 0)[0]), [109.25, 260.01, 21.25, 313.51], "the source document is unchanged");
+}
+
+/// A polyline's `/Vertices` (Table 181) outside its `/Rect` are drawn, with its line endings
+/// (`/LE`): the box takes in the arrow at the last vertex.
+#[test]
+fn polyline_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /PolyLine /Rect [667.5 250.69 567.75 344.44] /BS << /W 2 >> /C [0 0 1] /Vertices [250 44 350 94 285 138] >>",
+        b"<< /Type /Annot /Subtype /PolyLine /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /LE [/None /OpenArrow] /Vertices [100 100 200 100 200 200] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [249.0, 43.0, 667.5, 344.44], "the polyline's /Rect takes in its vertices");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("250 44 m"), "the polyline is drawn");
+    // Half the width (1) and the arrow (6 + 3 × 2) past the vertices.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 213.0, 213.0], "and its arrow");
+}
+
+/// A polygon's `/Vertices` outside its `/Rect` are drawn, its cloudy border (§12.5.4) included.
+#[test]
+fn polygon_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 1 >> /C [0 0 1] /IC [1 1 0] /Vertices [100 100 200 100 150 180] >>",
+        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /BE << /S /C /I 1 >> /Vertices [100 100 200 100 150 180] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.5, 180.5], "the polygon's /Rect takes in its vertices");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("100 100 m"), "the polygon is drawn");
+    // Half the width (1) and the cloud's reach (`cloud_reach`: 1.5 bumps of 6 + 1.5 × 2 at
+    // intensity 1) past the vertices.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 214.5, 194.5], "and its cloudy border");
+}
+
+/// A line's `/L` (Table 178) outside its `/Rect` is drawn, with its line ending and its leader
+/// lines. Shaped like the arrows of `issue13447.pdf`.
+#[test]
+fn line_whose_points_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Line /Rect [598.31 146.63 537 316.13] /BS << /W 6 >> /C [0 0 1] /LE [/None /ClosedArrow] /L [176 45 178 154] >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /L [100 100 200 100] /LL 20 /LLE 5 >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [90 90 210 110] /BS << /W 2 >> /C [0 0 1] /LE [/OpenArrow /OpenArrow] /L [100 100 200 100] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    // Half the width (3) and the arrow (6 + 3 × 6) past `/L`.
+    assert_eq!(rect(&shown[0]), [149.0, 18.0, 598.31, 316.13], "the line's /Rect takes in /L and its arrow");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("176 45 m"), "the line is drawn");
+    // The leaders rise 20 + 5 above `/L`; half the width (1) past them.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 201.0, 126.0], "and its leader lines");
+    assert_eq!(rect(&shown[2]), [90.0, 90.0, 210.0, 110.0], "a /Rect that holds /L stays as it is");
+}
+
+/// Points past the caps (`appearance::MAX_REACH_POINTS`) leave `/Rect` as it is, as do points
+/// that aren't numbers; a restyle (the edit path) saves the widened `/Rect` of an ink annotation.
+#[test]
+fn path_reach_stops_at_the_point_cap_and_is_saved_on_restyle() {
+    let cap = appearance::MAX_REACH_POINTS;
+    let stroke = |n: usize| format!("[{}]", vec!["100 120"; n].join(" "));
+    let at_cap = format!("<< /Type /Annot /Subtype /Ink /Rect [10 10 20 20] /BS << /W 0 >> /C [1 0 0] /InkList [{} [200 200]] >>", stroke(cap - 1));
+    let past_cap = format!("<< /Type /Annot /Subtype /Ink /Rect [10 10 20 20] /BS << /W 0 >> /C [1 0 0] /InkList [{} [200 200]] >>", stroke(cap));
+    let (_, display) = displayed(&[at_cap.as_bytes(), past_cap.as_bytes()]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.0, 200.0], "as many points as the cap widen the box");
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 20.0, 20.0], "more points than the cap keep the /Rect");
+
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [109.25 260.01 21.25 313.51] /BS << /W 3 >> /C [1 0 0] /InkList [[260 502.75 300 537 330 520]] >>",
+    ]);
+    set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    let saved = reopen(&doc);
+    let shown = list(&saved, 0);
+    assert_rect_near(&rect(&shown[0]), [21.25, 260.01, 331.5, 538.825], "the saved /Rect takes in the strokes");
+    assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
+}
+
+/// A squiggle's peaks stand 1.5 above a quad's bottom edge however low the quad is, so over a quad
+/// 1 high they reach past it: the widened box takes them in, with half the line's width.
+#[test]
+fn squiggly_peaks_over_a_low_quad_are_inside_the_widened_box() {
+    let (_, display) =
+        displayed(&[b"<< /Type /Annot /Subtype /Squiggly /Rect [10 10 20 20] /C [0 1 0] /QuadPoints [100 301 200 301 100 300 200 300] >>"]);
+    let shown = list(&display, 0);
+    // Peak 300 + 1.5, half the 0.5 line width: 301.75; the sides reach 0.75 past the quad.
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 200.75, 301.75]);
+    assert_eq!(ap_bbox(&display, &shown[0]), nums_of(&shown[0], b"Rect"));
+}
+
+/// A line's caption (`/Cap`, ISO 32000-2 Table 178) is drawn beside `/L`: the widened box takes
+/// in the caption's text as well as the line.
+#[test]
+fn a_line_caption_is_inside_the_widened_box() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /L [100 100 200 100] /Cap true /CP /Top /Contents (Caption) >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = nums_of(&shown[0], b"Rect");
+    // The caption sits on top of the line: its 10-point text rises well past the stroke's 101.
+    assert!(rect[3] > 108.0, "{rect:?}");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect);
+}
+
+/// A line just above the crop box whose wide stroke reaches down onto the page is drawn as far as
+/// the page shows, not cut to its `/Rect`.
+#[test]
+fn a_stroke_that_reaches_onto_the_page_from_points_off_it_widens_the_box() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 6 >> /C [0 0 1] /L [100 401 200 401] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the line needs an appearance");
+    let shown = list(&display, 0);
+    // The stroke spans 398 to 404 across and 97 to 203 along; the page shows up to 400.
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 203.0, 400.0]);
+}
+
+/// A cached display appearance was drawn for its page's crop box: once the crop box grows, the
+/// next refresh draws the annotation again for the larger region.
+#[test]
+fn a_cached_appearance_is_redrawn_for_a_changed_crop_box() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 380 500 380 100 360 500 360] >>",
+    ]);
+    let mut cache = AppearanceCache::default();
+    let display = with_missing_appearances_cached(&doc, &mut cache).expect("drawn");
+    assert_eq!(nums_of(&list(&display, 0)[0], b"Rect"), [10.0, 10.0, 300.0, 380.0]);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"CropBox".to_vec(), Object::Array([0, 0, 612, 792].map(Object::Int).to_vec()))).unwrap();
+    let display = with_missing_appearances_cached(&doc, &mut cache).expect("drawn");
+    let shown = list(&display, 0);
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 500.0, 380.0], "drawn for the larger crop box");
+    assert_eq!(ap_bbox(&display, &shown[0]), nums_of(&shown[0], b"Rect"));
+}
+
+/// Redrawing a comment drawn through its points finds its page through `/P` when that page
+/// lists it, reading that one page's `/Annots` rather than every page's: here the last of 300.
+#[test]
+fn restyling_a_comment_drawn_through_its_points_reads_only_its_page() {
+    let pages = 300;
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 612 792] >>", kids.join(" ")));
+    for i in 0..pages {
+        let (page, annot) = (3 + 2 * i, 4 + 2 * i);
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{annot} 0 R] >>"));
+        objs.push(format!(
+            "<< /Type /Annot /Subtype /Highlight /P {page} 0 R /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] >>"
+        ));
+    }
+    let bytes: Vec<&[u8]> = objs.iter().map(|o| o.as_bytes()).collect();
+    let mut doc = document_of(&bytes);
+    let last = pages - 1;
+    ANNOTS_ENTRIES_COPIED.with(|c| c.set(0));
+    set_style(&mut doc, last, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    let copied = ANNOTS_ENTRIES_COPIED.with(std::cell::Cell::get);
+    assert!(copied < 20, "{copied} annotation entries copied for one restyle");
+    assert_eq!(nums_of(&list(&doc, last)[0], b"Rect"), [10.0, 10.0, 200.0, 120.0], "drawn for its page");
+}
+
+/// `got` is `want` to within 0.001 in every coordinate.
+fn assert_rect_near(got: &[f64], want: [f64; 4], what: &str) {
+    assert!(got.len() == 4 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "{what}: {got:?}");
+}
+
+fn nums_of(d: &Dict, key: &[u8]) -> Vec<f64> {
+    d.get(key).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|o| o.as_f64()).collect()).unwrap_or_default()
 }
 
 /// The `y` of every `1 0 0 1 x y Tm` in `content`: where each piece of text sits.
