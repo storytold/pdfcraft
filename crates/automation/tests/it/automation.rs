@@ -3951,6 +3951,34 @@ fn exporting_images_and_text_through_tools() {
     assert!(a.call("doc_export_text", &json!({ "doc": doc, "path": "/etc/x.txt" })).is_err(), "confined to the root");
 }
 
+/// `doc_export_size` says what `doc_export_images` will write, without writing it (#2819).
+#[test]
+fn estimating_an_export_size_through_tools() {
+    let dir = workdir("export-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let estimate = ok(&mut a, "doc_export_size", json!({ "doc": doc, "dpi": 72, "pages": [1, 3] }));
+    assert_eq!(estimate["sampled"], json!([1, 3]), "the first and the last page are measured");
+    assert_eq!(estimate["pages"].as_array().unwrap().len(), 2);
+    // Estimating writes nothing.
+    assert!(!dir.join("out").exists(), "the estimate leaves no files");
+    // Write the same pages at the same resolution: the files are about the size it said.
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "out", "dpi": 72, "pages": [1, 3] }));
+    let written: Vec<u64> = ["out/a_page_1.png", "out/a_page_3.png"].iter().map(|p| std::fs::metadata(dir.join(p)).unwrap().len()).collect();
+    let estimated: Vec<u64> = estimate["pages"].as_array().unwrap().iter().map(|p| p["bytes"].as_u64().unwrap()).collect();
+    for (page, (estimated, written)) in estimated.iter().zip(&written).enumerate() {
+        let ratio = *estimated as f64 / *written as f64;
+        assert!((0.75..=1.25).contains(&ratio), "page {}: estimated {estimated} bytes, wrote {written}", page + 1);
+    }
+    let total = estimate["total"].as_u64().unwrap();
+    assert!((total as f64 - written.iter().sum::<u64>() as f64).abs() / total as f64 <= 0.25, "the total is close: {total}");
+    // JPEG at a quality, over the whole document, and an unknown format is refused.
+    let jpeg = ok(&mut a, "doc_export_size", json!({ "doc": doc, "format": "jpeg", "quality": 40, "dpi": 36 }));
+    assert!(jpeg["total"].as_u64().unwrap() > 0);
+    assert_eq!(jpeg["sampled"], json!([1, 2, 3]));
+    assert!(matches!(a.call("doc_export_size", &json!({ "doc": doc, "format": "webp" })), Err(ToolError::InvalidArgs(_))));
+}
+
 #[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};

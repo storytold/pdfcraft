@@ -96,7 +96,51 @@ pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, inde
     format!("{stem}_Page_{:0width$}_Image_{index:04}.{}", image.page + 1, image.extension)
 }
 
+/// An estimate of the image files Export ▸ Image writes, made before it writes them.
+///
+/// It is a sample, not the bytes themselves: the pages it measures are drawn and encoded, and
+/// their bytes per pixel estimate every page (see [`Exporter::estimate`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SizeEstimate {
+    /// Estimated bytes of each page's file, in the order asked for.
+    pub pages: Vec<u64>,
+    /// The pages measured, in the order asked for (0-based): the first, the middle and the last.
+    pub sampled: Vec<usize>,
+}
+
+impl SizeEstimate {
+    /// Estimated bytes of all the files together.
+    pub fn total(&self) -> u64 {
+        self.pages.iter().copied().fold(0, u64::saturating_add)
+    }
+}
+
+/// What [`Exporter::estimate_cancellable`] returns when it is stopped. The estimate it was making
+/// would have been thrown away, so it says why instead of reporting one.
+const ESTIMATE_CANCELLED: &str = "the size estimate was cancelled";
+
+/// The pages [`Exporter::estimate`] measures: the first, the middle and the last of `pages`, each
+/// once, so a short range is measured whole and a long one samples its ends and its middle.
+fn sample_of(pages: &[usize]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for i in [0, pages.len() / 2, pages.len().saturating_sub(1)] {
+        if let Some(&page) = pages.get(i)
+            && !out.contains(&page)
+        {
+            out.push(page);
+        }
+    }
+    out
+}
+
 impl Exporter {
+    /// How many pixels [`Exporter::estimate`] draws of a page at most. A page whose export at the
+    /// asked resolution is larger is sampled smaller: bytes per pixel fall slowly with resolution,
+    /// so the estimate stays close without drawing tens of megapixels for every setting.
+    const ESTIMATE_SAMPLE_PIXELS: f64 = 16.0e6;
+    /// The fewest pixels a sample has, along its longer side, however large the page.
+    const ESTIMATE_SAMPLE_SIDE: f64 = 512.0;
+
     pub fn new(doc: &Document) -> Self {
         Self::from_source(doc.export_source())
     }
@@ -144,6 +188,100 @@ impl Exporter {
         self.check(page)?;
         let used = self.dpi_used(page, dpi);
         draw_image(&mut self.renderer, page, dpi, format, used)
+    }
+
+    /// Estimate the bytes [`Exporter::image`] writes for `pages` at `dpi` in `format`, without
+    /// writing them.
+    ///
+    /// Up to three pages — the first, the middle and the last — are drawn and encoded at the
+    /// resolution the export uses, and the bytes per pixel they measure estimate every page,
+    /// scaled to that page's own pixel count. A page whose render at the export's resolution would
+    /// exceed [`Exporter::ESTIMATE_SAMPLE_PIXELS`] is sampled smaller, which reads a little high
+    /// (bytes per pixel fall as resolution rises), so the estimate errs on the large side. The
+    /// files can still differ from the estimate, most of all when the pages it did not measure
+    /// differ from the ones it did.
+    ///
+    /// This runs to the end; [`Exporter::estimate_cancellable`] stops early when it is no longer
+    /// wanted.
+    pub fn estimate(&mut self, pages: &[usize], dpi: f64, format: ImageFormat) -> Result<SizeEstimate, String> {
+        self.estimate_cancellable(pages, dpi, format, &AtomicBool::new(false))
+    }
+
+    /// [`Exporter::estimate`], given up on when `cancel` is set: it is checked before any page is
+    /// drawn and again between samples, so a closed dialog stops drawing pages no one will read.
+    /// A single render cannot be interrupted, so a stop waits for the page in hand to finish.
+    pub fn estimate_cancellable(&mut self, pages: &[usize], dpi: f64, format: ImageFormat, cancel: &AtomicBool) -> Result<SizeEstimate, String> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ESTIMATE_CANCELLED.to_string());
+        }
+        for page in pages {
+            self.check(*page)?;
+        }
+        let dpi = dpi.clamp(18.0, 1200.0);
+        let sampled = sample_of(pages);
+        // The samples' bits per pixel, weighted by the pixels each drew: a sample of a large page
+        // counts for as much as the page it stands for.
+        let mut bits = 0.0f64;
+        let mut drawn = 0.0f64;
+        for page in &sampled {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(ESTIMATE_CANCELLED.to_string());
+            }
+            let (bytes, pixels) = self.draw_sample(*page, dpi, format)?;
+            if pixels > 0.0 {
+                bits += bytes as f64 * 8.0;
+                drawn += pixels;
+            }
+        }
+        let per_pixel = if drawn > 0.0 { bits / drawn } else { 0.0 };
+        let mut estimate = SizeEstimate { pages: Vec::with_capacity(pages.len()), sampled };
+        for page in pages {
+            let bytes = per_pixel * self.pixels(*page, dpi) / 8.0;
+            // A page that drew nothing (an empty page, or one the renderer refused) has no size to
+            // report: say zero rather than invent one.
+            estimate.pages.push(if bytes.is_finite() && bytes > 0.0 { bytes.round().min(u64::MAX as f64) as u64 } else { 0 });
+        }
+        Ok(estimate)
+    }
+
+    /// Draw and encode page `page` for an estimate: (bytes, pixels drawn).
+    fn draw_sample(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<(u64, f64), String> {
+        let (w, h) = self.page_size(page);
+        let scale = self.scale_for(page, dpi);
+        let area = f64::from(w.max(1.0)) * f64::from(h.max(1.0));
+        // Pixels = area × scale², so this scale keeps a sample within the budget…
+        let by_area = (Self::ESTIMATE_SAMPLE_PIXELS / area).sqrt();
+        // …unless that would leave fewer pixels than a sample needs to be representative.
+        let by_side = Self::ESTIMATE_SAMPLE_SIDE / f64::from(w.max(h).max(1.0));
+        let sample_scale = if by_area.is_finite() && by_area > 0.0 { (scale as f64).min(by_area.max(by_side)) as f32 } else { scale };
+        let r = self.renderer.render(RenderRequest { page, scale: sample_scale, ..Default::default() });
+        if let Some(e) = r.error {
+            return Err(format!("page {}: {e}", page + 1));
+        }
+        // The sample is thrown away once measured, so it records the export's own resolution:
+        // the metadata adds the same few bytes either way, and the encode path stays the one the
+        // file will take.
+        let bytes = encode_image(r.width, r.height, &r.rgba, format, self.dpi_used(page, dpi))?;
+        Ok((bytes.len() as u64, f64::from(r.width) * f64::from(r.height)))
+    }
+
+    /// Page `page`'s displayed size in points, or letter paper when the source did not say.
+    fn page_size(&self, page: usize) -> (f32, f32) {
+        self.sizes.get(page).copied().unwrap_or((612.0, 792.0))
+    }
+
+    /// Device pixels per point page `page` is exported at for `dpi` (the renderer's size limits
+    /// may lower it; see [`Exporter::dpi_used`]).
+    fn scale_for(&self, page: usize, dpi: f64) -> f32 {
+        let (w, h) = self.page_size(page);
+        pdfcraft_render::effective_scale(w.max(1.0), h.max(1.0), (dpi.clamp(18.0, 1200.0) / 72.0) as f32)
+    }
+
+    /// The pixels page `page` covers in its exported file at `dpi`.
+    fn pixels(&self, page: usize, dpi: f64) -> f64 {
+        let (w, h) = self.page_size(page);
+        let scale = self.scale_for(page, dpi);
+        f64::from(pdfcraft_render::device_pixels(w, scale)) * f64::from(pdfcraft_render::device_pixels(h, scale))
     }
 
     /// Pages `pages` as image files of `format`, handed to `sink` in order with their page

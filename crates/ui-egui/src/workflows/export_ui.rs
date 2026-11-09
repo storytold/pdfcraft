@@ -3,10 +3,17 @@
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
+use pdfcraft_engine::{
+    DocId,
+    export::{ExportSource, Exporter, ImageFormat, SizeEstimate},
+};
 
 use crate::marks_ui::PageRange;
 use crate::theme::{self, Tokens};
@@ -38,8 +45,196 @@ impl Default for ExportDraft {
 /// Progress of a background export: (done, total, final message once finished).
 pub type ExportStatus = Arc<Mutex<Option<(usize, usize, Option<String>)>>>;
 
+/// What the size estimate was made for: a new document state, page range, resolution or format
+/// starts a new one.
+#[derive(Clone, PartialEq, Eq)]
+struct SizeKey {
+    /// The document whose pages are measured.
+    doc: DocId,
+    /// The document's edit generation, so an undo or an edit measures again.
+    generation: u64,
+    /// The 0-based pages the export would write.
+    pages: Vec<usize>,
+    /// The resolution's bits, so the key compares exactly without a float.
+    dpi: u64,
+    /// The file format (and JPEG quality) the pages would be written in.
+    format: ImageFormat,
+}
+
+/// One running size estimate: the settings it was started for, its worker's result, and the flag
+/// that stops it.
+struct SizeJob {
+    /// The settings this estimate was started for; a result is only kept while it still matches.
+    key: SizeKey,
+    /// The worker's result, once it has one.
+    receiver: mpsc::Receiver<Result<SizeEstimate, String>>,
+    /// Set when this estimate is no longer wanted (a new key, or the dialog closed); the worker
+    /// reads it before starting and between the pages it draws.
+    cancel: Arc<AtomicBool>,
+}
+
+impl SizeJob {
+    /// Whether its worker has exited: a worker drops its sender when it returns, which the
+    /// receiver reports as disconnected (a worker that finished normally sends first).
+    fn finished(&self) -> bool {
+        matches!(self.receiver.try_recv(), Ok(_) | Err(mpsc::TryRecvError::Disconnected))
+    }
+}
+
+impl Drop for SizeJob {
+    /// Dropping the job is cancellation: nothing will read what it measures.
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The export dialog's size estimate: at most one worker running, and no stale result after the
+/// settings, the document or the page range change.
+#[derive(Default)]
+pub(crate) struct SizeDraft {
+    key: Option<SizeKey>,
+    /// The key the previous frame had. A job starts only once the settings settle, so dragging the
+    /// quality slider does not start a worker per frame.
+    settled: Option<SizeKey>,
+    job: Option<SizeJob>,
+    /// Cancelled estimates whose worker has not exited yet. A render cannot be interrupted, so a
+    /// new worker waits for these: closing and reopening the dialog then cannot stack renders.
+    retiring: Vec<SizeJob>,
+    result: Option<Result<SizeEstimate, String>>,
+}
+
+impl SizeDraft {
+    /// Stop measuring and forget the last estimate (the dialog closed, or another document is up).
+    pub(crate) fn cancel(&mut self) {
+        if let Some(job) = self.job.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+            self.retiring.push(job);
+        }
+        self.key = None;
+        self.settled = None;
+        self.result = None;
+        self.prune();
+    }
+
+    /// Forget the cancelled workers that have exited.
+    fn prune(&mut self) {
+        self.retiring.retain(|job| !job.finished());
+    }
+
+    /// Keep `key`'s estimate up to date: start a worker once the settings have settled, drop the
+    /// result of a job whose key has changed, and take the finished estimate when it arrives.
+    fn update(&mut self, key: SizeKey, source: impl FnOnce() -> ExportSource, ctx: &egui::Context, inline: bool) {
+        self.prune();
+        if self.key.as_ref() != Some(&key) {
+            if let Some(job) = self.job.take() {
+                job.cancel.store(true, Ordering::Relaxed);
+                self.retiring.push(job);
+            }
+            self.key = Some(key.clone());
+            self.settled = None;
+            self.result = None;
+        }
+        if let Some(job) = &self.job {
+            let received = match job.receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err("the size estimate stopped unexpectedly".to_string())),
+            };
+            if let Some(result) = received {
+                if job.key == key && !job.cancel.load(Ordering::Relaxed) {
+                    self.result = Some(result);
+                }
+                self.job = None;
+            }
+        }
+        if self.job.is_some() || self.result.is_some() {
+            return;
+        }
+        if !self.retiring.is_empty() {
+            // A cancelled estimate is still winding down. Start nothing until it exits, and keep
+            // the frame coming so this notices when it does.
+            ctx.request_repaint();
+            return;
+        }
+        if self.settled.as_ref() != Some(&key) {
+            self.settled = Some(key);
+            // The settling frame starts no worker, so ask for the next frame itself: the estimate
+            // must not wait for the user to move the mouse.
+            ctx.request_repaint();
+            return;
+        }
+        let source = source();
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (pages, dpi, format) = (key.pages.clone(), f64::from_bits(key.dpi), key.format);
+        self.job = Some(SizeJob { key, receiver, cancel: cancel.clone() });
+        let ctx = ctx.clone();
+        let work = move || {
+            // The dialog may have closed, or the settings changed, while this worker waited to
+            // start: there is nothing to measure for any more.
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let result = Exporter::from_source(source).estimate_cancellable(&pages, dpi, format, &cancel);
+            let _ = sender.send(result);
+            ctx.request_repaint();
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if !inline {
+            if let Err(error) = std::thread::Builder::new().name("export-size".into()).spawn(work) {
+                self.job = None;
+                self.result = Some(Err(error.to_string()));
+            }
+            return;
+        }
+        let _ = inline;
+        work();
+    }
+}
+
+/// An estimated size in the unit that keeps it short: an estimate is approximate, so it keeps one
+/// decimal at most.
+fn approx_size(bytes: u64) -> String {
+    let (mb, kb) = (bytes as f64 / (1u64 << 20) as f64, bytes as f64 / (1u64 << 10) as f64);
+    if mb >= 10.0 {
+        format!("{mb:.0} MB")
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else if kb >= 10.0 {
+        format!("{kb:.0} KB")
+    } else if kb >= 1.0 {
+        format!("{kb:.1} KB")
+    } else {
+        crate::panels::byte_count(bytes as usize)
+    }
+}
+
+/// The size the files will take, that it is being measured, or why it is unknown.
+fn size_line(ui: &mut egui::Ui, size: &SizeDraft, t: &Tokens) {
+    match &size.result {
+        Some(Ok(estimate)) => {
+            let text = crate::i18n::fmt(tl!("Estimated size: about {size}"), &[("size", &approx_size(estimate.total()))]);
+            ui.label(egui::RichText::new(text).color(t.text_muted))
+                .on_hover_text(tl!("Measured on a sample of the pages at this resolution and format; the files may differ."));
+        }
+        Some(Err(error)) => {
+            let text = crate::i18n::fmt(tl!("No size estimate: {e}"), &[("e", error)]);
+            ui.label(egui::RichText::new(text).small().color(t.text_faint));
+        }
+        None => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new(tl!("Estimating size…")).color(t.text_faint));
+            });
+        }
+    }
+}
+
+/// The Export dialog's body: the format and resolution (and page range) controls, the estimate of
+/// what the files will take, and the Export button. Returns (export clicked, cancel clicked).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: ExportKind) -> (bool, bool) {
-    let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.info.pages.len()).unwrap_or(0);
+    let active = app.active_ids();
+    let count = active.and_then(|(_, id)| app.session.get(id)).map(|d| d.info.pages.len()).unwrap_or(0);
     let d = &mut app.export_draft;
     ui.label(
         egui::RichText::new(match kind {
@@ -87,6 +282,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 .small()
                 .color(t.text_faint),
         );
+        // What the files will take, measured on a sample of the pages by a worker (#2819).
+        let (pages, dpi, format) = (d.range.pages(count), d.dpi, d.format);
+        if !pages.is_empty()
+            && let Some((_, id)) = active
+            && let Some(doc) = app.session.get(id)
+        {
+            let key = SizeKey { doc: id, generation: doc.edit_generation(), pages, dpi: dpi.to_bits(), format };
+            let size = &mut app.export_size;
+            size.update(key, || doc.export_source(), ui.ctx(), app.run_inline);
+            size_line(ui, &app.export_size, t);
+        }
     } else if kind == ExportKind::AllImages {
         ui.horizontal(|ui| {
             ui.label(tl!("Exclude images smaller than"));
@@ -304,5 +510,70 @@ impl PdfCraftApp {
         if let Some(ctx) = &self.ctx {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The settings for edit `generation`, asking to measure page 0.
+    fn key(generation: u64) -> SizeKey {
+        SizeKey { doc: DocId(1), generation, pages: vec![0], dpi: 150.0f64.to_bits(), format: ImageFormat::Png }
+    }
+
+    /// A source with no pages: measuring it fails at once, which is enough to see a worker start.
+    fn source() -> ExportSource {
+        ExportSource { bytes: Arc::new(Vec::new()), config: Default::default(), pages: 0, sizes: Vec::new() }
+    }
+
+    /// A render cannot be interrupted, so a cancelled estimate keeps its slot until its worker
+    /// exits. Closing and reopening the dialog then cannot stack renders.
+    #[test]
+    fn a_cancelled_worker_keeps_its_slot_until_it_exits() {
+        let ctx = egui::Context::default();
+        let mut draft = SizeDraft::default();
+        // A worker that is still rendering: its sender is alive, so it has not exited.
+        let (sender, receiver) = mpsc::channel();
+        draft.key = Some(key(1));
+        draft.job = Some(SizeJob { key: key(1), receiver, cancel: Arc::new(AtomicBool::new(false)) });
+
+        // New settings cancel it, but nothing starts while it winds down.
+        let mut started = 0;
+        draft.update(
+            key(2),
+            || {
+                started += 1;
+                source()
+            },
+            &ctx,
+            true,
+        );
+        assert_eq!(started, 0, "no worker while a cancelled one is still rendering");
+        assert_eq!(draft.retiring.len(), 1, "the cancelled worker is still accounted for");
+
+        // The worker exits (drops its sender). The new estimate settles, then starts.
+        drop(sender);
+        draft.update(
+            key(2),
+            || {
+                started += 1;
+                source()
+            },
+            &ctx,
+            true,
+        );
+        assert_eq!(started, 0, "the frame after settling only settles");
+        draft.update(
+            key(2),
+            || {
+                started += 1;
+                source()
+            },
+            &ctx,
+            true,
+        );
+        assert_eq!(started, 1, "the estimate starts once the previous worker has exited");
+        assert!(draft.retiring.is_empty(), "the exited worker is forgotten");
     }
 }
