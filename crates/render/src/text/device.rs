@@ -458,9 +458,17 @@ impl<'a> Device<'a> for TextDevice {
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }
         let advance = match glyph {
-            Glyph::Outline(g) => {
-                g.advance_width().filter(|a| *a > 0.0).map(f64::from).unwrap_or_else(|| g.outline().bounding_box().width().max(500.0))
-            }
+            // A vertical font's advance runs down the column; across it, the glyph is as wide as
+            // its horizontal width w0, centred on the column by default (ISO 32000-2 §9.7.4.3). Taking
+            // the outline's width instead gave a column of Latin letters boxes of uneven widths,
+            // off its centre, and a narrow letter cut the line's gap allowance below the spacing
+            // of widely tracked text, so the column fell apart into lines.
+            Glyph::Outline(g) => g
+                .vertical_glyph_width()
+                .or_else(|| g.advance_width())
+                .filter(|a| a.is_finite() && *a > 0.0)
+                .map(f64::from)
+                .unwrap_or_else(|| g.outline().bounding_box().width().max(500.0)),
             Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map(f64::from).unwrap_or(600.0),
         };
         // The baseline direction in view space (y down).
