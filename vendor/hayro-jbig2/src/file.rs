@@ -88,6 +88,19 @@ pub(crate) struct File<'a> {
 /// (D.4.1)
 const FILE_HEADER_ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
 
+/// PdfCraft patch (17): an embedded stream that starts with a file header (D.4), which some
+/// producers write into a PDF's `JBIG2Decode` data although ISO 32000-1 7.4.7 has the embedded
+/// organization (D.3) there. Returns the reader past the header and the organization the header
+/// declares, or `None` when the data doesn't start with the header's ID string.
+pub(crate) fn after_file_header(data: &[u8]) -> Result<Option<(Reader<'_>, FileOrganization)>> {
+    if !data.starts_with(&FILE_HEADER_ID) {
+        return Ok(None);
+    }
+    let mut reader = Reader::new(data);
+    let header = parse_file_header(&mut reader)?;
+    Ok(Some((reader, header.organization)))
+}
+
 /// Parse a standalone JBIG2 file.
 pub(crate) fn parse_file(data: &[u8]) -> Result<File<'_>> {
     let mut reader = Reader::new(data);
@@ -170,7 +183,9 @@ fn parse_segments<'a>(
         FileOrganization::Sequential => {
             parse_segments_sequential(reader, &mut segments, &mut SegmentCount::default())?;
         }
-        FileOrganization::RandomAccess => parse_segments_random_access(reader, &mut segments)?,
+        FileOrganization::RandomAccess => {
+            parse_segments_random_access(reader, &mut segments, &mut SegmentCount::default())?;
+        }
     }
 
     Ok(segments)
@@ -213,12 +228,12 @@ pub(crate) fn parse_segments_sequential<'a>(
 /// is followed by a sequence of segments headers; the last segment header is
 /// followed by the data for the first segment, then the data for the second
 /// segment, and so on." (D.2)
-fn parse_segments_random_access<'a>(
+pub(crate) fn parse_segments_random_access<'a>(
     reader: &mut Reader<'a>,
     segments: &mut Vec<Segment<'a>>,
+    count: &mut SegmentCount,
 ) -> Result<()> {
     let mut headers = Vec::new();
-    let mut count = SegmentCount::default();
 
     loop {
         if reader.at_end() {
