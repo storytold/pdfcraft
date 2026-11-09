@@ -23,6 +23,7 @@
 
 pub mod icc;
 mod xmp;
+mod xmp_extension;
 mod xmp_types;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -153,6 +154,14 @@ pub const WORDINGS: &[&str] = &[
     "The title in the metadata and the document information differ",
     "The XMP property {property} in metadata stream {object} should have the value type {type}",
     "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+    "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
+    "The XMP extension schema container in metadata stream {object} holds no rdf:Bag",
+    "The XMP extension schema container in metadata stream {object} holds {found}, not one rdf:Bag",
+    "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
+    "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -509,10 +518,12 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
-    // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
-    let mut mistyped = Vec::new();
+    // 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
+    // every metadata stream.
+    let (mut mistyped, mut extension) = (Vec::new(), xmp_extension::Findings::default());
     xmp_types::for_each_packet(&objs, |object, packet| {
         mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
+        extension.add(object, packet);
     });
     for (object, name, written, ty) in mistyped {
         let mut values = vec![("{property}", name.clone()), ("{object}", object.to_string()), ("{type}", ty)];
@@ -531,6 +542,87 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
                 "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
                 values,
                 object,
+                false,
+            );
+        }
+    }
+    for m in extension.missing {
+        let mut values = vec![("{schema}", m.schema), ("{object}", m.object.to_string()), ("{entry}", m.entry)];
+        match (m.item, m.empty) {
+            (None, false) => located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
+                values,
+                m.object,
+                false,
+            ),
+            (None, true) => located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+                values,
+                m.object,
+                false,
+            ),
+            (Some(item), false) => {
+                values.push(("{item}", item));
+                located_issue(
+                    "6.6.2.3.3",
+                    "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+                    values,
+                    m.object,
+                    false,
+                );
+            }
+            (Some(item), true) => {
+                values.push(("{item}", item));
+                located_issue(
+                    "6.6.2.3.3",
+                    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
+                    values,
+                    m.object,
+                    false,
+                );
+            }
+        }
+    }
+    for c in extension.not_bag {
+        let object = c.object;
+        if c.found.is_empty() {
+            located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema container in metadata stream {object} holds no rdf:Bag",
+                vec![("{object}", object.to_string())],
+                object,
+                false,
+            );
+        } else {
+            let values = vec![("{object}", object.to_string()), ("{found}", c.found)];
+            located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema container in metadata stream {object} holds {found}, not one rdf:Bag",
+                values,
+                object,
+                false,
+            );
+        }
+    }
+    for p in extension.prefixes {
+        let mut values = vec![("{object}", p.object.to_string()), ("{namespace}", p.namespace.to_owned()), ("{prefix}", p.own.to_owned())];
+        if p.written.is_empty() {
+            located_issue(
+                "6.6.2.3.3",
+                "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
+                values,
+                p.object,
+                false,
+            );
+        } else {
+            values.push(("{written}", p.written));
+            located_issue(
+                "6.6.2.3.3",
+                "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
+                values,
+                p.object,
                 false,
             );
         }

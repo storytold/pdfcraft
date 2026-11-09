@@ -776,6 +776,324 @@ fn xmp_exif_schemas_have_their_value_types() {
     assert_eq!(element("aux:SerialNumber", "<rdf:Bag><rdf:li>1</rdf:li></rdf:Bag>"), ["aux:SerialNumber"]);
 }
 
+/// The 6.6.2.3.3 findings of a packet whose extension schema bag holds `schema`, with the five
+/// description namespaces bound to the prefixes in `prefixes` (`pdfaSchema` and so on by default).
+fn extension(schema: &str, prefixes: [&str; 4]) -> (Vec<String>, Vec<&'static str>) {
+    let found = extension_findings(schema, prefixes);
+    (found.missing.into_iter().map(|m| m.entry).collect(), found.prefixes.into_iter().map(|p| p.own).collect())
+}
+
+/// [`extension`]'s findings in full, as if from the metadata stream `3 0 R`.
+fn extension_findings(schema: &str, prefixes: [&str; 4]) -> xmp_extension::Findings {
+    let [s, p, t, f] = prefixes;
+    let xmp = format!(
+        concat!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+            r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+            r#"xmlns:{s}="http://www.aiim.org/pdfa/ns/schema#" xmlns:{p}="http://www.aiim.org/pdfa/ns/property#" "#,
+            r#"xmlns:{t}="http://www.aiim.org/pdfa/ns/type#" xmlns:{f}="http://www.aiim.org/pdfa/ns/field#">"#,
+            r#"<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">{schema}</rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+            r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        ),
+        s = s,
+        p = p,
+        t = t,
+        f = f,
+        schema = schema
+    );
+    let parsed = xmp::parse(&xmp).expect("parses");
+    let mut found = xmp_extension::Findings::default();
+    found.add(ObjRef::new(3, 0), &parsed);
+    found
+}
+
+const OWN: [&str; 4] = ["pdfaSchema", "pdfaProperty", "pdfaType", "pdfaField"];
+
+/// A complete schema description, with `drop` left out of it (`pdfaSchema:schema` and so on).
+fn schema_without(drop: &str) -> String {
+    let entry = |name: &str, value: &str| if name == drop { String::new() } else { format!("<{name}>{value}</{name}>") };
+    let property = ["pdfaProperty:name", "pdfaProperty:valueType", "pdfaProperty:category", "pdfaProperty:description"]
+        .iter()
+        .map(|n| entry(n, "x"))
+        .collect::<String>();
+    let field = ["pdfaField:name", "pdfaField:valueType", "pdfaField:description"].iter().map(|n| entry(n, "x")).collect::<String>();
+    let field = entry("pdfaType:field", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{field}</rdf:li></rdf:Seq>"#));
+    let value_type =
+        ["pdfaType:type", "pdfaType:namespaceURI", "pdfaType:prefix", "pdfaType:description"].iter().map(|n| entry(n, "x")).collect::<String>();
+    [
+        entry("pdfaSchema:schema", "Some schema"),
+        entry("pdfaSchema:namespaceURI", "http://example.com/ns/"),
+        entry("pdfaSchema:prefix", "ex"),
+        entry("pdfaSchema:property", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{property}</rdf:li></rdf:Seq>"#)),
+        entry("pdfaSchema:valueType", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{value_type}{field}</rdf:li></rdf:Seq>"#)),
+    ]
+    .concat()
+}
+
+/// PDF/A-2 6.6.2.3.3: every extension schema description has its required entries, in each of its
+/// four kinds, and writes each description namespace with its own prefix.
+#[test]
+fn xmp_extension_schema_descriptions_are_complete() {
+    assert_eq!(extension(&schema_without(""), OWN), (vec![], vec![]));
+    // The property and value type lists of a schema are optional.
+    assert_eq!(extension(&schema_without("pdfaSchema:property"), OWN), (vec![], vec![]));
+    assert_eq!(extension(&schema_without("pdfaSchema:valueType"), OWN), (vec![], vec![]));
+    // Every other entry is required.
+    for required in [
+        "pdfaSchema:schema",
+        "pdfaSchema:namespaceURI",
+        "pdfaSchema:prefix",
+        "pdfaProperty:name",
+        "pdfaProperty:valueType",
+        "pdfaProperty:category",
+        "pdfaProperty:description",
+        "pdfaType:type",
+        "pdfaType:namespaceURI",
+        "pdfaType:prefix",
+        "pdfaType:description",
+        "pdfaType:field",
+        "pdfaField:name",
+        "pdfaField:valueType",
+        "pdfaField:description",
+    ] {
+        assert_eq!(extension(&schema_without(required), OWN), (vec![required.to_string()], vec![]), "{required}");
+    }
+    // An entry may be an attribute of an rdf:Description item.
+    let as_attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:namespaceURI="http://e/" pdfaSchema:prefix="e"/>"#;
+    assert_eq!(extension(&format!("{}{as_attribute}", schema_without("")), OWN), (vec![], vec![]));
+    let missing_attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:prefix="e"/>"#;
+    assert_eq!(extension(&format!("{}{missing_attribute}", schema_without("")), OWN).0, ["pdfaSchema:namespaceURI"]);
+    // Each namespace with its own prefix: the right URI under another prefix breaks the rule.
+    for (i, own) in OWN.iter().enumerate() {
+        let mut prefixes = OWN;
+        prefixes[i] = "other";
+        let schema = schema_without("").replace(&format!("{own}:"), "other:");
+        assert_eq!(extension(&schema, prefixes), (vec![], vec![*own]), "{own}");
+    }
+    // A second property list is read as well as the first.
+    let complete = schema_without("");
+    let second = complete.replacen(
+        "</pdfaSchema:property>",
+        r#"</pdfaSchema:property><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>p</pdfaProperty:name></rdf:li></rdf:Seq></pdfaSchema:property>"#,
+        1,
+    );
+    assert_eq!(extension(&second, OWN).0, ["pdfaProperty:valueType", "pdfaProperty:category", "pdfaProperty:description"]);
+    // The container is an rdf:Bag (TechNote 0009, 4.2).
+    let container = |inner: &str| {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas>{inner}</pdfaExtension:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut found = xmp_extension::Findings::default();
+        found.add(ObjRef::new(3, 0), &xmp::parse(&xmp).expect("parses"));
+        found.not_bag.into_iter().map(|c| c.found).collect::<Vec<_>>()
+    };
+    let schema = r#"<rdf:li rdf:parseType="Resource"><pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI><pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li>"#;
+    assert!(container(&format!("<rdf:Bag>{schema}</rdf:Bag>")).is_empty());
+    // What it holds instead is named as the packet writes it.
+    assert_eq!(container(&format!("<rdf:Seq>{schema}</rdf:Seq>")), ["rdf:Seq"]);
+    assert_eq!(container(r#"<rdf:Description pdfaSchema:schema="S"/>"#), ["rdf:Description"]);
+    assert_eq!(container(&format!("<rdf:Bag>{schema}</rdf:Bag><rdf:Bag/>")), ["rdf:Bag, rdf:Bag"]);
+    assert_eq!(container(""), [""]);
+    // The container itself is written as pdfaExtension too (TechNote 0009, 4.1).
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:ext="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><ext:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li></rdf:Bag></ext:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let mut found = xmp_extension::Findings::default();
+    found.add(ObjRef::new(3, 0), &xmp::parse(xmp).expect("parses"));
+    assert!(found.missing.is_empty());
+    let written: Vec<(&str, &str, &str)> = found.prefixes.iter().map(|p| (p.namespace, p.own, p.written.as_str())).collect();
+    assert_eq!(written, [("http://www.aiim.org/pdfa/ns/extension/", "pdfaExtension", "ext")]);
+    // Through verify, under 6.6.2.3.3 and not fixable.
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+        r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let issues: Vec<Issue> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").collect();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].message, "The XMP extension schema #1 in metadata stream 3 0 R has no pdfaSchema:namespaceURI entry");
+    assert_eq!(issues[0].object, Some(ObjRef::new(3, 0)));
+    assert!(!issues[0].fixable);
+}
+
+/// PDF/A-2 6.6.2.3.3: an entry that names something is incomplete when it is empty, while the
+/// human-readable descriptions may be empty (TechNote 0009, 4.3 to 4.6).
+#[test]
+fn xmp_extension_naming_entries_are_not_empty() {
+    let complete = schema_without("");
+    let emptied = |name: &str, value: &str, with: &str| {
+        let element = format!("<{name}>{value}</{name}>");
+        assert_eq!(complete.matches(&element).count(), 1, "{name}");
+        complete.replace(&element, &format!("<{name}>{with}</{name}>"))
+    };
+    let said = |schema: &str| -> Vec<(String, bool)> { extension_findings(schema, OWN).missing.into_iter().map(|m| (m.entry, m.empty)).collect() };
+    for (name, value) in [
+        ("pdfaSchema:namespaceURI", "http://example.com/ns/"),
+        ("pdfaSchema:prefix", "ex"),
+        ("pdfaProperty:name", "x"),
+        ("pdfaProperty:valueType", "x"),
+        ("pdfaProperty:category", "x"),
+        ("pdfaType:type", "x"),
+        ("pdfaType:namespaceURI", "x"),
+        ("pdfaType:prefix", "x"),
+        ("pdfaField:name", "x"),
+        ("pdfaField:valueType", "x"),
+    ] {
+        assert_eq!(said(&emptied(name, value, "")), [(name.to_owned(), true)], "{name}");
+        assert_eq!(said(&emptied(name, value, " \n\t ")), [(name.to_owned(), true)], "{name} blank");
+    }
+    for (name, value) in
+        [("pdfaSchema:schema", "Some schema"), ("pdfaProperty:description", "x"), ("pdfaType:description", "x"), ("pdfaField:description", "x")]
+    {
+        assert_eq!(said(&emptied(name, value, "")), [], "{name}");
+    }
+    // An empty element written shut, and an empty attribute, are empty too.
+    let shut = complete.replace("<pdfaType:prefix>x</pdfaType:prefix>", "<pdfaType:prefix/>");
+    assert_eq!(said(&shut), [("pdfaType:prefix".to_owned(), true)]);
+    let attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:namespaceURI="http://e/" pdfaSchema:prefix=" "/>"#;
+    assert_eq!(said(&format!("{complete}{attribute}")), [("pdfaSchema:prefix".to_owned(), true)]);
+    // A URI given as an rdf:resource, or a value given as rdf:value, is a value.
+    let resource =
+        complete.replace("<pdfaType:namespaceURI>x</pdfaType:namespaceURI>", r#"<pdfaType:namespaceURI rdf:resource="http://t.example/"/>"#);
+    assert_eq!(said(&resource), []);
+    let value = complete.replace("<pdfaType:type>x</pdfaType:type>", r#"<pdfaType:type rdf:value="T"/>"#);
+    assert_eq!(said(&value), []);
+    // A comment is not a value.
+    assert_eq!(said(&emptied("pdfaType:prefix", "x", "<!-- t -->")), [("pdfaType:prefix".to_owned(), true)]);
+
+    // Through verify, with their own wordings.
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#">"#,
+        r#"<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://a.example/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix></pdfaSchema:prefix><pdfaSchema:valueType><rdf:Seq><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaType:type>T</pdfaType:type><pdfaType:namespaceURI>http://t.example/</pdfaType:namespaceURI>"#,
+        r#"<pdfaType:prefix> </pdfaType:prefix><pdfaType:description>d</pdfaType:description>"#,
+        r#"<pdfaType:field><rdf:Seq/></pdfaType:field></rdf:li></rdf:Seq></pdfaSchema:valueType>"#,
+        r#"</rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R has an empty pdfaSchema:prefix entry",
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes T with an empty pdfaType:prefix entry",
+        ]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.3: each incomplete description is reported by itself, named by its schema's
+/// namespace URI, its own name and its metadata stream, and so is each misused prefix and container.
+#[test]
+fn xmp_extension_findings_say_where_they_are() {
+    // Two schemas lacking the same entries are two findings, each with its schema.
+    let schema = |uri: &str, property: &str| {
+        format!(
+            concat!(
+                r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>{uri}</pdfaSchema:namespaceURI>"#,
+                r#"<pdfaSchema:prefix>e</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">{property}"#,
+                r#"</rdf:li></rdf:Seq></pdfaSchema:property>"#
+            ),
+            uri = uri,
+            property = property
+        )
+    };
+    let named = "<pdfaProperty:name>p</pdfaProperty:name><pdfaProperty:valueType>Text</pdfaProperty:valueType>";
+    let two = format!(r#"{}</rdf:li><rdf:li rdf:parseType="Resource">{}"#, schema("http://a.example/", named), schema("http://b.example/", ""));
+    let found = extension_findings(&two, OWN);
+    let said: Vec<(&str, Option<&str>, &str)> = found.missing.iter().map(|m| (m.schema.as_str(), m.item.as_deref(), m.entry.as_str())).collect();
+    assert_eq!(
+        said,
+        [
+            ("http://a.example/", Some("p"), "pdfaProperty:category"),
+            ("http://a.example/", Some("p"), "pdfaProperty:description"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:name"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:valueType"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:category"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:description"),
+        ]
+    );
+    assert!(found.missing.iter().all(|m| m.object == ObjRef::new(3, 0)));
+    // A field is named by its value type and its own name.
+    let field = schema_without("pdfaField:description")
+        .replace(">x</pdfaType:type>", ">Dim</pdfaType:type>")
+        .replace(">x</pdfaField:name>", ">w</pdfaField:name>");
+    let found = extension_findings(&field, OWN);
+    assert_eq!(found.missing.iter().map(|m| m.item.as_deref()).collect::<Vec<_>>(), [Some("Dim/w")]);
+    // A name the packet gives is repeated only so far.
+    let long = format!("http://example.com/{}", "a".repeat(400));
+    let found = extension_findings(&schema(&long, ""), OWN);
+    assert!(found.missing[0].schema.ends_with('…') && found.missing[0].schema.chars().count() == 201, "{}", found.missing[0].schema);
+    // So many findings are enough.
+    let many = vec![schema("http://m.example/", ""); 400].join(r#"</rdf:li><rdf:li rdf:parseType="Resource">"#);
+    assert_eq!(extension_findings(&many, OWN).missing.len(), 1000);
+
+    // Through verify: each wording, with the stream it is in.
+    let verify_packet = |description: &str| -> Vec<String> {
+        let xmp = format!(
+            concat!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+                r#"<rdf:Description rdf:about="" {}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            ),
+            description
+        );
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").map(|i| i.message).collect()
+    };
+    let ns = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{ns}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">{}</rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+            schema("http://a.example/", named)
+        )),
+        [
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes p without a pdfaProperty:category entry",
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes p without a pdfaProperty:description entry",
+        ]
+    );
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{ns}><pdfaExtension:schemas><rdf:Seq><rdf:li rdf:parseType="Resource">{}</rdf:li></rdf:Seq></pdfaExtension:schemas>"#,
+            schema(
+                "http://a.example/",
+                &format!("{named}<pdfaProperty:category>external</pdfaProperty:category><pdfaProperty:description>d</pdfaProperty:description>")
+            )
+        )),
+        ["The XMP extension schema container in metadata stream 3 0 R holds rdf:Seq, not one rdf:Bag"]
+    );
+    assert_eq!(
+        verify_packet(&format!(r#"{ns}><pdfaExtension:schemas/>"#)),
+        ["The XMP extension schema container in metadata stream 3 0 R holds no rdf:Bag"]
+    );
+    let other = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:s="http://www.aiim.org/pdfa/ns/schema#""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{other}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><s:schema>S</s:schema><s:namespaceURI>http://a.example/</s:namespaceURI><s:prefix>e</s:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#
+        )),
+        ["Metadata stream 3 0 R writes the namespace http://www.aiim.org/pdfa/ns/schema# with the prefix s, not pdfaSchema"]
+    );
+    let default = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{default}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><schema xmlns="http://www.aiim.org/pdfa/ns/schema#">S</schema><pdfaSchema:namespaceURI xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#">http://a.example/</pdfaSchema:namespaceURI><pdfaSchema:prefix xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#">e</pdfaSchema:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#
+        )),
+        ["Metadata stream 3 0 R writes the namespace http://www.aiim.org/pdfa/ns/schema# without a prefix, not with pdfaSchema"]
+    );
+}
+
 /// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
 /// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
 /// preferred prefix.
