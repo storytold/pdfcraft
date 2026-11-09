@@ -16,7 +16,7 @@ use crate::XfaError;
 use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -180,6 +180,8 @@ struct Layouter<'t> {
     splitting: Option<Splitting>,
     /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
     field_border: Option<(usize, usize)>,
+    /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
+    views: Views,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -230,6 +232,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         leaves: Vec::new(),
         splitting: None,
         field_border: None,
+        views: Views::ALL,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
@@ -255,6 +258,7 @@ fn fill_page_count(items: &mut [Item], count: &str) {
         match it {
             Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
             Item::Turned(t) => fill_page_count(&mut t.items, count),
+            Item::Only { item, .. } => fill_page_count(std::slice::from_mut(item.as_mut()), count),
             _ => {}
         }
     }
