@@ -918,12 +918,13 @@ pub fn reset_with_formatting(
     let recalculated = recalculate_values(doc, calculation_runner, Some(&mut redraw_fields))?;
     // Format scripts can read other fields. Draw from the final values once all
     // selected defaults and calculated values have been written.
-    if !redraw_fields.is_empty() && !scripts.stopped() {
+    if !redraw_fields.is_empty() {
+        let mut no_scripts = NoScripts;
         for f in fields(doc).into_iter().filter(|f| redraw_fields.contains(&f.obj)) {
-            redraw(doc, &f, &f.value, scripts)?;
-            if scripts.stopped() {
-                break;
-            }
+            // A host may stop callbacks and still commit the reset. Its widgets must
+            // continue to reflect the saved values.
+            let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
+            redraw(doc, &f, &f.value, formatting)?;
         }
     }
     Ok((changed, recalculated))

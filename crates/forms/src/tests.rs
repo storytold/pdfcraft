@@ -1434,6 +1434,51 @@ fn reset_restores_defaults() {
 }
 
 #[test]
+fn reset_redraws_remaining_widgets_after_callbacks_stop() {
+    struct StopOn {
+        event: FieldEvent,
+        stopped: bool,
+        calls: Vec<FieldEvent>,
+    }
+    impl Scripts for StopOn {
+        fn stopped(&self) -> bool {
+            self.stopped
+        }
+
+        fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            assert!(!self.stopped, "callbacks must stop after refusal");
+            self.calls.push(event);
+            self.stopped = event == self.event;
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: Vec::new(), message: None }
+        }
+    }
+
+    for stop_event in [FieldEvent::Calculate, FieldEvent::Format] {
+        let mut doc = one_page();
+        for (name, y) in [("a", 700.0), ("b", 650.0), ("total", 600.0)] {
+            add_field(&mut doc, 0, [40.0, y, 200.0, y + 30.0], &NewField::Text { multiline: false }, Some(name)).unwrap();
+        }
+        for name in ["a", "b"] {
+            set_props(&mut doc, name, &FieldProps { default_value: Some(Some("Default".into())), ..Default::default() }).unwrap();
+            set_value(&mut doc, name, &FieldValue::Text("Before".into())).unwrap();
+            set_field_script(&mut doc, name, "format", Some("event.value = event.value;")).unwrap();
+        }
+        set_field_script(&mut doc, "total", "calculate", Some("event.value = 1;")).unwrap();
+        let mut host = StopOn { event: stop_event, stopped: false, calls: Vec::new() };
+        assert_eq!(reset_with_formatting(&mut doc, Some(&["a".into(), "b".into()]), &mut host, true).unwrap(), (2, 0));
+        assert_eq!(host.calls.last(), Some(&stop_event));
+        let saved = reopen(&doc);
+        let all = fields(&saved);
+        for name in ["a", "b"] {
+            let f = field(&all, name);
+            assert_eq!(f.value, ["Default"]);
+            let drawn = ap(&saved, &f.widgets[0]);
+            assert!(drawn.contains("(Default) Tj") && !drawn.contains("(Before) Tj"), "{name}: {drawn}");
+        }
+    }
+}
+
+#[test]
 fn documents_without_forms_say_so() {
     let mut doc = Document::new_empty();
     assert_combined_matches_legacy(&doc, 0);

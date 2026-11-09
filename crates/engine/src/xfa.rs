@@ -326,6 +326,12 @@ fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, 
     Some((path, parent_som, name, index))
 }
 
+/// The final layout index, which can differ from the index of the bound data node.
+fn indexed_som_tail(som: &str) -> Option<(&str, usize)> {
+    let (prefix, index) = som.strip_suffix(']')?.rsplit_once('[')?;
+    Some((prefix, index.parse().ok()?))
+}
+
 /// Adjust a pending focus when a sibling is deleted and its later instances are renumbered.
 fn shift_focus_after_removal(target: &mut Option<String>, prefix: &str, removed: usize) {
     let Some((index, suffix)) = target
@@ -917,9 +923,9 @@ impl<'a, 'b> Runner<'a, 'b> {
                         self.data_op(pdfcraft_xfa::DataOp::Instances { parent: parent.clone(), name: name.clone(), count: have });
                         // SOM indexes after the removed instance shift down. A focus on
                         // the deleted instance itself must never reach its replacement.
-                        if let Some((prefix, _)) = som.rsplit_once('[') {
+                        if let Some((prefix, removed)) = indexed_som_tail(som) {
                             for (_, target) in &mut self.focus_requests {
-                                shift_focus_after_removal(target, prefix, index);
+                                shift_focus_after_removal(target, prefix, removed);
                             }
                         }
                         let mut path = parent;
@@ -1479,6 +1485,29 @@ mod tests {
         assert_eq!(hits, 0);
         assert!(targets.matches("form1[0].page1[0].other49999[0]"));
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn focus_shift_uses_the_som_index_when_data_binding_omits_the_segment() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form"><area name="row"/><subform name="row"><occur min="1" max="4"/></subform></subform>
+            </template>"#,
+        )
+        .unwrap();
+        let removed = "form[0].row[1]";
+        assert_eq!(split_instance(&tpl, removed).unwrap().3, 0);
+        let (prefix, index) = indexed_som_tail(removed).unwrap();
+        for (before, after) in [
+            ("form[0].row[0].amount[0]", Some("form[0].row[0].amount[0]")),
+            ("form[0].row[1].amount[0]", None),
+            ("form[0].row[2].amount[0]", Some("form[0].row[1].amount[0]")),
+        ] {
+            let mut target = Some(before.to_owned());
+            shift_focus_after_removal(&mut target, prefix, index);
+            assert_eq!(target.as_deref(), after);
+        }
+        assert!(indexed_som_tail("form[0].row[bad]").is_none());
     }
 
     #[test]
