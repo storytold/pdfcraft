@@ -751,6 +751,43 @@ fn custom_document_properties_are_kept_in_the_xmp_packet_as_pdfx() {
     assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), LIBREOFFICE_XMP);
 }
 
+/// PDF/A-1 to -3 allow an XMP schema only when the packet describes it (ISO 19005-2 §6.6.2.3), so
+/// a PDF/A file gets no new `pdfx:` property, while one it already has still follows `/Info`. A
+/// packet that binds `pdfx` to another namespace keeps that namespace's properties.
+#[test]
+fn custom_properties_add_nothing_to_pdfa_packets_or_another_schemas_pdfx() {
+    let pdfa = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"2\" pdfaid:conformance=\"B\"/>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(pdfa.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Project").as_deref(), Some("Apollo"));
+    assert_eq!(xmp_text(&doc).unwrap(), pdfa, "no undescribed schema in a PDF/A packet");
+    // One the packet already has (described, as an Acrobat PDF/A file would) is changed and removed.
+    let described = pdfa.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>Sales</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(described.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace(">Sales<", ">R&amp;D<"));
+    set_info(&mut doc, "Dept", "").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace("<pdfx:Dept>Sales</pdfx:Dept>", ""));
+
+    // `pdfx` bound to the PDF/X identification namespace: neither changed nor added to.
+    let other = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx = 'http://www.npes.org/pdfx/ns/id/'><pdfx:Dept>keep</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(other.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!((info(&doc, "Dept").as_deref(), info(&doc, "Project").as_deref()), (Some("R&D"), Some("Apollo")));
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), other);
+}
+
 #[test]
 fn successive_incremental_saves_stack_revisions() {
     let mut doc = open(fixture());
@@ -1441,6 +1478,11 @@ fn removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims() {
     remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
     let x = pdfx_of(&full_roundtrip(&x1a));
     assert!(x.xmp.as_deref().is_some_and(|x| !x.contains("GTS_") && x.contains("<pdfx:Dept>Print</pdfx:Dept>")), "{:?}", x.xmp);
+
+    // A copy alone declares nothing: refused, and the copy stays.
+    let mut copy_only = doc_print("CGATS TR 001", "icc", "/Title (Flyer)", Some(xmp));
+    assert!(matches!(remove_standard_id(&mut copy_only, Standard::PdfX), Err(OrganizeError::Invalid(_))));
+    assert!(!copy_only.is_modified(), "a refused removal changes nothing");
 }
 
 #[test]

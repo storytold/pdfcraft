@@ -8,7 +8,8 @@
 //! `dc:description`, Keywords → `pdf:Keywords`, Creator → `xmp:CreatorTool`, Producer →
 //! `pdf:Producer`. A custom property (Document Properties ▸ Custom) is kept as `pdfx:<name>`, plain
 //! text in the `http://ns.adobe.com/pdfx/1.3/` schema where Acrobat keeps them, so tools that read
-//! XMP see it too; one whose name can't be an XML element name stays in `/Info` only.
+//! XMP see it too; one whose name can't be an XML element name stays in `/Info` only, and a
+//! PDF/A packet gets no new one (see [`sync_info`]).
 //!
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
@@ -57,13 +58,48 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 /// packet say the same: the standard keys' properties, and `pdfx:<key>` for a custom property.
 /// Does nothing for standard keys XMP doesn't mirror (the dates, Trapped), custom names that
 /// aren't XML names, files without XMP, and packets that can't be edited safely.
+///
+/// A custom property is left alone where `pdfx:` would not mean Adobe's schema (a packet binding
+/// the prefix to another namespace keeps its own property), and in a packet that declares PDF/A
+/// one is changed or removed where it stands but never added: PDF/A-1 to -3 allow a schema only
+/// when the packet describes it in an extension schema (ISO 19005-2 §6.6.2.3), so a new `pdfx:`
+/// property would end the file's conformance. `/Info` keeps it either way.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
-    let (name, ns, shape) = match property(key) {
-        Some((name, ns, shape)) => (name.to_string(), ns, shape),
-        None if !crate::STANDARD_INFO_KEYS.contains(&key) && is_xml_name(key) => (format!("pdfx:{key}"), PDFX, Shape::Text),
-        None => return Ok(()),
-    };
-    edit_packet(doc, |xmp| set_property(xmp, &name, ns, shape, value)).map(|_| ())
+    if let Some((name, ns, shape)) = property(key) {
+        return edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ());
+    }
+    if crate::STANDARD_INFO_KEYS.contains(&key) || !is_xml_name(key) {
+        return Ok(());
+    }
+    let name = format!("pdfx:{key}");
+    edit_packet(doc, |xmp| {
+        if binds_prefix_elsewhere(xmp, "pdfx", PDFX) {
+            return None;
+        }
+        let present = element_span(xmp, &name).is_some() || attribute_span(xmp, &name).is_some();
+        if !present && get_property(xmp, "pdfaid:part", Shape::Text).is_some() {
+            return None;
+        }
+        set_property(xmp, &name, PDFX, Shape::Text, value)
+    })
+    .map(|_| ())
+}
+
+/// Whether `xmp` declares `prefix` for a namespace other than `ns` anywhere (`xmlns:pdfx="…"` on
+/// any element), so a property written with that prefix may belong to another schema. A
+/// declaration whose value never ends counts as another namespace.
+fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
+    let attr = format!("xmlns:{prefix}");
+    // Each declaration is read only up to its closing quote, and the first other value stops the
+    // search, so this is linear in the packet.
+    xmp.match_indices(&attr).any(|(i, _)| {
+        // `xmlns:pdfx` must end there (not `xmlns:pdfxid`), then `=` and a quoted value.
+        let Some(rest) = xmp.get(i + attr.len()..).and_then(|r| r.trim_start().strip_prefix('=')).map(str::trim_start) else {
+            return false;
+        };
+        let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
+        rest.get(1..).and_then(|v| v.get(..v.find(quote)?)).is_none_or(|value| value != ns)
+    })
 }
 
 /// Whether `name` can follow `pdfx:` in an element name: an XML name without a colon (XML 1.0
@@ -464,6 +500,20 @@ mod tests {
         }
         for name in ["", "1st", "-x", ".x", "·x", "a:b", "Q&A", "it's", "a\"b", "×x", "a b", "a=b", "x\u{FFFE}"] {
             assert!(!is_xml_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_bound_to_another_namespace_is_found() {
+        for (xmp, other) in [
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/>", false),
+            ("<d xmlns:pdfx = 'http://ns.adobe.com/pdfx/1.3/'/><e xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\"/>", false),
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/><e xmlns:pdfx=\"http://www.npes.org/pdfx/ns/id/\"/>", true),
+            ("<d xmlns:pdfx='http://ns.adobe.com/pdfx/1.3", true),
+            ("<d xmlns:pdfx>", false),
+            ("", false),
+        ] {
+            assert_eq!(binds_prefix_elsewhere(xmp, "pdfx", PDFX), other, "{xmp}");
         }
     }
 
