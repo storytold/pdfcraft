@@ -181,7 +181,7 @@ impl OcspResponse {
             return Err(bad("OCSP response is empty or exceeds the 2 MiB limit"));
         }
         let resp = Tlv::parse_all(bytes)?.expect(tag::SEQUENCE, "OCSPResponse")?.children()?;
-        let status = resp.first().ok_or_else(|| bad("missing responseStatus"))?.u64()?;
+        let status = resp.first().ok_or_else(|| bad("missing responseStatus"))?.enumerated()?;
         if status != 0 {
             return Err(bad(format!("responder reported an error (status {status})")));
         }
