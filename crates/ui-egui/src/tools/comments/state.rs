@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized};
+use super::geometry::{corner_ratio, frame, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -29,6 +29,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Copied comments hanging on the pointer as one bundle (their box `bounds` in user space,
+    /// `count` of them, their `outlines` drawn along so the drop can be aimed): a click puts
+    /// their centre there, on the page clicked; Escape or a right-click lets them go.
+    Place { xfdf: String, bounds: [f64; 4], count: usize, outlines: Vec<pdfcraft_engine::CommentOutline> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,14 +131,29 @@ impl CommentView {
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
-    /// The selected comment: (page, index in `/Annots`).
+    /// The selected comment: (page, index in `/Annots`). With several selected (`also`), the one
+    /// the handles, the properties and the context menu act on.
     pub selected: Option<(usize, usize)>,
+    /// The other selected comments (⌘/Ctrl-click or ⇧-click on the page adds one, ⇧-click in the
+    /// Comments panel a range): Delete, Copy, Properties and a drag act on them with `selected`.
+    pub also: Vec<(usize, usize)>,
+    /// Copy the selected comments (set by the menus; the app has the clipboard).
+    pub copy_request: bool,
+    /// Paste the copied comments onto this page, centred at this user-space point (set by the
+    /// page's menu, which knows where it was opened).
+    pub paste_request: Option<(usize, [f64; 2])>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// Finish the connected lines, polygon or cloud being drawn (the context menu's Complete).
+    pub finish_request: bool,
+    /// The group subordinate a click on the page picked, with the selection (its group's primary)
+    /// it was picked under: Delete acts on it while that group stays selected, as Acrobat deletes
+    /// the member clicked ([`Self::target`]).
+    pub(crate) member: Option<((usize, usize), (usize, usize))>,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -142,6 +161,19 @@ pub struct CommentView {
     pub editing: Option<(usize, usize, String)>,
     /// The panel should scroll the selected card into view.
     pub reveal: bool,
+    /// A pop-up window's title bar being dragged: the comment, and where the window's top-left
+    /// corner is now on screen.
+    pub popup_drag: Option<(usize, usize, Pos2)>,
+    /// A pop-up window's corner being dragged: the comment, and the window's size on screen now.
+    pub popup_resize: Option<(usize, usize, egui::Vec2)>,
+    /// Text being typed in a pop-up window: (page, index, text).
+    pub popup_text: Option<(usize, usize, String)>,
+    /// A reply being typed in a pop-up window: the comment or reply it answers (page, index), and its text.
+    pub popup_reply: Option<(usize, usize, String)>,
+    /// Where each open pop-up was drawn last frame, for the connector lines and hit-testing.
+    pub popup_rects: Vec<((usize, usize), Rect)>,
+    /// The pop-up the pointer was over last frame.
+    pub popup_hovered: Option<(usize, usize)>,
     /// The "Add a comment" box at the top of the Comments panel.
     pub add_box: String,
     /// The Comments panel's search query (`None`: search closed).
@@ -189,6 +221,85 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Every selected comment, the one the handles belong to first.
+    pub fn selection(&self) -> Vec<(usize, usize)> {
+        let mut all: Vec<(usize, usize)> = self.selected.into_iter().collect();
+        all.extend(self.also.iter().copied().filter(|k| Some(*k) != self.selected));
+        all
+    }
+
+    /// Whether `key` (page, index) is among the selected comments.
+    pub fn is_selected(&self, key: (usize, usize)) -> bool {
+        self.selected == Some(key) || self.also.contains(&key)
+    }
+
+    /// Select `key` alone.
+    pub fn select_only(&mut self, key: (usize, usize)) {
+        self.selected = Some(key);
+        self.also.clear();
+        self.member = None;
+    }
+
+    /// ⇧-click in a list (`order`, as shown): every comment from the one with the handles to
+    /// `key` is selected, and only those, so another ⇧-click from the same comment changes the
+    /// range. Without a comment with the handles, or with either end not in the list, `key` is
+    /// added as by ⌘/Ctrl-click.
+    pub fn select_range(&mut self, order: &[(usize, usize)], key: (usize, usize)) {
+        let ends = self.selected.and_then(|anchor| Some((order.iter().position(|k| *k == anchor)?, order.iter().position(|k| *k == key)?)));
+        let Some((a, b)) = ends else { return self.toggle(key) };
+        let anchor = self.selected;
+        self.also = order.get(a.min(b)..=a.max(b)).unwrap_or_default().iter().copied().filter(|k| Some(*k) != anchor).collect();
+    }
+
+    /// ⌘/Ctrl-click: add `key` to the selection, or take it out again. The handles go to the
+    /// comment clicked last.
+    pub fn toggle(&mut self, key: (usize, usize)) {
+        self.member = None;
+        if self.selected == Some(key) {
+            self.selected = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|k| *k == key) {
+            self.also.remove(at);
+        } else {
+            if let Some(previous) = self.selected.replace(key) {
+                self.also.push(previous);
+            }
+        }
+    }
+
+    /// Nothing selected.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.also.clear();
+        self.member = None;
+    }
+
+    /// What Delete acts on: the group member clicked, while its group is still the selection,
+    /// else the selected comment.
+    pub(crate) fn target(&self) -> Option<(usize, usize)> {
+        match self.member {
+            Some((member, group)) if Some(group) == self.selected => Some(member),
+            _ => self.selected,
+        }
+    }
+
+    /// Select `key` alone, or nothing, from anywhere but a press on the page ([`Self::pick`]): the
+    /// group member a press picked goes, so Delete and the arrow keys act on what is selected now,
+    /// not on a member remembered from before (after the Comments panel, a deletion or undo).
+    pub(crate) fn select(&mut self, key: Option<(usize, usize)>) {
+        match key {
+            Some(key) => self.select_only(key),
+            None => self.clear_selection(),
+        }
+    }
+
+    /// Select `a`, the comment a press at `p` on this page selects ([`PageCx::click_target`]),
+    /// remembering the group subordinate under `p` when `a` is its group's primary
+    /// ([`PageCx::picked`]). The only place that sets [`Self::member`].
+    pub(crate) fn pick(&mut self, cx: &PageCx<'_>, p: Pos2, a: &Annotation) {
+        self.select_only((cx.page, a.index));
+        self.member = cx.picked(p, self.selected);
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -228,20 +339,65 @@ impl CommentView {
     /// went too.
     pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
         self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.also = std::mem::take(&mut self.also).into_iter().filter_map(|k| after_delete(before, after, gone, k)).collect();
+        self.member = None;
         self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
         if self.editing.is_none() {
             self.editor_focus = None;
         }
+        // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
+        let moved = |k: (usize, usize)| after_delete(before, after, gone, k);
+        self.popup_text = self.popup_text.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
+        self.popup_reply = self.popup_reply.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
+        self.popup_drag = self.popup_drag.and_then(|(p, i, at)| moved((p, i)).map(|(p, i)| (p, i, at)));
+        self.popup_resize = self.popup_resize.and_then(|(p, i, size)| moved((p, i)).map(|(p, i)| (p, i, size)));
     }
 
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
     /// page, so a (page, index) held here may now name another one. The selection and the inline
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
-    /// took its place.
+    /// took its place; so do the pop-ups' unsaved text and drags.
     pub(crate) fn history_stepped(&mut self) {
-        self.selected = None;
+        self.clear_selection();
         self.editing = None;
         self.editor_focus = None;
+        self.popup_text = None;
+        self.popup_reply = None;
+        self.popup_drag = None;
+        self.popup_resize = None;
+    }
+
+    /// The comments the pop-ups hold unsaved text, a reply or a drag for.
+    pub(crate) fn popup_keys(&self) -> Vec<(usize, usize)> {
+        let text = self.popup_text.as_ref().map(|(p, i, _)| (*p, *i));
+        let reply = self.popup_reply.as_ref().map(|(p, i, _)| (*p, *i));
+        let drag = self.popup_drag.map(|(p, i, _)| (p, i));
+        let resize = self.popup_resize.map(|(p, i, _)| (p, i));
+        [text, reply, drag, resize].into_iter().flatten().collect()
+    }
+
+    /// An edit other than a deletion just ran: `before` are the comments at [`Self::popup_keys`]
+    /// until then, `after` the document's annotations now. When pages moved, came or went, a pop-up's (page, index)
+    /// may now name another comment: what was typed in that pop-up and not saved, and a window
+    /// being dragged or resized, are dropped rather than written to whatever took its place.
+    pub(crate) fn popups_after_edit(&mut self, before: &[Annotation], after: &[Annotation]) {
+        // The same comment: its kind, author and `/NM`, at that place before and after.
+        let who = |list: &[Annotation], k: (usize, usize)| {
+            list.iter().find(|a| (a.page, a.index) == k).map(|a| (a.subtype.clone(), a.author.clone(), a.name.clone()))
+        };
+        let kept = |p: usize, i: usize| who(before, (p, i)).is_some_and(|w| who(after, (p, i)) == Some(w));
+        if self.popup_text.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
+            self.popup_text = None;
+        }
+        if self.popup_reply.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
+            self.popup_reply = None;
+        }
+        if self.popup_drag.is_some_and(|(p, i, _)| !kept(p, i)) {
+            self.popup_drag = None;
+        }
+        if self.popup_resize.is_some_and(|(p, i, _)| !kept(p, i)) {
+            self.popup_resize = None;
+        }
     }
 }
 
@@ -346,6 +502,11 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
+    /// Where a comment's selection frame and resize handles go on screen ([`frame`]).
+    pub(super) fn frame_rect(&self, a: &Annotation) -> Rect {
+        self.xf.user_rect(self.info, self.page, frame(a, self.rotation()))
+    }
+
     /// Top-level comments on this page, in paint order.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
         self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
@@ -385,13 +546,62 @@ impl PageCx<'_> {
     }
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
-    /// comments by position, not in paint order).
-    pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
+    /// comments by position, not in paint order). A Replace Text strikeout is grouped under its
+    /// caret (`/RT /Group`), which holds the proposal, so the strikeout is hit as that caret: the
+    /// proposal is picked by either part, not only by its small caret.
+    pub(super) fn comment_at(&self, p: Pos2) -> Option<&Annotation> {
+        let under = |a: &&Annotation| self.screen_rects(a).any(|r| r.expand(3.0).contains(p));
+        let strikes = self
+            .info
+            .annotations
+            .iter()
+            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit"))
+            .filter(under)
+            .filter_map(|s| {
+                let (page, index) = s.parent?;
+                let caret = self.get(index).filter(|c| page == self.page && c.subtype == "Caret")?;
+                Some((s.index, caret))
+            });
+        self.comments().filter(under).map(|a| (a.index, a)).chain(strikes).max_by_key(|(i, _)| *i).map(|(_, a)| a)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
         self.comments().find(|a| a.index == index)
+    }
+
+    /// The group subordinates (`/RT /Group`, ISO 32000-2 §12.5.6.2) on this page, each with the
+    /// comment on this page that is its group's primary.
+    pub(super) fn group_members(&self) -> Vec<(&Annotation, &Annotation)> {
+        let all = &self.info.annotations;
+        // Painted every frame a comment is selected: most documents have no group to look up.
+        if self.hidden || !all.iter().any(|a| a.is_group_member() && a.page == self.page) {
+            return Vec::new();
+        }
+        let primaries = pdfcraft_render::group_primaries(all);
+        all.iter()
+            .zip(primaries)
+            .filter(|(a, _)| a.is_group_member() && a.page == self.page)
+            .filter_map(|(a, p)| Some((a, all.get(p?).filter(|p| p.page == self.page && p.is_comment())?)))
+            .collect()
+    }
+
+    /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
+    /// the group's primary, which stands for the group.
+    pub(super) fn click_target(&self, p: Pos2) -> Option<&Annotation> {
+        self.comment_at(p).or_else(|| self.member_at(p).map(|(_, p)| p))
+    }
+
+    /// The group subordinate under `p`, where no comment is, with its group's primary.
+    fn member_at(&self, p: Pos2) -> Option<(&Annotation, &Annotation)> {
+        self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p)))
+    }
+
+    /// The group member a click at `p` picked when it selects `selected`, its group's primary
+    /// ([`CommentView::member`]): the subordinate under the pointer.
+    pub(super) fn picked(&self, p: Pos2, selected: Option<(usize, usize)>) -> Option<((usize, usize), (usize, usize))> {
+        let (m, primary) = self.comment_at(p).is_none().then(|| self.member_at(p)).flatten()?;
+        let group = (primary.page, primary.index);
+        (Some(group) == selected).then_some(((self.page, m.index), group))
     }
 
     pub(crate) fn rect_to_user(&self, r: Rect) -> [f64; 4] {
@@ -409,7 +619,7 @@ impl PageCx<'_> {
         shift: bool,
         pending: Option<&Edit>,
     ) -> Rect {
-        let r = self.screen_rect(a);
+        let r = self.frame_rect(a);
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
@@ -418,8 +628,8 @@ impl PageCx<'_> {
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            let r = a.shown_rect(self.rotation());
-            return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
+            let f = frame(a, self.rotation());
+            return self.xf.user_rect(self.info, self.page, [f[0] + *dx as f32, f[1] + *dy as f32, f[2] + *dx as f32, f[3] + *dy as f32]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),

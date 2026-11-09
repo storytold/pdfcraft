@@ -82,6 +82,7 @@ impl PdfCraftApp {
                     &[("u", &u)],
                 ),
                 Request::SaveAs => self.run_command("file.save_as"),
+                Request::Highlight(on) => self.script_highlight(id, on),
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -111,6 +112,16 @@ impl PdfCraftApp {
         if self.toast.is_none() {
             self.next_script_message();
         }
+    }
+
+    /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the
+    /// Highlight fields button does, for document `id` and the next ones.
+    pub(crate) fn script_highlight(&mut self, id: DocId, on: bool) {
+        if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
+            v.highlight_fields = on;
+        }
+        self.view_defaults.highlight_fields = on;
+        self.session.set_field_highlight(on);
     }
 
     /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
@@ -327,6 +338,9 @@ mod tests {
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
         let hindi = date_language("hi");
         assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
