@@ -142,6 +142,148 @@ fn numbered_latin1_names_fill_the_recovered_layer_only() {
     assert!(recovered.is_none());
 }
 
+/// Review on #6733: when the strict part of a recovered-text request has used half the render
+/// pool's watchdog, the page keeps its strict layer and has no recovered one. A failed
+/// recovered-text request fails the page's text, so the recovered layout must never be what
+/// pushes a page past the watchdog.
+#[test]
+fn a_page_slow_to_read_keeps_its_strict_text_and_skips_the_recovered_layout() {
+    assert!(RECOVERY_DEADLINE.saturating_mul(2) <= crate::raster::STUCK_AFTER);
+    let pdf = parse(names_page("/C83 /C111 /C99", "ABCDEF+AdvTTSynthetic", true));
+    let (_, recovered, _) = layers(&pdf);
+    assert!(recovered.is_some(), "a quick page has its recovered layer");
+    let millis = u64::try_from(RECOVERY_DEADLINE.as_millis()).unwrap_or(u64::MAX);
+    STRICT_MILLIS.with(|m| m.set(Some(millis)));
+    let (strict, recovered, plain) = layers(&pdf);
+    STRICT_MILLIS.with(|m| m.set(None));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "Hi");
+    assert!(recovered.is_none(), "past the deadline the recovered layout is skipped");
+}
+
+/// A CFF INDEX of `items` (offsets one byte wide when they fit, else two).
+fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
+    let count = u16::try_from(items.len()).unwrap();
+    let mut out = count.to_be_bytes().to_vec();
+    if items.is_empty() {
+        return out;
+    }
+    let total: usize = items.iter().map(Vec::len).sum::<usize>() + 1;
+    let wide = total > 255;
+    out.push(if wide { 2 } else { 1 });
+    let mut at = 1usize;
+    let mut offsets = vec![at];
+    for item in items {
+        at += item.len();
+        offsets.push(at);
+    }
+    for o in offsets {
+        if wide {
+            out.extend_from_slice(&u16::try_from(o).unwrap().to_be_bytes());
+        } else {
+            out.push(u8::try_from(o).unwrap());
+        }
+    }
+    for item in items {
+        out.extend_from_slice(item);
+    }
+    out
+}
+
+/// A bare CFF program whose glyphs 1, 2, 3 … are named `names` (custom strings) and drawn by
+/// codes 1, 2, 3 … of its built-in encoding (format 0); every glyph is empty.
+fn cff_with_names(names: &[&str]) -> Vec<u8> {
+    // Operands as five-byte integers, so the offsets don't change the Top DICT's size.
+    let int = |v: usize| {
+        let mut b = vec![29];
+        b.extend_from_slice(&i32::try_from(v).unwrap().to_be_bytes());
+        b
+    };
+    let n = names.len();
+    let strings = cff_index(&names.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
+    let header = vec![1, 0, 4, 1];
+    let name = cff_index(&[b"Synthetic".to_vec()]);
+    let global_subrs = cff_index(&[]);
+    let encoding: Vec<u8> = [vec![0, u8::try_from(n).unwrap()], (1..=n).map(|c| u8::try_from(c).unwrap()).collect()].concat();
+    let charset: Vec<u8> = std::iter::once(0u8).chain((0..n).flat_map(|k| u16::try_from(391 + k).unwrap().to_be_bytes())).collect();
+    let charstrings = cff_index(&vec![vec![14u8]; n + 1]);
+    let private = vec![139, 20];
+    let top_len = |dict: &[u8]| cff_index(&[dict.to_vec()]).len();
+    let top = |charset_at: usize, encoding_at: usize, charstrings_at: usize, private_at: usize| {
+        [int(charset_at), vec![15], int(encoding_at), vec![16], int(charstrings_at), vec![17], int(private.len()), int(private_at), vec![18]].concat()
+    };
+    let start = header.len() + name.len() + top_len(&top(0, 0, 0, 0)) + strings.len() + global_subrs.len();
+    let (encoding_at, charset_at) = (start, start + encoding.len());
+    let charstrings_at = charset_at + charset.len();
+    let private_at = charstrings_at + charstrings.len();
+    let top_index = cff_index(&[top(charset_at, encoding_at, charstrings_at, private_at)]);
+    [header, name, top_index, strings, global_subrs, encoding, charset, charstrings, private].concat()
+}
+
+/// Review on #6733: rule 1 reads the glyph names of a CFF program's own charset when the font
+/// has no `/Encoding` (its built-in encoding draws codes 1, 2, 3 as `C83`, `C111`, `C99`), as
+/// it reads `/Differences`; the strict layer still reads nothing.
+#[test]
+fn numbered_names_of_a_cff_programs_own_charset_fill_the_recovered_layer() {
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 3 /Widths [600 600 600] /FontDescriptor 7 0 R >>",
+        "<010203>",
+        false,
+        &[
+            (
+                "<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>",
+                Vec::new(),
+            ),
+            ("/Subtype /Type1C", cff_with_names(&["C83", "C111", "C99"])),
+        ],
+    );
+    let (strict, recovered, _) = layers(&parse(page));
+    assert!(strict.glyphs.is_empty(), "{:?}", strict.plain_text());
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("Soc"));
+}
+
+/// Review on #6733: a font of an Adobe character collection names its characters by CID (its
+/// UCS2 CMap), so its glyph ids are never read in the Macintosh order, even for CIDs the map
+/// lacks (here past Adobe-GB1's last CID); the same font as Adobe-Identity is read.
+#[test]
+fn a_font_of_an_adobe_collection_is_not_read_in_the_macintosh_order() {
+    let text = "Articles of Amendment";
+    let g = gids(text);
+    let first = 40_000usize;
+    let mut map = vec![0u8; (first + g.len()) * 2];
+    for (k, gid) in g.iter().enumerate() {
+        let at = (first + k) * 2;
+        map[at..at + 2].copy_from_slice(&gid.to_be_bytes());
+    }
+    let shown: String = (0..g.len()).map(|k| format!("{:04X}", first + k)).collect();
+    let page = |ordering: &str| {
+        page_with_font(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+            &format!("<{shown}>"),
+            false,
+            &[
+                (
+                    &format!(
+                        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 0 >> /CIDToGIDMap 10 0 R /DW 600 /FontDescriptor 8 0 R >>"
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    "<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>",
+                    Vec::new(),
+                ),
+                ("", kept_ids(text, Cmap::None)),
+                ("", map.clone()),
+            ],
+        )
+    };
+    let (_, identity, _) = layers(&parse(page("Identity")));
+    assert_eq!(identity.map(|r| r.text.plain_text()).as_deref(), Some(text), "the fixture reads as Adobe-Identity");
+    let (strict, gb1, _) = layers(&parse(page("GB1")));
+    assert!(strict.glyphs.is_empty(), "{:?}", strict.plain_text());
+    assert!(gb1.is_none(), "{:?}", gb1.map(|r| r.text.plain_text()));
+}
+
 /// Rule 1's numbers are codes of the font's own encoding, not always Latin-1. A copy of Symbol
 /// named with a `Sym` ending reads them through the Symbol font's built-in encoding (ISO
 /// 32000-2 Annex D.5): `/C211` is `©` (copyrightserif), not `Ó`; a font named `…Symbols` still

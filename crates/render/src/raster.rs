@@ -35,6 +35,7 @@ use crate::{Pixels, ReadingColors};
 
 mod pool;
 
+pub(crate) use pool::STUCK_AFTER;
 use pool::lock;
 #[cfg(test)]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};

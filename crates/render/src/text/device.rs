@@ -106,12 +106,49 @@ const MAX_RECOVERY_FONTS: usize = 1 << 10;
 /// overrides); past it the page has no recovered layer.
 const MAX_RECOVERED_GLYPHS: usize = 1 << 20;
 
+/// How long the strict part of a recovered-text request (the interpretation and the strict
+/// layout) may take before the recovered layout is skipped: half the render pool's watchdog
+/// ([`crate::raster::STUCK_AFTER`]). A failed recovered-text request fails the page's text
+/// (`RequestFailureKey`), so the recovered layout must never push a page past the watchdog that
+/// its strict text alone stays under: a page this slow keeps its strict layer and has no
+/// recovered one.
+pub(super) const RECOVERY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(crate::raster::STUCK_AFTER.as_secs() / 2);
+
+/// When a page's text extraction started, to hold the recovered layout to [`RECOVERY_DEADLINE`]
+/// (wasm has no clock and no watchdog).
+#[derive(Clone, Copy)]
+struct Started(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
+
+impl Started {
+    fn now() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        return Self(std::time::Instant::now());
+        #[cfg(target_arch = "wasm32")]
+        return Self();
+    }
+
+    /// Whether [`RECOVERY_DEADLINE`] has passed since (never on wasm).
+    fn past_recovery_deadline(self) -> bool {
+        #[cfg(test)]
+        if let Some(ms) = STRICT_MILLIS.with(std::cell::Cell::get) {
+            return std::time::Duration::from_millis(ms) >= RECOVERY_DEADLINE;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.0.elapsed() >= RECOVERY_DEADLINE;
+        #[cfg(target_arch = "wasm32")]
+        return false;
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Replacement text bytes given to redraws on this thread.
     pub(super) static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Makes the recovery rules panic on this thread, to show the strict text survives them.
     pub(super) static PANIC_IN_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How long the strict part of the pages read on this thread takes, in milliseconds, in
+    /// place of the clock.
+    pub(super) static STRICT_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// A smaller dedupe work budget for the pages read on this thread.
     pub(super) static PAGE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// Work (cells visited, glyphs compared) of `drop_doubles` on this thread.
@@ -843,6 +880,7 @@ fn extract_page_with(
     filter: TextFilter,
     recover: bool,
 ) -> Result<(PageText, Option<RecoveredText>), String> {
+    let started = Started::now();
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
     let (w, h) = p.render_dimensions();
@@ -916,6 +954,9 @@ fn extract_page_with(
     let mut work_left = dev.work_left;
     let (mut strict, strict_order) = lay_out(dev.glyphs, w, h, &[]);
     strict.truncated = truncated;
+    if started.past_recovery_deadline() {
+        return Ok((strict, None));
+    }
     // The recovered layer's own layout can't cost the strict text: if it fails, the page just
     // has no recovered layer.
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

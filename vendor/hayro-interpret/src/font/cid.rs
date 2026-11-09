@@ -553,7 +553,12 @@ impl Type0Font {
             },
             base_font: self.recovery.base_font.as_deref(),
             flags: self.recovery.flags.as_ref(),
-            has_to_unicode: self.to_unicode.is_some() || self.identity_to_unicode,
+            // A font of an Adobe character collection names its characters by CID, through the
+            // collection's UCS2 CMap (patch 84) even where that map lacks a CID: its glyph ids
+            // are never a reading in the Macintosh order.
+            has_to_unicode: self.to_unicode.is_some()
+                || self.identity_to_unicode
+                || self.adobe_collection,
             has_encoding: self.recovery.has_encoding,
             names: None,
             program,
