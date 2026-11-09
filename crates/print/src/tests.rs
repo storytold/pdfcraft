@@ -84,7 +84,7 @@ fn page_selection() {
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
 fn wordings_are_said() {
-    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into())];
+    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into()), PrintError::TooManySelected(1_000)];
     for e in &mistakes {
         assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
     }

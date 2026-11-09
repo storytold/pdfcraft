@@ -52,6 +52,8 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Rectangle of the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 impl FieldState {
@@ -68,6 +70,7 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            rect: None,
         }
     }
 
