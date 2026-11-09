@@ -19,10 +19,12 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   for one point per pixel, or `ImageResolution::Embedded` for the same behavior as
   `from_images`. The largest page side is still capped at 14,400 points;
 - `from_text(text, …)`: plain text set in Helvetica, wrapped and paginated. Text Helvetica
-  can't draw is refused, naming the line and the character, never set as `?`.
+  can't draw is set in the bundled Inter face instead (Latin, Greek and Cyrillic letters), with
+  the same page, margins, wrapping and form feeds; text Inter can't draw either is refused,
+  naming the line and the character, never set as `?`.
 - `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
-  (comment summaries, compare reports): such characters are written as `[U+XXXX]` and the first
-  line says so (`ESCAPED_NOTE`).
+  (comment summaries, compare reports): text Inter draws is set in it; otherwise the characters
+  Helvetica can't draw are written as `[U+XXXX]` and the first line says so (`ESCAPED_NOTE`).
 
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 

@@ -181,7 +181,8 @@ fn find_shortcuts_advance_and_retreat_matches() {
     assert_eq!(n, 15);
     // Surrender text edit focus so canvas shortcut handler receives key events.
     h.state_mut().views[0].find.as_mut().unwrap().focus = false;
-    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("find-input")));
+    let find_input = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.surrender_focus(find_input));
     h.run_steps(2);
     let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
     // ⌘G advances to next match.
@@ -652,6 +653,24 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
+}
+
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). Typed in the page
+/// box, "(n)" goes to the nth page whatever its label, as print ranges take it, while a bare
+/// number is still a label first. On these pages (i, ii, 1, 2, 3) "1" is the third page and
+/// "(1)" the first; a position past the end, or anything else in parentheses, leaves the page.
+#[test]
+fn page_label_input_takes_a_position_in_parentheses() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.run_steps(3);
+    for (typed, page, displayed) in [("(1)", 0, "i"), ("1", 2, "1"), ("(4)", 3, "2"), ("( 2 )", 1, "ii"), ("(9)", 1, "ii"), ("(x)", 1, "ii")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
 }
 
 #[test]
