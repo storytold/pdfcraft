@@ -3996,6 +3996,55 @@ fn without_need_appearances_only_missing_appearances_are_drawn() {
     assert!(with_field_appearances(&copy).is_none(), "every widget has one now");
 }
 
+/// ISO 32000-2 12.5.5 and Table 170: a normal appearance is a stream or a subdictionary of
+/// streams chosen by `/AS`. A form XObject's dictionary without its stream (`x`: object 6 says
+/// it is one, but 7.5.7 keeps streams out of object streams, so a writer that packed it there
+/// lost the data), a subdictionary with no `/AS` (`s`), or a state whose entry is no stream
+/// (`u`, the push button `p`, the check box `k`) draws nothing, so these are drawn like widgets
+/// without one: `x` with its `/MK /BC` border at its `/BS /W` of 3, given by reference. A
+/// subdictionary whose `/AS` names a stream (`t`) is the file's own.
+fn appearances_without_a_stream() -> Document {
+    let widget = |n: &str, rest: &str| format!("<< /Type /Annot /Subtype /Widget /T ({n}) /F 4 /P 3 0 R {rest} >>");
+    let tx = "/FT /Tx /V (v) /DA (/Helv 12 Tf 0 g)";
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        "<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 106 14] >>".into(), // 6
+        "<< /W 3 >>".into(),
+        "<< /Length 18 >>\nstream\nBT (old T) Tj ET\nendstream".into(), // 8
+        widget("x", &format!("{tx} /Rect [54 705 160 719] /MK << /BC [0 0 0] /BG [0.88 0.88 0.88] >> /BS 7 0 R /AP << /N 6 0 R >>")),
+        widget("s", &format!("{tx} /Rect [54 680 160 694] /AP << /N << /On 8 0 R >> >>")), // 10
+        widget("t", &format!("{tx} /Rect [54 655 160 669] /AS /On /AP << /N << /On 8 0 R >> >>")),
+        widget("u", &format!("{tx} /Rect [54 630 160 644] /AS /On /AP << /N << /On 6 0 R >> >>")),
+        widget("p", "/FT /Btn /Ff 65536 /DA (/Helv 12 Tf 0 g) /MK << /CA (Go) /BC [0 0 0] >> /Rect [54 600 160 620] /AP << /N 6 0 R >>"),
+        widget(
+            "k",
+            "/FT /Btn /V /Yes /AS /Yes /DA (/ZaDb 0 Tf 0 g) /MK << /CA (4) /BC [0 0 0] >> /Rect [200 700 224 724] /AP << /N << /Yes 6 0 R /Off 8 0 R >> >>",
+        ),
+    ])
+}
+
+#[test]
+fn normal_appearances_that_give_no_stream_are_drawn() {
+    let doc = appearances_without_a_stream();
+    let copy = with_field_appearances(&doc).expect("x, s, u, p and k draw nothing of their own");
+    let all = fields(&copy);
+    let x = ap(&copy, &field(&all, "x").widgets[0]);
+    assert!(x.contains("0.88 0.88 0.88 rg\n0 0 106 14 re f") && x.contains("0 0 0 RG\n3 w\n1.5 1.5 103 11 re S"), "{x}");
+    assert!(x.contains("(v) Tj"), "{x}");
+    for name in ["s", "u"] {
+        assert!(ap(&copy, &field(&all, name).widgets[0]).contains("(v) Tj"), "{name}");
+    }
+    assert!(ap(&copy, &field(&all, "p").widgets[0]).contains("(Go) Tj"));
+    assert!(state_ap(&copy, &field(&all, "k").widgets[0], "Yes").contains("(4) Tj"));
+    let t = |d: &Document| d.get(field(&fields(d), "t").widgets[0].obj).as_dict().and_then(|w| w.get(b"AP").cloned());
+    assert_eq!(t(&copy), t(&doc), "a state with a stream is the file's own");
+    assert!(with_field_appearances(&copy).is_none(), "every widget has a stream now");
+}
+
 /// #3470: refreshing the display copy redraws only the widgets whose inputs changed. Typing in
 /// one field of a form that leaves every appearance to the viewer otherwise redrew all of them.
 #[test]
