@@ -1082,8 +1082,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/it/view.rs::the_hand_tool_moves_the_page_with_the_pointer", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools"]
-notes = "drag to pan: the page follows the pointer point for point in the frame it moves, and stops where it is let go (no fling); Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily. Checked with kittest pointer events, not yet on a desktop"
+evidence = ["crates/ui-egui/tests/it/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/it/view.rs::the_hand_tool_moves_the_page_with_the_pointer", "crates/ui-egui/tests/it/view.rs::a_flicked_finger_glides_on_with_the_hand_tool_and_slows_to_a_stop", "crates/ui-egui/tests/it/view.rs::a_finger_back_down_holds_a_hand_tool_glide", "crates/ui-egui/tests/it/view.rs::a_finger_dragging_during_a_hand_tool_glide_takes_the_page", "crates/ui-egui/tests/it/view.rs::a_finger_resting_before_it_lifts_does_not_glide_with_the_hand_tool", "crates/ui-egui/tests/it/view.rs::a_two_finger_drag_does_not_glide_with_the_hand_tool", "crates/ui-egui/tests/it/view.rs::no_hand_tool_glide_with_animation_effects_off","crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools"]
+notes = "drag to pan: the page follows the pointer point for point in the frame it moves; a mouse drag stops where it is let go, and a finger flicked on a touch screen glides on after it lifts and slows to a stop, as a phone's page does (#1231), unless Animation effects is off; a finger back down, a click, a key or a zoom catches it, and a pinch doesn't glide. Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily. The glide was checked by hand on a Windows 11 ARM64 touch screen; the rest with kittest pointer and touch events. Not yet: the Select tool's one-finger scroll (#5679) doesn't glide"
 
 [[feature]]
 id = "view.rotate-view"

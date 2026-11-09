@@ -1970,13 +1970,154 @@ fn the_hand_tool_moves_the_page_with_the_pointer() {
     // Held still, it stays: nothing is left to ease in.
     h.run_steps(30);
     assert_eq!(page(&h) - grabbed, pointer - start, "nothing moves the page once the pointer stops");
-    // Let go mid-stroke, it stops with the pointer: the Hand tool doesn't fling the page on.
+    // Let go mid-stroke, it stops with the pointer: a mouse drag doesn't fling the page on (a
+    // finger's does, `a_flicked_finger_glides_on_with_the_hand_tool_and_slows_to_a_stop`).
     pointer += egui::vec2(0.0, -30.0);
     h.event(egui::Event::PointerMoved(pointer));
     h.step();
     h.event(button(pointer, false));
     h.run_steps(30);
     assert_eq!(page(&h) - grabbed, pointer - start, "the page stays where it was let go");
+}
+
+// The Hand tool on a touch screen (#1231): a flicked finger glides the page on after it lifts, as
+// a phone's does; a mouse drag still stops where it is let go
+// (`the_hand_tool_moves_the_page_with_the_pointer`). Input arrives as egui-winit sends a finger:
+// a `Touch` event and the pointer events it stands for, in one frame.
+
+/// The Hand tool at 300 % in continuous layout, 60 frames a second, with Animation effects as
+/// `effects`.
+fn hand_harness(effects: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300"), ("quick", "hand")]);
+    h.state_mut().set_option("animation_effects", effects).unwrap();
+    h.run_steps(2);
+    h
+}
+
+fn finger(id: u64, phase: TouchPhase, pos: egui::Pos2) -> egui::Event {
+    egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None }
+}
+
+fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+}
+
+/// Page 1's top on screen.
+fn page_top(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    rect(h, 0).expect("page 1 on screen").min.y
+}
+
+/// A finger flicked up the page, 40 points a frame for six frames, from the middle of the view:
+/// how far the document scrolled by the fourth frame after the lift.
+fn hand_flick(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
+    let a = h.state().views[0].viewport_rect().center();
+    let before = page_top(h);
+    crate::support::input::touch_drag(h, a, a - egui::vec2(0.0, 240.0));
+    before - page_top(h)
+}
+
+#[test]
+fn a_flicked_finger_glides_on_with_the_hand_tool_and_slows_to_a_stop() {
+    let mut h = hand_harness("on");
+    let flicked = hand_flick(&mut h);
+    assert!(flicked > 240.0, "the page went with the finger and on past it: moved {flicked}");
+    let glided = scroll_over(&mut h, 10);
+    assert!(glided > 100.0, "the page glides on after the lift: moved {glided} more");
+    let rest = scroll_over(&mut h, 240);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "the glide slows to a stop: still drifting {drift}");
+    // 2400 points a second at the lift, gliding 0.6 s worth (the touchpad's 0.35 s would be 840).
+    let total = flicked - 240.0 + glided + rest;
+    assert!(total > 1200.0 && total < 1600.0, "about the lift speed × 0.6 s: glided {total}");
+}
+
+#[test]
+fn no_hand_tool_glide_with_animation_effects_off() {
+    let mut h = hand_harness("off");
+    let flicked = hand_flick(&mut h);
+    assert!((flicked - 240.0).abs() < 1.0, "the page went with the finger, and no further: moved {flicked}");
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "no glide with animations off: drifted {drift}");
+}
+
+#[test]
+fn a_finger_back_down_holds_a_hand_tool_glide() {
+    let mut h = hand_harness("on");
+    hand_flick(&mut h);
+    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
+    let at = h.state().views[0].viewport_rect().center();
+    crate::support::input::one_frame(&mut h, [finger(1, TouchPhase::Start, at), egui::Event::PointerMoved(at), primary(at, true)]);
+    scroll_over(&mut h, 2);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "a finger back down holds the page: drifted {drift}");
+}
+
+#[test]
+fn a_finger_dragging_during_a_hand_tool_glide_takes_the_page() {
+    // The new drag stops the glide and moves the page with the finger, point for point; held
+    // still before it lifts, it lets go without gliding.
+    let mut h = hand_harness("on");
+    hand_flick(&mut h);
+    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
+    let a = h.state().views[0].viewport_rect().center();
+    use crate::support::input::one_frame;
+    one_frame(&mut h, [finger(1, TouchPhase::Start, a), egui::Event::PointerMoved(a), primary(a, true)]);
+    let grabbed = page_top(&h);
+    let mut p = a;
+    for _ in 0..6 {
+        p += egui::vec2(0.0, 10.0);
+        one_frame(&mut h, [finger(1, TouchPhase::Move, p), egui::Event::PointerMoved(p)]);
+    }
+    assert!((page_top(&h) - grabbed - 60.0).abs() < 1.0, "the page went down with the finger: {}", page_top(&h) - grabbed);
+    h.run_steps(10);
+    one_frame(&mut h, [finger(1, TouchPhase::End, p), primary(p, false), egui::Event::PointerGone]);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "no glide from the new drag: drifted {drift}");
+}
+
+#[test]
+fn a_finger_resting_before_it_lifts_does_not_glide_with_the_hand_tool() {
+    let mut h = hand_harness("on");
+    let a = h.state().views[0].viewport_rect().center();
+    let before = page_top(&h);
+    use crate::support::input::one_frame;
+    one_frame(&mut h, [finger(1, TouchPhase::Start, a), egui::Event::PointerMoved(a), primary(a, true)]);
+    let mut p = a;
+    for _ in 0..6 {
+        p -= egui::vec2(0.0, 40.0);
+        one_frame(&mut h, [finger(1, TouchPhase::Move, p), egui::Event::PointerMoved(p)]);
+    }
+    // Held still for a sixth of a second, then lifted.
+    h.run_steps(10);
+    one_frame(&mut h, [finger(1, TouchPhase::End, p), primary(p, false), egui::Event::PointerGone]);
+    h.run_steps(4);
+    assert!((before - page_top(&h) - 240.0).abs() < 1.0, "the page went with the finger, and no further: moved {}", before - page_top(&h));
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "no glide after resting: drifted {drift}");
+}
+
+#[test]
+fn a_two_finger_drag_does_not_glide_with_the_hand_tool() {
+    // Two fingers flicked up together, the second lifted first, as a pinch ends.
+    let mut h = hand_harness("on");
+    let a = h.state().views[0].viewport_rect().center() - egui::vec2(100.0, 0.0);
+    let b = a + egui::vec2(200.0, 0.0);
+    let before = page_top(&h);
+    use crate::support::input::one_frame;
+    one_frame(&mut h, [finger(1, TouchPhase::Start, a), egui::Event::PointerMoved(a), primary(a, true)]);
+    one_frame(&mut h, [finger(2, TouchPhase::Start, b)]);
+    let (mut p, mut q) = (a, b);
+    for _ in 0..6 {
+        p -= egui::vec2(0.0, 40.0);
+        q -= egui::vec2(0.0, 40.0);
+        one_frame(&mut h, [finger(1, TouchPhase::Move, p), finger(2, TouchPhase::Move, q), egui::Event::PointerMoved(p)]);
+    }
+    one_frame(&mut h, [finger(2, TouchPhase::End, q)]);
+    one_frame(&mut h, [finger(1, TouchPhase::End, p), primary(p, false), egui::Event::PointerGone]);
+    h.run_steps(4);
+    assert!(before - page_top(&h) > 100.0, "the fingers moved the page: {}", before - page_top(&h));
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "no glide after two fingers: drifted {drift}");
 }
 
 #[test]
