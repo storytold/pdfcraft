@@ -1487,6 +1487,7 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
     }
 
+    /// Verify that a shared layout name cannot cause a data-binding index to redirect pending focus.
     #[test]
     fn focus_shift_uses_the_som_index_when_data_binding_omits_the_segment() {
         let (tpl, _) = pdfcraft_xfa::parse(

@@ -69,6 +69,7 @@ impl ScriptSession {
         }
     }
 
+    /// Attach icon versions to the snapshot and record when history must invalidate all handles because tracking filled up.
     fn stamp_icons(&mut self, job: &mut Job) {
         const MAX_TRACKED_ICONS: usize = 16_384;
         for id in job.fields.iter().filter_map(|field| field.icon) {
@@ -266,6 +267,7 @@ impl ScriptSession {
         self.start_job(job, false)
     }
 
+    /// Reserve the document worker and enqueue a job. An English-date retry uses a fresh context and leaves the retained realm alone.
     fn start_job(&mut self, mut job: Job, english_retry: bool) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
         if self.sender.is_none() {
             if self.worker_lifetime.upgrade().is_some() {
@@ -370,6 +372,7 @@ impl ScriptSession {
         self.run_timed(job, &[], limit, true)
     }
 
+    /// Wait within one deadline for startup, prompt replies and completion. Detach a worker that exceeds the deadline.
     fn run_timed(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration, english_retry: bool) -> Outcome {
         let started = std::time::Instant::now();
         let rx = match self.start_job(job, english_retry) {

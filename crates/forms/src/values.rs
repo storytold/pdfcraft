@@ -206,6 +206,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     recalculate_values(doc, scripts, None)
 }
 
+/// Evaluate fields in calculation order. When a redraw set is supplied, record changed fields for formatting after the pass.
 fn recalculate_values(
     doc: &mut Document,
     scripts: &mut dyn Scripts,
@@ -313,6 +314,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
     write_value_impl(doc, f, value, scripts, false)
 }
 
+/// Persist a value according to the field kind. A reset bypasses custom input validation and defers text and choice appearances.
 fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {

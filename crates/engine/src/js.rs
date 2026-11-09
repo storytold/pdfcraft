@@ -77,6 +77,7 @@ fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], req
     Ok(())
 }
 
+/// Match an exact reset selector or one of its dotted descendants.
 fn reset_name_matches(name: &str, selectors: &[String]) -> bool {
     selectors.iter().any(|selector| name == selector || name.strip_prefix(selector).is_some_and(|rest| rest.starts_with('.')))
 }
@@ -275,6 +276,7 @@ pub fn field_object_id(object: pdfcraft_cos::ObjRef) -> u64 {
     (u64::from(object.num) << 16) | u64::from(object.generation)
 }
 
+/// Check that a supplied field identity belongs to the requested field name.
 fn validate_script_target(target: Option<&str>, identity: Option<u64>, fields: &[Field]) -> Result<(), EditError> {
     if let Some(id) = identity
         && !fields.iter().any(|f| Some(f.name.as_str()) == target && field_object_id(f.obj) == id)
@@ -844,6 +846,7 @@ impl Session {
         self.run_javascript_job(id, "", None, None, &[], true)
     }
 
+    /// Route generated XFA clicks to the XFA engine, or run a synchronous AcroForm job and apply its outcome.
     fn run_javascript_job(
         &mut self,
         id: DocId,

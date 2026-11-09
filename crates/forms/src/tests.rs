@@ -1433,6 +1433,7 @@ fn reset_restores_defaults() {
     assert!(matches!(reset(&mut doc, Some(&["nope".to_string()])), Err(FormError::NoSuchField(_))));
 }
 
+/// Check saved values and appearances when the host stops callbacks during calculation or formatting.
 #[test]
 fn reset_redraws_remaining_widgets_after_callbacks_stop() {
     struct StopOn {

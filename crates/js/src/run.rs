@@ -92,6 +92,7 @@ pub fn run_shared_calculations(
     run_shared_here(script, event, doc, fields, doc_scripts, calculations, limits)
 }
 
+/// Run a snapshot in a fresh context on the calling thread, skipping document scripts that fail source preflight.
 pub(crate) fn run_shared_here(
     script: &str,
     event: &Event,
