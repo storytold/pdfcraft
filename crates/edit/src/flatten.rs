@@ -183,6 +183,19 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
     Ok(drawn)
 }
 
+/// `page` with what its own dictionary holds now, after an edit: re-reading this one page,
+/// where walking the whole page tree again for every flattened page would be quadratic.
+/// Inherited attributes stay as they were collected, under the page's own entries.
+fn refreshed(doc: &Document, page: &pdfcraft_model::Page) -> pdfcraft_model::Page {
+    let mut dict = page.dict.clone();
+    if let Some(own) = doc.get(page.obj).as_dict() {
+        for (k, v) in own.iter() {
+            dict.set(k.clone(), v.clone());
+        }
+    }
+    pdfcraft_model::Page { obj: page.obj, dict }
+}
+
 fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -322,10 +335,10 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-            let page = page_list(doc)[i].clone();
+            let page = refreshed(doc, &page);
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
         }
-        let page_now = page_list(doc)[i].clone();
+        let page_now = refreshed(doc, &page);
         match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
             Some(r) => doc.set(r, Object::Array(kept)),
             None => doc.update_dict(page.obj, |d| {
