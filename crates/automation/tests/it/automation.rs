@@ -8916,6 +8916,49 @@ fn cut_stack_printing_through_tools() {
 }
 
 #[test]
+fn custom_pages_per_sheet_prints_the_grid_as_given() {
+    // Two narrow pages side by side on portrait A4: 2 columns by 1 row (#6551).
+    let dir = workdir("custom-grid");
+    std::fs::write(dir.join("narrow.pdf"), fixture(4)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "narrow.pdf"}))["doc"].as_u64().unwrap();
+    for orientation in ["auto", "portrait"] {
+        let r = ok(
+            &mut a,
+            "doc_print",
+            json!({"doc": doc, "layout": "multiple", "cols": 2, "rows": 1, "paper": "A4", "orientation": orientation, "path": "grid.pdf"}),
+        );
+        assert_eq!(r["sheets"], 2, "{orientation}");
+        let printed = ok(&mut a, "doc_open", json!({"path": "grid.pdf"}))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({"doc": printed}));
+        let sheet = &info["pages"][0];
+        assert!(sheet["width"].as_f64().unwrap() < sheet["height"].as_f64().unwrap(), "portrait sheet with {orientation}: {sheet}");
+        // Side by side: the second page level with the first, to its right.
+        let rows = ok(&mut a, "text_extract", json!({"doc": printed, "rect": [0, 0, 600, 850]}));
+        let rows: Vec<&str> = rows["pages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap().trim()).collect();
+        assert_eq!(rows, ["Page 1	Page 2", "Page 3	Page 4"], "{orientation}");
+        ok(&mut a, "doc_close", json!({"doc": printed}));
+    }
+    for bad in [
+        json!({"cols": 2}),
+        json!({"rows": 1}),
+        json!({"cols": 0, "rows": 1}),
+        json!({"cols": 2, "rows": 100}),
+        json!({"cols": -1, "rows": 2}),
+        json!({"cols": 2, "rows": 1, "per_sheet": 2}),
+        json!({"cols": 2, "rows": 1, "layout": "fit"}),
+    ] {
+        let mut args = json!({"doc": doc, "layout": "multiple", "path": "refused.pdf"});
+        for (k, v) in bad.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        assert!(matches!(a.call("doc_print", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("refused.pdf").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn measurements_calibrate_draw_save_reopen_and_export() {
     let dir = workdir("measurements");
     let mut a = auto(&dir);
