@@ -1,5 +1,5 @@
 //! Left tool panel (All tools + tool sub-panels, generated from the engine catalogue) and the
-//! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
+//! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments, Destinations).
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
@@ -11,6 +11,7 @@ use crate::{LeftPanel, PdfCraftApp, RightPanel, icons, widgets};
 pub(super) mod all_tools_ui;
 mod bookmarks;
 pub(super) mod comments_panel;
+mod destinations;
 mod edit;
 pub(super) mod format_text_ui;
 pub(super) mod organize_panel;
@@ -23,6 +24,7 @@ mod tools;
 
 pub use bookmarks::BmAction;
 pub(crate) use bookmarks::ellipsized_prefix;
+pub use destinations::{DestAction, DestinationsView};
 pub use right::right_panel;
 pub use tools::left_panel;
 pub(crate) use tools::panel_header;

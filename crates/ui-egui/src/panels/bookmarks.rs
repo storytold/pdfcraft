@@ -102,7 +102,7 @@ pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) 
 /// The inline rename field (#5529). On the frame it takes focus it selects the whole title, so
 /// typing replaces the old text at once; later frames leave the user's own caret and selection
 /// alone. Same pattern as the zoom box in `chrome.rs`.
-fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
+pub(super) fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
     let first_frame = !ui.memory(|m| m.has_focus(id));
     let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
     if !resp.has_focus() && !resp.lost_focus() {

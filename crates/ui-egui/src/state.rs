@@ -43,6 +43,8 @@ pub enum RightPanel {
     Fields,
     Layers,
     Attachments,
+    /// Named destinations (Acrobat's Destinations panel).
+    Destinations,
     Signatures,
     /// Accessibility Checker results.
     Accessibility,

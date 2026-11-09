@@ -36,7 +36,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Read mode, full screen | yes | yes; full screen is one fitted page or spread at a time on black, and background clicks and keys turn pages while clicks on links, comments, fields and other page objects do not (#1459), a right-click or Shift+Enter goes back, page transitions and display times play (#379), a still pointer hides | shipped; loop after the last page and the full-screen preferences planned |
 | Light, dark, system theme | yes | yes | shipped |
 | Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704); the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808) | shipped |
-| Destinations, articles, model tree, Tags, Order, Content panels | yes | no | planned |
+| Destinations panel | yes | yes: sorted by name or page; go to, New destination at the view on screen, Set destination, Rename, Delete; the document's own links and bookmarks follow a rename and keep their place on a delete | shipped |
+| Articles, model tree, Tags, Order, Content panels | yes | no | planned |
 | Message bars (restricted, signed, PDF/A, forms) | yes | restricted and signed; no PDF/A view mode | partial |
 
 ## Tools, handles and precision

@@ -131,6 +131,7 @@ use panels::organize_panel;
 use panels::page_selection_ui;
 use panels::search_ui;
 pub use panels::side_panels;
+pub use panels::{DestAction, DestinationsView};
 pub use persist::last_session;
 pub use persist::last_view;
 pub use persist::paper;
@@ -748,6 +749,8 @@ pub struct PdfCraftApp {
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
+    /// The Destinations panel's sort, the destination being renamed and its list.
+    pub destinations: crate::panels::DestinationsView,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
     /// any document. Destinations are page indices.
     pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,

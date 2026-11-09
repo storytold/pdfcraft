@@ -1367,11 +1367,11 @@ title = "Named destinations panel"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["destination_list", "destination_add", "destination_set", "destination_rename", "destination_delete"]
+evidence = ["crates/organize/src/dests_tests.rs::the_tree_and_the_old_dictionary_are_listed_by_name_with_their_page_and_view", "crates/organize/src/dests_tests.rs::a_new_destination_goes_into_the_tree_beside_the_other_trees_and_survives_saving", "crates/organize/src/dests_tests.rs::set_destination_sends_every_entry_of_the_name_to_the_new_view", "crates/organize/src/dests_tests.rs::rename_keeps_where_a_destination_goes_in_the_tree_and_the_old_dictionary", "crates/organize/src/dests_tests.rs::renaming_gives_the_documents_links_bookmarks_and_actions_the_new_name", "crates/organize/src/dests_tests.rs::delete_removes_the_name_everywhere_and_an_empty_tree_with_it", "crates/organize/src/dests_tests.rs::deleting_sends_the_documents_links_bookmarks_and_actions_where_it_went", "crates/organize/src/dests_tests.rs::a_tree_nested_too_deeply_to_read_whole_is_listed_but_not_rewritten", "crates/organize/src/dests_tests.rs::hostile_action_chains_end_and_are_rewritten_once", "crates/engine/src/tests.rs::destination_edits_reach_the_links_that_name_them_undo_and_save", "crates/automation/tests/it/destinations.rs::destinations_are_added_moved_renamed_deleted_and_saved_through_tools", "crates/automation/tests/it/destinations.rs::destination_tools_refuse_what_they_cannot_do_and_change_nothing", "crates/ui-egui/tests/it/destinations.rs::new_rename_sort_go_to_set_and_delete_destinations"]
+notes = "View ▸ Side panels ▸ Destinations lists the named destinations (ISO 32000-2 §12.3.2.4) of the /Names /Dests tree and of the PDF 1.1 catalog /Dests dictionary (a name in both once, as a reader resolves it), sorted by name or, with the Page label, by page. A click goes to one; its menu has Go to destination, Set destination (the view on screen: the selection's corner, else the window's top, as a new bookmark), Rename and Delete; Destination options ▸ New destination names the view on screen, starting in rename mode. Each is one undo step, and applies to the name in both places. Renaming gives the document's own links, bookmarks and GoTo actions (/A, /AA, /OpenAction and their /Next chains) the new name, and deleting sends them to where the name went; links from other files and #nameddest= URLs cannot be reached. Edits write the tree as one flat sorted node, and are refused when the tree is nested more than 32 levels deep or has more than 100,000 nodes (rewriting it would drop what was not read). Not yet: Acrobat's Scan Document (the list is always current), making links to a destination from the panel (Link Properties takes a page), and checking Acrobat's own handling of links on rename and delete by observation."
 
 [[feature]]
 id = "view.articles-panel"
