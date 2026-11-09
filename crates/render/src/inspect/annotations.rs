@@ -1,6 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{
     Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, fill_group_text, link_replies,
+    state_or_default,
 };
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
@@ -17,11 +18,13 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the bookmark and link listings, and name, description and embedded-file key
-/// text the attachment listing, keep together. Many bookmarks, links or attachments can share one
-/// long string, which each would otherwise copy. Past it, a bookmark or link to a web address lists
-/// as a URI action without its address, an attachment under its generic name without a
-/// description, and an embedded file whose key does not fit is not listed.
+/// Web-address text and `/QuadPoints` geometry the bookmark and link listings, and name,
+/// description and embedded-file key text the attachment listing, keep together. Many bookmarks,
+/// links or attachments can share one long string or array, which each would otherwise copy. Past
+/// it, a bookmark or link to a web address lists as a URI action without its address (or a link
+/// keeps a relative address unresolved against the document's base), a link is active over its
+/// whole `/Rect`, an attachment is listed under its generic name without a description, and an
+/// embedded file whose key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
@@ -87,6 +90,9 @@ impl<'a> Inspector<'a> {
 
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
+        // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
+        // the budget only shrinks, so they are not read again (review on #4474).
+        let mut unfit_quads: HashSet<ObjectId> = HashSet::new();
         let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
         pages.sort_unstable_by_key(|&(_, page)| page);
         // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
@@ -138,7 +144,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, text_budget) {
+                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
                     if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                         info.has_javascript = true;
                     }
@@ -217,7 +223,7 @@ impl<'a> Inspector<'a> {
                 rect,
                 color,
                 index,
-                state: self.text(d, b"State"),
+                state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                 intent: self.name(d, b"IT"),
@@ -239,16 +245,64 @@ impl<'a> Inspector<'a> {
 
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
     /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
-    /// rectangle, or a destination or action that leads nowhere.
-    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
+    /// rectangle, or a destination or action that leads nowhere. `base` is the catalog's
+    /// `/URI /Base`, which a relative URI action is resolved against. `unfit_quads` holds the
+    /// indirect `/QuadPoints` arrays already found too large for the budget.
+    fn link(
+        &self,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        base: Option<&str>,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+    ) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
         } else {
-            self.action_target(d.get(b"A").ok().and_then(|a| self.dict(a))?, text_budget)?
+            match self.action_target(d.get(b"A").ok().and_then(|a| self.dict(a))?, text_budget)? {
+                LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
+                    // The raw address is spent already. What the base adds is spent too, or the
+                    // link keeps the raw address.
+                    Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
+                        *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
+                        LinkTarget::Uri(resolved)
+                    }
+                    _ => LinkTarget::Uri(uri),
+                },
+                other => other,
+            }
         };
-        Some(Link { page, index, rect, target })
+        // Not read at all once no quadrilateral would fit what is left of the budget, or when this
+        // shared array already did not fit: many links can share one long array, and reading it
+        // again for each would cost its length every time (review on #4474).
+        let shared = d.get(b"QuadPoints").ok().and_then(|o| o.as_reference().ok());
+        let readable = *text_budget >= std::mem::size_of::<[f32; 8]>() && shared.is_none_or(|id| !unfit_quads.contains(&id));
+        let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+            // Read no further than one value past the cap: a longer array isn't used.
+            Ok(Object::Array(q)) if readable && q.len() <= crate::MAX_LINK_QUADS.saturating_mul(8) => {
+                #[cfg(test)]
+                QUAD_ARRAYS_READ.with(|n| n.set(n.get() + 1));
+                let values: Vec<Option<f32>> = q.iter().map(|o| self.resolve(o).as_float().ok()).collect();
+                let quads = crate::link_quads(&values, rect);
+                // Many links can share one long array, which each would otherwise copy. Past the
+                // budget a link is active over its whole `/Rect`.
+                let bytes = std::mem::size_of_val(quads.as_slice());
+                if bytes <= *text_budget {
+                    *text_budget = text_budget.saturating_sub(bytes);
+                    quads
+                } else {
+                    if let Some(id) = shared {
+                        unfit_quads.insert(id);
+                    }
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        };
+        Some(Link { page, index, rect, quads, target })
     }
 
     /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
@@ -414,22 +468,44 @@ impl<'a> Inspector<'a> {
         let ft = self.name(d, b"FT").or(parent_ft);
         let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
-        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
-            Ok(Object::Array(k)) => k.as_slice(),
-            _ => &[],
+        let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k.clone(),
+            _ => Vec::new(),
         };
-        let (field_kids, widget_kids): (Vec<&Object>, Vec<&Object>) = kids.iter().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
-        let field_kids: Vec<_> = field_kids.into_iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
+        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
+            kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
-            let id = if let Object::Reference(id) = o { Some(*id) } else { None };
-            walk.path.extend(id);
+            let here = match o {
+                Object::Reference(id) => Some(*id),
+                _ => None,
+            };
+            walk.path.extend(here);
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+                // §12.7.4.2): a kid that doesn't name this field as its `/Parent` is named from its
+                // own chain, as the form reader names it.
+                let parent = match self.dict(k).map(|kd| kd.get(b"Parent")) {
+                    Some(Ok(Object::Reference(p))) => Some(*p),
+                    _ => None,
+                };
+                if parent == here {
+                    self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                } else {
+                    let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
+                    self.field(k, Some((&own, ft.clone(), ff)), out, walk, depth + 1);
+                }
             }
-            if id.is_some() {
+            if here.is_some() {
                 walk.path.pop();
             }
-            return;
+            // "A field's children in the hierarchy may also include widget annotations" (ISO
+            // 32000-2 §12.7.4): widget annotations listed beside named kids are still this
+            // field's widgets, listed as a field of this name, as the form reader reads them.
+            kids.retain(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_err() && self.name(kd, b"Subtype").as_deref() == Some("Widget")));
+            if kids.is_empty() {
+                return;
+            }
         }
         let flags = ff.unwrap_or(0);
         let kind = match ft.as_deref() {
@@ -457,20 +533,23 @@ impl<'a> Inspector<'a> {
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
-        // The widget is either this dict (merged field/widget) or its first kid. With no widget
-        // among its kids, it is the first page widget naming this field as its `/Parent`: a child
-        // names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and PDFium read it.
+        // The widget is this dict (merged field/widget) or its first kid. A merged dict that also
+        // lists widget kids has them as its widgets (ISO 32000-2 §12.7.4), as the form reader has
+        // it. With no widget among its kids, it is the first page widget naming this field as its
+        // `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and
+        // PDFium read it.
         let merged = d.get(b"Rect").is_ok();
         let named = if merged || !widget_kids.is_empty() { None } else { self.widget_naming(o) };
-        let widget = if merged {
-            Some(d)
-        } else {
-            widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok()))
+        let widget_kid = widget_kids.iter().filter_map(|k| self.dict(k)).find(|kd| self.name(kd, b"Subtype").as_deref() == Some("Widget"));
+        let widget = match widget_kid {
+            Some(w) => Some(w),
+            None if merged => Some(d),
+            None => widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok())),
         };
         let page = widget
             .and_then(|w| w.get(b"P").ok())
             .and_then(|p| self.page_of(p))
-            .or_else(|| self.find_widget_page(o, kids))
+            .or_else(|| self.find_widget_page(o, &kids))
             .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
@@ -539,6 +618,29 @@ impl<'a> Inspector<'a> {
         pages
     }
 
+    /// The fully qualified name of the field `id`: the partial names (`/T`) up its `/Parent`
+    /// chain, joined with periods; empty when none has one or the chain reaches an object that
+    /// isn't a dictionary, as the form reader has it. A `/Parent` loop ends the walk.
+    fn qualified_name(&self, id: ObjectId) -> String {
+        let mut parts = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if visited.len() > 64 || !visited.insert(c) {
+                break;
+            }
+            let o = Object::Reference(c);
+            let Some(d) = self.dict(&o) else { return String::new() };
+            parts.extend(self.text(d, b"T"));
+            cur = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+        }
+        parts.reverse();
+        parts.join(".")
+    }
+
     /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
     /// ancestor is already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
     pub(super) fn unlisted_field(&self, id: ObjectId, seen: &HashSet<ObjectId>) -> Option<ObjectId> {
@@ -595,4 +697,10 @@ fn rect4(o: &Object) -> [f32; 4] {
         }
         _ => [0.0; 4],
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/QuadPoints` arrays whose values were read.
+    pub(super) static QUAD_ARRAYS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
