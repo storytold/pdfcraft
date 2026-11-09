@@ -6584,6 +6584,45 @@ fn form_scripts_see_a_signature_fields_state() {
     assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("2|2")));
 }
 
+/// An AcroForm (no XFA) with a signed signature field `sig`, whose stand-in signature has no
+/// byte range, a text field `qty`, and a field `total` whose calculation reads `sig`'s state.
+fn signed_acroform_with_calculation() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /CO [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /V 7 0 R /Rect [20 250 180 270] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /Rect [20 220 180 240] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [20 190 180 210] /P 3 0 R /F 4 /AA << /C << /S /JavaScript /JS (event.value = getField\\('sig'\\).signatureValidate\\(\\) + '/' + getField\\('sig'\\).signatureInfo\\(\\).status;) >> >> >>",
+        "<< /Type /Sig /Name (A Signer) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A field's calculation run by an edit sees a signature field's state as the document's
+/// signatures were checked (invalid, 2), not only that the field is signed (1).
+#[test]
+fn calculations_see_a_signature_fields_checked_state() {
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(signed_acroform_with_calculation()), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").map(|f| f.value.clone());
+    assert_eq!(total, Some(vec!["2/2".to_string()]), "{:?}", s.take_js_output(id));
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(

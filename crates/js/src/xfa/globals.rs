@@ -1,4 +1,4 @@
-use super::host::host;
+use super::host::{FieldNode, host};
 use super::instances::instance_manager;
 use super::model::{MAX_DEPTH, MAX_NODES, XfaDoc, XfaEffect, XfaEvent, XfaKind, clip, reset_names};
 use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
@@ -28,7 +28,8 @@ fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
 /// (XFA 3.3, ch. 2, "Field Names", pp. 72-74), and only that spelling finds it: no other
 /// spelling, short name or missing index does. A subform's SOM expression gives an object that
 /// names the subform. A signature field isn't found by an initialize script (it is from later
-/// events). Anything else gives `null`; no name at all is an error.
+/// events). A field in a row the script removed isn't found either. Anything else gives
+/// `null`; no name at all is an error.
 fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let Some(wanted) = args.first() else { return Err(error("getField: a field name is required")) };
     let name = clip(text(wanted, ctx)?);
@@ -36,11 +37,15 @@ fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
         return Ok(JsValue::null());
     }
     let kind = crate::host::host(ctx)?.borrow().fields.iter().find(|f| f.name == name).map(|f| f.kind);
+    let removed = matches!(host(ctx)?.borrow().field_node(&name), FieldNode::Removed);
     match kind {
+        Some(_) if removed => Ok(JsValue::null()),
         Some(crate::FieldType::Signature) if host(ctx)?.borrow().activity == "initialize" => Ok(JsValue::null()),
         Some(_) => Ok(crate::document::field_object(ctx, &name).into()),
         None => {
-            let subform = host(ctx)?.borrow().nodes.iter().any(|n| !n.gone && n.som == name && n.kind == XfaKind::Subform);
+            let h = host(ctx)?.borrow();
+            let subform = h.nodes.iter().enumerate().any(|(i, n)| n.som == name && n.kind == XfaKind::Subform && h.is_live(i));
+            drop(h);
             Ok(if subform {
                 ObjectInitializer::new(ctx).property(js_string!("name"), s(&name), Attribute::READONLY).build().into()
             } else {
@@ -50,38 +55,87 @@ fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     }
 }
 
-/// A SOM path without its indexes (`form.page1.qty`), for matching the names scripts pass.
-fn plain_som(som: &str) -> String {
-    let mut out = String::with_capacity(som.len());
-    let mut skip = false;
+/// One step of a SOM expression: its name, and what its first brackets hold, if it has any.
+type Step = (String, Option<String>);
+
+/// The steps of a SOM expression (`form1[0].row[1].amount`). Dots inside brackets don't
+/// separate steps; brackets after a step's first are skipped; empty steps are left out.
+fn som_steps(som: &str) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let (mut name, mut index) = (String::new(), None::<String>);
+    // Bracket depth, and whether this step's first brackets are closed.
+    let (mut depth, mut closed) = (0usize, false);
     for c in som.chars() {
-        match c {
-            '[' => skip = true,
-            ']' => skip = false,
-            _ if !skip => out.push(c),
-            _ => {}
+        match (c, depth) {
+            ('[', 0) => {
+                depth = 1;
+                index.get_or_insert_with(String::new);
+            }
+            (']', 0) => {}
+            (']', 1) => {
+                depth = 0;
+                closed = true;
+            }
+            ('.', 0) => {
+                if !name.is_empty() {
+                    steps.push((std::mem::take(&mut name), index.take()));
+                }
+                index = None;
+                closed = false;
+            }
+            (_, 0) => name.push(c),
+            (_, _) => {
+                if c == '[' {
+                    depth = depth.saturating_add(1);
+                } else if c == ']' {
+                    depth = depth.saturating_sub(1);
+                }
+                if !closed && let Some(i) = index.as_mut() {
+                    i.push(c);
+                }
+            }
         }
     }
-    out
+    if !name.is_empty() {
+        steps.push((name, index));
+    }
+    steps
+}
+
+/// Does step `want` of a name a script passed name step `have` of a SOM expression? The names
+/// must be the same, and a number in `want`'s brackets must be `have`'s index (none written is
+/// 0); no brackets, `[*]` or anything else in them takes every index.
+fn step_names(want: &Step, have: &Step) -> bool {
+    if want.0 != have.0 {
+        return false;
+    }
+    let Some(wanted) = want.1.as_deref().and_then(|i| i.trim().parse::<usize>().ok()) else { return true };
+    have.1.as_deref().map_or(Some(0), |i| i.trim().parse::<usize>().ok()) == Some(wanted)
 }
 
 /// Does `name` from a script (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, a SOM expression with
 /// its indexes, or a container such as `table`) name the object at `som` or one of its
-/// ancestors? What `xfa.host.resetData` and `event.target.resetForm` reset by.
+/// ancestors? An index written in the name (`row[1].amount`) names that instance only; a step
+/// without one names every instance. What `xfa.host.resetData` and `event.target.resetForm`
+/// reset by.
 pub fn som_names(som: &str, name: &str) -> bool {
-    let plain = plain_som(som);
-    let n = plain_som(name.trim());
-    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
-    let want: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
-    let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
-    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
+    let want = som_steps(name.trim());
+    let skip = match want.as_slice() {
+        [(xfa, _), (form, _), ..] if xfa == "xfa" && form == "form" => 2,
+        [(form, _), ..] if form == "$form" => 1,
+        _ => 0,
+    };
+    let want = want.get(skip..).unwrap_or_default();
+    let have = som_steps(som);
+    !want.is_empty() && have.windows(want.len()).any(|w| w.iter().zip(want).all(|(h, n)| step_names(n, h)))
 }
 
 /// `event.target.resetForm(names)`: resets the named fields (an array of names, or one name; a
 /// name is matched as [`som_names`] matches it), or every field when no names are given; a list
 /// that names nothing (an empty array, or only missing or empty entries) resets nothing. The
 /// script reads the fields' default values back at once; the form itself is reset by the
-/// effect when the script is done, as for `xfa.host.resetData`.
+/// effect when the script is done, as for `xfa.host.resetData`. When the run's limits leave
+/// that effect out, nothing is reset, for the script either.
 fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let given = arg(args, 0);
     let all = given.is_undefined() || given.is_null();
@@ -96,7 +150,9 @@ fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if !all && names.is_empty() {
         return Ok(JsValue::undefined());
     }
-    effect(ctx, XfaEffect::ResetData(names.clone()))?;
+    if !host(ctx)?.borrow_mut().admit(XfaEffect::ResetData(names.clone())) {
+        return Ok(JsValue::undefined());
+    }
     // What the script reads from now on: each reset field's default value.
     let reset: Vec<(String, Vec<String>)> = {
         let mut fields = crate::host::host(ctx)?.borrow_mut();
@@ -113,7 +169,10 @@ fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     };
     let mut h = host(ctx)?.borrow_mut();
     for (som, value) in reset {
-        if let Some(n) = h.nodes.iter_mut().find(|n| !n.gone && n.som == som && n.kind == XfaKind::Field) {
+        // The field or exclusion group (a radio button group's value is its group's).
+        if let FieldNode::Live(i) = h.field_node(&som)
+            && let Some(n) = h.nodes.get_mut(i)
+        {
             n.value = value.join("\n");
             n.formatted = None;
         }
@@ -121,15 +180,57 @@ fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
-/// A script changed `before` into `after` through `getField`: a new value is set on the XFA
-/// field the same way `rawValue` sets it (so the script reads it back there too); properties
-/// XFA fields have no counterpart for here are noted and left as they were.
-pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after: &crate::FieldState) -> JsResult<()> {
+/// The value document field `f` has when its XFA field or exclusion group holds `text`, as the
+/// engine gives a field the value a script set: a check box is on when `text` is its on value
+/// (or, when it has none, anything but an off value), a radio group holds the selected value, a
+/// list box one value per line. `None` for buttons and signatures, which hold no value.
+fn field_value(f: &crate::FieldState, text: &str) -> Option<Vec<String>> {
+    use crate::FieldType as T;
+    let t = text.trim();
+    Some(match f.kind {
+        T::Button | T::Signature => return None,
+        T::CheckBox => {
+            let on = f.options.first().map_or("1", |o| o.0.as_str());
+            let off = matches!(t.to_ascii_lowercase().as_str(), "" | "0" | "off" | "false" | "no");
+            if t == on.trim() || (on.trim().is_empty() && !off) { vec![on.to_string()] } else { Vec::new() }
+        }
+        T::RadioButton if t.is_empty() => Vec::new(),
+        T::RadioButton => vec![t.to_string()],
+        T::ListBox => text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
+        _ if text.is_empty() => Vec::new(),
+        _ => vec![text.to_string()],
+    })
+}
+
+/// Document field `f` as an XFA script reads it now: with the value its XFA field holds, so a
+/// value the script set through `rawValue`, reset, or moved by removing a row reads the same
+/// through `getField`.
+pub(crate) fn field_now(ctx: &Context, f: &mut crate::FieldState) -> JsResult<()> {
+    let h = host(ctx)?.borrow();
+    if let FieldNode::Live(i) = h.field_node(&f.name)
+        && let Some(v) = h.nodes.get(i).and_then(|n| field_value(f, &n.value))
+    {
+        f.value = v;
+    }
+    Ok(())
+}
+
+/// A script changed `before` (the field as it read it) into `after` through `getField`: a new
+/// value is set on the XFA field the same way `rawValue` sets it, and the field keeps the value
+/// the form took (cut to the length a value keeps, or the old one when the run's limits left the
+/// write out). Properties XFA fields have no counterpart for here are noted and keep their old
+/// values. Returns the field as it now stands.
+pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after: &crate::FieldState) -> JsResult<crate::FieldState> {
     let mut h = host(ctx)?.borrow_mut();
+    let mut now = before.clone();
     if before.value != after.value {
-        let at = h.nodes.iter().position(|n| !n.gone && n.som == after.name);
-        if !at.is_some_and(|i| h.set_value(i, after.value.join("\n"))) {
-            h.unapplied(format!("{}: value", after.name));
+        match h.field_node(&after.name) {
+            FieldNode::Live(i) if h.set_value(i, after.value.join("\n")) => {
+                if let Some(v) = h.nodes.get(i).and_then(|n| field_value(before, &n.value)) {
+                    now.value = v;
+                }
+            }
+            _ => h.unapplied(format!("{}: value", after.name)),
         }
     }
     let others = [
@@ -145,7 +246,7 @@ pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after
             h.unapplied(format!("{}: {property}", after.name));
         }
     }
-    Ok(())
+    Ok(now)
 }
 
 /// `xfa.host.messageBox(message, title, icon, buttons)`: records the message with its title,

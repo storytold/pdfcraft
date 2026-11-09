@@ -86,7 +86,7 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            cx.js = Some(js::JsRunner::new(&next, &name).with_signatures(Arc::clone(&cx.signatures)));
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();

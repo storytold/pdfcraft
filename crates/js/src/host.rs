@@ -169,27 +169,40 @@ fn field_index(ctx: &Context, name: &JsString) -> JsResult<usize> {
     host(ctx)?.borrow().fields.iter().position(|f| f.name == n).ok_or_else(|| error(format!("no field named {n}")))
 }
 
+/// Field `name` as the script reads it now. In an XFA form's script, with the value its XFA
+/// field holds ([`xfa::field_now`]).
 pub(crate) fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
     let i = field_index(ctx, name)?;
-    Ok(host(ctx)?.borrow().fields[i].clone())
+    let (mut field, in_xfa) = {
+        let h = host(ctx)?.borrow();
+        (h.fields.get(i).cloned().ok_or_else(|| error("the field is no longer available"))?, h.xfa)
+    };
+    if in_xfa {
+        xfa::field_now(ctx, &mut field)?;
+    }
+    Ok(field)
 }
 
+/// Apply `change` to field `name`. In an XFA form's script the change goes to the XFA field,
+/// and the field keeps what the form took of it ([`xfa::field_written`]).
 pub(crate) fn write(ctx: &mut Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
-    let written = {
+    if host(ctx)?.borrow().xfa {
+        let before = read(ctx, name)?;
+        let mut after = before.clone();
+        change(&mut after);
+        let now = xfa::field_written(ctx, &before, &after)?;
         let mut h = host(ctx)?.borrow_mut();
-        let xfa = h.xfa;
         let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
-        let before = xfa.then(|| field.clone());
-        change(field);
-        let after = before.map(|b| (b, field.clone()));
+        *field = now;
         h.changed.insert(i);
-        after
-    };
-    match written {
-        Some((before, after)) => xfa::field_written(ctx, &before, &after),
-        None => Ok(()),
+        return Ok(());
     }
+    let mut h = host(ctx)?.borrow_mut();
+    let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
+    change(field);
+    h.changed.insert(i);
+    Ok(())
 }
 
 pub(crate) fn value_of(f: &FieldState, ctx: &mut Context) -> JsValue {

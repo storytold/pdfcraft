@@ -285,6 +285,10 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// How each signature field's signature checked when the document's signatures were read
+    /// ([`signature_states`]), by field name; a field not among them is as its value shows it
+    /// ([`signature_in_value`]).
+    signatures: std::sync::Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>,
 }
 
 impl JsRunner {
@@ -300,7 +304,20 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+            signatures: Default::default(),
+        }
+    }
+
+    /// This runner, with the signature states the document's signatures were checked with
+    /// ([`signature_states`]) for `signatureInfo()` and `signatureValidate()`.
+    pub(crate) fn with_signatures(self, signatures: std::sync::Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>) -> JsRunner {
+        JsRunner { signatures, ..self }
     }
 }
 
@@ -346,7 +363,7 @@ impl JsRunner {
                     None => pdfcraft_js::DISPLAY_VISIBLE,
                 };
                 let mut s = field_state_with_display(f, display);
-                s.signature = signature_in_value(&self.cos, f);
+                s.signature = self.signatures.get(&f.name).copied().unwrap_or_else(|| signature_in_value(&self.cos, f));
                 s
             })
             .collect();

@@ -1095,14 +1095,14 @@ mod xfa_model {
     fn event_target_get_field_finds_a_field_by_its_full_som_expression() {
         let o = go_with_fields(
             "var d = event.target; [d.getField('form1[0].page1[0].qty[0]').name, d.getField('form1[0].page1[0].qty[0]').value, \
-             d.getField('form1[0].page1[0].qty[0]').type, d.getField('form.form1.page1.qty'), d.getField('form1.page1.qty'), \
-             d.getField('xfa[0].form[0].form1[0].page1[0].qty[0]'), d.getField('form1[0].page1[0].qty'), d.getField('qty'), \
-             d.getField('form1[0].page1[0].nothing[0]'), d.getField(''), d.getField('form1[0].page1[0]').name, \
-             d.getField('form1[0].page1[0]').type].join('|')",
+             d.getField('form1[0].page1[0].qty[0]').type, d.getField('form.form1.page1.qty') === null, d.getField('form1.page1.qty') === null, \
+             d.getField('xfa[0].form[0].form1[0].page1[0].qty[0]') === null, d.getField('form1[0].page1[0].qty') === null, \
+             d.getField('qty') === null, d.getField('form1[0].page1[0].nothing[0]') === null, d.getField('') === null, \
+             d.getField('form1[0].page1[0]').name, d.getField('form1[0].page1[0]').type].join('|')",
             "click",
         );
         assert_eq!(o.error, None, "{o:?}");
-        assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].qty[0]|4|text||||||||form1[0].page1[0]|"));
+        assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].qty[0]|4|text|true|true|true|true|true|true|true|form1[0].page1[0]|"));
         let o = go_with_fields("event.target.getField()", "click");
         assert!(o.error.as_deref().is_some_and(|e| e.contains("field name is required")), "{o:?}");
         // Without the document's fields, nothing is found (and nothing fails).
@@ -1136,11 +1136,13 @@ mod xfa_model {
     #[test]
     fn a_value_set_through_get_field_sets_the_xfa_field() {
         let o = go_with_fields(
-            "var f = event.target.getField('form1[0].page1[0].qty[0]'); f.value = 7; f.readonly = true; f.rect = [0, 0, 9, 9]; qty.rawValue + '|' + f.value",
+            "var f = event.target.getField('form1[0].page1[0].qty[0]'); f.value = 7; f.readonly = true; f.rect = [0, 0, 9, 9]; \
+             [qty.rawValue, f.value, f.readonly, f.rect].join('|')",
             "click",
         );
         assert_eq!(o.error, None, "{o:?}");
-        assert_eq!(o.result.as_deref(), Some("7|7"));
+        // The properties left alone read as they were.
+        assert_eq!(o.result.as_deref(), Some("7|7|false|"));
         assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() }]);
         assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: readonly")), "{:?}", o.notes);
         assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: rect")), "{:?}", o.notes);
@@ -1170,6 +1172,127 @@ mod xfa_model {
         assert_eq!(reset(&format!("event.target.resetForm(){read}")), (names(&[]), "1|null|1".into()));
         assert_eq!(reset(&format!("event.target.resetForm([]){read}")), (Vec::new(), "4|2.5|4".into()));
         assert_eq!(reset(&format!("event.target.resetForm(['']){read}")), (Vec::new(), "4|2.5|4".into()));
+    }
+
+    /// The test form with a radio button group `pick` (value 2) on `page1`, and the document's
+    /// fields of [`doc_fields`] with the table's two amounts (default 3) and `pick` (no default).
+    fn form_with_rows_and_group() -> (XfaNode, Vec<crate::FieldState>) {
+        use crate::{FieldState, FieldType};
+        let mut root = form();
+        if let Some(page1) = root.children.first_mut() {
+            page1.children.push(XfaNode {
+                name: "pick".into(),
+                som: "form1[0].page1[0].pick[0]".into(),
+                kind: Some(XfaKind::ExclGroup),
+                value: "2".into(),
+                presence: "visible".into(),
+                ..Default::default()
+            });
+        }
+        let mut fields = doc_fields().to_vec();
+        for (i, value) in ["10", "5"].into_iter().enumerate() {
+            let mut amount = FieldState::new(format!("form1[0].page1[0].table[0].row[{i}].amount[0]"), FieldType::Text, vec![value.into()]);
+            amount.default = vec!["3".into()];
+            fields.push(amount);
+        }
+        let mut pick = FieldState::new("form1[0].page1[0].pick[0]", FieldType::RadioButton, vec!["2".into()]);
+        pick.options = vec![("1".into(), "1".into()), ("2".into(), "2".into())];
+        fields.push(pick);
+        (root, fields)
+    }
+
+    /// `script` run for a click on the button `go` of [`form_with_rows_and_group`].
+    fn click_rows_and_group(script: &str) -> XfaOutcome {
+        let (root, fields) = form_with_rows_and_group();
+        let ev = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, fields: std::sync::Arc::new(fields) };
+        run_xfa(script, &ev, &doc, &root, Limits::default())
+    }
+
+    /// What `getField` gives follows the form: a value set through `rawValue` reads back
+    /// through it, a value the form cut or left out reads as the form holds it, and a field in a
+    /// removed row is gone while the row that moved up is found with its own value (and takes a
+    /// value equal to the removed row's).
+    #[test]
+    fn get_field_reads_what_the_form_holds() {
+        let run = |script: &str| {
+            let o = click_rows_and_group(script);
+            assert_eq!(o.error, None, "{script}: {o:?}");
+            o
+        };
+        let qty = "var d = event.target, f = d.getField('form1[0].page1[0].qty[0]'); ";
+        let o = run(&format!("{qty}qty.rawValue = 9; price.rawValue = f.value; f.value + '|' + price.rawValue"));
+        assert_eq!(o.result.as_deref(), Some("9|9"));
+        // Cut to the length a value keeps, as `rawValue` reads it.
+        let o = run(&format!("{qty}f.value = new Array(70000).join('x'); f.value.length + '|' + qty.rawValue.length"));
+        assert_eq!(o.result.as_deref(), Some("65536|65536"));
+        // Past the effect cap the write is left out, of the field too.
+        let o = run(&format!("for (var i = 0; i < 30000; i++) xfa.host.beep(); {qty}f.value = 8; f.value + '|' + qty.rawValue"));
+        assert_eq!(o.result.as_deref(), Some("4|4"));
+        let row = |i: usize| format!("d.getField('form1[0].page1[0].table[0].row[{i}].amount[0]')");
+        let o = run(&format!("var d = event.target; table._row.removeInstance(0); [{} === null, {}.value].join('|')", row(1), row(0)));
+        assert_eq!(o.result.as_deref(), Some("true|5"));
+        let o = run(&format!(
+            "var d = event.target; table._row.removeInstance(0); {}.value = 10; xfa.resolveNode('table.row[0]').amount.rawValue",
+            row(0)
+        ));
+        assert_eq!(o.result.as_deref(), Some("10"));
+        assert!(
+            o.effects.contains(&XfaEffect::SetValue { som: "form1[0].page1[0].table[0].row[0].amount[0]".into(), value: "10".into() }),
+            "{:?}",
+            o.effects
+        );
+    }
+
+    /// `resetForm` with an index written resets that instance only; a radio group reset reads
+    /// back at once, through its node and through `getField`; a reset the run's limits leave out
+    /// changes nothing the script reads.
+    #[test]
+    fn reset_form_resets_the_instance_named_and_radio_groups() {
+        let run = |script: &str| {
+            let o = click_rows_and_group(script);
+            assert_eq!(o.error, None, "{script}: {o:?}");
+            o
+        };
+        let amounts = "xfa.resolveNode('table.row[0]').amount.rawValue + '|' + xfa.resolveNode('table.row[1]').amount.rawValue";
+        let o = run(&format!("event.target.resetForm('form1[0].page1[0].table[0].row[1].amount[0]'); {amounts}"));
+        assert_eq!(o.result.as_deref(), Some("10|3"));
+        let o = run(&format!("event.target.resetForm('table.row.amount'); {amounts}"));
+        assert_eq!(o.result.as_deref(), Some("3|3"));
+        let o = run(
+            "event.target.resetForm('form1[0].page1[0].pick[0]'); [pick.rawValue, event.target.getField('form1[0].page1[0].pick[0]').value].join('|')",
+        );
+        assert_eq!(o.result.as_deref(), Some("|Off"));
+        let o = run(
+            "for (var i = 0; i < 30000; i++) xfa.host.beep(); event.target.resetForm(); qty.rawValue + '|' + event.target.getField('form1[0].page1[0].qty[0]').value",
+        );
+        assert_eq!(o.result.as_deref(), Some("4|4"));
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::ResetData(_))));
+    }
+
+    /// A name with indexes names only the instances it writes; a step without one, or with
+    /// `[*]`, names every instance; `xfa.form` and `$form` in front are skipped.
+    #[test]
+    fn som_names_keeps_the_indexes_a_name_writes() {
+        let row = |i: usize| format!("form1[0].page1[0].table[0].row[{i}].amount[0]");
+        for (som, name, names) in [
+            (row(0), "form1[0].page1[0].table[0].row[1].amount[0]", false),
+            (row(1), "form1[0].page1[0].table[0].row[1].amount[0]", true),
+            (row(0), "row[1].amount", false),
+            (row(1), "row[1]", true),
+            (row(0), "row.amount", true),
+            (row(1), "row[*].amount", true),
+            (row(1), "table.row", true),
+            (row(1), "xfa[0].form[0].form1[0].page1[0].table[0]", true),
+            (row(1), "$form.form1.page1", true),
+            (row(1), "xfa.form.form1.page1.table.row[0]", false),
+            (row(0), "amount[0]", true),
+            (row(0), "amount[1]", false),
+            (row(0), "", false),
+            (row(0), "[0]", false),
+        ] {
+            assert_eq!(som_names(&som, name), names, "{name} names {som}");
+        }
     }
 }
 

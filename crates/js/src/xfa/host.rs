@@ -2,7 +2,7 @@ use super::model::{
     MAX_ALERTS, MAX_CONSOLE, MAX_DEPTH, MAX_EFFECTS, MAX_NODES, MAX_PAYLOAD, MAX_VALUE, XfaDoc, XfaEffect, XfaKind, XfaNode, clip, clip_value,
     effect_key, payload,
 };
-use super::{Context, HashMap, JsResult, Message, RefCell, error};
+use super::{Context, HashMap, HashSet, JsResult, Message, RefCell, error};
 
 /// One node of the flattened form, shared by the JavaScript and FormCalc engines.
 pub(crate) struct HNode {
@@ -54,6 +54,20 @@ pub(crate) struct XHost {
     /// no counterpart for here (`field.readonly`, say), as "SOM: property", at most
     /// [`MAX_UNAPPLIED`] of them.
     unapplied: Vec<String>,
+    /// The SOM expressions of the fields and exclusion groups as they were before the first
+    /// `removeInstance` (which renumbers the instances after the removed one): a document field
+    /// named by one of them that no live node has any more was removed. `None` until then.
+    fields_before_removal: Option<HashSet<String>>,
+}
+
+/// Where the document field a script asks for is in the form (see [`XHost::field_node`]).
+pub(crate) enum FieldNode {
+    /// The live field or exclusion group at this index, which holds the field's value.
+    Live(usize),
+    /// A row the script removed held it: the field is no longer in the form.
+    Removed,
+    /// The form snapshot has no node for it: the document's field is all there is.
+    Untracked,
 }
 
 /// Most unapplied field properties a run names (see [`XHost::unapplied`]).
@@ -85,6 +99,7 @@ impl XHost {
             dropped_bytes: 0,
             unapplied: Vec::new(),
             activity: String::new(),
+            fields_before_removal: None,
         }
     }
 
@@ -227,6 +242,52 @@ impl XHost {
             ));
         }
         out
+    }
+
+    /// Where the document field named `som` (its SOM expression with every index written) is in
+    /// the form now.
+    pub(crate) fn field_node(&self, som: &str) -> FieldNode {
+        let live =
+            self.nodes.iter().enumerate().position(|(i, n)| n.som == som && matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) && self.is_live(i));
+        match live {
+            Some(i) => FieldNode::Live(i),
+            None if self.fields_before_removal.as_ref().is_some_and(|s| s.contains(som)) => FieldNode::Removed,
+            None => FieldNode::Untracked,
+        }
+    }
+
+    /// Is node `i` still in the form: neither it nor a node above it removed? (The nodes of a
+    /// removed row keep their SOM expressions, which the row that moves up takes.)
+    pub(crate) fn is_live(&self, i: usize) -> bool {
+        let mut at = Some(i);
+        for _ in 0..=MAX_DEPTH.saturating_add(1) {
+            match at.and_then(|k| self.nodes.get(k)) {
+                Some(n) if n.gone => return false,
+                Some(n) => at = n.parent,
+                None => return true,
+            }
+        }
+        true
+    }
+
+    /// Before the first instance is removed: remember the fields' SOM expressions as they are
+    /// (see [`XHost::fields_before_removal`]).
+    pub(super) fn before_removal(&mut self) {
+        if self.fields_before_removal.is_none() {
+            let soms = self.nodes.iter().filter(|n| !n.gone && matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup)).map(|n| n.som.clone());
+            self.fields_before_removal = Some(soms.collect());
+        }
+    }
+
+    /// Record `e` as [`XHost::push`] does, and say whether it was kept: a change the script
+    /// sees at once is made only when the effect that applies it is.
+    pub(crate) fn admit(&mut self, e: XfaEffect) -> bool {
+        let e = self.clip_effect(e);
+        if !self.reserve(&e, payload(&e)) {
+            return false;
+        }
+        self.record(e);
+        true
     }
 
     /// Note that `what` ("SOM: property") was set through `getField` and not applied.

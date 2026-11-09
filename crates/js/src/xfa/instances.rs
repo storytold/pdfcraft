@@ -264,6 +264,7 @@ impl XHost {
         if !h.reserve(&XfaEffect::RemoveInstance { som: String::new() }, som.len()) {
             return;
         }
+        h.before_removal();
         if let Some(n) = h.nodes.get_mut(gone) {
             n.gone = true;
         }

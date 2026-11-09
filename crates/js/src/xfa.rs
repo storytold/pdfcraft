@@ -25,8 +25,8 @@ mod model;
 mod nodes;
 mod run;
 
-pub(crate) use globals::field_written;
 pub use globals::som_names;
+pub(crate) use globals::{field_now, field_written};
 pub(crate) use host::{HNode, XHost};
 pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
 pub(crate) use model::{MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
