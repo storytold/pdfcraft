@@ -1118,8 +1118,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves", "crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads"]
-notes = "Acrobat's Full Screen Mode (#1459): the page on black and nothing else, one page at a time fitted to the screen (one spread when two-page view was on, #1353), from the current page; a click, Space, Enter, \u2192 or Page Down go forward, a shift-click, Backspace, \u2190 or Page Up back, Home/End to the ends; Esc or \u2318L bring the display from before back at the page reached. Links still open on click. Missing: the cursor is not hidden, no transitions, auto-advance or loop (view.full-screen-presentation), and no full-screen preferences such as the background colour"
+evidence = ["crates/ui-egui/tests/it/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves", "crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_right_click_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_shift_enter_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
+notes = "Acrobat's Full Screen Mode (#1459): the page on black and nothing else, one page at a time fitted to the screen (one spread when two-page view was on, #1353), from the current page; a click, Space, Enter, \u2192 or Page Down go forward, a shift-click, a right-click (no context menu in full screen), Shift+Enter, Backspace, \u2190 or Page Up back, Home/End to the ends; Esc or \u2318L bring the display from before back at the page reached. Links still open on click. The pointer hides after three still seconds. Transitions and display times: view.full-screen-presentation. Missing: loop after the last page, and full-screen preferences such as the background colour"
 
 [[feature]]
 id = "view.full-screen-presentation"
@@ -1130,8 +1130,8 @@ milestone = "M12"
 status = "partial"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it"]
-notes = "Click to advance (and shift-click back) ships with view.full-screen; auto-advance every N seconds, loop after the last page, page transitions and the full-screen preferences are not done"
+evidence = ["crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_plays_a_page_transition_and_honours_the_display_time", "crates/ui-egui/tests/it/view.rs::full_screen_turns_at_once_without_animations_or_in_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
+notes = "Click to advance (and shift-click back) ships with view.full-screen. A page's /Trans plays when it comes into view (ISO 32000-2 \u00a712.4.4, Table 164; single-page view, no view rotation; the outgoing page is held until the incoming one has rendered; the Animation effects preference turns them off), a page's /Dur advances to the next page once it is up (not past the last), and the pointer hides after three still seconds. Not done: full-screen preferences that override the document (advance every N seconds, loop after the last page, a default transition, ignoring the document's transitions, the pointer setting), and transitions between two-page spreads"
 
 [[feature]]
 id = "view.reflow"
@@ -1430,8 +1430,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::find_counts_matches_across_pages"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/it/search_position.rs::every_match_is_shown_after_zooming", "crates/ui-egui/tests/it/search_position.rs::zooming_and_stepping_in_any_order_shows_the_match", "crates/ui-egui/tests/it/search_position.rs::a_step_during_a_wheel_zoom_keeps_the_match_on_screen", "crates/ui-egui/tests/it/search_position.rs::every_page_display_shows_the_match_after_zooming"]
+notes = "Each step (⌘G, ⇧⌘G, Enter, a Search panel result) centres the match in the window on both axes at any zoom, view rotation and page display, as far as the content's ends allow (#3530); a zoom still easing on, or one in the same frame, anchors on the match instead of the pointer. A word wider than the window shows its middle."
 
 [[feature]]
 id = "view.find-options"
@@ -3275,7 +3275,7 @@ status = "partial"
 commands = []
 tools = ["doc_info", "page_transition_set"]
 evidence = ["crates/render/src/inspect/tests.rs::page_transitions_and_display_times_are_read", "crates/automation/tests/it/automation.rs::doc_info_lists_page_transitions_and_display_times", "crates/organize/src/tests.rs::page_transitions_are_set_removed_and_checked", "crates/automation/tests/it/automation.rs::page_transitions_are_set_and_removed_through_the_tools"]
-notes = "Read and set, not played: each page's /Trans (style, duration, dimension, motion, direction, Fly scale and backdrop) and /Dur display time are read with the spec's defaults and listed by doc_info (DocInfo::transitions); page_transition_set (Edit::SetTransition, one undo step) writes or removes them on chosen pages with the values checked first. Not yet: playing them in full screen, auto-advancing on /Dur, and the Page Transitions dialog"
+notes = "Read, set and played: each page's /Trans (style, duration, dimension, motion, direction, Fly scale and backdrop) and /Dur display time are read with the spec's defaults and listed by doc_info (DocInfo::transitions); page_transition_set (Edit::SetTransition, one undo step) writes or removes them on chosen pages with the values checked first. Full screen plays them and advances on /Dur (view.full-screen-presentation). Not yet: the Page Transitions dialog"
 
 [[feature]]
 id = "organize.page-tab-order"
@@ -3487,11 +3487,11 @@ title = "Edit attachment descriptions"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["attachment_edit"]
+evidence = ["crates/organize/src/tests.rs::attachment_description_changes_only_the_file_spec_and_can_be_cleared", "crates/automation/tests/it/automation.rs::attachment_descriptions_can_be_edited_cleared_undone_and_saved", "crates/ui-egui/tests/it/attachment_row.rs::the_description_can_be_edited_from_the_row_menu"]
+notes = "The document-level attachment row menu edits only the Filespec /Desc; an empty description clears it. The embedded stream and other file-spec keys stay intact. Undo/redo and the headless attachment_edit tool use the same edit. Page paper-clip comments are not affected."
 
 [[feature]]
 id = "organize.associated-files"
@@ -3511,11 +3511,11 @@ title = "View PDF Portfolios as a file list"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_info"]
+evidence = ["crates/render/src/inspect/portfolio_tests.rs::a_portfolio_presents_the_attachment_its_d_names", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_closed", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_that_keeps_its_list_hidden_still_presents_its_initial_document", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_without_an_initial_document_shows_its_files_over_the_cover", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_inside_the_initial_document_waits_for_the_reader", "crates/automation/tests/it/portfolio_info.rs::doc_info_names_the_document_a_portfolio_presents_first"]
+notes = "A document with a /Collection (ISO 32000-2 §7.11.6) opens the PDF its /D names in a tab of its own, and the portfolio's tab shows its files in the Attachments panel even with the right panel closed (not with /View /H, which keeps the list for the reader to open), each PDF opening in a tab from there; doc_info reports the portfolio, its initial document and view. Not yet: the files in a details or tile view of their own with the /Schema columns, /Sort and thumbnails, /Folders, previewing a file inside the portfolio's window, and saving edits back into the portfolio"
 
 [[feature]]
 id = "organize.portfolio-extract"
@@ -3584,10 +3584,10 @@ area = "D"
 tier = "P1"
 milestone = "M4"
 status = "shipped"
-commands = ["file.properties"]
+commands = ["file.properties", "view.toggle_interface"]
 tools = ["doc_initial_view"]
-evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/ui-egui/tests/it/viewer.rs::initial_view_magnification_offers_25_and_100_percent", "crates/organize/src/tests.rs::choosing_100_percent_keeps_an_actual_size_opening_destination", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/render/src/inspect/navigation.rs::a_go_to_action_opens_at_its_destination_explicit_or_named", "crates/ui-egui/tests/it/open_action.rs::an_xyz_open_action_puts_its_point_at_the_window_top_left", "crates/ui-egui/tests/it/open_action.rs::a_fith_open_action_puts_its_top_at_the_window_top", "crates/ui-egui/tests/it/open_action.rs::a_named_open_destination_opens_its_page", "crates/ui-egui/tests/it/open_action.rs::a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen", "crates/organize/src/tests.rs::an_unchanged_opening_destination_keeps_its_position_and_name", "crates/automation/tests/it/automation.rs::doc_info_reports_the_open_destination", "crates/organize/src/tests.rs::choosing_page_one_replaces_a_named_opening_destination", "crates/organize/src/tests.rs::a_named_opening_destination_is_kept_while_it_still_holds"]
-notes = "navigation panel, layout, magnification, page, window and interface options; honoured on open; script open actions kept. Open in Full Screen mode (/PageMode /FullScreen) asks first (Full Screen / Not now), as Acrobat does, instead of taking the screen. Window and interface options also read indirect boolean ViewerPreferences values. Missing: Acrobat's Full Screen preference to turn that alert off and its \"remember my choice for this document\" (misc.prefs-full-screen). On open the /OpenAction destination places the view as ISO 32000-2 Table 149 says (the /XYZ point at the window's top-left, /FitH and /FitV top or left at the edge), and a named destination (name or string, /Names /Dests tree or catalog /Dests, §12.3.2.4) resolves; Always use my default zoom keeps only the page. A full-screen document shows its /NonFullScreenPageMode panel outside full screen (Table 147). doc_info reports the opening destination. Document Properties keeps an opening action whose page and magnification are left alone, but still edits only those two; it shows a named destination's page and magnification, and choosing another page or magnification replaces the name with an explicit destination, except that page 1 at the default magnification removes /OpenAction so the first page opens. A name that resolves nowhere reads as page 1 and is kept until another page is chosen"
+evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/ui-egui/tests/it/viewer.rs::initial_view_magnification_offers_25_and_100_percent", "crates/organize/src/tests.rs::choosing_100_percent_keeps_an_actual_size_opening_destination", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/render/src/inspect/navigation.rs::a_go_to_action_opens_at_its_destination_explicit_or_named", "crates/ui-egui/tests/it/open_action.rs::an_xyz_open_action_puts_its_point_at_the_window_top_left", "crates/ui-egui/tests/it/open_action.rs::a_fith_open_action_puts_its_top_at_the_window_top", "crates/ui-egui/tests/it/open_action.rs::a_named_open_destination_opens_its_page", "crates/ui-egui/tests/it/open_action.rs::a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen", "crates/organize/src/tests.rs::an_unchanged_opening_destination_keeps_its_position_and_name", "crates/automation/tests/it/automation.rs::doc_info_reports_the_open_destination", "crates/organize/src/tests.rs::choosing_page_one_replaces_a_named_opening_destination", "crates/organize/src/tests.rs::a_named_opening_destination_is_kept_while_it_still_holds", "crates/ui-egui/tests/it/viewer_prefs.rs::a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back", "crates/ui-egui/tests/it/viewer_prefs.rs::one_page_at_a_time_opens_at_fit_page", "crates/ui-egui/tests/it/viewer_prefs.rs::fit_window_sizes_the_window_to_the_first_page"]
+notes = "navigation panel, layout, magnification, page, window and interface options; honoured on open; script open actions kept. Open in Full Screen mode (/PageMode /FullScreen) asks first (Full Screen / Not now), as Acrobat does, instead of taking the screen. Window and interface options also read indirect boolean ViewerPreferences values. Missing: Acrobat's Full Screen preference to turn that alert off and its \"remember my choice for this document\" (misc.prefs-full-screen). On open the /OpenAction destination places the view as ISO 32000-2 Table 149 says (the /XYZ point at the window's top-left, /FitH and /FitV top or left at the edge), and a named destination (name or string, /Names /Dests tree or catalog /Dests, §12.3.2.4) resolves; Always use my default zoom keeps only the page. A full-screen document shows its /NonFullScreenPageMode panel outside full screen (Table 147). doc_info reports the opening destination. Document Properties keeps an opening action whose page and magnification are left alone, but still edits only those two; it shows a named destination's page and magnification, and choosing another page or magnification replaces the name with an explicit destination, except that page 1 at the default magnification removes /OpenAction so the first page opens. A name that resolves nowhere reads as page 1 and is kept until another page is chosen. HideToolbar, HideMenubar and HideWindowUI are applied in the document's tab only (the mode bar's tools and quick-action bar, the menu bar, the rail, side panels and scroll bars; the tab strip stays), never saved, skipped with Always use my default zoom and page layout, and F8 (view.toggle_interface) brings them back. FitWindow and CenterWindow apply to the window's only document when the window is neither maximized nor full screen; centring needs the window on the monitor at the desktop origin, and Wayland and the browser ignore both. SinglePage, TwoPageLeft and TwoPageRight without a named zoom open at fit page"
 
 [[feature]]
 id = "organize.custom-properties"
@@ -4698,8 +4698,8 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/automation/tests/it/automation.rs::auto_sized_text_follows_a_tall_field", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved", "crates/ui-egui/tests/it/prepare.rs::list_box_alignment_is_editable_and_preserved"]
-notes = "auto-size, comb, multiline, password, quadding (text, dropdown and list-box Options controls), /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics. Single-line auto-size follows the field height with no 12 pt cap, as Acrobat Reader draws it; multiline and comb auto-size still stop at 12 pt, not yet checked against Acrobat"
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/automation/tests/it/automation.rs::auto_sized_text_follows_a_tall_field", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it", "crates/ui-egui/tests/it/forms.rs::a_turned_field_places_the_caret_along_its_turned_text", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved", "crates/ui-egui/tests/it/prepare.rs::list_box_alignment_is_editable_and_preserved"]
+notes = "auto-size, comb, multiline, password, quadding (text, dropdown and list-box Options controls), /MK colours and /MK /R rotation (0, 90, 180, 270: the field keeps its rectangle and its text runs along the turned direction, also while it is typed into; double-click word selection in a turned field is not mapped); approximate Helvetica metrics. Single-line auto-size follows the field height with no 12 pt cap, as Acrobat Reader draws it; multiline and comb auto-size still stop at 12 pt, not yet checked against Acrobat"
 
 [[feature]]
 id = "form.rich-text-fields"
@@ -5543,8 +5543,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.flatten"]
 tools = ["doc_save", "doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0", "crates/engine/src/tests.rs::flattening_fill_and_sign_keeps_other_comments_fields_and_undoes", "crates/engine/src/tests.rs::flattening_fill_and_sign_is_refused_without_permission_to_change", "crates/automation/tests/it/automation.rs::saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments", "crates/ui-egui/tests/it/fill_sign.rs::saving_flattens_fill_and_sign_only_when_the_preference_is_on"]
-notes = "Preferences ▸ Fill & Sign, and doc_save flatten_fill_sign, bake text, marks and signatures into the page. The option defaults off, so a normal save leaves them editable. Other comments and form fields stay. Flatten comments still flattens every comment."
+evidence = ["crates/edit/src/tests.rs::fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0", "crates/engine/src/tests.rs::flattening_fill_and_sign_keeps_other_comments_fields_and_undoes", "crates/engine/src/tests.rs::flattening_fill_and_sign_is_refused_without_permission_to_change", "crates/automation/tests/it/automation.rs::saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments", "crates/ui-egui/tests/it/fill_sign.rs::saving_flattens_fill_and_sign_only_when_the_preference_is_on", "crates/ui-egui/tests/it/fill_sign.rs::placing_a_signature_offers_to_lock_it_now", "crates/ui-egui/tests/it/fill_sign.rs::the_first_save_after_placing_a_signature_asks_to_lock_it", "crates/ui-egui/tests/it/fill_sign.rs::cancelling_the_lock_question_saves_nothing", "crates/ui-egui/tests/it/fill_sign.rs::a_lock_that_fails_keeps_the_question", "crates/ui-egui/tests/it/fill_sign.rs::the_lock_question_is_skipped_or_kept_where_it_must_be"]
+notes = "Preferences ▸ Fill & Sign, and doc_save flatten_fill_sign, bake text, marks and signatures into the page. The option defaults off, so a normal save leaves them editable; right after a signature or initials is placed, a notice offers Lock now (undoable, no save), and the first save after one is placed asks whether to lock it into the page (Lock and save / Keep editable, with Don't ask again); the Fill & Sign panel's Sign yourself section carries the same switch (#2149). Not on a digitally signed document. Other comments and form fields stay. Flatten comments still flattens every comment."
 
 [[feature]]
 id = "form.autofill-profile"
@@ -5919,8 +5919,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo", "crates/automation/tests/it/automation.rs::redacting_through_tools", "crates/engine/src/tests.rs::the_renderer_check_refuses_text_still_shown_under_a_mark", "crates/redact/src/tests.rs::redacted_xobjects_do_not_survive_through_inherited_or_shared_resources"]
-notes = "confirmation; one undo step; next save is a full rewrite. Refused, with nothing changed, when the page still shows text under a mark afterwards: text in some predefined CMaps and rotated Type 3 fonts is not removed yet, so those documents cannot be redacted. Also refused on a page with an inline image the renderer reads no image for, since the operators after it can't be known. Removed images and forms are unlinked from page-tree resources (own, inherited or shared) and from surviving forms' resources, not yet from annotation appearances or patterns"
+evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo", "crates/automation/tests/it/automation.rs::redacting_through_tools", "crates/engine/src/tests.rs::the_renderer_check_refuses_text_still_shown_under_a_mark", "crates/redact/src/tests.rs::redacted_xobjects_do_not_survive_through_inherited_or_shared_resources", "crates/redact/src/tests.rs::redacted_text_does_not_survive_in_info_or_xmp", "crates/redact/src/tests.rs::metadata_is_cleared_when_the_removed_text_was_cut_short", "crates/redact/src/tests/metadata_fail_closed.rs::an_xmp_stream_whose_filter_data_is_corrupt_goes", "crates/redact/src/tests/elsewhere.rs::places_apply_leaves_that_still_hold_the_removed_text_are_counted_and_kept", "crates/engine/src/tests.rs::applied_redactions_report_a_bookmark_that_still_holds_the_removed_text", "crates/automation/tests/it/automation.rs::redact_apply_reports_places_that_still_hold_the_removed_text", "crates/ui-egui/tests/it/redact.rs::applying_says_where_the_removed_text_is_still_held", "crates/redact/src/tests/metadata_matching.rs::a_heading_tracked_with_tj_numbers_matches_the_metadata", "crates/redact/src/tests/metadata_matching.rs::unicode_forms_of_the_removed_text_match", "crates/redact/src/tests/metadata_matching.rs::a_utf16le_string_is_searched_as_utf16le", "crates/redact/src/tests/identification.rs::the_identification_of_a_removed_packet_is_written_back", "crates/automation/tests/it/automation.rs::redact_apply_reports_the_identification_written_back", "crates/ui-egui/tests/it/redact.rs::applying_says_the_pdfa_identification_was_written_back"]
+notes = "confirmation; one undo step; next save is a full rewrite. Document information entries that contain the removed text, and the document's and pages' XMP streams that do, are removed (#2448; matched without regard to case or spacing, by the whole run of removed text and by its words of three letters or digits or more, and a value wholly part of a run as whole words, each also compared by letters and digits alone (so spacing, hyphens and TJ tracking don't hide it), after NFKC and lower case, with FF FE strings read as UTF-16LE; fail-closed: all of it goes when the removed text can't be known in full (too much to collect or search for, a glyph whose text isn't known, a form removed unread), and an XMP packet goes when it can't be decoded strictly, is over 16 MiB or isn't UTF-8 or UTF-16). When the document's XMP goes, its PDF/A and PDF/UA identification is written back in a packet holding only that, value by value when each is a valid code that doesn't hold the removed text, else reported lost (Report::identification, the notification, redact_apply's identification); /Info entries that remain aren't mirrored into that packet. Bookmark titles, attachments (names, file names, descriptions), the comments that remain and other objects' XMP are not changed: applying counts those that still hold the removed text, and the notification and redact_apply's still_holding say where (Remove hidden information removes them); when the removed text couldn't be searched for, every such place holding any text is counted. Refused, with nothing changed, when the page still shows text under a mark afterwards: text in some predefined CMaps and rotated Type 3 fonts is not removed yet, so those documents cannot be redacted. Also refused on a page with an inline image the renderer reads no image for, since the operators after it can't be known. Removed images and forms are unlinked from page-tree resources (own, inherited or shared) and from surviving forms' resources, not yet from annotation appearances or patterns"
 
 [[feature]]
 id = "protect.redact-glyph-removal"
@@ -7643,11 +7643,11 @@ title = "Discard embedded search index"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::search_indexes_in_the_catalog_go_and_other_application_data_stays", "crates/optimize/tests/optimize.rs::an_indirect_piece_info_is_left_for_its_other_users", "crates/automation/tests/it/automation.rs::optimizing_discards_an_embedded_search_index_through_tools"]
+notes = "PDF Optimizer ▸ Discard Objects, off by default. The public help page does not say where the index is stored; PdfCraft's rule: an entry of the catalog's /PieceInfo whose application name contains \"index\" in any letter case (such as IBM-ODIndexes) is a search index and is removed, with /PieceInfo itself when nothing else is left. An indirect /PieceInfo is copied into the catalog without those entries and the original object is left for its other users. The full save leaves out objects only the removed entries reach, cycles included; objects something else also uses stay. Page /PieceInfo is not changed. An index stored under an application name that does not contain \"index\" is kept."
 
 [[feature]]
 id = "optimize.discard-print-settings"
@@ -7751,11 +7751,11 @@ title = "Discard external cross-references"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::links_and_bookmarks_to_other_documents_are_discarded_and_links_within_stay", "crates/optimize/tests/optimize.rs::an_action_to_another_document_hands_its_place_to_the_actions_after_it", "crates/optimize/tests/optimize.rs::a_chain_deeper_than_the_limit_loses_its_tail_and_one_without_a_remote_action_stays", "crates/optimize/tests/optimize.rs::a_long_chain_of_indirect_actions_stays_indirect_and_reads_back_after_saving", "crates/optimize/tests/optimize.rs::shared_actions_that_multiply_stop_the_optimization_when_one_opens_another_document", "crates/optimize/tests/optimize.rs::a_shared_chain_without_remote_actions_is_looked_at_once", "crates/optimize/tests/optimize.rs::a_link_named_through_an_indirect_subtype_is_discarded_and_a_form_field_keeps_its_action", "crates/optimize/tests/optimize.rs::thread_actions_into_another_file_and_data_imports_are_discarded_and_threads_here_stay", "crates/optimize/tests/optimize.rs::an_outline_over_the_limit_stops_the_optimization", "crates/optimize/tests/optimize.rs::bookmarks_stored_inside_other_bookmarks_lose_their_actions_too", "crates/optimize/tests/optimize.rs::a_removed_link_kept_by_the_structure_tree_reads_back_without_its_action", "crates/automation/tests/it/automation.rs::optimizing_discards_links_to_other_documents_through_tools"]
+notes = "PDF Optimizer ▸ Discard User Data, off by default. Takes GoToR, GoToE, Launch and ImportData actions, and Thread actions with an /F, out of the /A of link annotations (/Subtype /Link, stored directly or as an indirect name) and bookmarks, and the actions chained after one through /Next take its place in order. A link left with no action and no /Dest is removed from /Annots, and when the link is an indirect object its object is rewritten without the action for its other users (the structure tree, for example); a bookmark keeps its title and children. Bookmarks stored directly inside another bookmark or the outline dictionary are changed in place; an outline of more than 100,000 items, or with direct items nested more than 512 levels deep, stops the optimization with an error. Links within the document (/Dest, GoTo) and web links (URI) stay. An indirect action that changes is written as a new indirect object, except the first action left at the head of an /A, which is copied into the /A directly when other actions follow it; the old one stays for its other users. Past 512 nested levels (actions, /Next arrays and references), the rest of a chain is kept when it opens no other document and removed when it does. An /A with more than 100,000 values to check, or one that opens another document and needs more than 100,000 values to rewrite (actions shared so that their paths multiply), stops the optimization with an error. Not changed: /AA triggers, widget and other annotation actions, the catalog /OpenAction, and JavaScript."
 
 [[feature]]
 id = "optimize.discard-hidden-layers"
@@ -8322,8 +8322,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
-notes = "auto portrait/landscape"
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::landscape_sheets_ask_cups_to_turn_the_page", "crates/print/src/tests.rs::a_job_that_names_its_orientation_keeps_it", "crates/automation/src/printing.rs::printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them", "crates/ui-egui/tests/it/print.rs::printing_landscape_sheets_tells_cups_to_turn_them"]
+notes = "auto portrait/landscape. CUPS jobs carry orientation-requested=4 when every sheet is landscape, so a landscape sheet fills its portrait paper instead of being shrunk into it or, with the Mac's filters, printed unrotated and cut off at the paper's edge (#2713, #3739); an orientation the job already names (a driver choice, or doc_print's options) stands, and a job that mixes orientations is left to the spooler, so its landscape sheets still print unturned. Windows sets orientation in its own print ticket. The CUPS option was checked against Apple's filters (cupsfilter on an AirPrint PPD, no paper printed), and #3068's author printed one landscape page with it on a physical printer on macOS; the tests check the job both submission paths send, not a spooler's output, and physical output is otherwise unvalidated."
 
 [[feature]]
 id = "print.comments-and-forms"
@@ -8523,11 +8523,11 @@ title = "Convert colours"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["prepress.convert_colors"]
+tools = ["doc_convert_colours"]
+evidence = ["crates/edit/src/tests.rs::colours_are_converted_to_gray_rgb_and_cmyk", "crates/engine/src/tests.rs::converting_colours_recolours_pictures", "crates/ui-egui/tests/it/editing.rs::convert_colours_from_the_dialog", "crates/automation/tests/it/automation.rs::convert_colours_through_tools"]
+notes = "Print production ▸ Convert colours…: Grayscale, RGB or CMYK by the standard device formulas (no ICC profile applied): every colour operator in the pages' content and the Form XObjects it draws is rewritten (device spaces, ICCBased by component count, CalRGB/CalGray, Lab, Indexed, Separation/DeviceN through a Type 2 tint), black kept 100% K / gray 0 on request, 8-bit gray/RGB pictures re-encoded (JPEG stays JPEG, CMYK written lossless, soft masks kept) and the ones left alone counted, comments' and fields' appearances optionally; all, current or a range of pages; one undo step; tool doc_convert_colours, which also lists the PDF/A level and output intents the file may no longer meet (the dialog does not say so yet). Still missing against Acrobat: conversion through ICC profiles and rendering intents (it is no prepress separation and uses no output intent), keeping spot colours, sampled and PostScript tint transforms (a gray of the tint's darkness), per-object conversion rules, inline images, and indexed, CMYK and masked pictures or decode arrays."
 
 [[feature]]
 id = "print.ink-manager"
@@ -8559,11 +8559,11 @@ title = "Add printer marks (crop, bleed, registration, colour bars)"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["prepress.marks", "prepress.marks.remove"]
+tools = ["doc_printer_marks", "doc_remove_marks"]
+evidence = ["crates/edit/src/tests.rs::printer_marks_are_drawn_outside_the_trim_box_and_removable", "crates/ui-egui/tests/it/editing.rs::printer_marks_are_added_from_the_dialog_and_removed", "crates/automation/tests/it/automation.rs::printer_marks_through_tools"]
+notes = "Print production ▸ Add printer marks…: trim marks at the trim box's corners, dashed bleed marks at the bleed box, registration targets centred on each side, a C/M/Y/K + 75/50/25 % K colour bar and a page-information line (file name, page n of N, date), at 0.25/0.5/1 pt, outside the trim box as a removable page mark (Remove printer marks; adding again replaces), in registration colour (the /All Separation) except the process-ink colour bar; the page is widened by 36 pt a side when the marks would fall outside it, the trim box kept; all, current or a range of pages; tool doc_printer_marks and doc_remove_marks kind printer_marks. Still missing against Acrobat: the Japanese-style and Eastern-style mark variants, and the choice of marks per page box (always the trim box)."
 
 [[feature]]
 id = "print.fix-hairlines"
