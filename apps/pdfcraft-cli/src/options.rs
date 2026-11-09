@@ -89,6 +89,13 @@ pub(crate) const EXTRACT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--password", takes_value: true },
 ];
 
+pub(crate) const CONVERT_COLORS_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--to", takes_value: true },
+    OptionSpec { name: "--preserve-icc", takes_value: false },
+    OptionSpec { name: "--password", takes_value: true },
+];
+
 pub(crate) const SPLIT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--every", takes_value: true },
     OptionSpec { name: "--before", takes_value: true },

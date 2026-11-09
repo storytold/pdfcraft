@@ -60,7 +60,7 @@ mod run;
 mod ui;
 
 use check::{audit, check, check_one};
-use commands::{combine, edit, extract, info, render, split, text};
+use commands::{combine, convert_colors, edit, extract, info, render, split, text};
 use options::{OptionSpec, flag, validate_options};
 #[cfg(feature = "mcp")]
 use run::mcp;
@@ -80,6 +80,8 @@ pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--m
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+pdfcraft-cli convert-colors <in.pdf> --out out.pdf [--to rgb] [--preserve-icc]
+                                                          convert image colours (DeviceCMYK to DeviceRGB)
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
@@ -138,6 +140,7 @@ fn main() -> ExitCode {
         Some("combine") => combine(&args[1..]),
         Some("extract") => extract(&args[1..]),
         Some("split") => split(&args[1..]),
+        Some("convert-colors") => convert_colors(&args[1..]),
         Some("check") => check(&args[1..]),
         Some("check-one") => check_one(&args[1..]),
         Some("audit") => audit(&args[1..]),

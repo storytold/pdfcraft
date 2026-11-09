@@ -808,6 +808,20 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_convert_colors",
+            "Convert colours",
+            "Convert colour spaces of raster images in the document (Acrobat Print Production ▸ Convert Colors). Converts uncalibrated DeviceCMYK raster images to DeviceRGB using standard subtractive conversion, while preserving pure CMYK spaces when output intents or separation profiles are present.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": path_arg(),
+                "to": { "type": "string", "enum": ["rgb"], "description": "Target colour space (default \"rgb\")." },
+                "preserve_icc": { "type": "boolean", "description": "Preserve ICC-calibrated and separation profiles (default true)." },
+            }),
+            &["doc", "path"],
+        )),
         t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style; text painted in gray or CMYK also has gray (its level) or cmyk ([c, m, y, k]).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

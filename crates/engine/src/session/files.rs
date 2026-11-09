@@ -310,6 +310,21 @@ impl Session {
         out
     }
 
+    /// Convert colours: explicit colour space conversion of document assets (M11 parity `print.convert-colors`).
+    /// Converts uncalibrated DeviceCMYK raster images to DeviceRGB.
+    pub fn convert_colors(&self, id: DocId, options: &print::ConvertColorsOptions) -> Result<(Arc<Vec<u8>>, print::ConvertColorsReport), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let report = guard(|| print::convert_colors(&mut cos, *options)).map_err(EditError::Print)?.map_err(|e| EditError::Print(e.to_string()))?;
+        let bytes = write_full(&cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+        Ok((Arc::new(bytes), report))
+    }
+
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
     pub fn combine(&self, sources: &[(String, Arc<Vec<u8>>)]) -> Result<Arc<Vec<u8>>, EditError> {
         let docs = sources.iter().map(|(n, b)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;

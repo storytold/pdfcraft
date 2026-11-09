@@ -417,6 +417,29 @@ impl Automation {
         }
         Ok(out)
     }
+
+    /// `doc_convert_colors`: convert colours of raster images in the document (Acrobat Print Production ▸ Convert Colors).
+    pub(crate) fn doc_convert_colors(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let before_bytes = doc.bytes.len();
+        let path = self.resolve(a.str("path")?, true)?;
+        let to = a.opt_str("to")?.unwrap_or("rgb");
+        if to != "rgb" {
+            return Err(bad(format!("unknown target color space {to:?} (supported: \"rgb\")")));
+        }
+        let preserve_icc = a.opt_bool("preserve_icc")?.unwrap_or(true);
+        let options = print::ConvertColorsOptions { to_rgb: true, preserve_icc };
+        let (bytes, report) = self.session.convert_colors(id, &options).map_err(failed)?;
+        write_atomic(&path, &bytes)?;
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "converted": report.converted,
+            "skipped": report.skipped,
+            "before_bytes": before_bytes,
+            "after_bytes": bytes.len(),
+        }))
+    }
 }
 
 /// Where `doc_print` sends the sheets: a print-ready PDF file, or a printer's queue.
