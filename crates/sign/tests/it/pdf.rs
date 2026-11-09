@@ -321,8 +321,9 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
         |doc: &Document, o: &Object, t: &[u8]| o.as_ref().is_some_and(|r| doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(t)));
     let s = check(&swap(&|doc, o| subtype(doc, o, b"Text")));
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    // The empty signature widget put in its place signs nothing: it is a new annotation (#6755).
     let s = check(&swap(&|doc, o| subtype(doc, o, b"Widget") && o.as_ref().is_some_and(|r| r.num == 6)));
-    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER, kind::COMMENTS])));
 }
 
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
@@ -511,17 +512,18 @@ fn only_an_invisible_document_timestamp_survives_a_no_changes_certification() {
     assert_eq!(check(&signed).status, Status::Valid, "{:?}", check(&signed).details);
     let approval: &[(&[u8], Object)] = &[(b"Type", Object::name("Sig")), (b"SubFilter", Object::name("adbe.pkcs7.detached"))];
     let timestamp: &[(&[u8], Object)] = &[(b"Type", Object::name("DocTimeStamp")), (b"SubFilter", Object::name("ETSI.RFC3161"))];
-    // Each of these breaks the certification: it is a change P=1 does not allow.
-    for (what, v, rect) in [
-        ("visible overlay widget", None, [0, 0, 300, 300]),
-        ("invisible unsigned widget", None, [0, 0, 0, 0]),
-        ("visible approval signature", Some(approval), [0, 0, 300, 300]),
-        ("invisible approval signature", Some(approval), [0, 0, 0, 0]),
-        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300]),
+    // Each of these breaks the certification: it is a change P=1 does not allow. A widget with
+    // no signature value signs nothing: it is a new annotation (#6755).
+    for (what, v, rect, kind) in [
+        ("visible overlay widget", None, [0, 0, 300, 300], kind::COMMENTS),
+        ("invisible unsigned widget", None, [0, 0, 0, 0], kind::COMMENTS),
+        ("visible approval signature", Some(approval), [0, 0, 300, 300], kind::SIGNATURE),
+        ("invisible approval signature", Some(approval), [0, 0, 0, 0], kind::SIGNATURE),
+        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300], kind::SIGNATURE),
     ] {
         let edited = edit_after(&signed, |doc| add_sig_widget(doc, v, rect));
         let s = check(&edited);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)), "{what}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{what}: {:?}", s.modification);
         assert_ne!(s.status, Status::Valid, "{what}");
     }
 }
@@ -536,6 +538,57 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+}
+
+/// A new form XObject that paints the whole 300 × 300 page white.
+fn opaque_appearance(doc: &mut Document) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    d.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].map(Object::Int).to_vec()));
+    doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, b"1 1 1 rg 0 0 300 300 re f".to_vec())))
+}
+
+/// Signing is a new signature value. Under a "form fill and signing" certification (P=2), an
+/// empty signature widget added after signing, or the appearance of the signed file's empty
+/// signature field rewritten, signs nothing: it is an annotation that may draw anything over the
+/// signed page, which P=2 does not permit. P=3 permits it, as a comment change, not as signing.
+/// Signing the empty field keeps the certification valid.
+#[test]
+fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signing() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify.is_some()).unwrap();
+    let field = ObjRef { num: 6, generation: 0 };
+    let added = |doc: &mut Document| {
+        add_sig_widget(doc, None, [0, 0, 300, 300]);
+        let ap = opaque_appearance(doc);
+        let widget = doc.object_numbers().into_iter().max().map(|num| ObjRef { num, generation: 0 }).unwrap();
+        doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(ap))])))).unwrap();
+    };
+    let restyled = |doc: &mut Document| {
+        let ap = opaque_appearance(doc);
+        doc.update_dict(field, |w| w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(ap))])))).unwrap();
+    };
+    for p in [2, 3] {
+        let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(p), ..opts() }).unwrap();
+        for (what, edited) in
+            [("an empty signature widget added", edit_after(&certified, added)), ("the empty field restyled", edit_after(&certified, restyled))]
+        {
+            let s = check(&edited);
+            if p == 2 {
+                assert_ne!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);
+                assert_eq!(s.modification, Modification::Disallowed(vec![kind::COMMENTS]), "P={p}, {what}");
+            } else {
+                assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])), "P={p}, {what}");
+            }
+        }
+        // Signing the empty field is signing.
+        let signed = pdfcraft_sign::sign(&open(&certified), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        let s = check(&signed);
+        assert_eq!(s.status, Status::Valid, "P={p}, the empty field signed: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "P={p}: {:?}", s.modification);
+    }
 }
 
 /// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;

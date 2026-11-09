@@ -349,9 +349,14 @@ fn a_signature_added_with_respelled_strings_is_signing() {
     ]);
     let catalog =
         |lang: &str, da: &str| format!("<< /Type /Catalog /Pages 2 0 R /Lang {lang} /AcroForm << /DA {da} /Fields [5 0 R 6 0 R] /SigFlags 3 >> >>");
-    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 0 0] /P 4 0 R >>";
+    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /V 7 0 R /Rect [0 0 0 0] /P 4 0 R >>";
     let now = |lang: &str, da: &str| {
-        signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog(lang, da))), (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))), (6, Row::Obj(0, 0, sig))])
+        signed.clone().revision(&[
+            (1, Row::Obj(0, 0, &catalog(lang, da))),
+            (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+            (6, Row::Obj(0, 0, sig)),
+            (7, Row::Obj(0, 0, "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>")),
+        ])
     };
     let respelled = now("<656E2D5553>", "<2F48656C76203020546620302067>");
     assert_eq!(verdict(&respelled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));

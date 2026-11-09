@@ -370,7 +370,7 @@ impl ChangedObjectClassifier<'_> {
         } else if added.is_empty() {
             None
         } else {
-            Some(added_annots(self.doc, &added))
+            Some(added_annots(self.doc, self.old, &added))
         }
     }
 
@@ -567,24 +567,82 @@ fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
     parts
 }
 
-/// What adding `added` annotations amounts to: signing (signature widgets only), form fill
-/// (other widgets) or comments.
-fn added_annots(doc: &Document, added: &[ObjRef]) -> &'static str {
-    let kinds: Vec<(bool, bool)> = added
-        .iter()
-        .map(|r| {
-            let o = doc.get(*r);
-            let d = o.as_dict();
-            (d.is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")), d.is_some_and(|d| d.name(b"FT") == Some(b"Sig")))
-        })
-        .collect();
-    if !kinds.is_empty() && kinds.iter().all(|(w, s)| *w && *s) {
-        kind::SIGNATURE
-    } else if !kinds.is_empty() && kinds.iter().all(|(w, _)| *w) {
-        kind::FORM_FILL
-    } else {
-        kind::COMMENTS
+/// What adding `added` annotations amounts to: signing when each is a signature widget that
+/// brings a new signature with it, else comments. Filling a form changes the values of the
+/// fields it has; it adds no widget (ISO 32000-2 Table 257 permits creating annotations only at
+/// P=3). An empty signature widget, or a form widget, is a new annotation that may draw anything
+/// over the signed page (#6755, #6756).
+fn added_annots(doc: &Document, old: &Document, added: &[ObjRef]) -> &'static str {
+    let signs = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && gains_signature(doc, old, d, None));
+    if !added.is_empty() && added.iter().all(signs) { kind::SIGNATURE } else { kind::COMMENTS }
+}
+
+/// The most `/Parent` links followed to find what a field inherits.
+const MAX_FIELD_DEPTH: usize = 64;
+
+/// The entry `key` of the form field or widget `d`, or else of its nearest ancestor field that
+/// has it (ISO 32000-2 §12.7.4.1: `/FT` and `/V` are inheritable), with the number of the object
+/// that holds it (`None` for `d` itself). The `/Parent` chain is followed at most
+/// [`MAX_FIELD_DEPTH`] links, and not round a cycle.
+fn inherited(doc: &Document, d: &Dict, key: &[u8]) -> Option<(Option<u32>, Object)> {
+    if let Some(v) = d.get(key) {
+        return Some((None, v.clone()));
     }
+    let mut seen = HashSet::new();
+    let mut parent = d.get(b"Parent").and_then(Object::as_ref);
+    while let Some(r) = parent {
+        if !seen.insert(r.num) || seen.len() > MAX_FIELD_DEPTH {
+            return None;
+        }
+        let field = doc.get(r);
+        let field = field.as_dict()?;
+        if let Some(v) = field.get(key) {
+            return Some((Some(r.num), v.clone()));
+        }
+        parent = field.get(b"Parent").and_then(Object::as_ref);
+    }
+    None
+}
+
+/// Whether `d`, a form field or widget, is (or belongs to) a signature field.
+fn is_signature_field(doc: &Document, d: &Dict) -> bool {
+    inherited(doc, d, b"FT").is_some_and(|(_, ft)| doc.resolve(&ft).as_name() == Some(b"Sig".as_slice()))
+}
+
+/// Whether the signature field or widget `d` (as it was when signed: `before`, or nothing for a
+/// new one) now carries a signature it did not carry then: its value, its own or inherited, is a
+/// signature dictionary that is not one the signed revision held, and the field held no
+/// signature when signed. Rewriting an empty signature field's appearance, or pointing a new
+/// widget at a signature already in the file, signs nothing (#6755).
+fn gains_signature(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> bool {
+    if !is_signature_field(doc, d) {
+        return false;
+    }
+    let Some((holder, value)) = inherited(doc, d, b"V") else { return false };
+    if doc.resolve(&value).as_dict().is_none() {
+        return false;
+    }
+    let existed = |num: u32| old.try_get(num).ok().is_some_and(|o| !matches!(*o, Object::Null));
+    if value.as_ref().is_some_and(|r| existed(r.num)) {
+        return false;
+    }
+    // The value the holder of this one had when signed: the widget itself, or the ancestor field.
+    let signed_value = match holder {
+        None => before.and_then(|b| inherited(old, b, b"V")).map(|(_, v)| v),
+        Some(num) => old.try_get(num).ok().and_then(|o| o.as_dict().and_then(|f| f.get(b"V").cloned())),
+    };
+    !signed_value.is_some_and(|v| old.resolve(&v).as_dict().is_some())
+}
+
+/// A change to an existing form widget that is not a signature's, `before` as signed and `d`
+/// now. Filling the form changes the field's value (the widget's own `/V`, or the one it inherits
+/// from its field, as a radio button or a field with several widgets does) and the appearance
+/// that shows it (`/AS`, `/AP`): that is form fill. Any other change, or a new appearance without
+/// a new value, is a change to the annotation (#6756).
+fn widget_change(doc: &Document, old: &Document, d: &Dict, before: &Dict) -> &'static str {
+    let value = |doc: &Document, d: &Dict| inherited(doc, d, b"V").map(|(_, v)| (*doc.resolve(&v)).clone());
+    let filled = !same_entry(value(doc, d).as_ref(), value(old, before).as_ref());
+    if filled && same_entries(d, before, &[b"V", b"AS", b"AP"]) { kind::FORM_FILL } else { kind::COMMENTS }
 }
 
 /// The references in the annotation list `o` (inline or indirect), its length spent from
@@ -642,7 +700,8 @@ fn acroform(doc: &Document) -> Option<Dict> {
     doc.resolve(&c).as_dict().cloned()
 }
 
-/// An AcroForm change that only adds signature fields (and sets `/SigFlags`) is signing.
+/// An AcroForm change that only adds signature fields that bring new signatures (and sets
+/// `/SigFlags`) is signing. Any other field added is a new annotation, not a form fill (#6756).
 /// Without `before`, the signed revision's AcroForm (wherever it was) is the reference.
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
@@ -651,12 +710,15 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
         return kind::OTHER;
     }
+    let old_fields = refs(old, before.get(b"Fields"));
+    let signs = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| gains_signature(doc, old, d, None));
+    if !refs(doc, now.get(b"Fields")).iter().filter(|r| !old_fields.contains(r)).all(signs) {
+        return kind::COMMENTS;
+    }
     if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
         return kind::FORM_FILL;
     }
-    let old_fields = refs(old, before.get(b"Fields"));
-    let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
-    if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
+    kind::SIGNATURE
 }
 
 /// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
@@ -905,7 +967,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, &added)
+                    added_annots(doc, old, &added)
                 }
                 None => kind::COMMENTS,
             };
@@ -924,10 +986,24 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     if before.is_some_and(|b| b.name(b"Subtype") != d.name(b"Subtype")) {
         return kind::OTHER;
     }
-    // The new version's /FT still decides whether this is a signature: a signed widget relabelled
-    // as a text field is not a signature change, whatever it was when signed.
     match role.name(b"Subtype") {
-        Some(b"Widget") => return if d.name(b"FT") == Some(b"Sig") && signature_ok { kind::SIGNATURE } else { kind::FORM_FILL },
+        Some(b"Widget") => {
+            return match before {
+                // A new widget: signing only when it brings a new signature, as on a page.
+                None if gains_signature(doc, old, d, None) => kind::SIGNATURE,
+                None => kind::COMMENTS,
+                // A signature field's widget, when signed and still: signing only when its field
+                // gains a signature. A restyled empty one signs nothing (#6755).
+                Some(b) if is_signature_field(old, b) => {
+                    if is_signature_field(doc, d) && gains_signature(doc, old, d, Some(b)) {
+                        kind::SIGNATURE
+                    } else {
+                        kind::COMMENTS
+                    }
+                }
+                Some(b) => widget_change(doc, old, d, b),
+            };
+        }
         Some(b"Link") => return kind::LINKS,
         Some(_) if role.name(b"Type") == Some(b"Annot") || role.contains(b"Rect") => return kind::COMMENTS,
         _ => {}
