@@ -622,6 +622,141 @@ fn implementation_limits_cover_reals_and_cids() {
     assert_eq!(limits(&doc("", &range("0000", "00ff", 0), &range("3f00", "3fff", 65536))), cid, "through /UseCMap");
 }
 
+/// PDF/A-2 6.2.4.4: Separation spaces of one colorant name agree on their alternate space and tint
+/// transform, also inside a DeviceN space's `/Colorants`; and a DeviceN space names each spot
+/// colorant it uses in its `/Colorants` (ISO 32000-1 8.6.6.5, Table 71). Process colorants (the
+/// CMYK four, and an NChannel space's `/Process` components) and `None` need no entry.
+#[test]
+fn separation_and_devicen_spaces_are_checked() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let red = |alt: &str, f: u32| format!("[/Separation /Red /{alt} {f} 0 R]");
+    // The same name, the same alternate and an identical tint transform (another object): fine.
+    assert!(spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 6))).is_empty());
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceGray", 4))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Inside two DeviceN spaces' Colorants.
+    let nchannel = |f: u32| format!("[/DeviceN [/Red] /DeviceRGB 4 0 R << /Subtype /NChannel /Colorants << /Red {} >> >>]", red("DeviceRGB", f));
+    assert_eq!(
+        spots(&format!("/A {} /B {}", nchannel(4), nchannel(5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Spot colorants need a Colorants entry; process colorants and None don't.
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1 /Cyan /None] /DeviceCMYK 4 0 R]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1] /DeviceRGB 4 0 R << /Colorants << >> >>]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert!(spots(&format!("/A [/DeviceN [/Red /Black] /DeviceRGB 4 0 R << /Colorants << /Red {} >> >>]", red("DeviceRGB", 4))).is_empty());
+    assert!(
+        spots("/A [/DeviceN [/PrCyan /Black] /DeviceCMYK 4 0 R << /Subtype /NChannel /Process << /ColorSpace /DeviceCMYK /Components [/PrCyan /M /Y /Black] >> >>]")
+            .is_empty()
+    );
+}
+
+/// From the review of the 6.2.4.4 checks: nested parts compare by content, `All` and `None` get
+/// no exemption, names may be given by reference, `/Process` exempts only in an NChannel space, a
+/// null `/Colorants` entry defines nothing, and a colour space nested deep is still found.
+#[test]
+fn separation_and_devicen_checks_follow_references_depth_and_nchannel() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let icc = "<< /N 3 /Length 4 >>\nstream\nabcd\nendstream";
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                icc,
+                icc,
+                "/Red",
+                "null",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = |n: &str| vec![format!("Separation colour spaces named {n} differ in their alternate space or tint transform")];
+    let undefined = |n: &str| vec![format!("The spot colour {n} of a DeviceN colour space isn't in its Colorants dictionary")];
+    // Identical ICC streams under different numbers are the same alternate space.
+    assert!(spots("/A [/Separation /Red [/ICCBased 6 0 R] 4 0 R] /B [/Separation /Red [/ICCBased 7 0 R] 4 0 R]").is_empty());
+    assert_eq!(spots("/A [/Separation /All /DeviceRGB 4 0 R] /B [/Separation /All /DeviceRGB 5 0 R]"), differ("All"));
+    assert_eq!(spots("/A [/Separation 8 0 R /DeviceRGB 4 0 R] /B [/Separation /Red /DeviceRGB 5 0 R]"), differ("Red"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Process << /Components [/Spot] >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot null >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot 9 0 R >> >>]"), undefined("Spot"));
+    let deep = format!("/A {}[/DeviceN [/Spot] /DeviceRGB 4 0 R]{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(spots(&deep), undefined("Spot"));
+}
+
+/// From the second review of the 6.2.4.4 checks: a `/Colorants` entry is a Separation space of
+/// its own colorant, tint-transform streams compare by decoded data, and a structure shared by
+/// many definitions is compared once rather than once per path through it.
+#[test]
+fn separation_checks_match_colorant_entries_decode_streams_and_share_comparisons() {
+    // Two copies of a chain of arrays, each level naming the next twice: comparing them path by
+    // path takes about 2^19 steps.
+    const LEVELS: usize = 18;
+    let chain = |first: usize| -> Vec<String> {
+        (0..LEVELS).map(|k| if k + 1 < LEVELS { format!("[{n} 0 R {n} 0 R]", n = first + k + 1) } else { "[1 2 3]".into() }).collect()
+    };
+    let (a, b) = (5, 5 + LEVELS);
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            page,
+            "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>".into(),
+        ];
+        objects.extend(chain(a));
+        objects.extend(chain(b));
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup dup pop }\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Filter /ASCIIHexDecode /Length 31 >>\nstream\n7B206475702064757020706F70207D>\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup pop dup }\nendstream".into());
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = vec!["Separation colour spaces named Red differ in their alternate space or tint transform".to_string()];
+    let undefined = vec!["The spot colour Spot of a DeviceN colour space isn't in its Colorants dictionary".to_string()];
+    // A Colorants entry that isn't a Separation space of the same colorant defines nothing.
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot /DeviceRGB >> >>]"), undefined);
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Other /DeviceRGB 4 0 R] >> >>]"), undefined);
+    assert!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Spot /DeviceRGB 4 0 R] >> >>]").is_empty());
+    // The same PostScript function, once plain and once hex-encoded, is the same tint transform.
+    let (plain, hex, other) = (5 + 2 * LEVELS, 6 + 2 * LEVELS, 7 + 2 * LEVELS);
+    assert!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {hex} 0 R]")).is_empty());
+    assert_eq!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {other} 0 R]")), differ);
+    // Equal copies compared again and again still leave room to find the one that differs.
+    let sep = |f: usize| format!("[/Separation /Red /DeviceRGB {f} 0 R]");
+    assert_eq!(spots(&format!("/A {} /B {} /C {} /D {} /E {}", sep(a), sep(b), sep(b), sep(b), sep(4))), differ);
+}
+
 const XMP_NS: &str = concat!(
     r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
     r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,

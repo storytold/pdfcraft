@@ -23,6 +23,7 @@
 
 pub mod icc;
 mod limits;
+mod spot;
 mod xmp;
 mod xmp_extension;
 mod xmp_types;
@@ -175,6 +176,8 @@ pub const WORDINGS: &[&str] = &[
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
     "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
+    "Separation colour spaces named {} differ in their alternate space or tint transform",
+    "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary",
     "The document has additional actions (/AA)",
     "The document has document-level JavaScript",
     "The form asks viewers to make appearances (NeedAppearances)",
@@ -742,6 +745,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         if limits::page_box_out_of_range(doc, &p.dict) {
             issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
+    }
+    // 6.2.4.4: Separation and DeviceN colour spaces.
+    let spots = spot::check(doc, &objs);
+    for name in spots.differing {
+        issue("6.2.4.4", "Separation colour spaces named {} differ in their alternate space or tint transform", Some(name), None, false);
+    }
+    for name in spots.undefined {
+        issue("6.2.4.4", "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary", Some(name), None, false);
     }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
