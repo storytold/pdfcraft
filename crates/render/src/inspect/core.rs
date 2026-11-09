@@ -1,4 +1,4 @@
-use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
+use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
@@ -144,13 +144,16 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// The first page widget naming each field as its `/Parent`, built when a field has no widget
+    /// among its `/Kids`.
+    pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
 }
 
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
+        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new(), parent_widgets: OnceCell::new() };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -210,12 +213,13 @@ impl<'a> Inspector<'a> {
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
         self.annotations(info, &mut text_budget);
         self.transitions(info);
-        let mut field_seen = HashSet::new();
+        let mut walk = FieldWalk::default();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
         {
+            walk.roots = fields.iter().filter_map(|f| if let Object::Reference(id) = f { Some(*id) } else { None }).collect();
             for f in fields {
-                self.field(f, None, &mut info.fields, &mut field_seen, 0);
+                self.field(f, None, &mut info.fields, &mut walk, 0);
             }
         }
         // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
@@ -231,9 +235,9 @@ impl<'a> Inspector<'a> {
                     continue;
                 }
                 if let Object::Reference(id) = a
-                    && let Some(root) = self.unlisted_field(*id, &field_seen)
+                    && let Some(root) = self.unlisted_field(*id, &walk.seen)
                 {
-                    self.field(&Object::Reference(root), None, &mut info.fields, &mut field_seen, 0);
+                    self.field(&Object::Reference(root), None, &mut info.fields, &mut walk, 0);
                 }
             }
         }
@@ -288,11 +292,23 @@ impl<'a> Inspector<'a> {
     }
 
     pub(super) fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
-        let s = trimmed_text(self.resolve(d.get(key).ok()?))?;
-        (!s.is_empty()).then_some(s)
+        // Typewriter outer whitespace belongs to the text (keep in step with annot's summaries).
+        let s = if key == b"Contents"
+            && self.name(d, b"Subtype").as_deref() == Some("FreeText")
+            && self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter")
+        {
+            match self.resolve(d.get(key).ok()?) {
+                Object::String(bytes, _) => text_string(bytes).trim_matches('\0').to_owned(),
+                Object::Name(bytes) => String::from_utf8_lossy(bytes).trim_matches('\0').to_owned(),
+                _ => return None,
+            }
+        } else {
+            trimmed_text(self.resolve(d.get(key).ok()?))?
+        };
+        (!s.trim().is_empty()).then_some(s)
     }
 
-    /// [`Self::text`], converted and spent from `budget` as [`spend`] does, so text that trims
+    /// Whitespace-trimmed metadata, spent from `budget` as [`spend`] does, so text that trims
     /// short or to nothing still spends its raw length.
     pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
         let o = self.resolve(d.get(key).ok()?);
