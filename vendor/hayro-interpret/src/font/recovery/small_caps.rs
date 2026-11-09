@@ -16,7 +16,7 @@
 //! Latin-1 offset: `Asmall` is U+F761 and `A` is `A`, a form of `a`. Any other private use
 //! character still reads nothing.
 
-use super::{FontFacts, GlyphFacts, RecoveryMode, RecoveryRule, Rule};
+use super::{FontFacts, FontKind, GlyphFacts, RecoveryMode, RecoveryRule, Rule, symbol_font};
 use crate::font::generated::glyph_names;
 use crate::font::glyph_name_to_unicode;
 use hayro_cmap::BfString;
@@ -58,10 +58,20 @@ impl Rule for AdobeSmallCaps {
     const RULE: RecoveryRule = RecoveryRule::AdobeSmallCaps;
     type Guard = ();
 
-    /// A font with `/ToUnicode` (which may map codes to these code points), or a simple font
-    /// with a glyph name the glyph list reads as one; the reading looks at each glyph's strict
-    /// text.
+    /// A simple font (Type 1, CFF, TrueType or Type 3) with `/ToUnicode` (which may map codes
+    /// to these code points) or with a glyph name the glyph list reads as one; the reading
+    /// looks at each glyph's strict text. A Type 0 font never qualifies: in the corpus its
+    /// `/ToUnicode` maps into this range for other reasons (a Korean font's private use
+    /// characters at U+F734 …, an OCR text layer's identity map), and expert fonts with small
+    /// capitals are simple fonts. Fonts named as symbol fonts never qualify either.
     fn guard(font: &FontFacts<'_>) -> Option<()> {
+        if !matches!(
+            font.kind,
+            FontKind::Type1 | FontKind::Cff | FontKind::TrueType | FontKind::Type3
+        ) || symbol_font(font.base_font)
+        {
+            return None;
+        }
         let named = font.names.is_some_and(|names| {
             (0..=u8::MAX)
                 .filter_map(names)

@@ -1339,3 +1339,20 @@ fn only_the_glyph_lists_small_capitals_are_read() {
     assert_eq!(strict.plain_text(), "\u{F6CE}\u{F760}\u{E000}");
     assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
 }
+
+/// Counter-examples for rule M from the corpus: a font named as a symbol font with these glyph
+/// names, and a Type 0 font whose `/ToUnicode` maps into the range for reasons of its own (a
+/// Korean font's private use characters at U+F734 …, which is `fouroldstyle` in the glyph
+/// list), read nothing; their strict text is unchanged.
+#[test]
+fn small_capital_code_points_outside_simple_text_fonts_read_nothing() {
+    let (strict, recovered, _) = layers(&parse(names_page("/Asmall /Bsmall /Csmall", "ABCDEF+ZapfDingbatsBT", false)));
+    assert_eq!(strict.plain_text(), "\u{F761}\u{F762}\u{F763}");
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+    let text = "Articles";
+    let g = gids(text);
+    let tu: String = g.iter().enumerate().map(|(k, gid)| format!("<{gid:04X}> <{:04X}>\n", 0xF734 + k)).collect();
+    let (strict, recovered, _) = layers(&parse(type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, "", Some(&tu))));
+    assert!(strict.plain_text().starts_with('\u{F734}'), "{:?}", strict.plain_text());
+    assert!(recovered.as_ref().is_none_or(|r| !r.text.plain_text().contains('4')), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
