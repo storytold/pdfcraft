@@ -111,23 +111,28 @@ impl PdfCraftApp {
                     }
                 }
                 Request::Highlight(on) => self.script_highlight(id, on),
-                Request::Focus(name) => {
-                    if let Some(i) = view
-                        && let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name))
-                        && !f.read_only()
-                        && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
-                    {
-                        let page = widget.page.unwrap_or(0);
-                        if self.views[i].page_screen_rect(page).is_none() {
-                            self.views[i].go_to_page(page);
-                        }
-                        self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
-                    }
-                }
+                Request::Focus(name) => self.focus_script_field(id, view, &name, None),
+                Request::FocusField { name, object_id } => self.focus_script_field(id, view, &name, Some(object_id)),
                 Request::Beep | Request::Reset(_) => {}
             }
         }
         self.show_script_messages(out.alerts);
+    }
+
+    fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
+        if let Some(i) = view
+            && let Some(f) = self.session.get(id).and_then(|d| {
+                d.form.iter().find(|f| object_id.map_or_else(|| f.name == name, |key| pdfcraft_engine::js::field_object_id(f.obj) == key))
+            })
+            && !f.read_only()
+            && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
+        {
+            let page = widget.page.unwrap_or(0);
+            if self.views[i].page_screen_rect(page).is_none() {
+                self.views[i].go_to_page(page);
+            }
+            self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+        }
     }
 
     /// Show form script messages `messages` in order, each in the toast with its title and icon.

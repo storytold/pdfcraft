@@ -420,6 +420,7 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
+    pub(crate) refused: Option<String>,
     /// Source/order cache for this edit only; each callback still snapshots current field values.
     calculations: Option<Vec<(usize, String)>>,
 }
@@ -465,6 +466,7 @@ impl JsRunner {
             xfa,
             zoom: 100.0,
             runtime_highlight: highlight,
+            icon_epoch: 0,
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -472,7 +474,7 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), runtime: Default::default(), calculations: None }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), refused: None, runtime: Default::default(), calculations: None }
     }
 }
 
@@ -541,9 +543,12 @@ impl Scripts for JsRunner {
                 },
                 &[],
             ),
-            Err(_) => Outcome { error: Some("document script runtime is unavailable".into()), ..Default::default() },
+            Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
         self.output.absorb(&o);
+        if o.execution_refused {
+            self.refused = o.error.clone();
+        }
         if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
@@ -760,6 +765,22 @@ impl Session {
         target_id: Option<u64>,
         answers: &[Option<String>],
     ) -> Result<Outcome, EditError> {
+        self.run_javascript_job(id, script, target, target_id, answers, false)
+    }
+
+    pub(crate) fn run_opening_javascript(&mut self, id: DocId) -> Result<Outcome, EditError> {
+        self.run_javascript_job(id, "", None, None, &[], true)
+    }
+
+    fn run_javascript_job(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        target_id: Option<u64>,
+        answers: &[Option<String>],
+        opening: bool,
+    ) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
@@ -805,7 +826,7 @@ impl Session {
             },
             answers,
         );
-        let result = self.apply_script_outcome(id, &states, o);
+        let result = self.apply_script_outcome(id, &states, o, opening);
         if result.is_err() {
             self.invalidate_javascript(id);
         }
@@ -813,7 +834,7 @@ impl Session {
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
-    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
+    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
         if o.calculation_limit_exceeded {
             return Err(EditError::Invalid(o.error.unwrap_or_else(|| "script calculation work limit exceeded".into())));
         }
@@ -852,11 +873,12 @@ impl Session {
             let names = (!names.is_empty())
                 .then(|| states.iter().filter(|field| reset_name_matches(&field.name, &names)).map(|field| field.name.clone()).collect::<Vec<_>>());
             if let Some(doc) = reset_document.as_mut() {
-                // Reuse the actual reset path, whose built-in recalculation uses NoScripts.
-                // Unnamed dependent text/combo values belong to the comparison baseline too.
-                pdfcraft_forms::reset(doc, names.as_deref())?;
+                // The preview includes dependent calculation writes as well as direct resets.
+                let (reset, recalculated) = pdfcraft_forms::reset_with_counts(doc, names.as_deref())?;
+                if !opening || reset != 0 || recalculated != 0 {
+                    edits.push(Edit::ResetForm { names });
+                }
             }
-            edits.push(Edit::ResetForm { names });
         }
         if let Some(doc) = reset_document {
             let mut values = std::collections::HashMap::new();
@@ -1274,6 +1296,15 @@ impl Session {
             doc.js_runtime = Default::default();
         }
     }
+    /// Discard a timed-out invocation and retain the worker slot until its thread exits.
+    pub fn timeout_javascript(&mut self, p: PendingScript) {
+        if self.script_pending_current(&p)
+            && let Ok(mut runtime) = p.runtime.lock()
+        {
+            runtime.retire_timed_out_worker();
+        }
+    }
+
     /// Apply a current worker result, or discard it and reset the realm when the document changed.
     pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
         if !self.script_pending_current(&p) {
@@ -1281,7 +1312,7 @@ impl Session {
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
         p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
-        let result = self.apply_script_outcome(p.id, &p.states, out);
+        let result = self.apply_script_outcome(p.id, &p.states, out, false);
         if result.is_err() {
             self.invalidate_javascript(p.id);
         }

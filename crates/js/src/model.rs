@@ -163,6 +163,8 @@ impl Event {
 /// About the document, for `this.numPages`, `this.info` and the like.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocInfo {
+    /// Changes when history can replace an icon object under the same PDF reference.
+    pub icon_epoch: u64,
     pub file_name: String,
     pub num_pages: usize,
     /// The current page, 0-based.
@@ -297,6 +299,11 @@ pub enum Request {
     Submit(String),
     /// `field.setFocus()`.
     Focus(String),
+    /// Focus a specific AcroForm field when several fields share its name.
+    FocusField {
+        name: String,
+        object_id: u64,
+    },
     Beep,
     Zoom(f64),
     Highlight(bool),
@@ -337,6 +344,8 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// The runtime could not execute the callback safely.
+    pub execution_refused: bool,
     /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
     pub reset_limit_exceeded: bool,
     /// Calculation exhaustion rejects script writeback even if the script catches the error.

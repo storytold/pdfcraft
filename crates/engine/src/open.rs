@@ -102,10 +102,18 @@ impl Session {
         }
         self.docs.push(document);
         if !self.js_off && self.get(id).is_some_and(|d| d.info.xfa.is_none() && !d.document_scripts().is_empty()) {
-            match self.run_javascript(id, "", None) {
+            match self.run_opening_javascript(id) {
                 Ok(mut out) => {
-                    out.requests
-                        .retain(|r| matches!(r, js::Request::Highlight(_) | js::Request::Zoom(_) | js::Request::Focus(_) | js::Request::GoToPage(_)));
+                    out.requests.retain(|r| {
+                        matches!(
+                            r,
+                            js::Request::Highlight(_)
+                                | js::Request::Zoom(_)
+                                | js::Request::Focus(_)
+                                | js::Request::FocusField { .. }
+                                | js::Request::GoToPage(_)
+                        )
+                    });
                     if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
                         doc.js_output.requests.extend(out.requests);
                         doc.js_output.alerts.extend(out.alerts);

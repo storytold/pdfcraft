@@ -48,6 +48,11 @@ impl ScriptSession {
     pub fn sync_field_ids(&mut self, ids: impl IntoIterator<Item = u64>) {
         self.instances.sync(ids);
     }
+
+    /// Invalidate icon handles after restoring an earlier PDF object graph.
+    pub fn retire_icon_handles(&mut self) {
+        self.icon_epoch = self.icon_epoch.wrapping_add(1);
+    }
 }
 /// Boa context and initialization sources retained by exactly one open-document runtime.
 pub(crate) struct Realm {
@@ -61,7 +66,7 @@ impl Realm {
     }
     /// Validate sources, initialize once when needed, and execute this job in the retained document realm.
     fn run(&mut self, job: Job) -> Outcome {
-        let failed = |why: String| Outcome { rc: true, error: Some(why), ..Default::default() };
+        let failed = |why: String| Outcome { rc: true, execution_refused: true, error: Some(why), ..Default::default() };
         if let Some(why) = crate::refuse(&job.script) {
             return failed(why);
         }
@@ -217,19 +222,27 @@ impl Drop for WorkerPermit {
 pub struct ScriptSession {
     sender: Option<mpsc::SyncSender<(Job, mpsc::Sender<InteractiveEvent>)>>,
     busy: Arc<std::sync::atomic::AtomicBool>,
+    worker_lifetime: std::sync::Weak<()>,
     instances: FieldInstances,
+    icon_epoch: u64,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl ScriptSession {
     /// Start a bounded-stack native worker lazily and reject a second active job, including during prompts.
     pub fn start(&mut self, mut job: Job) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
         if self.sender.is_none() {
+            if self.worker_lifetime.upgrade().is_some() {
+                return Err("the timed-out script is still stopping; retry once it exits".into());
+            }
             let (tx, rx) = mpsc::sync_channel::<(Job, mpsc::Sender<InteractiveEvent>)>(1);
             let permit = WorkerPermit::acquire()?;
+            let lifetime = Arc::new(());
+            self.worker_lifetime = Arc::downgrade(&lifetime);
             std::thread::Builder::new()
                 .name("pdfcraft-document-js".into())
                 .stack_size(crate::run::DOCUMENT_WORKER_STACK)
                 .spawn(move || {
+                    let _lifetime = lifetime;
                     let _permit = permit;
                     let mut realm = Realm::new();
                     while let Ok((job, reply)) = rx.recv() {
@@ -238,7 +251,12 @@ impl ScriptSession {
                         crate::interaction::set_host(None);
                         let out = out.unwrap_or_else(|_| {
                             realm = Realm::new();
-                            Outcome { rc: true, error: Some("script engine stopped unexpectedly".into()), ..Default::default() }
+                            Outcome {
+                                rc: true,
+                                execution_refused: true,
+                                error: Some("script engine stopped unexpectedly".into()),
+                                ..Default::default()
+                            }
                         });
                         let _ = reply.send(InteractiveEvent::Complete(out));
                     }
@@ -250,6 +268,7 @@ impl ScriptSession {
             return Err("another script is active in this document".into());
         }
         self.instances.stamp(&mut job);
+        job.doc.icon_epoch = self.icon_epoch;
         let (tx, rx) = mpsc::channel();
         let Some(sender) = self.sender.as_ref() else {
             self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -269,6 +288,12 @@ impl ScriptSession {
     pub fn acknowledge_completion(&mut self) {
         self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
     }
+    /// Detach the old worker and retain its lifetime so it still occupies this document's slot.
+    pub fn retire_timed_out_worker(&mut self) {
+        self.sender = None;
+        self.acknowledge_completion();
+    }
+
     /// Run a job with one total deadline, discarding its entire realm when the host times out.
     pub fn run(&mut self, job: Job, answers: &[Option<String>]) -> Outcome {
         self.run_with_limit(job, answers, std::time::Duration::from_secs(10))
@@ -278,7 +303,7 @@ impl ScriptSession {
         let started = std::time::Instant::now();
         let rx = match self.start(job) {
             Ok(rx) => rx,
-            Err(e) => return Outcome { error: Some(e), ..Default::default() },
+            Err(e) => return Outcome { execution_refused: true, error: Some(e), ..Default::default() },
         };
         match Self::receive(&rx, answers, started, limit) {
             Some(out) => {
@@ -288,8 +313,8 @@ impl ScriptSession {
             None => {
                 // The old worker has no route into this replacement realm. Its reservation
                 // remains charged until cooperative execution finishes and the thread exits.
-                *self = Self::default();
-                Outcome { error: Some("script worker did not complete within its limit".into()), ..Default::default() }
+                self.retire_timed_out_worker();
+                Outcome { execution_refused: true, error: Some("script worker did not complete within its limit".into()), ..Default::default() }
             }
         }
     }
@@ -321,12 +346,13 @@ impl ScriptSession {
 pub struct ScriptSession {
     realm: Realm,
     instances: FieldInstances,
+    icon_epoch: u64,
 }
 #[cfg(target_arch = "wasm32")]
 impl Default for ScriptSession {
     /// Create the web runtime without native worker threads or a native prompt host.
     fn default() -> Self {
-        Self { realm: Realm::new(), instances: FieldInstances::default() }
+        Self { realm: Realm::new(), instances: FieldInstances::default(), icon_epoch: 0 }
     }
 }
 #[cfg(target_arch = "wasm32")]
@@ -334,6 +360,7 @@ impl ScriptSession {
     /// Run in the web-local realm; native prompt replies are unavailable on this host.
     pub fn run(&mut self, mut job: Job, _answers: &[Option<String>]) -> Outcome {
         self.instances.stamp(&mut job);
+        job.doc.icon_epoch = self.icon_epoch;
         self.realm.run(job)
     }
 }
@@ -589,9 +616,42 @@ mod tests {
     #[test]
     fn timed_out_jobs_never_share_the_next_realm() {
         let mut session = ScriptSession::default();
-        assert!(session.run_with_limit(job("buffer='late';held.custom=99;"), &[], std::time::Duration::ZERO).error.is_some());
+        use std::time::{Duration, Instant};
+        let out = session.run_with_limit(job("buffer='late';held.custom=99;"), &[], Duration::ZERO);
+        assert!(out.execution_refused);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while session.worker_lifetime.upgrade().is_some() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(session.run(job("buffer+'/'+typeof held.custom"), &[]).result.as_deref(), Some("/undefined"));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_detached_worker_holds_the_documents_slot_until_it_exits() {
+        let worker = Arc::new(());
+        let mut session = ScriptSession { worker_lifetime: Arc::downgrade(&worker), ..Default::default() };
+        let out = session.run(job("1+1"), &[]);
+        assert!(out.execution_refused);
+        assert!(session.sender.is_none());
+        drop(worker);
+        assert_eq!(session.run(job("1+1"), &[]).result.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn history_retires_icons_without_discarding_the_document_globals() {
+        let mut session = ScriptSession::default();
+        let mut capture = job("var oldIcon = getField('go').buttonGetIcon(); buffer='retained';");
+        Arc::make_mut(&mut capture.fields)[0].icon = Some(17);
+        assert_eq!(session.run(capture.clone(), &[]).error, None);
+        capture.script = "getField('go').buttonSetIcon(oldIcon);".into();
+        assert_eq!(session.run(capture.clone(), &[]).error, None);
+        session.retire_icon_handles();
+        assert!(session.run(capture.clone(), &[]).error.is_some());
+        capture.script = "buffer;".into();
+        assert_eq!(session.run(capture, &[]).result.as_deref(), Some("retained"));
+    }
+
     /// Exercise the actual process-wide cap in isolation, then recover a slot without resetting other documents.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -738,7 +798,7 @@ mod cache_lifecycle_tests {
             let out = realm.run(job.clone());
             assert_eq!(out.error, None);
             assert_eq!(out.result.as_deref(), Some("true"));
-            assert_eq!(out.requests, [crate::Request::Focus(field.name.clone())]);
+            assert_eq!(out.requests, [crate::Request::FocusField { name: field.name.clone(), object_id: 17 }]);
             assert_eq!(crate::host::host(realm.context.as_ref().unwrap()).unwrap().borrow().objects.len(), 1);
         }
         field.object_id = Some(18);

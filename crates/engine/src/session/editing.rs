@@ -17,6 +17,16 @@ fn deletes_pages(edit: &Edit) -> bool {
     }
 }
 
+/// Keep edits to the working copy until both the operation and its script callbacks succeed.
+fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+    guard(|| run_edit(next, edit, cx))
+        .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+    if let Some(reason) = cx.js.as_mut().and_then(|runner| runner.refused.take()) {
+        return Err(EditError::Invalid(reason));
+    }
+    Ok(())
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -102,8 +112,7 @@ impl Session {
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        guard(|| run_edit(&mut next, &edit, &mut cx))
-            .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        run_checked_edit(&mut next, &edit, &mut cx)?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
         // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
         // a batch keeps the other edits it holds.
@@ -313,6 +322,7 @@ impl Session {
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.retire_icon_handles();
             runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
@@ -348,6 +358,7 @@ impl Session {
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.retire_icon_handles();
             runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.

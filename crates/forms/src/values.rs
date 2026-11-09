@@ -833,6 +833,11 @@ pub fn default_value_known(doc: &Document, field: &Field) -> bool {
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
+    reset_with_counts(doc, names).map(|(reset, _)| reset)
+}
+
+/// Restore defaults and report direct resets and dependent calculation writes separately.
+pub fn reset_with_counts(doc: &mut Document, names: Option<&[String]>) -> Result<(usize, usize), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -867,8 +872,8 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         write_value(doc, &tmp, &v, &mut NoScripts)?;
         changed += 1;
     }
-    recalculate(doc)?;
-    Ok(changed)
+    let recalculated = recalculate(doc)?;
+    Ok((changed, recalculated))
 }
 
 /// Marks option `i` picked; false when it already was, or there is no such option.

@@ -13493,6 +13493,27 @@ fn reset_order_session(reset: &str) -> (Session, DocId) {
     (s, id)
 }
 
+#[test]
+fn an_unavailable_validation_runtime_rejects_the_field_edit() {
+    let mut s = Session::new();
+    let script = " ".repeat((1 << 20) + 1);
+    let id = s.open("oversized-script-library.pdf", None, Arc::new(scripted_form_with(&script)), None).unwrap();
+    let result = s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("101".into()) });
+    assert!(matches!(result, Err(EditError::Invalid(reason)) if reason.contains("document scripts exceed")));
+    assert!(s.get(id).unwrap().can_undo().is_none());
+}
+
+#[test]
+fn a_no_op_opening_reset_leaves_the_document_clean() {
+    let (mut s, id) = reset_order_session("resetForm(['price']);");
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: pdfcraft_forms::FieldValue::Text("7".into()) }).unwrap();
+    let bytes = s.save_bytes(id).unwrap();
+    let mut s = Session::new();
+    let id = s.open("already-reset.pdf", None, bytes, None).unwrap();
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    assert_eq!(s.run_javascript(id, "openedValue;", None).unwrap().result.as_deref(), Some("7"));
+}
+
 /// Reinitialization resets before the first event reads, while later writes survive save and Undo/Redo.
 #[test]
 fn doc_open_reset_and_first_event_persist_in_script_order() {

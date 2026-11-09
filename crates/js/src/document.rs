@@ -266,8 +266,12 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         Ok(JsValue::undefined())
     }
     fn set_focus(_: &JsValue, _: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-        let current_name = read(c, name)?.name;
-        host(c)?.borrow_mut().request(Request::Focus(current_name));
+        let field = read(c, name)?;
+        let request = match field.object_id {
+            Some(object_id) => Request::FocusField { name: field.name, object_id },
+            None => Request::Focus(field.name),
+        };
+        host(c)?.borrow_mut().request(request);
         Ok(JsValue::undefined())
     }
 

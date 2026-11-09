@@ -78,7 +78,7 @@ impl PdfCraftApp {
         if (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
             || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
         {
-            self.session.discard_javascript(&pending.run);
+            self.session.timeout_javascript(pending.run);
             self.notify("The form script timed out; its result was discarded");
             return;
         }

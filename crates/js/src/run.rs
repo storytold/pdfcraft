@@ -215,7 +215,8 @@ pub(crate) fn run_in_context(
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
-            (h.icons, h.objects)
+            let icons = if h.doc.icon_epoch == doc.icon_epoch { h.icons } else { Vec::new() };
+            (icons, h.objects)
         })
         .unwrap_or_default();
     let field_keys = fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect::<BTreeSet<_>>();

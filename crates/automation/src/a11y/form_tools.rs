@@ -11,6 +11,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::LaunchUrl(u) => json!({ "url": u }),
         R::Submit(u) => json!({ "submit": u }),
         R::Focus(f) => json!({ "focus": f }),
+        R::FocusField { name, object_id } => json!({ "focus": name, "field_id": object_id }),
         R::Zoom(z) => json!({"zoom":z}),
         R::Beep => json!({ "beep": true }),
         R::Highlight(on) => json!({ "highlight": on }),

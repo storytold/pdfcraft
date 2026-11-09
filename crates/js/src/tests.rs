@@ -74,7 +74,7 @@ fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
         Limits::default(),
     );
     assert_eq!(out.error, None);
-    assert_eq!(out.result.as_deref(), Some("[[20,310,200,30],[-10,190,290,-10],[15,165,265,15]]"));
+    assert_eq!(out.result.as_deref(), Some("[[0,280,180,0],[-10,190,290,-10],[15,165,265,15]]"));
 }
 
 #[test]
@@ -2031,6 +2031,15 @@ mod runtime_highlight {
         assert_eq!(o.error, None);
         assert_eq!(o.value, "false", "the dropped request changed nothing");
         assert!(!o.requests.iter().any(|r| matches!(r, Request::Highlight(_))));
+    }
+
+    #[test]
+    fn dropped_zoom_request_does_not_change_the_script_value() {
+        let document = DocInfo { zoom: 100.0, ..doc() };
+        let script = format!("for (var i = 0; i < {}; i++) app.execMenuItem('Print'); this.zoom = 200; this.zoom;", crate::xfa::MAX_EFFECTS);
+        let out = run(&script, &Event::doc("Console"), &document, &[], &[], Limits::default());
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("100"));
     }
 
     /// The same in XFA scripts, where the change is an effect; nothing is asked for when the

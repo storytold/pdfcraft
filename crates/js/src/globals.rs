@@ -199,14 +199,7 @@ fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
         let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
         (boxes[which], rotation, boxes[1])
     };
-    let [x0, y0, x1, y1] = rect;
-    let [cx0, cy0, cx1, cy1] = crop;
-    let rotated = match rotation {
-        90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
-        180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
-        270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
-        _ => [x0, y1, x1, y0],
-    };
+    let rotated = crate::rotate_rect(rect, crop, rotation);
     if !rotated.iter().all(|value| value.is_finite()) {
         return Err(error("getPageBox returned non-finite coordinates"));
     }
@@ -393,8 +386,11 @@ fn zoom_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     if !z.is_finite() || !(1.0..=6400.0).contains(&z) {
         return Err(error("zoom must be between 1 and 6400"));
     }
-    host(ctx)?.borrow_mut().doc.zoom = z;
-    host(ctx)?.borrow_mut().request(Request::Zoom(z));
+    let shared = host(ctx)?;
+    let mut host = shared.borrow_mut();
+    if host.request(Request::Zoom(z)) {
+        host.doc.zoom = z;
+    }
     Ok(JsValue::undefined())
 }
 /// Read the current page count after page insertion/deletion without resetting script globals.
