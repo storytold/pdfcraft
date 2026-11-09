@@ -330,7 +330,7 @@ mod tests {
         let token = body.get("jwt").and_then(|jwt| jwt.as_str()).unwrap_or("good").to_owned();
         let client = Client { timeout: Duration::from_secs(5) };
         let encoded = body.to_string();
-        let (status, body) = client.post_json_body(&format!("http://{address}/v1/sessions"), Some(&token), encoded.as_bytes()).map_err(|e| e.0)?;
+        let (status, body) = client.post_json(&format!("http://{address}/v1/sessions"), Some(&token), &[], encoded.as_bytes()).map_err(|e| e.0)?;
         Ok((status, serde_json::from_slice(&body).map_err(|e| e.to_string())?))
     }
 

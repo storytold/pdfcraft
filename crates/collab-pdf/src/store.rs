@@ -400,7 +400,7 @@ mod tests {
             let mut room = Room::new(SessionId::new("s1")?, doc.clone(), adapter, RoomConfig::default());
             room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
             room.apply(&editor, &op("a1")?, 0)?;
-            let mut commit = room.commit(&editor, 1)?;
+            let commit = room.commit(&editor, 1)?;
             let outcome = commit.publish();
             room.finish(commit, outcome)?;
         }

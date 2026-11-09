@@ -906,7 +906,7 @@ mod tests {
     /// Commit the way the transport does: the base under the room lock, the
     /// publication outside it (this adapter has none), the outcome after.
     fn commit(room: &mut Room<impl Adapter>, actor: &ActorId, expected: u64) -> Result<CommitResult, pdfcraft_collab_proto::ServerError> {
-        let mut commit = room.commit(actor, expected)?;
+        let commit = room.commit(actor, expected)?;
         let outcome = commit.publish();
         room.finish(commit, outcome)
     }

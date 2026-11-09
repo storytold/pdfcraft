@@ -113,6 +113,11 @@ fn run() -> Result<(), String> {
     let config = Config { app: args.app.clone(), origin: args.origin.clone(), ..Config::default() };
     let server = Arc::new(WsServer::new(hub, verifier.clone(), config));
     let handle = server.clone().bind_arc(&args.listen).map_err(|e| format!("could not listen on {}: {e}", args.listen))?;
+    // The publication queue (limitation 6): a commit's cabinet POST that failed
+    // is retried here with a backoff, without waiting for the next commit or the
+    // last client leaving. The handle lives for the life of the process.
+    let _publications =
+        server.spawn_publication_retries(Duration::from_millis(100)).map_err(|e| format!("could not start the publication queue: {e}"))?;
     let health = start_health(&args.health, server.clone())?;
     let control = match &args.control {
         Some(addr) => {
@@ -186,8 +191,8 @@ fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_coll
         ),
         Ok(metrics) if path == "/metrics" => {
             let mut body = format!(
-                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\n",
-                metrics.rooms, metrics.clients, metrics.forced_commits
+                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\npdfcraft_collab_publication_retries_total {}\n",
+                metrics.rooms, metrics.clients, metrics.forced_commits, metrics.publication_retries
             );
             for (room, version, epoch) in metrics.versions {
                 body.push_str(&format!(
@@ -360,7 +365,7 @@ mod tests {
             // decides whether its journal crossed the threshold.
             if let Some(mut pending) = hub.forced_commit(&doc) {
                 let outcome = pending.publish();
-                hub.finish(pending, outcome);
+                let _ = hub.finish(pending, outcome);
                 forced += 1;
             }
             sizes.push(std::fs::metadata(&journal).map(|meta| meta.len()).unwrap_or(0));
@@ -417,7 +422,7 @@ mod tests {
             let room = hub.room_mut(&doc).ok_or("no room")?;
             room.hello(editor.clone(), Role::Editor, &hello, 0)?;
             room.apply(&editor, &add("a1", "committed-note", 0)?, 0)?;
-            let mut commit = room.commit(&editor, 1)?;
+            let commit = room.commit(&editor, 1)?;
             let outcome = commit.publish();
             room.finish(commit, outcome)?;
             // Accepted after the commit: the journal, not the base, holds it.
@@ -452,6 +457,7 @@ mod tests {
             poisoned: Vec::new(),
             conflict: Vec::new(),
             forced_commits: 4,
+            publication_retries: 2,
         };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));
         assert_eq!(status, "200 OK");
@@ -461,6 +467,7 @@ mod tests {
         assert_eq!(status, "200 OK");
         assert!(body.contains("pdfcraft_collab_rooms 2"));
         assert!(body.contains("pdfcraft_collab_forced_commits_total 4"));
+        assert!(body.contains("pdfcraft_collab_publication_retries_total 2"));
         assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
         assert!(!body.contains("read_only"), "a healthy room is not reported as read-only");
 
@@ -471,6 +478,7 @@ mod tests {
             poisoned: vec!["file-2".into()],
             conflict: vec!["file-3".into()],
             forced_commits: 0,
+            publication_retries: 0,
         };
         let (_, _, body) = render("/health", Ok(broken.clone()));
         assert!(body.contains(r#""ok":false"#));
@@ -489,6 +497,7 @@ mod tests {
                 poisoned: Vec::new(),
                 conflict: Vec::new(),
                 forced_commits: 0,
+                publication_retries: 0,
             }),
         );
         assert_eq!(status, "404 Not Found");

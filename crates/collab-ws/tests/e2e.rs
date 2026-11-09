@@ -431,7 +431,7 @@ struct Gate {
 struct GatePublication(Gate);
 
 impl Publication for GatePublication {
-    fn run(self: Box<Self>) -> PublishOutcome {
+    fn run(&self) -> PublishOutcome {
         let _ = self.0.started.send(());
         let (lock, condvar) = &*self.0.release;
         let mut released = lock.lock().expect("the gate is not poisoned");
@@ -576,9 +576,89 @@ fn a_forced_commit_does_not_block_another_room_and_is_counted() -> Result<(), Bo
     Ok(())
 }
 
+/// RFC §8.2, limitation 6: a publication that fails with a retryable error is
+/// tried again in the background after a backoff — not on the next commit, and
+/// not on the last client leaving. The room stays `publishing` while the retry
+/// is queued, so a second commit is `busy` rather than reaching the cabinet out
+/// of order.
+#[test]
+fn a_retryable_publication_failure_is_retried_in_the_background() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Flaky {
+        inner: PdfAdapter,
+        runs: Arc<AtomicUsize>,
+    }
+
+    struct FailOnce(Arc<AtomicUsize>);
+
+    impl Publication for FailOnce {
+        fn run(&self) -> PublishOutcome {
+            if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+                Err(AdapterError::new(ErrorCode::Internal, "the cabinet did not answer", true))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    impl Adapter for Flaky {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+            Some(Box::new(FailOnce(self.runs.clone())))
+        }
+    }
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let doc = DocKey::new("file-1")?;
+    let mut hub = Hub::new(RoomConfig::default());
+    hub.open_room(doc.clone(), Flaky { inner: PdfAdapter::open("f.pdf", fixture(1).into())?, runs: runs.clone() })?;
+    let config = Config { publication_backoff: Duration::from_millis(20), publication_backoff_max: Duration::from_millis(50), ..Config::default() };
+    let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), config));
+    let handle = server.clone().bind_arc("127.0.0.1:0")?;
+    let queue = server.spawn_publication_retries(Duration::from_millis(5))?;
+
+    let mut ada = Peer::join(handle.local_addr(), "editor:ada", "ada")?;
+    let add = merge_op(doc.clone(), OpId::new("op-retry")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)));
+
+    ada.ws.send(Message::text(serde_json::to_string(&ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest {
+        expected_version: ada.version,
+        message: None,
+    }))?))?;
+    match ada.next()? {
+        ServerMessage::Error(e) => assert!(e.retryable, "the commit reports the failed publication as retryable"),
+        other => return Err(format!("expected the failed publication, got {other:?}").into()),
+    }
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while runs.load(Ordering::Relaxed) < 2 {
+        if std::time::Instant::now() > deadline {
+            return Err(format!("the queue did not retry the publication ({} attempt(s))", runs.load(Ordering::Relaxed)).into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let metrics = server.metrics()?;
+    assert_eq!(metrics.publication_retries, 1, "one background retry");
+    assert!(metrics.conflict.is_empty(), "a transport failure is not a conflict");
+    let state = server.with_hub(|hub| hub.room(&doc).map(|room| (room.is_dirty(), room.is_publishing())))?;
+    assert_eq!(state, Some((false, false)), "the retry published the base and released the room");
+    drop(queue);
+    Ok(())
+}
+
 /// A publication that keeps failing must not become a retry loop in the
-/// transport: the failure leaves the room dirty, and the next commit (here the
-/// last-leave one) retries it — it does not spin on its own.
+/// transport: a non-retryable failure leaves the room dirty, and the next commit
+/// (here the last-leave one) retries it — it does not spin on its own.
 #[test]
 fn a_failed_forced_publication_is_not_retried_in_a_loop() -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -591,7 +671,7 @@ fn a_failed_forced_publication_is_not_retried_in_a_loop() -> Result<(), Box<dyn 
     struct Fail(Arc<AtomicUsize>);
 
     impl Publication for Fail {
-        fn run(self: Box<Self>) -> PublishOutcome {
+        fn run(&self) -> PublishOutcome {
             self.0.fetch_add(1, Ordering::Relaxed);
             Err(AdapterError::new(ErrorCode::Internal, "the cabinet is down", false))
         }

@@ -216,22 +216,22 @@ impl Client {
         self.exchange(&mut stream, &endpoint, &head, &[], limit as u64)
     }
 
-    /// `POST` a JSON body and return the status and the response body.
-    pub fn post_json_body(&self, url: &str, bearer: Option<&str>, body: &[u8]) -> Result<(u16, Vec<u8>), HttpError> {
+    /// `POST` a JSON body with extra request headers (the commit callback's
+    /// `Idempotency-Key`, RFC §8.2) and return the status and the response
+    /// body. No redirects, no chunked bodies: the daemon's cabinet is known.
+    pub fn post_json(&self, url: &str, bearer: Option<&str>, headers: &[(&str, &str)], body: &[u8]) -> Result<(u16, Vec<u8>), HttpError> {
         let endpoint = parse_http_url(url)?;
         let mut stream = self.connect(&endpoint)?;
         let auth = match bearer {
             Some(token) => format!("Authorization: Bearer {token}\r\n"),
             None => String::new(),
         };
-        let head = format!("POST {} HTTP/1.1\r\nContent-Type: application/json\r\n{auth}", endpoint.path);
+        let mut extra = String::new();
+        for (name, value) in headers {
+            extra.push_str(&format!("{name}: {value}\r\n"));
+        }
+        let head = format!("POST {} HTTP/1.1\r\nContent-Type: application/json\r\n{auth}{extra}", endpoint.path);
         self.exchange(&mut stream, &endpoint, &head, body, DRAIN_LIMIT)
-    }
-
-    /// `POST` a JSON body and return the status code. A callback only says yes
-    /// or no, so the response body is dropped.
-    pub fn post_json(&self, url: &str, bearer: Option<&str>, body: &[u8]) -> Result<u16, HttpError> {
-        self.post_json_body(url, bearer, body).map(|(status, _)| status)
     }
 }
 
@@ -277,7 +277,7 @@ mod tests {
     fn a_posted_json_body_and_its_status_arrive() -> Result<(), Box<dyn std::error::Error>> {
         let (address, receiver) = one_shot("200 OK")?;
         let client = Client { timeout: Duration::from_secs(5) };
-        let status = client.post_json(&format!("http://{address}/commit"), None, br#"{"fileId":"file-1"}"#)?;
+        let (status, _) = client.post_json(&format!("http://{address}/commit"), None, &[], br#"{"fileId":"file-1"}"#)?;
         assert_eq!(status, 200);
         let seen = receiver.recv()?;
         assert!(seen.starts_with("POST /commit"), "{seen}");
@@ -309,6 +309,6 @@ mod tests {
     #[test]
     fn a_refused_connection_is_an_error_not_a_hang() {
         let client = Client { timeout: Duration::from_millis(200) };
-        assert!(client.post_json("http://127.0.0.1:1/commit", None, b"{}").is_err());
+        assert!(client.post_json("http://127.0.0.1:1/commit", None, &[], b"{}").is_err());
     }
 }

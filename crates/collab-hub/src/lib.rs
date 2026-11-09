@@ -12,7 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, Role, ServerError, ServerMessage, SessionId};
-use pdfcraft_collab_server::{Adapter, Commit, PublishOutcome, Room, RoomConfig};
+use pdfcraft_collab_server::{Adapter, Commit, Publication, PublishOutcome, Room, RoomConfig};
 use std::collections::{HashMap, VecDeque};
 
 pub type ClientId = u64;
@@ -169,16 +169,31 @@ impl<A: Adapter> Hub<A> {
 
     /// Record the outcome of a [`Pending`] publication and answer whoever asked.
     /// Called under the hub lock again; the room stays dirty when the
-    /// publication failed.
-    pub fn finish(&mut self, pending: Pending, outcome: PublishOutcome) {
+    /// publication failed. A retryable failure comes back as the publication
+    /// the caller has to queue: the room stays `publishing` until it is
+    /// resolved, so a newer base cannot overtake it.
+    pub fn finish(&mut self, pending: Pending, outcome: PublishOutcome) -> Option<Box<dyn Publication>> {
         let Pending { doc, client, commit } = pending;
-        let Some(entry) = self.rooms.get_mut(&doc) else { return };
+        let entry = self.rooms.get_mut(&doc)?;
         let answer = match entry.room.finish(commit, outcome) {
             Ok(result) => ServerMessage::CommitResult(result),
             Err(e) => ServerMessage::Error(e),
         };
+        let retry = entry.room.take_retry();
         if let Some(client) = client {
             deliver(&mut self.clients, client, answer);
+        }
+        retry
+    }
+
+    /// Record the outcome of a queued publication retry. `true` means the queue
+    /// should try again later; `false` means it is done (published, a `409` that
+    /// stopped it, or a refusal no retry would fix).
+    pub fn finish_retry(&mut self, doc: &DocKey, outcome: PublishOutcome) -> bool {
+        let Some(entry) = self.rooms.get_mut(doc) else { return false };
+        match entry.room.finish_retry(outcome) {
+            Ok(()) => false,
+            Err(e) => e.retryable,
         }
     }
 
@@ -442,7 +457,7 @@ mod tests {
         // the answer is delivered only after the outcome is recorded.
         assert!(hub.receive(editor).is_empty());
         let outcome = pending.publish();
-        hub.finish(pending, outcome);
+        assert!(hub.finish(pending, outcome).is_none(), "a successful publication leaves nothing to retry");
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::CommitResult(r)] if r.sha256 == "abc"));
         Ok(())
     }
@@ -465,7 +480,7 @@ mod tests {
         // it. Until it is reported, the room does not start a second one.
         assert!(hub.forced_commit(&doc).is_none(), "a commit in flight is not duplicated");
         let outcome = pending.publish();
-        hub.finish(pending, outcome);
+        assert!(hub.finish(pending, outcome).is_none(), "a successful publication leaves nothing to retry");
         assert!(hub.forced_commit(&doc).is_none(), "the base now contains both operations");
         Ok(())
     }

@@ -44,8 +44,13 @@ pub struct Publisher {
 pub enum PublishError {
     /// The cabinet has a version this session did not start from.
     Conflict(String),
-    /// Anything else: the file is committed locally but the cabinet did not
-    /// take it.
+    /// The cabinet or the network failed, and another attempt may work: the
+    /// daemon's queue retries it after a backoff with the same body and the
+    /// same idempotency key.
+    Retryable(String),
+    /// Anything else (a `4xx` that a retry would get again): the file is
+    /// committed locally but the cabinet did not take it, and the next commit
+    /// retries it.
     Failed(String),
 }
 
@@ -59,25 +64,44 @@ impl Publisher {
     }
 
     /// Send the committed file. The body is the contract of RFC §8:
-    /// `{fileId, bytes, sha256, version, expectedVersion}`, with the file
-    /// base64-encoded. `expectedVersion` is the version the cabinet is believed
-    /// to hold, so the cabinet can refuse with `409` when it moved on.
+    /// `{fileId, bytes, sha256, version, expectedVersion, idempotencyKey}`, with
+    /// the file base64-encoded. `expectedVersion` is the version the cabinet is
+    /// believed to hold, so the cabinet can refuse with `409` when it moved on.
+    ///
+    /// The idempotency key names the payload (`fileId:version:sha256`), not the
+    /// attempt: a retry after a lost response sends the same key, so a cabinet
+    /// that already took the version recognises the duplicate instead of
+    /// creating a second one. The same value travels in the body and in the
+    /// `Idempotency-Key` header.
     pub fn publish(&self, file_id: &str, version: u64, expected_version: u64, bytes: &[u8], sha256: &str) -> Result<(), PublishError> {
+        let key = idempotency_key(file_id, version, sha256);
         let body = serde_json::json!({
             "fileId": file_id,
             "bytes": base64_encode(bytes),
             "sha256": sha256,
             "version": version,
             "expectedVersion": expected_version,
+            "idempotencyKey": key,
         })
         .to_string();
-        match self.client.post_json(&self.url, self.token.as_deref(), body.as_bytes()) {
+        let headers = [("Idempotency-Key", key.as_str())];
+        match self.client.post_json(&self.url, self.token.as_deref(), &headers, body.as_bytes()).map(|(status, _)| status) {
             Ok(status) if (200..300).contains(&status) => Ok(()),
             Ok(409) => Err(PublishError::Conflict("the cabinet holds another version of the file".into())),
+            // The cabinet is busy, a proxy timed out, or the file will be there
+            // next time: another attempt with the same key may succeed.
+            Ok(status @ 429 | status @ 500..=599) => Err(PublishError::Retryable(format!("the cabinet answered {status}"))),
             Ok(status) => Err(PublishError::Failed(format!("the cabinet answered {status}"))),
-            Err(HttpError(message)) => Err(PublishError::Failed(message)),
+            Err(HttpError(message)) => Err(PublishError::Retryable(message)),
         }
     }
+}
+
+/// What an idempotent callback is keyed by: the file, the version and the bytes.
+/// Deterministic, so a retry after a restart (or a lost response) is the same
+/// key and cannot become a second version.
+pub fn idempotency_key(file_id: &str, version: u64, sha256: &str) -> String {
+    format!("{file_id}:{version}:{sha256}")
 }
 
 /// A room's adapter plus everything the cabinet contract adds to it: the
@@ -106,10 +130,15 @@ struct CabinetPublication {
 }
 
 impl Publication for CabinetPublication {
-    fn run(self: Box<Self>) -> PublishOutcome {
+    fn run(&self) -> PublishOutcome {
         match self.publisher.publish(&self.file_id, self.version, self.expected_version, self.bytes.as_slice(), &self.sha256) {
             Ok(()) => Ok(Some(Published { version: self.version, etag: format!("sha256:{}", self.sha256) })),
             Err(PublishError::Conflict(message)) => Err(AdapterError::new(ErrorCode::Conflict, message, false)),
+            // The room keeps `publishing` and the queue tries the same body and
+            // key again after a backoff (limitation 6).
+            Err(PublishError::Retryable(message)) => {
+                Err(AdapterError::new(ErrorCode::Internal, format!("the commit is saved locally but not published: {message}"), true))
+            }
             Err(PublishError::Failed(message)) => {
                 Err(AdapterError::new(ErrorCode::Internal, format!("the commit is saved locally but not published: {message}"), false))
             }
@@ -436,7 +465,9 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CabinetAdapter, Publisher, RoomError, RoomsConfig, Seed, base64_decode, base64_encode, doc_key, etag_of, open_room, seed_rooms};
+    use super::{
+        CabinetAdapter, PublishError, Publisher, RoomError, RoomsConfig, Seed, base64_decode, base64_encode, doc_key, etag_of, open_room, seed_rooms,
+    };
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{ActorId, DocKey, ErrorCode, Role};
     use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
@@ -498,7 +529,7 @@ mod tests {
         actor: &ActorId,
         expected: u64,
     ) -> Result<pdfcraft_collab_proto::CommitResult, pdfcraft_collab_proto::ServerError> {
-        let mut commit = room.commit(actor, expected)?;
+        let commit = room.commit(actor, expected)?;
         let outcome = commit.publish();
         room.finish(commit, outcome)
     }
@@ -636,6 +667,11 @@ mod tests {
         assert_eq!(body["version"], 1);
         assert_eq!(body["expectedVersion"], 0);
         assert_eq!(body["sha256"], result.sha256);
+        assert_eq!(
+            body["idempotencyKey"],
+            format!("file-1:1:{}", result.sha256),
+            "the key names the payload, so a retry is a duplicate to the cabinet"
+        );
         let posted = base64_decode(body["bytes"].as_str().ok_or("no bytes")?)?;
         assert!(posted.starts_with(b"%PDF-"), "the committed file is what is published");
 
@@ -647,6 +683,29 @@ mod tests {
         let published = Adapter::published(room.adapter()).ok_or("no cabinet marker")?;
         assert_eq!((published.version, published.etag), (2, format!("sha256:{}", second.sha256)));
         let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn a_transport_failure_is_retryable_and_a_refused_body_is_not() -> Result<(), Box<dyn std::error::Error>> {
+        let (url, requests) = cabinet(503)?;
+        let publisher = Publisher::new(url, None, Duration::from_secs(5));
+        match publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc") {
+            Err(PublishError::Retryable(message)) => assert!(message.contains("503"), "{message}"),
+            other => return Err(format!("a 503 has to be retryable, got {other:?}").into()),
+        }
+        let body = requests.recv_timeout(Duration::from_secs(5))?;
+        assert_eq!(body["idempotencyKey"], "file-1:1:abc");
+
+        // A 4xx that is not a conflict is the contract being wrong: another
+        // attempt would be refused again, so it stays a plain failure.
+        let (url, _requests) = cabinet(400)?;
+        let publisher = Publisher::new(url, None, Duration::from_secs(5));
+        assert!(matches!(publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc"), Err(PublishError::Failed(_))));
+
+        // No cabinet at all: the connection is the failure, and it is retryable.
+        let publisher = Publisher::new("http://127.0.0.1:1/commit", None, Duration::from_millis(200));
+        assert!(matches!(publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc"), Err(PublishError::Retryable(_))));
         Ok(())
     }
 

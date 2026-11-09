@@ -9,7 +9,7 @@
 use crate::token::{TokenError, Verifier};
 use pdfcraft_collab_hub::{ClientId, Hub, Pending};
 use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
-use pdfcraft_collab_server::Adapter;
+use pdfcraft_collab_server::{Adapter, Publication};
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -37,6 +37,10 @@ pub struct Config {
     pub origin: Option<String>,
     /// Outbox depth per connection.
     pub outbox: usize,
+    /// First delay before a failed publication is tried again (limitation 6).
+    pub publication_backoff: Duration,
+    /// The delay doubles per attempt up to this cap.
+    pub publication_backoff_max: Duration,
 }
 
 impl Default for Config {
@@ -48,6 +52,8 @@ impl Default for Config {
             write_timeout: Duration::from_secs(10),
             origin: None,
             outbox: 256,
+            publication_backoff: Duration::from_secs(1),
+            publication_backoff_max: Duration::from_secs(60),
         }
     }
 }
@@ -68,6 +74,24 @@ struct Shared<A: Adapter> {
     /// Server-initiated journal compactions so far (limitation 10). A counter,
     /// not a gauge: it only grows, and `/metrics` exposes it as a `_total`.
     forced_commits: u64,
+    /// Publications that failed retryably, by document. The room stays
+    /// `publishing` while an entry exists, so a newer base cannot overtake the
+    /// queued one.
+    retries: HashMap<DocKey, Queued>,
+    /// Publication retries attempted since the process started (limitation 6),
+    /// exposed as `pdfcraft_collab_publication_retries_total`.
+    publication_retries: u64,
+    /// The retry schedule, copied out of [`Config`] so `Shared` owns its clock.
+    backoff: Duration,
+    backoff_max: Duration,
+}
+
+/// One failed publication waiting for its next attempt.
+struct Queued {
+    publication: Box<dyn Publication>,
+    /// Retries already made for this publication; `0` before the first one.
+    attempts: u32,
+    due_ms: u64,
 }
 
 impl<A: Adapter> Shared<A> {
@@ -119,31 +143,78 @@ impl<A: Adapter> Shared<A> {
             self.pending.push(pending);
         }
     }
+
+    /// Keep a failed publication for a later attempt (limitation 6). The room is
+    /// already `publishing`; the queue is the only thing that releases it.
+    fn queue_publication(&mut self, doc: DocKey, publication: Box<dyn Publication>, now_ms: u64) {
+        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms: now_ms.saturating_add(backoff_ms(0, self.backoff, self.backoff_max)) });
+    }
+
+    /// Take the retries whose backoff has elapsed. They are removed so the
+    /// cabinet call runs outside the lock; a failure goes back through
+    /// [`Self::requeue`].
+    fn due_retries(&mut self, now_ms: u64) -> Vec<(DocKey, Queued)> {
+        let due: Vec<DocKey> = self.retries.iter().filter(|(_, queued)| queued.due_ms <= now_ms).map(|(doc, _)| doc.clone()).collect();
+        due.into_iter().filter_map(|doc| self.retries.remove(&doc).map(|queued| (doc, queued))).collect()
+    }
+
+    /// Schedule the next attempt of a retry that failed again.
+    fn requeue(&mut self, doc: DocKey, mut queued: Queued, now_ms: u64) {
+        queued.attempts = queued.attempts.saturating_add(1);
+        queued.due_ms = now_ms.saturating_add(backoff_ms(queued.attempts, self.backoff, self.backoff_max));
+        self.retries.insert(doc, queued);
+    }
+}
+
+/// The delay before retry number `attempts + 1`: the base delay doubled per
+/// attempt, capped. `attempts` is how many retries already ran.
+fn backoff_ms(attempts: u32, base: Duration, max: Duration) -> u64 {
+    let base = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+    let max = u64::try_from(max.as_millis()).unwrap_or(u64::MAX);
+    let factor = 1u64 << attempts.min(32);
+    base.saturating_mul(factor).min(max)
 }
 
 impl<A: Adapter> WsServer<A> {
     pub fn new(hub: Hub<A>, verifier: Arc<dyn Verifier>, config: Config) -> Self {
-        Self { shared: Arc::new(Mutex::new(Shared { hub, sinks: HashMap::new(), pending: Vec::new(), forced_commits: 0 })), verifier, config }
+        let shared = Shared {
+            hub,
+            sinks: HashMap::new(),
+            pending: Vec::new(),
+            forced_commits: 0,
+            retries: HashMap::new(),
+            publication_retries: 0,
+            backoff: config.publication_backoff,
+            backoff_max: config.publication_backoff_max,
+        };
+        Self { shared: Arc::new(Mutex::new(shared)), verifier, config }
     }
 
     /// Run the cabinet calls of commits that were prepared under the lock, and
     /// record their outcomes. The hub lock is released for every call: a
     /// cabinet that does not answer delays this connection, not the other
     /// documents in the process (RFC §16).
+    ///
+    /// A retryable failure is handed to the publication queue instead of being
+    /// dropped: [`Self::retry_publications`] tries it again after a backoff,
+    /// without waiting for the next commit or the last client leaving.
     fn run_pending(&self, mut pending: Vec<Pending>) {
         while let Some(mut item) = pending.pop() {
             let doc = item.doc().clone();
             let outcome = item.publish();
             let Ok(mut shared) = lock(&self.shared) else { return };
             let published = outcome.is_ok();
-            shared.hub.finish(item, outcome);
+            let retry = shared.hub.finish(item, outcome);
+            if let Some(publication) = retry {
+                shared.queue_publication(doc.clone(), publication, now_ms());
+            }
             // Edits accepted while the publication ran may have crossed the
             // threshold again: the compaction is not lost behind the lock.
             if published && shared.hub.members(&doc) == 0 {
                 // The last participant left while this publication ran: the
                 // room still has to reach the cabinet (RFC §8). Only after a
                 // successful publication, so a cabinet that keeps failing is
-                // retried by the next commit, not in a loop here.
+                // not retried here: the queue owns that.
                 if let Some(next) = shared.hub.commit_if_dirty(&doc) {
                     shared.pending.push(next);
                 }
@@ -151,6 +222,52 @@ impl<A: Adapter> WsServer<A> {
             shared.queue_forced(&doc);
             shared.pump();
             pending.extend(shared.take_pending());
+        }
+    }
+
+    /// Try the publications whose backoff has elapsed (limitation 6). Called by
+    /// the daemon's publication thread; a test can pass its own clock and drive
+    /// it by hand. Returns how many attempts were made.
+    ///
+    /// Each attempt runs outside the hub lock, and the room stays `publishing`
+    /// until it is reported, so a commit made in the meantime is `busy` rather
+    /// than reaching the cabinet out of order.
+    pub fn retry_publications(&self, now_ms: u64) -> usize {
+        let mut attempts = 0;
+        loop {
+            let due = match lock(&self.shared) {
+                Ok(mut shared) => shared.due_retries(now_ms),
+                Err(_) => return attempts,
+            };
+            if due.is_empty() {
+                return attempts;
+            }
+            let mut follow_up = Vec::new();
+            for (doc, queued) in due {
+                attempts += 1;
+                let outcome = queued.publication.run();
+                let published = outcome.is_ok();
+                let Ok(mut shared) = lock(&self.shared) else { return attempts };
+                shared.publication_retries = shared.publication_retries.saturating_add(1);
+                let again = shared.hub.finish_retry(&doc, outcome);
+                if again {
+                    shared.requeue(doc.clone(), queued, now_ms);
+                }
+                shared.pump();
+                if published {
+                    // Edits accepted while the publication was queued are not
+                    // in the base that was just published. With nobody left to
+                    // commit them, publish them now.
+                    shared.queue_forced(&doc);
+                    if shared.hub.members(&doc) == 0
+                        && let Some(next) = shared.hub.commit_if_dirty(&doc)
+                    {
+                        shared.pending.push(next);
+                    }
+                }
+                follow_up.extend(shared.take_pending());
+            }
+            self.run_pending(follow_up);
         }
     }
 
@@ -198,6 +315,30 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
             }
         })?;
         Ok(ServerHandle { local_addr, stop, thread: Some(thread) })
+    }
+
+    /// Run the publication queue in the background: every `interval` the loop
+    /// tries the failed publications whose backoff has elapsed. The daemon
+    /// starts one; tests start one with a short interval and a synthetic clock
+    /// is not needed because the loop reads the wall clock.
+    ///
+    /// Dropping the handle stops the loop and waits for the attempt in flight,
+    /// so a test cannot leave a cabinet call racing its own teardown.
+    pub fn spawn_publication_retries(self: &Arc<Self>, interval: Duration) -> io::Result<PublicationRetries> {
+        let server = self.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let interval = interval.max(Duration::from_millis(1));
+        let thread = thread::Builder::new().name("collab-ws-publication".into()).spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                thread::sleep(interval);
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                server.retry_publications(now_ms());
+            }
+        })?;
+        Ok(PublicationRetries { stop, thread: Some(thread) })
     }
 
     fn serve(self: Arc<Self>, stream: TcpStream) {
@@ -412,6 +553,9 @@ pub struct Metrics {
     /// Server-initiated journal compactions since the process started
     /// (limitation 10), exposed as `pdfcraft_collab_forced_commits_total`.
     pub forced_commits: u64,
+    /// Publication retries attempted since the process started (limitation 6),
+    /// exposed as `pdfcraft_collab_publication_retries_total`.
+    pub publication_retries: u64,
 }
 
 impl<A: Adapter> WsServer<A> {
@@ -431,7 +575,15 @@ impl<A: Adapter> WsServer<A> {
                 }
             }
         }
-        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned, conflict, forced_commits: shared.forced_commits })
+        Ok(Metrics {
+            rooms: shared.hub.rooms(),
+            clients: shared.sinks.len(),
+            versions,
+            poisoned,
+            conflict,
+            forced_commits: shared.forced_commits,
+            publication_retries: shared.publication_retries,
+        })
     }
 }
 
@@ -440,6 +592,21 @@ pub struct ServerHandle {
     local_addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// The background publication queue. Dropping it stops the loop.
+pub struct PublicationRetries {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for PublicationRetries {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl ServerHandle {
@@ -650,6 +817,18 @@ mod tests {
             preview: None,
         };
         Ok(serde_json::to_value(ClientMessage::Op(op))?)
+    }
+
+    #[test]
+    fn the_publication_backoff_doubles_and_caps() {
+        let base = Duration::from_millis(1000);
+        let max = Duration::from_millis(60_000);
+        assert_eq!(super::backoff_ms(0, base, max), 1_000, "the first retry waits the base delay");
+        assert_eq!(super::backoff_ms(1, base, max), 2_000);
+        assert_eq!(super::backoff_ms(2, base, max), 4_000);
+        assert_eq!(super::backoff_ms(5, base, max), 32_000);
+        assert_eq!(super::backoff_ms(6, base, max), 60_000, "the cap holds");
+        assert_eq!(super::backoff_ms(64, base, max), 60_000, "no overflow after many attempts");
     }
 
     #[test]

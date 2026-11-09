@@ -118,7 +118,11 @@ pub type PublishOutcome = Result<Option<Published>, AdapterError>;
 /// run under the hub lock — a cabinet that does not answer would freeze every
 /// other document in the process (RFC §16, limitation 9).
 pub trait Publication: Send {
-    fn run(self: Box<Self>) -> PublishOutcome;
+    /// Run the call once. It takes `&self` because a failed attempt may be run
+    /// again by the retry queue: every attempt carries the same payload, the
+    /// same version and the same idempotency key, so a repeated delivery is a
+    /// duplicate to the cabinet, never a second version.
+    fn run(&self) -> PublishOutcome;
 }
 
 /// A commit that has written its base and still has a publication to run.
@@ -133,10 +137,12 @@ impl Commit {
         &self.result
     }
 
-    /// Run the part that must not hold the room lock. Calling it twice is a
-    /// no-op the second time.
-    pub fn publish(&mut self) -> PublishOutcome {
-        match self.publication.take() {
+    /// Run the part that must not hold the room lock. The publication stays
+    /// with the commit, so a retryable failure can be queued and run again with
+    /// exactly the same payload (`Room::finish` hands it back through
+    /// [`Room::take_retry`]).
+    pub fn publish(&self) -> PublishOutcome {
+        match &self.publication {
             Some(publication) => publication.run(),
             None => Ok(None),
         }
@@ -229,10 +235,14 @@ pub struct Room<A: Adapter> {
     /// stay refused until an operator re-seeds the room, and `/health` says so.
     conflict: Option<String>,
     /// A commit has written its base and its publication is running outside
-    /// the room lock. A second commit is refused with `busy` until
-    /// [`Self::finish`], so two publications cannot reach the cabinet out of
-    /// order.
+    /// the room lock, or a failed publication waits for the retry queue. A
+    /// second commit is refused with `busy` until [`Self::finish`] or
+    /// [`Self::finish_retry`], so two publications cannot reach the cabinet out
+    /// of order.
     publishing: bool,
+    /// A publication that failed retryably, waiting for the transport's queue.
+    /// The room keeps `publishing` while it is here.
+    retry: Option<Box<dyn Publication>>,
 }
 
 impl<A: Adapter> Room<A> {
@@ -263,6 +273,7 @@ impl<A: Adapter> Room<A> {
             poisoned: None,
             conflict: None,
             publishing: false,
+            retry: None,
         }
     }
 
@@ -295,6 +306,12 @@ impl<A: Adapter> Room<A> {
     /// Why the room refuses commits, if the cabinet's copy changed under it.
     pub fn conflict(&self) -> Option<&str> {
         self.conflict.as_deref()
+    }
+
+    /// A commit's publication is running, or a failed one waits for the retry
+    /// queue. A second commit is `busy` while this is true.
+    pub fn is_publishing(&self) -> bool {
+        self.publishing
     }
 
     /// Join. The role comes from the verified token, never from the body.
@@ -610,9 +627,18 @@ impl<A: Adapter> Room<A> {
 
     /// Record the result of a [`Commit`]'s publication. The room lock is held
     /// again here; nothing is sent to another service.
+    ///
+    /// A retryable failure (the cabinet did not answer, a `5xx`) keeps the room
+    /// `publishing` and hands the publication to the retry queue through
+    /// [`Self::take_retry`]: a newer base must not overtake it, and the queue
+    /// tries the same payload again without waiting for the next commit. A
+    /// `409` or a non-retryable refusal releases the room and leaves it dirty,
+    /// exactly as before (RFC §8.2, limitation 6).
     pub fn finish(&mut self, commit: Commit, outcome: PublishOutcome) -> Result<CommitResult, ServerError> {
         self.publishing = false;
         let version = commit.result.version;
+        let retryable = is_retryable(&outcome);
+        let retry = if retryable { commit.publication } else { None };
         let recorded = match outcome {
             Ok(published) => self.adapter.finish_publish(version, Ok(published)),
             Err(error) => {
@@ -628,11 +654,59 @@ impl<A: Adapter> Room<A> {
                 self.committed_version = self.committed_version.max(version);
                 Ok(commit.result)
             }
-            Err(e) => {
-                if e.code == ErrorCode::Conflict {
-                    self.conflict = Some(e.message.clone());
+            Err(error) => {
+                if error.code == ErrorCode::Conflict {
+                    self.conflict = Some(error.message.clone());
+                } else if let Some(publication) = retry {
+                    // The queue owns the attempt now. `publishing` stays true so
+                    // no newer base can reach the cabinet before this one.
+                    self.retry = Some(publication);
+                    self.publishing = true;
                 }
-                Err(server_error(e.code, e.message, e.retryable))
+                Err(server_error(error.code, error.message, error.retryable))
+            }
+        }
+    }
+
+    /// The failed publication the retry queue has to try again. Taking it does
+    /// not release the room: [`Self::finish_retry`] does.
+    pub fn take_retry(&mut self) -> Option<Box<dyn Publication>> {
+        self.retry.take()
+    }
+
+    /// Record the outcome of a queued retry. The publication belongs to the
+    /// base written by the commit that queued it (`base_version`); the room is
+    /// `publishing` for the whole queue, so no newer base exists.
+    ///
+    /// Another retryable failure leaves the room `publishing` (the queue
+    /// schedules the next attempt); a success advances what the cabinet holds; a
+    /// `409` flags the room `conflict` and stops the queue until an operator
+    /// re-seeds it.
+    pub fn finish_retry(&mut self, outcome: PublishOutcome) -> Result<(), ServerError> {
+        let version = self.base_version;
+        let retryable = is_retryable(&outcome);
+        let recorded = match outcome {
+            Ok(published) => self.adapter.finish_publish(version, Ok(published)),
+            Err(error) => {
+                let _ = self.adapter.finish_publish(version, Err(error.clone()));
+                Err(error)
+            }
+        };
+        match recorded {
+            Ok(()) => {
+                self.conflict = None;
+                self.committed_version = self.committed_version.max(version);
+                self.publishing = false;
+                Ok(())
+            }
+            Err(error) => {
+                if error.code == ErrorCode::Conflict {
+                    self.conflict = Some(error.message.clone());
+                    self.publishing = false;
+                } else {
+                    self.publishing = retryable;
+                }
+                Err(server_error(error.code, error.message, error.retryable))
             }
         }
     }
@@ -693,6 +767,13 @@ impl<A: Adapter> Room<A> {
 
 fn server_error(code: ErrorCode, message: impl Into<String>, retryable: bool) -> ServerError {
     ServerError { code, message: message.into(), retryable }
+}
+
+/// Is this failure worth another attempt later? A conflict never is (the
+/// cabinet moved on, only a re-seed helps); anything the adapter marks
+/// retryable is what the publication queue picks up.
+fn is_retryable(outcome: &PublishOutcome) -> bool {
+    matches!(outcome, Err(error) if error.code != ErrorCode::Conflict && error.retryable)
 }
 
 /// The size of the line the durable adapter writes for one accepted operation:
@@ -783,10 +864,10 @@ mod tests {
     }
 
     impl super::Publication for Counting {
-        fn run(self: Box<Self>) -> super::PublishOutcome {
+        fn run(&self) -> super::PublishOutcome {
             self.runs.fetch_add(1, Ordering::Relaxed);
-            match self.failure {
-                Some(error) => Err(error),
+            match &self.failure {
+                Some(error) => Err(error.clone()),
                 None => Ok(None),
             }
         }
@@ -820,7 +901,7 @@ mod tests {
     /// A commit the way the transport runs it: prepare under the lock, publish
     /// (nothing to do for these adapters), record.
     fn commit_and_publish<A: Adapter>(room: &mut Room<A>, actor: &ActorId, expected: u64) -> Result<CommitResult, super::ServerError> {
-        let mut commit = room.commit(actor, expected)?;
+        let commit = room.commit(actor, expected)?;
         let outcome = commit.publish();
         room.finish(commit, outcome)
     }
@@ -1041,7 +1122,7 @@ mod tests {
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
         room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
 
-        let mut commit = room.commit(&editor, 1)?;
+        let commit = room.commit(&editor, 1)?;
         assert_eq!(runs.load(Ordering::Relaxed), 0, "the cabinet call is not made while the room is held");
         assert!(room.is_dirty(), "the base is written but the publication is not done");
         // Two versions must not reach the cabinet out of order: a second commit
@@ -1065,12 +1146,96 @@ mod tests {
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
         room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
 
-        let mut commit = room.commit(&editor, 1)?;
+        let commit = room.commit(&editor, 1)?;
         let outcome = commit.publish();
         assert_eq!(runs.load(Ordering::Relaxed), 1);
         assert!(matches!(room.finish(commit, outcome), Err(e) if e.code == ErrorCode::Conflict && !e.retryable));
         assert!(room.is_dirty(), "a refused publication leaves the room dirty so the next commit retries it");
         assert_eq!(room.conflict(), Some("the cabinet holds another version"));
+        assert!(room.take_retry().is_none(), "a 409 stops the queue: only a re-seed can resolve it");
+        assert!(!room.is_publishing(), "a 409 releases the room for the operator's own commit");
+        Ok(())
+    }
+
+    /// A publication that fails retryably the first time and succeeds after.
+    struct Flaky {
+        inner: Fake,
+        runs: Arc<AtomicUsize>,
+    }
+
+    struct FlakyPublication {
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl super::Publication for FlakyPublication {
+        fn run(&self) -> super::PublishOutcome {
+            if self.runs.fetch_add(1, Ordering::Relaxed) == 0 {
+                Err(AdapterError::new(ErrorCode::Internal, "the cabinet did not answer", true))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    impl Adapter for Flaky {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn super::Publication>> {
+            Some(Box::new(FlakyPublication { runs: self.runs.clone() }))
+        }
+    }
+
+    #[test]
+    fn a_retryable_publication_failure_is_queued_and_keeps_the_room_busy() -> Result<(), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let adapter = Flaky { inner: Fake::new(), runs: runs.clone() };
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+
+        let commit = room.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert!(matches!(room.finish(commit, outcome), Err(e) if e.code == ErrorCode::Internal && e.retryable));
+        assert!(room.is_dirty());
+        assert!(room.is_publishing(), "a queued retry keeps the room publishing");
+        assert_eq!(room.conflict(), None, "a transport failure is not a conflict");
+        assert!(
+            matches!(room.commit(&editor, 1), Err(e) if e.code == ErrorCode::Busy && e.retryable),
+            "a newer base must not overtake the queued publication"
+        );
+
+        let retry = room.take_retry().ok_or("the failed publication is queued")?;
+        assert!(room.take_retry().is_none(), "the queue owns exactly one attempt");
+        room.finish_retry(retry.run())?;
+        assert!(!room.is_dirty(), "the retry advanced what the cabinet holds");
+        assert!(!room.is_publishing());
+        assert!(commit_and_publish(&mut room, &editor, 1).is_ok(), "the room is free again");
+        Ok(())
+    }
+
+    #[test]
+    fn a_failure_no_retry_would_fix_is_not_queued() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, _runs) = publishing_room(Some(AdapterError::new(ErrorCode::Internal, "the cabinet refused the body", false)))?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+
+        let commit = room.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert!(matches!(room.finish(commit, outcome), Err(e) if !e.retryable));
+        assert!(room.take_retry().is_none());
+        assert!(!room.is_publishing(), "the next commit retries it, not the queue");
+        assert!(room.is_dirty());
         Ok(())
     }
 
@@ -1237,7 +1402,7 @@ mod tests {
         room.apply(&editor, &op("f2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
         assert!(room.forced_commit_due(), "the journal reached the operation threshold");
 
-        let mut commit = room.commit_now()?;
+        let commit = room.commit_now()?;
         let outcome = commit.publish();
         room.finish(commit, outcome)?;
         assert!(!room.forced_commit_due(), "the base contains both operations, so the journal is empty again");
@@ -1320,7 +1485,7 @@ mod tests {
         room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
         // A client commit is publishing; the threshold is still crossed but the
         // room answers `busy` until that publication finishes.
-        let mut commit = room.commit(&editor, 1)?;
+        let commit = room.commit(&editor, 1)?;
         room.apply(&editor, &op("p2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
         assert!(room.forced_commit_due());
         assert!(matches!(room.commit_now(), Err(e) if e.code == ErrorCode::Busy && e.retryable));
@@ -1328,7 +1493,7 @@ mod tests {
         room.finish(commit, outcome)?;
         // The base written by the client commit holds version 1, not version 2,
         // so the threshold is still crossed and the next call succeeds.
-        let mut forced = room.commit_now()?;
+        let forced = room.commit_now()?;
         let outcome = forced.publish();
         room.finish(forced, outcome)?;
         assert!(!room.forced_commit_due());
