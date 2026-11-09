@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Op, Pieces, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -62,18 +62,24 @@ fn content_pieces(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> 
         let Object::Stream(stream) = &*value else { return Err(unsupported(index, "contents include a non-stream object")) };
         let remaining = MAX_PAGE_BYTES.saturating_sub(total.saturating_add(1));
         if remaining == 0 {
-            return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+            return Err(unsupported(index, "decoding the content takes more than 16 MiB"));
         }
-        let chain = stream.filters();
-        let decoded = if chain.is_empty() {
-            if stream.raw.len() > remaining {
-                return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+        // Strictly, and with `/DecodeParms` given by reference: the content is written back from it.
+        let mut budget = DecodeBudget::new(remaining, 0);
+        let decoded = budget.decode_strict(doc, stream).map_err(|e| {
+            // The allowance counts what every filter stage decodes, as a page's does.
+            if budget.remaining() == 0 {
+                unsupported(index, "decoding the content takes more than 16 MiB")
+            } else {
+                // The decoder's own reason: `CosError::Filter`'s text would say again that the data
+                // couldn't be decoded.
+                let why = match e {
+                    pdfcraft_cos::CosError::Filter(why) => why,
+                    other => other.to_string(),
+                };
+                unsupported(index, format!("content cannot be decoded strictly: {why}"))
             }
-            stream.raw.to_vec()
-        } else {
-            pdfcraft_filters::decode(&chain, &stream.raw, remaining)
-                .map_err(|e| unsupported(index, format!("content cannot be decoded strictly: {e}")))?
-        };
+        })?;
         total = total.saturating_add(decoded.len()).saturating_add(1);
         pieces.push(decoded);
     }

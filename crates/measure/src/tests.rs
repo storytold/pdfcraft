@@ -80,7 +80,7 @@ fn standard_annotations_captions_restyle_move_and_unknown_keys() {
     let (r, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.name(b"IT"), Some(&b"LineDimension"[..]));
     d.update_dict(r, |d| d.set(b"VendorKey".to_vec(), Object::Int(42))).unwrap();
-    pdfcraft_annot::set_style(&mut d, 0, 0, Some([1.0, 0.0, 0.0]), None, Some(2.0), None, &meta).unwrap();
+    pdfcraft_annot::set_style(&mut d, 0, 0, pdfcraft_annot::StyleChange::new(Some([1.0, 0.0, 0.0]), None, Some(2.0), None), &meta).unwrap();
     let (_, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.int(b"VendorKey"), Some(42));
     let ap = d.resolve(dict.get(b"AP").unwrap());
@@ -449,6 +449,16 @@ fn listing_skips_repeated_refs_and_caps_what_it_keeps() {
     assert!(!listing.measurements.is_empty());
 }
 #[test]
+fn ortho_holds_a_vertex_level_or_plumb_with_the_last() {
+    let last = [10.0, 20.0];
+    assert_eq!(snap::ortho(last, [50.0, 27.0]), [50.0, 20.0], "mostly across: level");
+    assert_eq!(snap::ortho(last, [-30.0, 13.0]), [-30.0, 20.0], "to the left too");
+    assert_eq!(snap::ortho(last, [14.0, 80.0]), [10.0, 80.0], "mostly up: plumb");
+    assert_eq!(snap::ortho(last, [8.0, -40.0]), [10.0, -40.0], "and down");
+    assert_eq!(snap::ortho(last, [30.0, 40.0]), [30.0, 20.0], "a tie stays level");
+    assert_eq!(snap::ortho(last, last), last);
+}
+#[test]
 fn a_stream_over_the_byte_budget_uses_it_up_once() {
     // 50 references to one Flate stream that inflates past the 16 MiB budget decode once.
     let big = pdfcraft_cos::Stream::flate(Dict::new(), &vec![b' '; 17 << 20]);
@@ -460,4 +470,78 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert_eq!(g.unreadable, 1);
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
+}
+
+/// A content stream drawn again and again pays for every filter stage's output each time, not
+/// only for what the last stage leaves: `/ASCIIHexDecode /RunLengthDecode` turns 4 MiB of hex
+/// into 2 MiB and then 1 MiB, and eight draws of it are 24 MiB of decoding against a 16 MiB bound.
+#[test]
+fn repeated_content_pays_for_every_filter_stage() {
+    let hex = "0058".repeat(1 << 20);
+    let pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents [4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R] >>")
+        .stream("/Filter [/ASCIIHexDecode /RunLengthDecode]", &hex);
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(g.truncated, "eight draws decode past the page's bound");
+}
+
+/// One scale shared by many measurements is read once, and the self-intersection check of many
+/// areas is charged against one work bound rather than run in full for each.
+#[test]
+fn listing_reads_a_shared_scale_once_and_bounds_boundary_checks() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 pt = 1 pt) /X [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /D [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /A [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] >>";
+    // A convex 2,048-gon: every one of its edges is checked against every other.
+    let n = MAX_POINTS;
+    let verts: Vec<String> = (0..n)
+        .map(|i| {
+            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+            format!("{:.3} {:.3}", 300.0 + 100.0 * a.cos(), 400.0 + 100.0 * a.sin())
+        })
+        .collect();
+    let verts = verts.join(" ");
+    let areas = 40;
+    let annots: Vec<String> = (0..areas).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "")
+        .obj(measure);
+    for _ in 0..areas {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /Polygon /IT /PolygonDimension /Rect [0 0 612 792] /Vertices [{verts}] /Measure 5 0 R >>"));
+    }
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let l = list(&d);
+    // 40 areas of 2,048 vertices are 168 million pairs: the listing stops at its bound, with the
+    // areas before it listed.
+    assert!(l.truncated, "{} listed", l.measurements.len());
+    assert!((5..areas).contains(&l.measurements.len()), "{} listed", l.measurements.len());
+    assert!(l.unsupported.is_empty(), "{:?}", l.unsupported);
+}
+
+/// Perimeters and distances read their vertices once: only areas pay for the pairwise boundary
+/// check, so many maximal perimeters list in full.
+#[test]
+fn perimeters_are_charged_linear_work() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 pt = 1 pt) /X [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /D [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /A [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] >>";
+    let verts: Vec<String> = (0..MAX_POINTS).map(|i| format!("{} {}", 10 + i % 500, 10 + i / 500 * 3 + (i % 2))).collect();
+    let verts = verts.join(" ");
+    let lines = 40;
+    let annots: Vec<String> = (0..lines).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "")
+        .obj(measure);
+    for _ in 0..lines {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /PolyLine /IT /PolyLineDimension /Rect [0 0 612 792] /Vertices [{verts}] /Measure 5 0 R >>"));
+    }
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let l = list(&d);
+    assert!(!l.truncated, "{} listed", l.measurements.len());
+    assert_eq!(l.measurements.len() + l.unsupported.len(), lines, "{:?}", l.unsupported.first());
 }

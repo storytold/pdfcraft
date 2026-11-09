@@ -144,6 +144,43 @@ pub fn static_shell(data: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form of `n` text fields `form1[0].page1[0].f<i>[0]` on one page, whose values
+/// (`v<i>`) are only in its datasets, as when another viewer filled it in. The first field is
+/// read-only.
+pub fn static_shell_many(n: usize) -> Vec<u8> {
+    let data: String = (0..n).map(|i| format!("<f{i}>v{i}</f{i}>")).collect();
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1><page1>{data}</page1></form1></xfa:data></xfa:datasets></xdp:xdp>"
+    );
+    // Objects 1–7, then the widgets from 8.
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 8)).collect();
+    let kids = kids.join(" ");
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [{kids}] >>").into_bytes(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        format!("<< /T (page1[0]) /Parent 6 0 R /Kids [{kids}] >>").into_bytes(),
+    ];
+    for i in 0..n {
+        let y = 760 - (i % 50) * 14;
+        let x = 36 + (i / 50) * 110;
+        // The first field is read-only: its data value is not taken.
+        let flags = if i == 0 { " /Ff 1" } else { "" };
+        objs.push(
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}[0]){flags} /Parent 7 0 R /Rect [{x} {y} {} {}] /P 3 0 R /DA (/Helv 9 Tf 0 g) >>",
+                x + 100,
+                y + 12
+            )
+            .into_bytes(),
+        );
+    }
+    assemble(objs)
+}
+
 /// A PDF file holding `objs` as objects 1, 2, … in order, with a cross-reference table and a
 /// trailer whose root is object 1.
 fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {

@@ -21,6 +21,10 @@ const MAX_IMAGE: usize = 32 << 20;
 const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
+/// Most content areas kept on one page area. A master page has a handful (the most in the
+/// 500-form corpus is nine); laying a splittable subform out across tens of thousands of them,
+/// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
+const MAX_CONTENT_AREAS: usize = 128;
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -198,6 +202,16 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -205,6 +219,7 @@ fn parse_common(n: XmlNode) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -598,7 +613,19 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
                     attr_measure(c, "h").unwrap_or(height).clamp(1.0, height),
                 )
             })
+            .take(MAX_CONTENT_AREAS + 1)
             .collect();
+        if content.len() > MAX_CONTENT_AREAS {
+            content.truncate(MAX_CONTENT_AREAS);
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them. It is
+            // kept first, so whether it was said is one comparison, not a scan of every warning
+            // for every page area (nothing else is put first).
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if warnings.first() != Some(&said) {
+                warnings.insert(0, said);
+            }
+        }
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
@@ -725,7 +752,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
@@ -735,10 +762,12 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             && n.tag_name().name() == "template"
             && (n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-template")) || children(*n, "subform").next().is_some())
     };
+    // The template is a packet of the XDP itself, a child of its root: one nested deeper is
+    // data (an imported dataset, say), which must not supply the form's scripts.
     let template = if is_template(&root) {
         root
     } else {
-        root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     let mut warnings = Vec::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
@@ -749,7 +778,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root
-        .descendants()
+        .children()
         .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
     if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
         if let Some(p) = saved_root.attribute("presence") {

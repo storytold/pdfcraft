@@ -229,6 +229,73 @@ fn incremental_save_keeps_a_trailer_only_edit() {
 }
 
 #[test]
+fn incremental_save_ignores_a_negative_trailer_size() {
+    let mut doc = Document::open(Arc::new(classic_table())).unwrap();
+    doc.trailer_mut().set(b"Size".to_vec(), Object::Int(-1));
+    let next = doc.add(Object::Int(5)).num + 1;
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    assert_eq!(back.trailer().int(b"Size"), Some(i64::from(next)));
+}
+
+/// What one edit added and a later one unlinked (a deleted comment, a cleared redaction mark) is
+/// not written: the file never held it, and writing it would keep what was removed. Additions the
+/// update still refers to, from the trailer or a changed object and through other additions, are.
+#[test]
+fn incremental_save_leaves_out_additions_nothing_refers_to() {
+    let mut doc = Document::open(Arc::new(classic_table())).unwrap();
+    let text = |s: &str| Object::String(pdfcraft_cos::PdfString::literal(s.as_bytes().to_vec()));
+    let dict = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        entries.iter().for_each(|(k, v)| d.set(k.as_bytes().to_vec(), v.clone()));
+        Object::Dict(d)
+    };
+    let page_obj = ObjRef::new(3, 0);
+    let leaf = doc.add(text("kept leaf"));
+    let kept = doc.add(dict(&[("Leaf", Object::Ref(leaf))]));
+    doc.update_dict(page_obj, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(kept))).unwrap();
+    let by_trailer = doc.add(text("kept by the trailer"));
+    doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(by_trailer));
+    // Linked from the page and unlinked again, as clearing a mark does.
+    let dropped_leaf = doc.add(text("dropped leaf"));
+    let dropped = doc.add(dict(&[("Leaf", Object::Ref(dropped_leaf))]));
+    doc.update_dict(page_obj, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(dropped)]))).unwrap();
+    doc.update_dict(page_obj, |d| {
+        d.remove(b"Annots");
+    })
+    .unwrap();
+    // Unlinked additions that refer to each other.
+    let first = doc.add(Object::Null);
+    let second = doc.add(dict(&[("Next", Object::Ref(first)), ("Note", text("dropped cycle"))]));
+    doc.set(first, dict(&[("Next", Object::Ref(second))]));
+
+    // Off by default: a writer may add what only it finds again, by scanning.
+    let kept_all = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(kept_all.windows(12).any(|w| w == b"dropped leaf"));
+    let saved = write_incremental(&doc, &SaveOptions { drop_unlinked: true, ..SaveOptions::default() }).unwrap();
+    let holds = |s: &str| saved.windows(s.len()).any(|w| w == s.as_bytes());
+    assert!(holds("kept leaf") && holds("kept by the trailer"));
+    assert!(!holds("dropped leaf") && !holds("dropped cycle"), "unlinked additions are written");
+    let back = Document::open(Arc::new(saved.clone())).unwrap();
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(back.get(leaf).as_string().map(|s| s.bytes.as_slice()), Some(b"kept leaf".as_slice()));
+    for gone in [dropped, dropped_leaf, first, second] {
+        assert_eq!(*back.get(gone), Object::Null);
+    }
+    assert!(!page(&back).contains(b"Annots"));
+    assert_qpdf_clean(&saved);
+
+    // Freed beforehand, they are written the same way without the option, and what is added
+    // after that, nothing referring to it either (a document timestamp), is kept.
+    let mut freed = doc.clone();
+    freed.free_unlinked_additions();
+    assert_eq!(write_incremental(&freed, &SaveOptions::default()).unwrap(), saved, "the same objects, freed the same way");
+    freed.add(text("added after"));
+    let stamped = write_incremental(&freed, &SaveOptions::default()).unwrap();
+    assert!(stamped.windows(11).any(|w| w == b"added after") && !stamped.windows(12).any(|w| w == b"dropped leaf"));
+}
+
+#[test]
 fn qpdf_accepts_object_stream_output() {
     let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
     let doc = Document::open(Arc::new(fixture())).unwrap();
@@ -291,11 +358,32 @@ fn objects_referenced_by_the_encrypt_dictionary_stay_outside_object_streams() {
     let cf = doc.get(enc_ref).as_dict().unwrap().get(b"CF").cloned().unwrap();
     let cf_ref = doc.add(cf);
     doc.update_dict(enc_ref, |d| d.set(b"CF".to_vec(), Object::Ref(cf_ref))).unwrap();
-    let packed = write_full(&doc, &SaveOptions::default()).unwrap();
-    let back = Document::open(Arc::new(packed.clone())).expect("reopens");
-    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
-    assert_eq!(title(&back), b"Caf\xe9 (draft)");
-    assert_eq!(hayro_pages(&packed), 4);
+    // Visit this alias from Root before the encryption walk reaches /CF's other alias.
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"CFProbe".to_vec(), Object::Ref(cf_ref))).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let saved = Document::open(Arc::new(classic.clone())).unwrap();
+    let cf_num = saved.get(saved.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap().num;
+    for damaged in [false, true] {
+        let mut bytes = classic.clone();
+        if damaged {
+            // Equal-length edits preserve the xref offsets and its generation-zero row.
+            for (from, to) in [(format!("\n{cf_num} 0 obj"), format!("\n{cf_num} 1 obj")), (format!("/CF {cf_num} 0 R"), format!("/CF {cf_num} 1 R"))]
+            {
+                let start = bytes.windows(from.len()).position(|w| w == from.as_bytes()).unwrap();
+                bytes[start..start + from.len()].copy_from_slice(to.as_bytes());
+            }
+        }
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let packed = write_full(&doc, &SaveOptions::default()).unwrap();
+        let back = Document::open(Arc::new(packed.clone())).expect("reopens");
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        assert_eq!(title(&back), b"Caf\xe9 (draft)");
+        assert_eq!(hayro_pages(&packed), 4);
+        let probe = back.get(back.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap();
+        let encrypt = back.get(back.trailer().reference(b"Encrypt").unwrap());
+        assert_eq!(encrypt.as_dict().unwrap().reference(b"CF"), Some(probe));
+        assert!(matches!(back.xref_entry(probe.num), Some(pdfcraft_cos::XrefEntry::InFile { .. })), "crypt filters must stay outside object streams");
+    }
 }
 
 #[test]

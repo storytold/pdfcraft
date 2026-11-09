@@ -23,6 +23,7 @@
 
 pub mod icc;
 mod xmp;
+mod xmp_types;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
@@ -63,18 +64,25 @@ impl Level {
 /// another language says it from [`pattern`](Issue::pattern) and [`value`](Issue::value) instead:
 /// the pattern is wording of ours, listed in [`WORDINGS`], and the value — when there is one — is
 /// the document's own name for something, a PDF keyword that reads the same in every language.
+/// A wording that names more than one thing has a named hole, such as `{object}`, for each, so a
+/// language can put them in its own order; [`values`](Issue::values) fills those.
 /// [`Issue::said`] does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
     /// The ISO 19005-2 clause.
     pub clause: &'static str,
     pub message: String,
-    /// The problem as it is worded here, with `{}` where the document's own name goes.
+    /// The problem as it is worded here, with `{}` or a named hole where the document's own name goes.
     pub pattern: &'static str,
     /// What goes in the pattern's `{}`: an annotation subtype, an action, a font, a page number.
     pub value: Option<String>,
+    /// What goes in each of the pattern's named holes, by the hole's name (`"{object}"`, braces
+    /// included).
+    pub values: Vec<(&'static str, String)>,
     /// 0-based page, when the problem is on a page.
     pub page: Option<usize>,
+    /// The indirect object the problem is in, when that is what locates it: a metadata stream.
+    pub object: Option<ObjRef>,
     /// Whether [`convert`] can fix it.
     pub fixable: bool,
 }
@@ -86,12 +94,41 @@ impl Issue {
     /// font called `{}` cannot turn into anything else. With [`in_english`] this is
     /// [`message`](Issue::message).
     pub fn said(&self, words: Words) -> String {
-        let said = words(self.pattern);
-        match &self.value {
-            Some(v) => said.replacen("{}", v, 1),
-            None => said,
-        }
+        fill(&words(self.pattern), self.value.as_deref(), &self.values)
     }
+}
+
+/// `wording` with its holes filled: the first `{}` with `value`, and each named hole, such as
+/// `{object}`, with its entry in `values`. A hole with nothing for it stays as it is written.
+///
+/// The values go in during one pass over the wording, so a value with braces in it is never read
+/// as a hole.
+fn fill(wording: &str, value: Option<&str>, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(wording.len().saturating_add(16));
+    let mut value = value;
+    let mut rest = wording;
+    while let Some(open) = rest.find('{') {
+        let (before, from_brace) = rest.split_at(open);
+        out.push_str(before);
+        // A brace with nothing closing it is just text. `}` is one byte, so the end of the hole is a
+        // char boundary; `get` rather than slicing all the same.
+        let Some(hole) = from_brace.find('}').and_then(|close| from_brace.get(..=close)) else {
+            out.push_str(from_brace);
+            return out;
+        };
+        if hole == "{}"
+            && let Some(v) = value.take()
+        {
+            out.push_str(v);
+        } else if let Some((_, v)) = values.iter().find(|(name, _)| *name == hole) {
+            out.push_str(v);
+        } else {
+            out.push_str(hole);
+        }
+        rest = from_brace.get(hole.len()..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
 
 /// How an interface says one of our wordings in its own language: given the English in [`WORDINGS`],
@@ -103,7 +140,8 @@ pub fn in_english(wording: &str) -> String {
     wording.to_owned()
 }
 
-/// Every problem [`verify`] can report, in English, with `{}` where the document's own name goes.
+/// Every problem [`verify`] can report, in English, with `{}` or a named hole, such as `{object}`,
+/// where the document's own name goes.
 ///
 /// An interface that shows them in another language translates these, which is the whole reason they
 /// are gathered here; `wordings_are_complete` fails if a rule says something that is not on the
@@ -113,6 +151,8 @@ pub const WORDINGS: &[&str] = &[
     "The document has no XMP metadata",
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
+    "The XMP property {property} in metadata stream {object} should have the value type {type}",
+    "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -427,15 +467,24 @@ thread_local! {
 
 /// Check `doc` against `level`.
 pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
-    let mut out = Vec::new();
+    // Shared by `issue` and `located_issue`, each of which takes the list out, adds one issue and
+    // puts it back.
+    let out = std::cell::Cell::new(Vec::new());
+    let push = |i: Issue| {
+        let mut list = out.take();
+        list.push(i);
+        out.set(list);
+    };
     // Each problem is worded here and named by the document there: the wording goes on the list in
     // `WORDINGS` for an interface to translate, and the name goes in its `{}` as it stands.
     let mut issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
-        let message = match &value {
-            Some(v) => pattern.replacen("{}", v, 1),
-            None => pattern.to_owned(),
-        };
-        out.push(Issue { clause, message, pattern, value, page, fixable });
+        let message = fill(pattern, value.as_deref(), &[]);
+        push(Issue { clause, message, pattern, value, values: Vec::new(), page, object: None, fixable });
+    };
+    // A problem in one indirect object, worded with named holes.
+    let located_issue = |clause: &'static str, pattern: &'static str, values: Vec<(&'static str, String)>, object: ObjRef, fixable: bool| {
+        let message = fill(pattern, None, &values);
+        push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     let cat = catalog(doc);
     // 6.1.3 / 6.6: identification and metadata.
@@ -460,6 +509,32 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
+    // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
+    let mut mistyped = Vec::new();
+    xmp_types::for_each_packet(&objs, |object, packet| {
+        mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
+    });
+    for (object, name, written, ty) in mistyped {
+        let mut values = vec![("{property}", name.clone()), ("{object}", object.to_string()), ("{type}", ty)];
+        if written == name {
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object} should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        } else {
+            values.push(("{written}", written));
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        }
+    }
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
         None if used.any() => {
@@ -514,97 +589,162 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
-    for (r, o) in &objs {
-        let Some(d) = dict_of(o) else { continue };
-        let ty = d.name(b"Type");
-        let sub = d.name(b"Subtype");
-        // Actions anywhere (structure elements also have /S: their role), with the actions they
-        // chain to and those written directly in an /A or /OpenAction.
-        let own = (d.get(b"S").is_some() && is_action(d)).then_some(d);
-        let direct = [b"A".as_slice(), b"OpenAction"].map(|k| d.get(k).and_then(|a| a.as_dict()));
-        for a in [own].into_iter().chain(direct).flatten() {
-            if let Some(s) = chain_forbidden(doc, a) {
-                issue("6.5.1", "A {} action isn't allowed", Some(s), None, true);
-            }
-        }
-        // Annotations.
-        if ty == Some(b"Annot") || (sub.is_some() && d.get(b"Rect").is_some() && d.get(b"P").is_some()) {
-            let page = page_of(*r);
-            let name = sub.map(|s| String::from_utf8_lossy(s).into_owned()).unwrap_or_default();
-            if sub.is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-                issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
-                continue;
-            }
-            let f = d.int(b"F").unwrap_or(0);
-            if sub != Some(b"Popup") && (f & 4 == 0 || f & (1 | 2 | 32) != 0) {
-                issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
-            }
-            let has_ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).is_some_and(|a| a.get(b"N").is_some());
-            if !has_ap && !matches!(sub, Some(b"Popup") | Some(b"Link")) {
-                let zero = d.get(b"Rect").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).is_some_and(|a| {
-                    let v: Vec<f64> = a.iter().filter_map(|n| doc.resolve(n).as_f64()).collect();
-                    v.len() == 4 && (v[2] - v[0]).abs() < 1e-6 && (v[3] - v[1]).abs() < 1e-6
-                });
-                if !zero {
-                    issue("6.3.3", "A {} annotation has no appearance stream", Some(name.clone()), page, false);
-                }
-            }
-            if d.get(b"AA").is_some() {
-                issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
-            }
-        }
-        // Form fields with additional actions (non-widget fields).
-        if d.get(b"FT").is_some() && d.get(b"AA").is_some() && ty != Some(b"Annot") {
-            issue("6.5.2", "A form field has additional actions", None, None, true);
-        }
-        // Fonts.
-        if ty == Some(b"Font") || d.get(b"BaseFont").is_some() && sub.is_some() {
-            check_font(doc, d, &mut issue);
-        }
-        // Streams.
-        if let Object::Stream(s) = &**o {
-            let filters: Vec<Vec<u8>> = match s.dict.get(b"Filter").map(|f| doc.resolve(f)) {
-                Some(f) => match &*f {
-                    Object::Name(n) => vec![n.clone()],
-                    Object::Array(a) => a.iter().filter_map(|x| x.as_name().map(<[u8]>::to_vec)).collect(),
-                    _ => Vec::new(),
-                },
-                None => Vec::new(),
-            };
-            if filters.iter().any(|f| f == b"LZWDecode") {
-                issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
-            }
-            if s.dict.get(b"F").is_some() || s.dict.get(b"FFilter").is_some() {
-                issue("6.1.7.1", "A stream refers to an external file", None, None, false);
-            }
-            if sub == Some(b"Image") {
-                if matches!(s.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
-                    issue("6.2.8", "An image asks to be interpolated", None, None, true);
-                }
-                if s.dict.get(b"Alternates").is_some() || s.dict.get(b"OPI").is_some() {
-                    issue("6.2.8", "An image has alternates or OPI information", None, None, true);
-                }
-            }
-            if sub == Some(b"PS") {
-                issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
-            }
-        }
-        // Embedded files.
-        if ty == Some(b"Filespec") && d.get(b"EF").is_some() {
-            match level {
-                Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
-                Level::A3b => {
-                    if d.get(b"AFRelationship").is_none() {
-                        issue("6.8", "An embedded file has no AFRelationship", None, None, true);
-                    }
-                }
-            }
-        }
-    }
+    check_objects(doc, level, &objs, &page_of, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
+    let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
+}
+
+fn check_objects(
+    doc: &Document,
+    level: Level,
+    objects: &[(ObjRef, std::sync::Arc<Object>)],
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    for (r, o) in objects {
+        let Some(d) = dict_of(o) else { continue };
+        check_one_object(doc, level, *r, d, o, page_of, issue);
+    }
+}
+
+fn check_one_object(
+    doc: &Document,
+    level: Level,
+    reference: ObjRef,
+    dict: &Dict,
+    object: &Object,
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let ty = dict.name(b"Type");
+    let subtype = dict.name(b"Subtype");
+    check_actions(doc, dict, issue);
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+        // A forbidden annotation stops every later check for its object, as the scan did before
+        // it was split into helpers: the rest of its own checks and the form field, font, stream
+        // and embedded file below all came after that `continue`.
+        return;
+    }
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
+        issue("6.5.2", "A form field has additional actions", None, None, true);
+    }
+    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+        check_font(doc, dict, issue);
+    }
+    if let Object::Stream(stream) = object {
+        check_stream(doc, stream, subtype, issue);
+    }
+    if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
+        check_embedded_file(level, dict, issue);
+    }
+}
+
+fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let own = (dict.get(b"S").is_some() && is_action(dict)).then_some(dict);
+    let direct = [b"A".as_slice(), b"OpenAction"].map(|key| dict.get(key).and_then(|action| action.as_dict()));
+    for action in [own].into_iter().chain(direct).flatten() {
+        if let Some(name) = chain_forbidden(doc, action) {
+            issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+        }
+    }
+}
+
+fn is_annotation(dict: &Dict, ty: Option<&[u8]>, subtype: Option<&[u8]>) -> bool {
+    ty == Some(b"Annot") || (subtype.is_some() && dict.get(b"Rect").is_some() && dict.get(b"P").is_some())
+}
+
+fn check_annotation(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) -> bool {
+    let name = subtype.map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
+    if subtype.is_some_and(|value| FORBIDDEN_ANNOTS.contains(&value)) {
+        issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
+        return true;
+    }
+    let flags = dict.int(b"F").unwrap_or(0);
+    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & (1 | 2 | 32) != 0) {
+        issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
+    }
+    check_annotation_appearance(doc, dict, subtype, &name, page, issue);
+    if dict.get(b"AA").is_some() {
+        issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
+    }
+    false
+}
+
+fn check_annotation_appearance(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    name: &str,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let has_appearance = dict
+        .get(b"AP")
+        .map(|appearance| doc.resolve(appearance))
+        .and_then(|appearance| appearance.as_dict().cloned())
+        .is_some_and(|appearance| appearance.get(b"N").is_some());
+    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) {
+        return;
+    }
+    let zero_area = dict.get(b"Rect").map(|rect| doc.resolve(rect)).and_then(|rect| rect.as_array().cloned()).is_some_and(|values| {
+        let values: Vec<f64> = values.iter().filter_map(|value| doc.resolve(value).as_f64()).collect();
+        values.len() == 4 && (values[2] - values[0]).abs() < 1e-6 && (values[3] - values[1]).abs() < 1e-6
+    });
+    if !zero_area {
+        issue("6.3.3", "A {} annotation has no appearance stream", Some(name.to_owned()), page, false);
+    }
+}
+
+fn check_stream(
+    doc: &Document,
+    stream: &pdfcraft_cos::Stream,
+    subtype: Option<&[u8]>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let filters: Vec<Vec<u8>> = match stream.dict.get(b"Filter").map(|filter| doc.resolve(filter)) {
+        Some(filter) => match &*filter {
+            Object::Name(name) => vec![name.clone()],
+            Object::Array(filters) => filters.iter().filter_map(|filter| filter.as_name().map(<[u8]>::to_vec)).collect(),
+            _ => Vec::new(),
+        },
+        None => Vec::new(),
+    };
+    if filters.iter().any(|filter| filter == b"LZWDecode") {
+        issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
+    }
+    if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
+        issue("6.1.7.1", "A stream refers to an external file", None, None, false);
+    }
+    if subtype == Some(b"Image") {
+        if matches!(stream.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
+            issue("6.2.8", "An image asks to be interpolated", None, None, true);
+        }
+        if stream.dict.get(b"Alternates").is_some() || stream.dict.get(b"OPI").is_some() {
+            issue("6.2.8", "An image has alternates or OPI information", None, None, true);
+        }
+    }
+    if subtype == Some(b"PS") {
+        issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
+    }
+}
+
+fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    match level {
+        Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
+        Level::A3b if dict.get(b"AFRelationship").is_none() => {
+            issue("6.8", "An embedded file has no AFRelationship", None, None, true);
+        }
+        Level::A3b => {}
+    }
 }
 
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
@@ -813,6 +953,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
                     doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
                 }
             }
+            // The object stays in the file unless it is replaced: verify scans every object, so a
+            // forbidden annotation left behind would still be reported (clause 6.3.1).
+            doc.set(r, Object::Null);
             removed += 1;
             continue;
         }
@@ -830,7 +973,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
                 }
             }
             if changed {
-                doc.set(r, Object::Dict(nd));
+                doc.set_existing(r, Object::Dict(nd))?;
             }
             continue;
         }
@@ -846,7 +989,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             changed |= ns.dict.remove(b"Alternates").is_some();
             changed |= ns.dict.remove(b"OPI").is_some();
             if changed {
-                doc.set(r, Object::Stream(ns));
+                doc.set_existing(r, Object::Stream(ns))?;
                 images += 1;
             }
             continue;
@@ -854,7 +997,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         if level == Level::A3b && ty.as_deref() == Some(b"Filespec") && d.get(b"EF").is_some() && d.get(b"AFRelationship").is_none() {
             let mut nd = d.clone();
             nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
-            doc.set(r, Object::Dict(nd));
+            doc.set_existing(r, Object::Dict(nd))?;
             files += 1;
         }
     }
@@ -863,14 +1006,14 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     for (r, o) in objects(doc) {
         let Object::Dict(d) = &*o else { continue };
         if d.get(b"S").is_some() && is_action(d) && chain_forbidden(doc, d).is_some() {
-            doc.set(r, Object::Null);
+            doc.set_existing(r, Object::Null)?;
             actions += 1;
         } else if let Some(Object::Dict(a)) = d.get(b"A")
             && chain_forbidden(doc, a).is_some()
         {
             let mut nd = d.clone();
             nd.remove(b"A");
-            doc.set(r, Object::Dict(nd));
+            doc.set_existing(r, Object::Dict(nd))?;
             actions += 1;
         }
     }

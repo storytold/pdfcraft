@@ -163,6 +163,8 @@ const HELP: Option<&str> = Some("Help");
 
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
+    c("view.select_tool", "Select", None, None, Document, "mouse-pointer-2"),
+    c("view.hand_tool", "Hand", None, None, Document, "hand"),
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
     // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
@@ -218,6 +220,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Alt-drag for moving windows (several Linux window managers).
     // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
+    // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
+    c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),
+    c("comment.paste", "Paste comments", EDIT, None, Annotate, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
@@ -231,7 +237,23 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
-    c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
+    c(
+        "view.side_panel",
+        "Show or hide the side panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-right",
+    ),
+    c(
+        "view.tools_pane",
+        "Show or hide the Tools panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: true, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-left",
+    ),
+    c("ui.dock.reset", "Reset side panels", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
@@ -243,6 +265,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.underline", "Underline text", None, None, Annotate, "underline"),
     c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),
     c("comment.squiggly", "Squiggly underline text", None, None, Annotate, "spline"),
+    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "highlighter"),
     c("comment.ink", "Draw freehand", None, None, Annotate, "pencil"),
     c("comment.line", "Draw a line", None, None, Annotate, "minus"),
     c("comment.arrow", "Draw an arrow", None, None, Annotate, "move-right"),
@@ -336,7 +359,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
     c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
@@ -362,6 +387,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
     c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
+    // Bookmarks from the lines set in chosen text styles, for headings that aren't tagged (#1693).
+    c("bookmark.from_text_styles", "New bookmarks from text styles…", PAGES, None, Assembly, "list"),
     c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
     c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
@@ -376,6 +403,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),

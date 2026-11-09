@@ -1,7 +1,10 @@
-//! vendor/winit patch (9) (vendor/README.md).
+//! Provenance-only: reads the retained `vendor/` copy, not the resolved dependency, so it is
+//! not runtime coverage. `vendor_graph.rs` checks the resolved graph identity.
+//! Retained vendor provenance for winit patch (9) (vendor/README.md); `vendor_graph.rs` checks the resolved graph.
 
+/// Regression test: the vendored winit sends a key committed through macOS IME only once.
 #[test]
-fn winit_sends_a_key_committed_through_macos_ime_only_once() {
+fn vendor_provenance_winit_sends_a_key_committed_through_macos_ime_only_once() {
     // Apple Korean answers Space with no syllable in progress with `setMarkedText(" ")`,
     // `insertText(" ")` and `setMarkedText("")`. The last call resets winit 0.30.13's IME state, so
     // the key went to the app both as `Ime::Commit(" ")` and as `KeyboardInput` with text " ", and

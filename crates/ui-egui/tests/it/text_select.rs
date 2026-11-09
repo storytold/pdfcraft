@@ -189,19 +189,17 @@ fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
     h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == want))
 }
 
+/// Check that both the Edit menu and the context menu copy the selected page text.
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
     use egui_kittest::kittest::Queryable;
-    let (mut h, at) = harness(|_| {});
+    let (mut h, at) = harness(|app| app.system_clipboard = false);
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2); // Hide floating Copy so this test can only reach menu entries.
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover();
-    h.run_steps(3);
-    h.get_by_label_contains("Copy").click();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Copy").click();
     let mut did_copy = false;
     for _ in 0..4 {
         h.step();
@@ -228,15 +226,13 @@ fn selected_text_copy_edit_and_context_menus() {
 
 #[test]
 fn escape_closes_an_open_menu_before_it_clears_the_selection() {
-    // #3535: one Escape closed the main menu and dropped the selection with it.
-    use egui_kittest::kittest::Queryable;
+    // #3535: one Escape closed the menu and dropped the selection with it.
     let (mut h, at) = harness(|_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.run_steps(2);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
+    crate::support::open_menu(&mut h, "View");
     assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
@@ -249,7 +245,7 @@ fn escape_closes_an_open_menu_before_it_clears_the_selection() {
 
 #[test]
 fn selected_text_copy_command_requires_selection() {
-    let (mut h, at) = harness(|_| {});
+    let (mut h, at) = harness(|app| app.system_clipboard = false);
     assert!(!h.state_mut().execute("edit.copy"));
     click(&mut h, at);
     click(&mut h, at);
@@ -281,6 +277,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
             app.open_bytes("no-copy.pdf", None, bytes).unwrap();
             app.submit_password(Some(password.into()));
             app.set_option("left", "closed").unwrap();
+            app.system_clipboard = false;
             app
         });
         let mut loaded = false;
@@ -303,6 +300,104 @@ fn selected_text_copy_floating_button_honours_permissions() {
         assert_eq!(did_copy, password == "owner", "floating Copy with {password} password");
         assert_eq!(h.state_mut().execute("edit.copy"), password == "owner");
     }
+}
+
+/// What the stand-in for the system clipboard was given: `(html, plain text)` per copy.
+type HtmlSets = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// The system clipboard on, through a stand-in that takes or refuses Copy with formatting.
+fn html_clipboard(app: &mut PdfCraftApp, takes: bool) -> HtmlSets {
+    let sets = HtmlSets::default();
+    let seen = sets.clone();
+    app.system_clipboard = true;
+    app.html_clipboard_override = Some(Box::new(move |html, text| {
+        seen.lock().unwrap().push((html.to_owned(), text.to_owned()));
+        takes
+    }));
+    sets
+}
+
+fn any_copy_text(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_)))
+}
+
+/// Copy with formatting: Copy puts the selection as HTML (font, size) and its plain text on the
+/// system clipboard in one set, and doesn't also copy the text through egui, which would
+/// replace the HTML. A new copy replaces it.
+#[test]
+fn selected_text_copy_keeps_the_formatting_as_html() {
+    let (mut h, at) = harness(|_| {});
+    let sets = html_clipboard(h.state_mut(), true);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert!(h.state_mut().execute("edit.copy"));
+    h.step();
+    assert_eq!(
+        sets.lock().unwrap().as_slice(),
+        [("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:14pt\">quick</span></p>\n".to_owned(), "quick".to_owned())]
+    );
+    assert!(!any_copy_text(&h), "egui's own text copy would replace the HTML");
+    // Three clicks: the line, a new copy.
+    h.run_steps(60);
+    for _ in 0..3 {
+        click(&mut h, at);
+    }
+    assert!(h.state_mut().execute("edit.copy"));
+    let last = sets.lock().unwrap().last().cloned().unwrap_or_default();
+    assert!(last.0.contains(">The quick brown fox</span>"), "{last:?}");
+    assert_eq!(last.1, "The quick brown fox");
+}
+
+/// When the system clipboard refuses the HTML, Copy still copies the plain text.
+#[test]
+fn selected_text_copy_falls_back_to_plain_text_when_html_is_refused() {
+    let (mut h, at) = harness(|_| {});
+    let sets = html_clipboard(h.state_mut(), false);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert!(h.state_mut().execute("edit.copy"));
+    h.step();
+    assert_eq!(sets.lock().unwrap().len(), 1, "the HTML was offered");
+    assert!(copied(&h, "quick"), "the plain text goes out the usual way");
+}
+
+/// With the system clipboard off, no HTML is built and the plain text goes out as before.
+#[test]
+fn selected_text_copy_without_system_clipboard_builds_no_html() {
+    let (mut h, at) = harness(|_| {});
+    let sets = html_clipboard(h.state_mut(), true);
+    h.state_mut().system_clipboard = false;
+    click(&mut h, at);
+    click(&mut h, at);
+    assert!(h.state_mut().execute("edit.copy"));
+    h.step();
+    assert!(sets.lock().unwrap().is_empty());
+    assert!(copied(&h, "quick"));
+}
+
+/// A document that withholds copying gives neither the text nor its HTML.
+#[test]
+fn selected_text_copy_with_formatting_honours_permissions() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(two_lines())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "pw",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut h, at) = harness_with(bytes, |app| app.submit_password(Some("pw".into())));
+    let sets = html_clipboard(h.state_mut(), true);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    assert!(!h.state_mut().execute("edit.copy"));
+    h.step();
+    assert!(!any_copy_text(&h));
+    assert!(sets.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -336,6 +431,7 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![0]));
 }
 
+/// Check that a focused search input owns Copy and the selected page text does not also consume it.
 #[test]
 fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     let (mut h, at) = harness(|_| {});
@@ -344,7 +440,7 @@ fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     h.state_mut().views[0].open_find();
     h.state_mut().views[0].find.as_mut().unwrap().query = "widget café".into();
     h.run_steps(3);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find-input")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("find-input")));
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
@@ -394,7 +490,13 @@ fn press_and_move(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
 
 /// One wheel event, with time to scroll (egui spreads a wheel line over a few frames).
 fn wheel(h: &mut Harness<'static, PdfCraftApp>, unit: MouseWheelUnit, dy: f32) {
-    h.event(Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.event(Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, dy),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
     h.run_steps(10);
 }
 
