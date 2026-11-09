@@ -5533,3 +5533,28 @@ fn a_script_tree_node_aliased_by_generation_is_read_once() {
     doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
     assert_eq!(document_scripts_named(&doc), [("a".to_string(), "var a;".to_string())]);
 }
+
+/// A `/Kids` array full of repeats of one node does not crowd out the distinct node after them:
+/// the repeats are dropped before the walk's room is taken, so the script is still found.
+#[test]
+fn repeated_name_tree_kids_do_not_crowd_out_a_script() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut doc = one_page();
+    crate::scripting::set_document_script(&mut doc, "Deep", Some("app.alert(1);")).unwrap();
+    let root = doc.root().unwrap();
+    // The tree the writer made, as its names array alone.
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let names = cat.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let tree = names.get(b"JavaScript").map(|t| doc.resolve(t)).and_then(|t| t.as_dict().cloned()).unwrap();
+    let pairs = tree.get(b"Names").cloned().unwrap();
+    let mut leaf_d = Dict::new();
+    leaf_d.set(b"Names".to_vec(), pairs);
+    let leaf = doc.add(Object::Dict(leaf_d));
+    let node = doc.add(Object::Dict(Dict::new()));
+    let kids: Vec<Object> = std::iter::repeat(Object::Ref(node)).take(9_999).chain([Object::Ref(leaf)]).collect();
+    doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+    let mut names = names;
+    names.set(b"JavaScript".to_vec(), Object::Ref(node));
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    assert_eq!(crate::scripting::document_scripts_named(&doc), vec![("Deep".to_string(), "app.alert(1);".to_string())]);
+}

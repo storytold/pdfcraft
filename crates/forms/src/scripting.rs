@@ -211,8 +211,10 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
             }
             Some(array)
         }) {
+            // Children already seen are dropped before the room is taken: a long run of repeats
+            // would otherwise fill the stack and crowd a distinct node, the script among them, out.
             let room = 10_000usize.saturating_sub(visited + stack.len());
-            stack.extend(kids.into_iter().take(room));
+            stack.extend(kids.into_iter().filter(|k| !matches!(k, Object::Ref(r) if seen.contains(&r.num))).take(room));
         }
         if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
             for pair in pairs.chunks(2) {
