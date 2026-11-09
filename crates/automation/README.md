@@ -26,6 +26,11 @@ its undo/redo history.
 `page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
 follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 
+`page_add_text` and `content_update` take one of `color` (`#RRGGBB` or a name, painted in
+DeviceRGB), `gray` (0 black to 1 white, DeviceGray `g`) and `cmyk` (`[c, m, y, k]`, each 0 to 1,
+DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list` reports `gray` or
+`cmyk` for such text.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -141,7 +146,10 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 `object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork and added items
 with generation-scoped kind/index references. `object_move {doc, page, objects, offset, generation?}`
 moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
-and fonts. A refusal changes nothing; success is one undo step. See
+and fonts. A refusal changes nothing; success is one undo step. `all: true` takes every object on the
+page instead, as ⌘A does. `object_copy {doc, page, objects | all, cut?}` copies them with every
+resource they use and `object_paste {doc, page}` pastes them as page content that draws the same,
+into the same or another open document, stepped as the app steps a paste. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
 ## Accessibility review record
@@ -204,6 +212,30 @@ undoable and survive saving/reopening. `image_hit` shares the UI's curve and hol
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
 
+`text_fonts` also lists `builtin:thai` when the build includes the bundled Noto Sans Thai face
+(the optional craft-fonts input). Passing it as `text_edit.font_resource` explicitly replaces a
+paragraph or range with that face; the source font is never swapped for it silently. A build
+without the face never lists it, and `text_edit` refuses it there. A page whose own fonts fill
+the listing's 32 MiB preview budget can leave it out too; `text_edit` still accepts it then.
+
+### Preparing grouped text
+
+`text_prepare {doc, page}` makes supported grouped Form text editable on one page, as one click
+on grouped text in the GUI's Edit text does. It keeps the group's original glyph operators and shared source
+objects, records preparation and map repairs in the repair log, and is one undoable step. List
+`text_paragraphs` afterwards; its indices belong to the prepared page. Besides the document
+summary it returns what this edit did:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `prepared_groups` | integer | Form placements drawn in place, so their text is now the page's own. |
+| `repaired_fonts` | integer | Page fonts whose damaged legacy THSarabunPSK Thai map was repaired on a page-owned copy. |
+| `refused_groups` | array of strings | One `name: reason` per group left as it was: unsafe compositing, tags, malformed content, or text grouped more than eight levels deep. |
+
+The page's own fonts with that damaged map are repaired too, whether their text was grouped or
+not. It fails, changing nothing, when the page has nothing to prepare or repair (the error gives
+the first reason a group was left as it was) or the page is out of range.
+
 ### Superscript and subscript normalization
 
 `text_script` changes characters to their Unicode superscript or subscript forms; it does not
@@ -256,7 +288,14 @@ Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
 reference) to a PNG, without the viewer. `model` picks the page's Nth 3D model (default 1);
 `width` and `height` are 1 to 4096 (default 512); `direction` is the view direction from the eye
 (default `[-1, 1, -1]`, with Z up unless the view looks along Z); `perspective` defaults to true.
-The model is framed to fill the image and shaded by a headlight on white. U3D models are refused
+The model is framed to fill the image and shaded by a headlight on white. `orbit`, instead of
+`direction`, frames it as a viewer's orbit control would: `{view, up, front, turn, zoom,
+zoom_at, pan}`, all optional. `view` is `iso` (default), `front`, `right`, `top` or `back`
+about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`); `turn` is
+`[yaw, pitch]` in degrees, pitch down; `zoom` is a positive factor, the result held within 0.05 to 50, at `zoom_at` `[right, up]`
+in picture heights from the centre, where the point under it stays still; `pan` `[right, up]`
+moves the target, in model radii, so the model moves the other way. Every view frames the model
+at the same size, whatever its direction. U3D models are refused
 with an error, and the annotation's own views, lighting and render modes are not applied yet.
 
 ## Viewer navigation history

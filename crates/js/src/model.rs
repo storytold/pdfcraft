@@ -52,6 +52,8 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Rectangle of the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 impl FieldState {
@@ -68,6 +70,7 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            rect: None,
         }
     }
 
@@ -275,6 +278,8 @@ pub struct Outcome {
     pub rc: bool,
     /// `event.value` after the script.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
