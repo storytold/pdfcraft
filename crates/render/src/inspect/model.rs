@@ -287,6 +287,11 @@ pub struct OutlineItem {
     pub page: Option<usize>,
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
     pub view: DestView,
+    /// What the bookmark does instead when its action (`/A`, ISO 32000-2 §12.3.3 Table 151) goes
+    /// nowhere in this document: a web address, another PDF, a layer change, or an action named
+    /// but not run ([`LinkTarget::Other`]), read as a link's is. Never [`LinkTarget::Page`]: a
+    /// go-to is `page` and `view`.
+    pub action: Option<LinkTarget>,
     pub children: Vec<OutlineItem>,
     /// Whether the bookmark starts open: only a positive `/Count` says so (ISO 32000-2 §12.3.3,
     /// Table 151). A negative one is closed, and so is a missing one, which a bookmark with

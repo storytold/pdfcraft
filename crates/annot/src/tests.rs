@@ -1003,12 +1003,12 @@ fn stamps_draw_their_label_and_by_line() {
 
 #[test]
 fn links_are_added_edited_listed_and_removed() {
-    use crate::links::{self, Highlight, LinkAction, LinkStyle};
+    use crate::links::{self, Highlight, LinkAction, LinkStyle, LinkZoom};
     let mut doc = fixture();
     let before = links::list(&doc).len();
     let i = links::add(&mut doc, 0, [10.0, 10.0, 110.0, 30.0], &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
     let style = LinkStyle { visible: true, color: [1.0, 0.0, 0.0], width: 2.0, dashed: true, underline: false, highlight: Highlight::Outline };
-    links::add(&mut doc, 1, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page(0), &style).unwrap();
+    links::add(&mut doc, 1, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }, &style).unwrap();
     let doc = reopen(&doc);
     let all = links::list(&doc);
     assert_eq!(all.len(), before + 2);
@@ -1017,7 +1017,7 @@ fn links_are_added_edited_listed_and_removed() {
         (web.action.clone(), web.style.visible, web.style.highlight),
         (LinkAction::Uri("https://example.org".into()), false, Highlight::Invert)
     );
-    let page = all.iter().find(|l| l.page == 1 && l.action == LinkAction::Page(0)).unwrap().clone();
+    let page = all.iter().find(|l| l.page == 1 && l.action == LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }).unwrap().clone();
     assert_eq!(page.style, style);
     let mut doc = doc;
     links::set(&mut doc, 1, page.index, Some([0.0, 0.0, 50.0, 20.0]), Some(&LinkAction::Uri("mailto:ada@example.org".into())), None).unwrap();
@@ -1027,7 +1027,201 @@ fn links_are_added_edited_listed_and_removed() {
     assert!(links::delete(&mut doc, 0, 999).is_err(), "no such annotation");
     let n = links::remove_all(&mut doc, None).unwrap();
     assert!(n >= 1 && links::list(&doc).is_empty());
-    assert!(links::add(&mut doc, 0, [0.0, 0.0, 1.0, 1.0], &LinkAction::Page(0), &LinkStyle::default()).is_err(), "too small");
+    assert!(
+        links::add(&mut doc, 0, [0.0, 0.0, 1.0, 1.0], &LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }, &LinkStyle::default()).is_err(),
+        "too small"
+    );
+}
+
+#[test]
+fn page_links_keep_their_zoom() {
+    use crate::links::{self, LinkAction, LinkStyle, LinkZoom};
+    let page1 = page_refs(&fixture()).unwrap()[1];
+    let dest_of = |doc: &Document, obj: ObjRef| doc.get(obj).as_dict().and_then(|d| d.get(b"Dest").cloned());
+    // Each zoom is written as its destination type (Table 149) and reads back after a save.
+    let null = Object::Null;
+    for (zoom, written) in [
+        (LinkZoom::FitPage, vec![Object::name("Fit")]),
+        (LinkZoom::FitWidth, vec![Object::name("FitH"), null.clone()]),
+        (LinkZoom::FitHeight, vec![Object::name("FitV"), null.clone()]),
+        (LinkZoom::FitVisible, vec![Object::name("FitB")]),
+        (LinkZoom::Inherit, vec![Object::name("XYZ"), null.clone(), null.clone(), null.clone()]),
+        (LinkZoom::Percent(100.0), vec![Object::name("XYZ"), null.clone(), null.clone(), Object::Real(1.0)]),
+        (LinkZoom::Percent(250.0), vec![Object::name("XYZ"), null.clone(), null.clone(), Object::Real(2.5)]),
+    ] {
+        let mut doc = fixture();
+        let i = links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom }, &LinkStyle::default()).unwrap();
+        let link = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap();
+        let mut expected = vec![Object::Ref(page1)];
+        expected.extend(written);
+        assert_eq!(dest_of(&doc, link.obj.unwrap()), Some(Object::Array(expected)), "{zoom:?}");
+        let doc = reopen(&doc);
+        let link = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap();
+        assert_eq!(link.action, LinkAction::Page { page: 1, zoom }, "{zoom:?} after a save");
+    }
+    // What other writers use reads as the nearest zoom: a zero zoom keeps the reader's, the boxed
+    // fits as the plain ones, a rectangle as Fit Page, and a GoTo action like a /Dest.
+    let mut doc = fixture();
+    let i = links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom: LinkZoom::FitPage }, &LinkStyle::default()).unwrap();
+    let obj = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().obj.unwrap();
+    let dest = |kind: &str, operands: Vec<Object>| {
+        let mut d = vec![Object::Ref(page1), Object::name(kind)];
+        d.extend(operands);
+        Object::Array(d)
+    };
+    for (key, value, zoom) in [
+        ("Dest", dest("XYZ", vec![Object::Int(100), Object::Int(700), Object::Int(0)]), LinkZoom::Inherit),
+        ("Dest", dest("FitBH", vec![Object::Int(500)]), LinkZoom::FitWidth),
+        ("Dest", dest("FitBV", vec![Object::Int(20)]), LinkZoom::FitHeight),
+        ("Dest", dest("FitR", vec![Object::Int(0), Object::Int(0), Object::Int(10), Object::Int(10)]), LinkZoom::FitPage),
+        ("A", dest("XYZ", vec![null.clone(), null.clone(), Object::Real(1.5)]), LinkZoom::Percent(150.0)),
+        // A factor outside what PdfCraft writes reads as the destination has it, not capped, so
+        // it agrees with the viewer's `destination`; one whose percentage overflows stays finite.
+        ("Dest", dest("XYZ", vec![null.clone(), null.clone(), Object::Real(100.0)]), LinkZoom::Percent(10000.0)),
+        ("Dest", dest("XYZ", vec![null.clone(), null.clone(), Object::Real(0.005)]), LinkZoom::Percent(0.5)),
+        ("Dest", dest("XYZ", vec![null.clone(), null.clone(), Object::Real(1e307)]), LinkZoom::Percent(f64::MAX)),
+    ] {
+        let mut d = doc.get(obj).as_dict().cloned().unwrap();
+        d.remove(b"Dest");
+        d.remove(b"A");
+        if key == "A" {
+            let mut go_to = pdfcraft_cos::Dict::new();
+            go_to.set(b"S".to_vec(), Object::name("GoTo"));
+            go_to.set(b"D".to_vec(), value);
+            d.set(b"A".to_vec(), Object::Dict(go_to));
+        } else {
+            d.set(b"Dest".to_vec(), value);
+        }
+        doc.set(obj, Object::Dict(d));
+        let link = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap();
+        assert_eq!(link.action, LinkAction::Page { page: 1, zoom }, "{key}");
+    }
+    // A zoom that isn't a positive percentage is refused before anything is written.
+    for p in [0.0, -50.0, f64::NAN, f64::INFINITY] {
+        let before = links::list(&doc).len();
+        let refused =
+            links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom: LinkZoom::Percent(p) }, &LinkStyle::default());
+        assert!(refused.is_err(), "{p}");
+        assert_eq!(links::list(&doc).len(), before, "{p}: no link added");
+    }
+}
+
+/// A link rewritten with the zoom it has keeps its own `/XYZ` factor, however far outside the
+/// 1–6400% a new zoom is written within: giving it a new page (Link Properties' OK, `link_edit`
+/// without `zoom`) must not change its zoom. A zoom chosen anew is still written within 1–6400%.
+#[test]
+fn a_rewritten_link_keeps_its_own_zoom_factor() {
+    use crate::links::{self, LinkAction, LinkStyle, LinkZoom};
+    let pages = page_refs(&fixture()).unwrap();
+    let dest_of = |doc: &Document, obj: ObjRef| doc.get(obj).as_dict().and_then(|d| d.get(b"Dest").cloned());
+    let xyz = |page: ObjRef, factor: Object| Object::Array(vec![Object::Ref(page), Object::name("XYZ"), Object::Null, Object::Null, factor]);
+    for (key, factor) in [
+        ("Dest", Object::Real(0.005)),
+        ("Dest", Object::Real(100.0)),
+        ("Dest", Object::Int(100)),
+        ("Dest", Object::Real(1e307)),
+        ("A", Object::Real(0.005)),
+    ] {
+        let mut doc = fixture();
+        let i =
+            links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom: LinkZoom::FitPage }, &LinkStyle::default()).unwrap();
+        let obj = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().obj.unwrap();
+        let mut d = doc.get(obj).as_dict().cloned().unwrap();
+        d.remove(b"Dest");
+        if key == "A" {
+            let mut go_to = pdfcraft_cos::Dict::new();
+            go_to.set(b"S".to_vec(), Object::name("GoTo"));
+            go_to.set(b"D".to_vec(), xyz(pages[1], factor.clone()));
+            d.set(b"A".to_vec(), Object::Dict(go_to));
+        } else {
+            d.set(b"Dest".to_vec(), xyz(pages[1], factor.clone()));
+        }
+        doc.set(obj, Object::Dict(d));
+        let LinkAction::Page { zoom, .. } = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().action else {
+            panic!("{key} {factor:?}")
+        };
+        links::set(&mut doc, 0, i, None, Some(&LinkAction::Page { page: 0, zoom }), None).unwrap();
+        assert_eq!(dest_of(&doc, obj), Some(xyz(pages[0], factor.clone())), "{key} {factor:?}: the factor is the link's own");
+        let doc = reopen(&doc);
+        assert_eq!(
+            links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().action,
+            LinkAction::Page { page: 0, zoom },
+            "{key} {factor:?}"
+        );
+    }
+    // A zoom other than the link's is written within 1–6400%.
+    let mut doc = fixture();
+    let i = links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom: LinkZoom::Percent(50.0) }, &LinkStyle::default())
+        .unwrap();
+    let obj = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().obj.unwrap();
+    links::set(&mut doc, 0, i, None, Some(&LinkAction::Page { page: 1, zoom: LinkZoom::Percent(10000.0) }), None).unwrap();
+    assert_eq!(dest_of(&doc, obj), Some(xyz(pages[1], Object::Real(64.0))));
+}
+
+/// A go-to edited without a change (its own page and zoom, as `link_edit` naming its page does)
+/// is left as it is: the `/XYZ` position, a fit's position and the GoTo form stay. Given a new
+/// page with its zoom, a link keeps how that zoom is written, a boxed fit (`/FitBH`, `/FitBV`)
+/// included, but not its position, which belongs to the old page.
+#[test]
+fn an_unchanged_go_to_keeps_its_destination_and_a_new_page_keeps_its_fit() {
+    use crate::links::{self, LinkAction, LinkStyle, LinkZoom};
+    let pages = page_refs(&fixture()).unwrap();
+    let dest = |page: ObjRef, kind: &str, operands: Vec<Object>| {
+        let mut d = vec![Object::Ref(page), Object::name(kind)];
+        d.extend(operands);
+        Object::Array(d)
+    };
+    let link_with = |key: &str, value: Object| {
+        let mut doc = fixture();
+        let i =
+            links::add(&mut doc, 0, [10.0, 10.0, 60.0, 30.0], &LinkAction::Page { page: 1, zoom: LinkZoom::FitPage }, &LinkStyle::default()).unwrap();
+        let obj = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().obj.unwrap();
+        let mut d = doc.get(obj).as_dict().cloned().unwrap();
+        d.remove(b"Dest");
+        if key == "A" {
+            let mut go_to = pdfcraft_cos::Dict::new();
+            go_to.set(b"S".to_vec(), Object::name("GoTo"));
+            go_to.set(b"D".to_vec(), value);
+            d.set(b"A".to_vec(), Object::Dict(go_to));
+        } else {
+            d.set(b"Dest".to_vec(), value);
+        }
+        doc.set(obj, Object::Dict(d));
+        (doc, i, obj)
+    };
+    let (num, null) = (|n: i64| Object::Int(n), Object::Null);
+    // The same page and zoom: nothing is rewritten.
+    for (key, value) in [
+        ("Dest", dest(pages[1], "XYZ", vec![num(72), num(500), Object::Real(2.0)])),
+        ("Dest", dest(pages[1], "FitBH", vec![num(250)])),
+        ("Dest", dest(pages[1], "FitV", vec![num(20)])),
+        ("A", dest(pages[1], "XYZ", vec![num(72), num(500), Object::Real(0.005)])),
+    ] {
+        let (mut doc, i, obj) = link_with(key, value);
+        let before = doc.get(obj).as_dict().cloned();
+        let LinkAction::Page { page, zoom } = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().action else {
+            panic!("{key}")
+        };
+        links::set(&mut doc, 0, i, None, Some(&LinkAction::Page { page, zoom }), None).unwrap();
+        assert_eq!(doc.get(obj).as_dict().cloned(), before, "{key} {zoom:?}: left as it is");
+    }
+    // A new page: the fit's kind and the factor stay, positions go.
+    for (value, written) in [
+        (dest(pages[1], "FitBH", vec![num(250)]), dest(pages[0], "FitBH", vec![null.clone()])),
+        (dest(pages[1], "FitBV", vec![num(20)]), dest(pages[0], "FitBV", vec![null.clone()])),
+        (dest(pages[1], "FitH", vec![num(250)]), dest(pages[0], "FitH", vec![null.clone()])),
+        (
+            dest(pages[1], "XYZ", vec![num(72), num(500), Object::Real(2.0)]),
+            dest(pages[0], "XYZ", vec![null.clone(), null.clone(), Object::Real(2.0)]),
+        ),
+    ] {
+        let (mut doc, i, obj) = link_with("Dest", value.clone());
+        let LinkAction::Page { zoom, .. } = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == i).unwrap().action else {
+            panic!("{value:?}")
+        };
+        links::set(&mut doc, 0, i, None, Some(&LinkAction::Page { page: 0, zoom }), None).unwrap();
+        assert_eq!(doc.get(obj).as_dict().and_then(|d| d.get(b"Dest").cloned()), Some(written), "{value:?}");
+    }
 }
 
 #[test]
@@ -1290,9 +1484,17 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
         delete_annotation(&mut doc, 0, member).unwrap();
         assert!(!list(&doc, 0).iter().any(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))), "{member}");
     }
+    let marks = |doc: &Document| list(doc, 0).iter().filter(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))).count();
+    let s = a.iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
     let mut doc = doc;
-    delete_annotation(&mut doc, 0, i).unwrap();
-    assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
+    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    // A locked caret keeps the strikeout too: the pair can't be broken by deleting the other.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, c, true).unwrap();
+    assert!(deletable(&locked, 0, s).is_err() && delete_annotation(&mut locked, 0, s).is_err(), "a locked caret refuses its strikeout's deletion");
+    assert_eq!(marks(&locked), 2);
+    delete_annotation(&mut doc, 0, c).unwrap();
+    assert_eq!(marks(&doc), 0, "deleting the caret deletes the strikeout");
     assert!(
         add_text_replacement(
             &mut doc,
@@ -1806,6 +2008,55 @@ fn a_group_chain_is_followed_to_a_bounded_depth() {
     assert_eq!(colour_of(&doc, chain[deepest + 1]), past, "past the depth limit, not in the group");
 }
 
+/// Review on #5689 (CodeRabbit): clicking a Replace Text strikeout selects its caret, the
+/// group's primary, so a restyle from Comment Properties lands on the caret. Colour and opacity
+/// are the proposal's, so the strikeout is restyled and redrawn in the same edit, whichever
+/// member is restyled; it takes no border width. A locked member refuses the whole change.
+#[test]
+fn restyling_a_replace_text_pair_restyles_both_members() {
+    let mut doc = fixture();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let tr = TextReplacement {
+        page: 0,
+        quads: &quads,
+        replacement: "new words",
+        author: "Ada",
+        strike: &red,
+        caret: &red,
+        strike_meta: &meta("r"),
+        caret_meta: &meta("r-caret"),
+    };
+    let c = add_text_replacement(&mut doc, tr).unwrap();
+    let s = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
+    let color = |doc: &Document, i: usize| {
+        list(doc, 0)[i].get(b"C").and_then(|o| o.as_array().cloned()).unwrap().iter().filter_map(Object::as_f64).collect::<Vec<_>>()
+    };
+    let green = [0.0, 0.5, 0.0];
+
+    // Restyled through the caret (what a click on either part selects).
+    let mut by_caret = doc.clone();
+    set_style(&mut by_caret, 0, c, StyleChange::new(Some(green), Some(0.5), Some(3.0), None), &meta("")).unwrap();
+    let by_caret = reopen(&by_caret);
+    assert_eq!(color(&by_caret, c), green.to_vec());
+    assert_eq!(color(&by_caret, s), green.to_vec(), "the strikeout takes the proposal's colour");
+    let strike = &list(&by_caret, 0)[s];
+    assert_eq!(strike.get(b"CA").and_then(Object::as_f64), Some(0.5), "and its opacity");
+    assert!(strike.get(b"BS").is_none(), "a strikeout has no border to widen: {strike:?}");
+    assert!(ap_content(&by_caret, strike).contains("0 0.5 0 RG"), "its appearance is redrawn: {}", ap_content(&by_caret, strike));
+
+    // Restyled through the strikeout: the caret follows.
+    let mut by_strike = doc.clone();
+    set_style(&mut by_strike, 0, s, StyleChange::new(Some(green), None, None, None), &meta("")).unwrap();
+    assert_eq!(color(&by_strike, c), green.to_vec(), "the caret takes the proposal's colour");
+
+    // A locked strikeout refuses the change, and nothing moves.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, s, true).unwrap();
+    assert!(set_style(&mut locked, 0, c, StyleChange::new(Some(green), None, None, None), &meta("")).is_err());
+    assert_eq!(color(&locked, c), red.color.to_vec(), "the caret keeps its colour");
+}
+
 #[test]
 fn files_attach_as_comments() {
     let mut doc = fixture();
@@ -1856,6 +2107,12 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     erase_ink(&mut doc, 0, i, &all[..21], 8.0, &meta("e")).unwrap();
     erase_ink(&mut doc, 0, i, &all[21..], 8.0, &meta("e")).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Ink")));
+}
+
+/// A document holding only a catalog, for appearance builds from a bare dictionary whose
+/// values are all direct.
+fn bare_doc() -> Document {
+    document_of(&[b"<< /Type /Catalog /Pages << /Type /Pages /Kids [] /Count 0 >> >>"])
 }
 
 /// A one-page document from object bodies (object 1 is the catalog, 3 the page).
@@ -1953,7 +2210,7 @@ fn malformed_optional_interior_color_does_not_hide_shape_strokes() {
     polyline.set(b"IC".to_vec(), malformed);
 
     for (name, annotation) in [("Square", square), ("Circle", circle), ("Polygon", polygon), ("Line", line), ("PolyLine", polyline)] {
-        assert!(appearance::build(&annotation).is_some(), "malformed optional /IC must not hide a valid {name} stroke");
+        assert!(appearance::build(&bare_doc(), &annotation).is_some(), "malformed optional /IC must not hide a valid {name} stroke");
     }
 
     let doc = document_of(&[
@@ -2048,7 +2305,7 @@ fn a_stamp_without_an_appearance_draws_the_stamp_it_names() {
     // A stamp's own artwork is never replaced, and the drawing is for display only: edits
     // (restyling, flattening) still find nothing they may write.
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /AP << /N 9 0 R >>")).is_none());
-    assert!(appearance::build(&stamp_dict("/Name /Draft")).is_none());
+    assert!(appearance::build(&bare_doc(), &stamp_dict("/Name /Draft")).is_none());
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /PCStamp true")).is_none(), "PdfCraft's own stamps are drawn by `build`");
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /Rect [5 5 5 50]")).is_none(), "no width");
 }
@@ -2151,8 +2408,8 @@ fn every_line_ending_is_drawn() {
     assert_eq!(call.name(b"LE"), Some(b"Diamond".as_slice()));
     assert!(ap_content(&doc, call).contains("h B"), "diamond callout");
 
-    assert!(appearance::build(&line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
-    assert!(appearance::build(&line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
+    assert!(appearance::build(&bare_doc(), &line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
+    assert!(appearance::build(&bare_doc(), &line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
 }
 
 #[test]
@@ -2693,7 +2950,7 @@ fn note_drawing(name: Option<&str>, color: [f64; 3]) -> Vec<u8> {
     if let Some(n) = name {
         d.set(b"Name".to_vec(), Object::name(n));
     }
-    crate::appearance::build(&d).expect("a note is drawn").decoded().unwrap()
+    crate::appearance::build(&bare_doc(), &d).expect("a note is drawn").decoded().unwrap()
 }
 
 /// ISO 32000-2 §12.5.6.4, Table 175: a viewer shall provide icons for the seven standard names,
@@ -2741,7 +2998,7 @@ fn a_star_note_keeps_its_star_when_recoloured() {
 fn content_of(src: &str) -> String {
     let doc = document_of(&[src.as_bytes()]);
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().expect("a dictionary");
-    let stream = appearance::build(&d).expect("drawn");
+    let stream = appearance::build(&bare_doc(), &d).expect("drawn");
     String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned()
 }
 
@@ -2793,7 +3050,7 @@ fn bad_dash_arrays_draw_solid() {
     for w in [f64::NAN, f64::INFINITY, -2.0] {
         let dash = Object::Array([f64::NAN, 2.0].map(Object::Real).to_vec());
         d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(w), dash]));
-        let c = String::from_utf8_lossy(&appearance::build(&d).unwrap().decoded().unwrap()).into_owned();
+        let c = String::from_utf8_lossy(&appearance::build(&bare_doc(), &d).unwrap().decoded().unwrap()).into_owned();
         assert!(c.contains("1 w") && !c.contains(" d\n") && !c.contains("NaN") && !c.contains("inf"), "{w}: {c}");
     }
 }
@@ -2815,7 +3072,7 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     let caret = |extra: &str| {
         let doc = document_of(&[format!("<< /Subtype /Caret /Rect [30 30 60 60] /C [0.9 0.1 0.1] {extra} >>").as_bytes()]);
         let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
-        let s = appearance::build(&d).unwrap();
+        let s = appearance::build(&bare_doc(), &d).unwrap();
         (s.decoded().unwrap(), s.dict.get(b"Resources").and_then(Object::as_dict).is_some_and(|r| r.contains(b"Font")))
     };
     let has_pilcrow = |c: &[u8]| c.windows(5).any(|w| w == b"(\xb6) T");
@@ -2843,7 +3100,7 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     }
     let doc = document_of(&[b"<< /Subtype /Caret /Rect [30 30 30 30] /Sy /P >>"]);
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
-    assert!(appearance::build(&d).is_some());
+    assert!(appearance::build(&bare_doc(), &d).is_some());
 }
 
 // ── Line annotations: leader lines and captions (ISO 32000-2 §12.5.6.7, Table 178) ──────────
@@ -2863,7 +3120,7 @@ fn table_178_line(l: [f64; 4], extra: &[(&str, Object)]) -> Dict {
 
 /// The built appearance's content.
 fn line_drawing(d: &Dict) -> String {
-    let s = crate::appearance::build(d).expect("the line is drawn");
+    let s = crate::appearance::build(&bare_doc(), d).expect("the line is drawn");
     String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
 }
 
@@ -3016,7 +3273,7 @@ fn a_diagonal_lines_leaders_are_perpendicular_and_its_caption_turns_with_it() {
 fn a_caption_from_rich_text_and_one_the_font_cant_draw() {
     let rc = "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\"><p>Dim &amp; <b>5</b>0&#x20;mm &lt;x&gt;</p></body>";
     let d = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("RC", Object::String(PdfString::text(rc)))]);
-    let s = crate::appearance::build(&d).unwrap().decoded().unwrap();
+    let s = crate::appearance::build(&bare_doc(), &d).unwrap().decoded().unwrap();
     assert!(s.windows(17).any(|w| w == b"(Dim & 50 mm <x>)"), "{}", String::from_utf8_lossy(&s));
     let cjk = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("長さ")))]);
     assert_eq!(crate::appearance::undrawable_text(&cjk), Some(("the line's caption", '長')));
@@ -3312,4 +3569,212 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     };
     check(&doc);
     check(&reopen(&doc));
+}
+
+/// PDFBOX-2699: a `/C` written `[1 0 0 null]` (Table 166 asks for numbers) is still a four-entry
+/// colour, CMYK with the null as 0 as PDFium, MuPDF and Poppler read it, so a shape without an
+/// appearance is drawn instead of dropped. `/IC` is read the same way, and three numbers stay RGB.
+/// The properties and the comment list report the colours as drawn.
+#[test]
+fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 null] /IC [0 0 1 null] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("both squares get a fallback appearance");
+    let squares = list(&display, 0);
+    let cmyk = ap_content(&display, &squares[0]);
+    assert!(cmyk.contains("0 1 1 RG") && cmyk.contains("1 1 0 rg"), "CMYK (1,0,0,0) stroke and (0,0,1,0) fill: {cmyk}");
+    let rgb = ap_content(&display, &squares[1]);
+    assert!(rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+    // The properties read the stroke and the fill as they are drawn.
+    let p = props(&doc, 0, 0).expect("the square has properties");
+    assert_eq!((p.color, p.fill), (Some([0.0, 1.0, 1.0]), Some([1.0, 1.0, 0.0])));
+    assert_eq!(props(&doc, 0, 1).and_then(|p| p.color), Some([1.0, 0.0, 0.0]));
+    // The comment list reports the same colours.
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([0.0, 1.0, 1.0]), Some([1.0, 0.0, 0.0])]);
+}
+
+/// A `/C` given by reference is followed for the comment list, as three numbers were, and read
+/// like a direct one: `[0 0 1 null]` is CMYK yellow, and a referenced grey level is grey.
+#[test]
+fn a_referenced_colour_is_listed_like_a_direct_one() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C 6 0 R >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [55 5 95 35] /C 7 0 R >>",
+        b"[0 0 1 null]",
+        b"[0.5]",
+    ]);
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([1.0, 1.0, 0.0]), Some([0.5, 0.5, 0.5])]);
+}
+
+/// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
+/// doesn't follow it and draws no appearance, as for any colour it can't read.
+#[test]
+fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+        b"1",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
+    let squares = list(&display, 0);
+    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
+    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
+}
+
+/// The `y` of every `1 0 0 1 x y Tm` in `content`: where each piece of text sits.
+fn baselines(content: &str) -> Vec<f64> {
+    content.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect()
+}
+
+/// Thai typed into Fill & Sign text or a text box is shaped and drawn from the Thai face, as Add
+/// text draws it: Type 3 glyphs (their streams objects of their own) with a ToUnicode map, never
+/// `?`. The box grows to hold the ink of its stacked marks and descenders, which reach past the
+/// 1.2 em lines boxes are sized by. A build without a Thai face refuses the text, saying why.
+#[test]
+fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
+    let mut doc = fixture();
+    // Each line has the face's highest stack (น้ำ) and deepest descender (ฎู).
+    let thai = "น้ำฎู บุญ\nปั้นน้ำฎู";
+    let item = |shape: Shape| NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: thai.into(), author: "Ada".into() };
+    let shapes = [
+        Shape::Typewriter { rect: [100.0, 700.0, 300.0, 716.0], font_size: 24.0 },
+        Shape::TextBox { rect: [100.0, 400.0, 400.0, 430.0], font_size: 30.0 },
+    ];
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        for shape in shapes {
+            let err = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap_err();
+            assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        }
+        assert_eq!(list(&doc, 0).len(), 1, "nothing was added");
+        let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 }), &meta("b")).unwrap();
+        assert!(matches!(set_contents(&mut doc, 0, t, thai, &meta("")), Err(AnnotError::Undrawable(_))));
+        assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "hello");
+        return;
+    }
+    let reach = pdfcraft_fonts::shaped_text::thai_reach;
+    let (lo, hi) = (reach("ฎู").unwrap()[0], reach("น้ำ").unwrap()[1]);
+    for (shape, size) in shapes.into_iter().zip([24.0, 30.0]) {
+        let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
+        let doc = reopen(&doc);
+        let d = &list(&doc, 0)[t];
+        assert_eq!((text(d, b"Contents").as_str(), pdfcraft_fonts::undrawn_mark(d)), (thai, None));
+        let content = ap_content(&doc, d);
+        assert!(!content.contains('?') && content.contains("/PCTh1 "), "{content}");
+        // The glyphs and the text they stand for are objects of the saved file.
+        let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).unwrap();
+        let ap = doc.get(n);
+        let fonts = ap.as_dict().and_then(|s| s.get(b"Resources")).and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict());
+        let font = fonts.and_then(|f| f.get(b"PCTh1")).and_then(|f| f.as_dict()).unwrap().clone();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let cmap = doc.get(font.reference(b"ToUnicode").unwrap());
+        let Object::Stream(cmap) = &*cmap else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        assert!(cmap.contains("<0E190E490E33>"), "น้ำ copies as typed: {cmap}");
+        let procs = font.get(b"CharProcs").and_then(|p| p.as_dict()).unwrap();
+        assert!(procs.iter().all(|(_, g)| matches!(g, Object::Ref(_))), "glyph programs are stream objects");
+        // Every line's ink lies inside the box: the appearance's BBox and its clip.
+        let (r, ys) = (rect(d), baselines(&content));
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= r[3] + 1e-3 && bottom + lo * size >= r[1] - 1e-3, "{ys:?} at {size} in {r:?}");
+    }
+    // New text refits the box to its ink too: the stack on its first line, the descender on its last.
+    set_contents(&mut doc, 0, 1, "น้ำ\nฎู", &meta("")).unwrap();
+    let d = &list(&doc, 0)[1];
+    let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
+    assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
+}
+
+const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// The appearance a `subtype` with `/QuadPoints` `quads` draws, as text.
+fn quad_appearance(subtype: &str, quads: Vec<Object>) -> Option<String> {
+    quad_appearance_with(&bare_doc(), subtype, Object::Array(quads))
+}
+
+fn quad_appearance_with(doc: &Document, subtype: &str, quad_points: Object) -> Option<String> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name(subtype));
+    d.set(b"Rect".to_vec(), Object::Array([20, 95, 40, 110].map(Object::Int).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)]));
+    d.set(b"QuadPoints".to_vec(), quad_points);
+    appearance::build(doc, &d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// Appearance drawing reads `/QuadPoints` by the rule the other readers do, indirect objects
+/// included: entries by reference, and the array itself by reference, draw the same quads as
+/// the direct values.
+#[test]
+fn appearances_draw_indirect_quads_like_direct_ones() {
+    for subtype in ["Redact", "Highlight"] {
+        let clean = quad_appearance(subtype, reals(&QUAD)).unwrap();
+        let mut doc = bare_doc();
+        let by_ref: Vec<Object> = QUAD.iter().map(|v| Object::Ref(doc.add(Object::Real(*v)))).collect();
+        assert_eq!(quad_appearance_with(&doc, subtype, Object::Array(by_ref)).as_deref(), Some(clean.as_str()), "{subtype}: entries by reference");
+        let array_ref = Object::Ref(doc.add(Object::Array(reals(&QUAD))));
+        assert_eq!(quad_appearance_with(&doc, subtype, array_ref).as_deref(), Some(clean.as_str()), "{subtype}: the array by reference");
+    }
+}
+
+/// Redaction outlines and text markup draw the quads redaction apply would use, no more: a NaN
+/// quad wrote `NaN` into the stream, and one non-number or a trailing partial quad left the other,
+/// usable quads undrawn.
+#[test]
+fn appearances_draw_only_usable_quads() {
+    let mut one_nan = QUAD;
+    one_nan[3] = f64::NAN;
+    for subtype in ["Redact", "Highlight"] {
+        let clean = quad_appearance(subtype, reals(&QUAD)).unwrap();
+        assert!(!clean.contains("NaN"), "{clean}");
+        let mut name_first = reals(&[QUAD, QUAD].concat());
+        name_first[2] = Object::name("oops");
+        let same =
+            [reals(&[one_nan, QUAD].concat()), name_first, reals(&[&QUAD[..], &QUAD[..4]].concat()), reals(&[QUAD, [f64::INFINITY; 8]].concat())];
+        for (i, quads) in same.into_iter().enumerate() {
+            assert_eq!(quad_appearance(subtype, quads).as_deref(), Some(clean.as_str()), "{subtype} case {i}");
+        }
+        // No usable quad draws nothing, as with no /QuadPoints.
+        assert_eq!(quad_appearance(subtype, reals(&[f64::NAN; 8])), None, "{subtype}");
+    }
+}
+
+/// The comment list reads `/QuadPoints` by the rule redaction apply does: unusable quads are left
+/// out, not read as zeros, and an indirect number is followed.
+#[test]
+fn summaries_list_only_usable_quads() {
+    let mut doc = fixture();
+    let forty = Object::Ref(doc.add(Object::Int(40)));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    // A non-number in the first quad, an indirect 40 in the second, NaN in the third, and four
+    // entries of a fourth.
+    let mut quads = reals(&[QUAD, QUAD, QUAD, QUAD].concat());
+    quads[1] = Object::name("oops");
+    quads[10] = forty;
+    quads[17] = Object::Real(f64::NAN);
+    quads.truncate(28);
+    annotation.set(b"Subtype".to_vec(), Object::name("Redact"));
+    annotation.set(b"QuadPoints".to_vec(), Object::Array(quads));
+    set_annots(&mut doc, page, entries).unwrap();
+    let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
+    assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
 }

@@ -180,7 +180,8 @@ impl Automation {
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
         // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) lists as its primary, with the primary's
-        // attributes: the subordinates are neither comments nor replies, only its `group`.
+        // attributes: the subordinates are neither comments nor replies, only its `group`, each
+        // with its own colour (a group restyle reaches them too).
         let mut members: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
         let mut primary_of: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
         for (m, p) in all.iter().zip(pdfcraft_render::group_primaries(&all)) {
@@ -196,7 +197,7 @@ impl Automation {
                 .flatten()
                 .map(|m| {
                     let rect = crate::view_rect(&doc.info, m.page, m.shown_rect(doc.info.pages.get(m.page).map_or(0, |p| p.rotation)));
-                    json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype, "rect": rect })
+                    json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype, "rect": rect, "color": m.color.map(hex) })
                 })
                 .collect();
             let mut v = json!({
@@ -511,8 +512,12 @@ impl Automation {
             if contents.trim().is_empty() {
                 return Err(ToolError::InvalidArgs("replace needs `contents`: the replacement text".into()));
             }
+            // `/C` is a group attribute, taken from the primary (ISO 32000-2 §12.5.6.2), so the
+            // caret carries the colour too. Only the colour: opacity and the rest are the
+            // caret's own.
+            let mut caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
+            caret.color = style.color;
             let strike = style;
-            let caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
             let mut out = self.apply(a, Edit::ReplaceText { page, quads, text: contents, author, strike, caret })?;
             out["comment"] = json!({ "page": page + 1, "type": "replace" });
             return Ok(out);

@@ -97,7 +97,7 @@ impl PdfCraftApp {
     }
 
     /// New comments of the kind at `(page, index)` take the look in `p`: its colour, opacity,
-    /// line width and (for shapes) fill. `p` may be a Comment Properties draft not applied yet.
+    /// line width, (for shapes) fill and (for text boxes and callouts) font size. `p` may be a Comment Properties draft not applied yet.
     pub fn make_props_default(&mut self, page: usize, index: usize, p: &CommentProps) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
@@ -142,6 +142,9 @@ impl PdfCraftApp {
         self.comment_prefs.set_part_opacity(tool, p.fill_opacity.filter(|_| fill), p.text_opacity.filter(|_| text));
         if let Some(w) = p.width {
             self.comment_prefs.set_width(tool, w);
+        }
+        if let Some(size) = p.font_size {
+            self.comment_prefs.set_font_size(tool, size);
         }
         self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }

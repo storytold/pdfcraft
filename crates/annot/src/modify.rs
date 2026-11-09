@@ -26,6 +26,15 @@ pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotE
     Ok(())
 }
 
+/// Thai typed into a text box (`free_text`) that this build can't draw (it has no Thai face): refused
+/// with what to do, rather than drawn as `?`.
+pub(crate) fn refuse_undrawable_thai(free_text: bool, text: &str) -> Result<(), AnnotError> {
+    match free_text.then(|| pdfcraft_fonts::shaped_text::thai_refusal(text)).flatten() {
+        Some(why) => Err(AnnotError::Undrawable(why)),
+        None => Ok(()),
+    }
+}
+
 /// Format a number for content streams and DA strings.
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -109,7 +118,7 @@ fn deleted_index(doc: &Document, page: usize, index: usize) -> Result<usize, Ann
     if let Some((i, e)) = caret {
         (target, index) = (e, i);
     }
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
     // answers either (ISO 32000-2 §12.5.3, Table 167: Locked); nor does the other half of Replace
     // Text. Pop-ups follow their comment.
@@ -133,7 +142,7 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(doc, e, &doomed)).map(|(_, e)| e.clone()).collect();
     let kept = release_members(doc, kept, &doomed)?;
     Ok(set_annots(doc, p, kept)?)
@@ -171,9 +180,22 @@ pub fn release_members(doc: &mut Document, kept: Vec<Object>, going: &HashSet<Ob
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
-/// comment (which has none to collect) the pop-up it names, which still goes.
-fn seed(target: &Object) -> Option<ObjRef> {
-    target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+/// comment (which has none to collect) the pop-up it names, which still goes. The strikeout of a
+/// Replace Text proposal also takes the caret it is grouped under, so the two go together
+/// whichever is deleted.
+fn seed(doc: &Document, target: &Object) -> Vec<ObjRef> {
+    let own = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
+    own.into_iter().chain(replaced_by(doc, target)).collect()
+}
+
+/// The caret a Replace Text strikeout is grouped under (`/IT /StrikeOutTextEdit`, `/RT /Group`,
+/// `/IRT` to a caret): the proposal's primary, which holds the replacement.
+fn replaced_by(doc: &Document, strike: &Object) -> Option<ObjRef> {
+    let obj = doc.resolve(strike);
+    let d = obj.as_dict()?;
+    let edit = d.name(b"Subtype") == Some(b"StrikeOut") && d.name(b"IT") == Some(b"StrikeOutTextEdit") && d.name(b"RT") == Some(b"Group");
+    let caret = d.reference(b"IRT").filter(|_| edit)?;
+    (annot_dict(doc, caret).name(b"Subtype") == Some(b"Caret")).then_some(caret)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -243,6 +265,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let free_text = d.name(b"Subtype") == Some(b"FreeText");
+    refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&d);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
@@ -302,8 +325,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let height = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size);
+    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -558,7 +581,7 @@ fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let (_, size) = appearance::parse_da(d);
     let lines = appearance::wrap(&text, size, wrap.max(1.0));
     let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, lines.len().max(1) as f64 * size * 1.2]
+    [widest, appearance::text_lines_height(&lines, size)]
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by
@@ -828,7 +851,7 @@ fn member_change(doc: &Document, page: usize, index: usize, change: &StyleChange
     let callout = subtype == b"FreeText" && d.contains(b"CL");
     let pair = matches!(subtype, b"Line" | b"PolyLine");
     let endings = change.endings.clone().filter(|e| (callout && e.len() == 1) || (pair && e.len() == 2));
-    let bordered = matches!(subtype, b"Square" | b"Circle" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink" | b"FreeText");
+    let bordered = matches!(subtype, b"Square" | b"Circle" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink" | b"FreeText" | b"Caret");
     let c = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| bordered), endings };
     Ok((c != StyleChange::default()).then_some(c))
 }
@@ -840,7 +863,7 @@ fn style_one(doc: &mut Document, page: usize, index: usize, change: StyleChange,
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -1016,7 +1039,7 @@ fn fill_one(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, me
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {
@@ -1057,7 +1080,7 @@ pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Opt
         return Err(AnnotError::Invalid("invalid opacity".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new opacity.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype));
     }
     refuse_foreign_text(doc, &d)?;
