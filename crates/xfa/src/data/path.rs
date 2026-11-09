@@ -151,6 +151,52 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
     }
 }
 
+/// Every field with an `id`, with the SOM path the layout gives it: the root subform's
+/// fields under the root, a page area's under the area (as master pages lay them out), each
+/// named object adding its name and its number among its siblings (repeating subforms as their
+/// first instance). Bounded by [`MAX_DEPTH`].
+pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
+    fn walk<'a>(nodes: &'a [Node], som: &str, out: &mut Vec<(&'a str, String, &'a Field)>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            let here = match &n.common().name {
+                Some(name) if som.is_empty() => format!("{name}[{}]", sibs.at(i)),
+                Some(name) => format!("{som}.{name}[{}]", sibs.at(i)),
+                None => som.to_string(),
+            };
+            match n {
+                Node::Field(f) => {
+                    if let Some(id) = &f.common.id {
+                        out.push((id.as_str(), here, f));
+                    }
+                }
+                Node::Subform(s) => {
+                    walk(&s.children, &here, out, depth + 1);
+                    if let Some(ps) = &s.page_set {
+                        for a in &ps.areas {
+                            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), out, depth + 1);
+                        }
+                    }
+                }
+                Node::Area(a) => walk(&a.children, &here, out, depth + 1),
+                Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
+    walk(&tpl.root.children, &root, &mut out, 1);
+    if let Some(ps) = &tpl.root.page_set {
+        for a in &ps.areas {
+            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), &mut out, 1);
+        }
+    }
+    out
+}
+
 pub(super) fn path_som(path: &DataPath) -> String {
     path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".")
 }
