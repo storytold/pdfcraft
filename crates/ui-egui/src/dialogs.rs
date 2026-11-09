@@ -62,6 +62,7 @@ struct Pending {
     open_revision: Option<usize>,
     a11y_now: bool,
     ocr_now: bool,
+    scan_clean_now: bool,
     compare_now: bool,
     images_now: bool,
     stamp_now: bool,
@@ -126,13 +127,24 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.custom_draft = Some((id, crate::CustomDraft { props: doc.custom_info(), ..Default::default() }));
     }
     let mut req = Pending::default();
-    let modal = widgets::show_modal(ctx, "dialog", |ui| {
+    // Every dialog shares this modal. A different dialog than the one shown before starts from
+    // its own size, not from the last one's: rows that fill the height they are offered would
+    // otherwise keep, say, Print as tall as Preferences (#5118). Tabs of one dialog keep its size;
+    // the kinds of Marks and Export are different dialogs.
+    let shown = egui::Id::unique("dialog").with("shown");
+    let kind = match dialog {
+        Dialog::Properties(_) => Dialog::Properties(PropsTab::Description),
+        _ => dialog,
+    };
+    let remeasure = ctx.data(|d| d.get_temp::<Dialog>(shown)) != Some(kind);
+    ctx.data_mut(|d| d.insert_temp(shown, kind));
+    let modal = widgets::show_modal_sized(ctx, "dialog", remeasure, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
-            Dialog::About => 780.0,
+            Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
@@ -393,6 +405,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = go || cancel;
             return false;
         }
+        Dialog::EnhanceScan => {
+            let (go, cancel) = crate::scan_clean_ui::body(ui, app, &t);
+            req.scan_clean_now = go;
+            req.close = go || cancel;
+            return false;
+        }
         Dialog::AccessibilityOptions => {
             let (start, cancel) = crate::a11y_ui::options_body(ui, app, &t);
             req.a11y_now = start;
@@ -617,7 +635,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 for (m, n) in names {
                                     ui.selectable_value(&mut v.magnification, m, n);
                                 }
-                                for p in [50.0, 75.0, 125.0, 150.0, 200.0] {
+                                // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size.
+                                for p in [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0] {
                                     ui.selectable_value(&mut v.magnification, M::Percent(p), format!("{p:.0}%"));
                                 }
                             })
@@ -1352,6 +1371,7 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
             app.signature = d.saved();
             crate::fill_sign::FillTool::Signature
         };
+        app.fill_tool = tool;
         app.quick_tool = crate::QuickTool::Fill(tool);
         app.toast = None;
     }
@@ -1490,7 +1510,8 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     use crate::commands::{
-        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN, ZOOM_OUT,
+        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIRST_PAGE, FIT_WIDTH, LAST_PAGE, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW,
+        SELECT_ALL, ZOOM_IN, ZOOM_OUT,
     };
     // Registered commands first (always in sync with the real bindings), then the
     // keys the document view handles itself.
@@ -1520,7 +1541,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (key(FIT_WIDTH), tl!("Fit to width").to_string()),
         (pair(ZOOM_IN, ZOOM_OUT), scroll),
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
-        (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
+        (
+            format!("{} / {}, {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End"), pair(FIRST_PAGE, LAST_PAGE)),
+            tl!("First / last page").to_string(),
+        ),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
         (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
@@ -1834,6 +1858,9 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();
             let n: usize = app.hidden_draft.found.iter().filter(|f| f.2).map(|f| f.1).sum();
             if app.apply_edit(Edit::RemoveHidden { which }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if n == 1 {
                     app.notify_tr("Removed 1 hidden item. Save to remove them from the file.");
                 } else {
@@ -1842,11 +1869,17 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             }
         }
         Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            if let Some((_, id)) = app.active_ids() {
+                app.renew_recovery(id);
+            }
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if marks == 1 {
                     app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
                 } else {
@@ -1994,6 +2027,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     }
     if req.ocr_now {
         app.start_ocr();
+    }
+    if req.scan_clean_now {
+        app.start_scan_clean();
     }
     if req.compare_now {
         app.run_compare();

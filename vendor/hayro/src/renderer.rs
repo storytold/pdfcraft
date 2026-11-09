@@ -193,6 +193,67 @@ fn image_buffer(len: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// PdfCraft patch: `mask` sampled onto the grid of a `width` × `height` image (no side smaller
+/// than the mask's). Each image sample takes the mask sample under its centre or, for a mask that
+/// asks for `/Interpolate`, the bilinear blend of the four around it, so the mask's edges stay as
+/// smooth as when it was enlarged on its own. `None` for an empty side, an image side smaller than
+/// the mask's, or a buffer over the limits.
+fn mask_on_image_grid(mask: &LumaData, width: u32, height: u32) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 || mask.width == 0 || mask.height == 0 {
+        return None;
+    }
+    let mut out = image_buffer(source_byte_len(width, height, 1, MAX_IMAGE_PIXELS)?)?;
+    let columns = grid_axis(mask.width, width, mask.interpolate)?;
+    let rows = grid_axis(mask.height, height, mask.interpolate)?;
+    let mask_width = mask.width as usize;
+    let row = |y: usize| {
+        let start = y.checked_mul(mask_width)?;
+        mask.data.get(start..start.checked_add(mask_width)?)
+    };
+    let one = u64::from(GRID_ONE);
+    for &(y0, y1, fy) in &rows {
+        let (top, bottom, fy) = (row(y0)?, row(y1)?, u64::from(fy));
+        for &(x0, x1, fx) in &columns {
+            let fx = u64::from(fx);
+            let blend = |r: &[u8]| Some(u64::from(*r.get(x0)?) * (one - fx) + u64::from(*r.get(x1)?) * fx);
+            // At most 255 × GRID_ONE², so the sum fits in a u64 and the result in a u8.
+            let v = (blend(top)? * (one - fy) + blend(bottom)? * fy + one * one / 2) / (one * one);
+            out.push(v.min(255) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// PdfCraft patch: fixed-point unit of [`grid_axis`]'s blend weights.
+const GRID_ONE: u32 = 1 << 16;
+
+/// PdfCraft patch: for each of `dst` samples (`dst >= src`) taken from `src` along one axis, the
+/// two source samples it lies between and the weight of the second, in [`GRID_ONE`] units.
+/// Centres line up: target `t` lies at `(t + ½)·src/dst − ½` source samples, held to the ends.
+/// Without `smooth` both are the nearest sample, so the weight does not matter.
+fn grid_axis(src: u32, dst: u32, smooth: bool) -> Option<Vec<(usize, usize, u32)>> {
+    if src == 0 || dst < src {
+        return None;
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(dst as usize).ok()?;
+    let last = u64::from(src - 1) << 16;
+    for t in 0..dst {
+        if !smooth {
+            let s = nearest_source_index(src, dst, t);
+            out.push((s, s, 0));
+            continue;
+        }
+        // In u128, as `(2t + 1)·src·2^16` can pass 2^64 for a long side; the quotient is at
+        // most `src·2^16`, so it fits back in a u64.
+        let centre = ((2 * u128::from(t) + 1) * u128::from(src) << 16) / (2 * u128::from(dst));
+        let at = u64::try_from(centre).ok()?.saturating_sub(u64::from(GRID_ONE / 2)).min(last);
+        let s = (at >> 16) as usize;
+        out.push((s, (s + 1).min(src as usize - 1), (at & 0xFFFF) as u32));
+    }
+    Some(out)
+}
+
 /// PdfCraft patch (#624): the source index that PicScale's nearest-neighbour plan copies for
 /// destination `index` of `dst` samples taken from `src`. It is the same fixed-point centre
 /// sampling as `ResampleNearestPlan`, so these are the samples a nearest resize would copy.
@@ -234,6 +295,255 @@ fn nearest_premultiplied_rgba(
         }
     }
     Some(out)
+}
+
+/// PdfCraft patch: the shorter side, in samples, from which an image that did not ask for
+/// `/Interpolate` is still smoothed when enlarged. A page scanned at 72 dpi is 612 samples wide;
+/// icons, QR codes and pixel art are usually far smaller and keep their hard pixels.
+const SMOOTHED_IMAGE_SIDE: u32 = 512;
+
+/// PdfCraft patch: the scale above which such an image counts as enlarged. A scan drawn at its own
+/// resolution can come out a few ulps above 1 (the scale is an `f32`: a 192 dpi scan on a 2×
+/// display at 100%), and sampled bilinearly at a half-pixel offset it blurred by half a pixel.
+/// Below 1% nearest-neighbour repeats at most one sample in a hundred.
+const SMOOTHED_IMAGE_SCALE: f32 = 1.01;
+
+/// PdfCraft patch: fixed-point unit of [`area_shrink`]'s weights.
+const AREA_ONE: u64 = 1 << 16;
+
+/// PdfCraft patch: the source samples target sample `t` covers when `src` samples shrink to `dst`
+/// (`dst <= src`), with their weights in [`AREA_ONE`] units. Target `t` spans `[t·src, (t+1)·src)`
+/// and source `s` spans `[s·dst, (s+1)·dst)`, both in units of 1/(src·dst) of the axis, so every
+/// overlap is exact. The weights are differences of one rounded running sum, so they add up to
+/// exactly [`AREA_ONE`] and a flat area keeps its exact value.
+fn area_taps(src: u32, dst: u32, t: u32) -> impl Iterator<Item = (usize, u64)> {
+    let (src, dst, t) = (u64::from(src), u64::from(dst), u64::from(t));
+    // `t < dst <= src <= 2^28` (MAX_IMAGE_PIXELS), so every product below fits in a u64.
+    let (lo, hi) = (t * src, (t + 1) * src);
+    let fixed = move |x: u64| (x * AREA_ONE + src / 2) / src;
+    (lo / dst..hi.div_ceil(dst)).map(move |s| {
+        let from = (s * dst).max(lo) - lo;
+        let to = ((s + 1) * dst).min(hi) - lo;
+        (s as usize, fixed(to) - fixed(from))
+    })
+}
+
+/// PdfCraft patch: [`area_taps`] of every target sample of one axis, worked out once: for each
+/// target, the first source sample it covers and the weights of the samples from there on (the
+/// samples a target covers are consecutive). There are at most `src + dst` taps in all.
+struct AreaAxis {
+    first: Vec<usize>,
+    /// Where each target's weights start in `weights`, and where the last one's end.
+    offsets: Vec<usize>,
+    weights: Vec<u32>,
+}
+
+impl AreaAxis {
+    fn new(src: u32, dst: u32) -> Option<Self> {
+        let n = dst as usize;
+        let (mut first, mut offsets, mut weights) = (Vec::new(), Vec::new(), Vec::new());
+        first.try_reserve_exact(n).ok()?;
+        offsets.try_reserve_exact(n.checked_add(1)?).ok()?;
+        weights.try_reserve_exact((src as usize).checked_add(n.checked_mul(2)?)?).ok()?;
+        offsets.push(0);
+        for t in 0..dst {
+            let mut start = None;
+            for (s, w) in area_taps(src, dst, t) {
+                start.get_or_insert(s);
+                // A weight is at most AREA_ONE, so it fits in a u32.
+                weights.push(w as u32);
+            }
+            first.push(start?);
+            offsets.push(weights.len());
+        }
+        Some(Self { first, offsets, weights })
+    }
+
+    /// Target `t`'s first source sample and its weights.
+    fn get(&self, t: usize) -> Option<(usize, &[u32])> {
+        let (lo, hi) = (*self.offsets.get(t)?, *self.offsets.get(t.checked_add(1)?)?);
+        Some((*self.first.get(t)?, self.weights.get(lo..hi)?))
+    }
+}
+
+/// PdfCraft patch: shrinks `N`-channel samples from `source` to `target` (no side larger than its
+/// source side) by area averaging: each target sample is the mean of the source it covers,
+/// weighted by how much of it it covers. Nothing is invented between samples, which is what
+/// `/Interpolate` governs (ISO 32000-2 §8.9.5.3, for images drawn above their resolution), and
+/// nothing is dropped: nearest-neighbour keeps one sample in N per axis, so a scan shown at screen
+/// size lost the strokes of its text. Premultiplied input stays premultiplied. `None` if nothing
+/// shrinks, the sizes don't fit or a buffer cannot be allocated.
+fn area_shrink<const N: usize>(data: &[u8], source: (u32, u32), target: (u32, u32)) -> Option<Vec<u8>> {
+    if data.len() != source_byte_len(source.0, source.1, N, MAX_IMAGE_PIXELS)? {
+        return None;
+    }
+    let row_len = (source.0 as usize).checked_mul(N)?;
+    area_shrink_rows::<N>(source, target, |s, row| {
+        let start = s.checked_mul(row_len)?;
+        row.copy_from_slice(data.get(start..start.checked_add(row_len)?)?);
+        Some(())
+    })
+}
+
+/// PdfCraft patch: [`area_shrink`] of a colour image under its same-size soft mask (a stencil's
+/// ink under the stencil, or an image under a mask sampled onto its grid), premultiplied a source
+/// row at a time as it is averaged. The result equals premultiplying the expanded RGBA and
+/// shrinking that, without building it: a 10718 × 13701 stencil shown at page size peaked at
+/// 1.16 GB with the full-resolution RGBA, which is 587 MB.
+fn area_shrink_premultiplied(
+    color: &ImageData,
+    alpha: &[u8],
+    source: (u32, u32),
+    target: (u32, u32),
+) -> Option<Vec<u8>> {
+    let (samples, channels) = match color {
+        ImageData::Luma(luma) => (luma.data.as_slice(), 1),
+        ImageData::Rgb(rgb) => (rgb.data.as_slice(), 3),
+    };
+    if samples.len() != source_byte_len(source.0, source.1, channels, MAX_IMAGE_PIXELS)?
+        || alpha.len() != source_byte_len(source.0, source.1, 1, MAX_IMAGE_PIXELS)?
+    {
+        return None;
+    }
+    let width = source.0 as usize;
+    area_shrink_rows::<4>(source, target, |s, row| {
+        let start = s.checked_mul(width)?;
+        let end = start.checked_add(width)?;
+        let colors = samples.get(start.checked_mul(channels)?..end.checked_mul(channels)?)?;
+        let alphas = alpha.get(start..end)?;
+        for ((out, px), a) in row.chunks_exact_mut(4).zip(colors.chunks_exact(channels)).zip(alphas) {
+            let [r, g, b] = match px {
+                [v] => [*v; 3],
+                [r, g, b] => [*r, *g, *b],
+                _ => return None,
+            };
+            out.copy_from_slice(&AlphaColor::from_rgba8(r, g, b, *a).premultiply().to_rgba8().to_u8_array());
+        }
+        Some(())
+    })
+}
+
+/// PdfCraft patch: the area shrink behind [`area_shrink`], reading source row `s` through
+/// `read_row(s, row)` into a buffer of one row. Each target row averages the source rows it
+/// covers, and that row is shrunk across at once with taps worked out once per image, so work
+/// memory is one source row of samples, one of `u32` accumulators, one shrunk row and the
+/// horizontal taps (at most `sw + 2 × tw`): never the image. A side over
+/// `MAX_RESAMPLING_SOURCE_SIDE` is refused, so none of it exceeds a few times one source row.
+fn area_shrink_rows<const N: usize>(
+    source: (u32, u32),
+    target: (u32, u32),
+    mut read_row: impl FnMut(usize, &mut [u8]) -> Option<()>,
+) -> Option<Vec<u8>> {
+    let ((sw, sh), (tw, th)) = (source, target);
+    // A side over MAX_RESAMPLING_SOURCE_SIDE would make the accumulator row and the tap table
+    // several times larger than the samples (a 2^27 × 2 image of zeros is a tiny file).
+    if tw == 0
+        || th == 0
+        || tw > sw
+        || th > sh
+        || (tw, th) == (sw, sh)
+        || sw > MAX_RESAMPLING_SOURCE_SIDE
+        || sh > MAX_RESAMPLING_SOURCE_SIDE
+    {
+        return None;
+    }
+    let row_len = (sw as usize).checked_mul(N)?;
+    let zeroed = |len: usize| {
+        let mut v = image_buffer(len)?;
+        v.resize(len, 0);
+        Some(v)
+    };
+    let (mut source_row, mut shrunk_row) = (zeroed(row_len)?, image_buffer(row_len)?);
+    let mut acc: Vec<u32> = Vec::new();
+    acc.try_reserve_exact(row_len).ok()?;
+    acc.resize(row_len, 0);
+    // The taps depend only on the widths, so they are worked out once, not again for each row.
+    let taps = if tw == sw { None } else { Some(AreaAxis::new(sw, tw)?) };
+    let out_len = match taps {
+        None => source_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?,
+        Some(_) => image_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?,
+    };
+    let mut out = image_buffer(out_len)?;
+    // Weights sum to AREA_ONE (2^16) and samples are at most 255, so every sum fits in a u32.
+    let round = |acc: u32| ((acc + (AREA_ONE as u32) / 2) >> 16).min(255) as u8;
+    // The last source row read: neighbouring target rows share the row on their boundary.
+    let mut loaded = None;
+    for t in 0..th {
+        // Vertical: the whole source rows target row `t` covers, averaged.
+        let row: &[u8] = if th == sh {
+            read_row(t as usize, &mut source_row)?;
+            &source_row
+        } else {
+            acc.fill(0);
+            for (s, w) in area_taps(sh, th, t) {
+                if loaded != Some(s) {
+                    read_row(s, &mut source_row)?;
+                    loaded = Some(s);
+                }
+                // A weight is at most AREA_ONE, so it fits in a u32.
+                let w = w as u32;
+                for (a, v) in acc.iter_mut().zip(&source_row) {
+                    *a += w * u32::from(*v);
+                }
+            }
+            shrunk_row.clear();
+            shrunk_row.extend(acc.iter().map(|a| round(*a)));
+            &shrunk_row
+        };
+        // Horizontal: that row shrunk to `tw` samples.
+        let Some(taps) = &taps else {
+            out.extend_from_slice(row);
+            continue;
+        };
+        for x in 0..tw as usize {
+            let (first, weights) = taps.get(x)?;
+            let samples = row.get(first * N..(first + weights.len()) * N)?;
+            let mut acc = [0_u32; N];
+            for (w, px) in weights.iter().zip(samples.chunks_exact(N)) {
+                for (a, v) in acc.iter_mut().zip(px) {
+                    *a += w * u32::from(*v);
+                }
+            }
+            out.extend(acc.map(round));
+        }
+    }
+    Some(out)
+}
+
+/// PdfCraft patch: [`area_shrink`] for an image's pixel format. If it cannot run, the image keeps
+/// its source resolution, as when [`Renderer::resize_image_data`] fails.
+fn area_resize(
+    data: Vec<u8>,
+    source: (u32, u32),
+    target: (u32, u32),
+    format: ImagePixelFormat,
+) -> (Vec<u8>, u32, u32) {
+    let shrunk = match format {
+        ImagePixelFormat::Luma => area_shrink::<1>(&data, source, target),
+        ImagePixelFormat::Rgb => area_shrink::<3>(&data, source, target),
+        ImagePixelFormat::Rgba => area_shrink::<4>(&data, source, target),
+    };
+    match shrunk {
+        Some(out) => (out, target.0, target.1),
+        None => {
+            log::warn!(
+                "Image area shrink failed or exceeded its buffer limit; falling back to source data"
+            );
+            (data, source.0, source.1)
+        }
+    }
+}
+
+/// PdfCraft patch: premultiplies straight RGBA samples in place.
+fn premultiply_rgba(rgba: &mut [u8]) {
+    let (chunks, _) = rgba.as_chunks_mut::<4>();
+    for chunk in chunks {
+        let [r, g, b, a] = *chunk;
+        *chunk = AlphaColor::from_rgba8(r, g, b, a)
+            .premultiply()
+            .to_rgba8()
+            .to_u8_array();
+    }
 }
 
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
@@ -325,6 +635,47 @@ thread_local! {
 #[doc(hidden)]
 pub fn set_skip_offscreen_paths(skip: bool) {
     SKIP_OFFSCREEN_PATHS.with(|s| s.set(skip));
+}
+
+/// PdfCraft patch (30): what the renders on this thread have drawn offscreen, for tests that check
+/// a page's cost by counting rather than by timing it (see [`offscreen_draws`]).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OffscreenDraws {
+    /// Tiling pattern cells drawn; a cell taken from `tiling_cells` isn't drawn again.
+    pub tiling_cells: u64,
+    /// The pixels of every pixmap drawn offscreen: tiling cells, masks, groups and the like.
+    pub pixels: u64,
+}
+
+thread_local! {
+    /// PdfCraft patch (30): see [`OffscreenDraws`].
+    static OFFSCREEN_DRAWS: std::cell::Cell<OffscreenDraws> =
+        const { std::cell::Cell::new(OffscreenDraws { tiling_cells: 0, pixels: 0 }) };
+}
+
+/// PdfCraft patch (30): exported for its regression tests (see [`OffscreenDraws`]). The counts
+/// only grow; a test takes the difference across a render.
+#[doc(hidden)]
+pub fn offscreen_draws() -> OffscreenDraws {
+    OFFSCREEN_DRAWS
+        .try_with(std::cell::Cell::get)
+        .unwrap_or_default()
+}
+
+/// PdfCraft patch (30): a `width` × `height` pixmap to draw offscreen, counted in
+/// [`OffscreenDraws`]. Every pixmap the renderer renders into, besides the page, is made here.
+fn offscreen_pixmap(width: u16, height: u16, tiling_cell: bool) -> Pixmap {
+    // Gone only while the thread exits, when there is nothing left to count for.
+    let _ = OFFSCREEN_DRAWS.try_with(|draws| {
+        let mut counts = draws.get();
+        counts.pixels = counts
+            .pixels
+            .saturating_add(u64::from(width) * u64::from(height));
+        counts.tiling_cells = counts.tiling_cells.saturating_add(u64::from(tiling_cell));
+        draws.set(counts);
+    });
+    Pixmap::new(width, height)
 }
 
 /// PdfCraft patch: whether a device-space box can paint a pixel of a `width` × `height`
@@ -423,9 +774,12 @@ fn snap_minified_image(
     planned: (u32, u32),
 ) -> Option<(u32, u32, Affine)> {
     let [a, b, c, d, e, f] = transform.as_coeffs();
+    // Halves round up, not away from zero: a tile's origin moves edges by whole pixels, and only
+    // then do they snap where the whole page snaps them (-2.5 must go to -2 as 2.5 goes to 3).
+    let snap = |v: f64| (v + 0.5).floor();
     // The device span of a source edge from `origin` across `side` samples of `scale`, rounded.
     let edge = |origin: f64, scale: f64, side: u32| {
-        let (p, q) = (origin.round(), (origin + scale * f64::from(side)).round());
+        let (p, q) = (snap(origin), snap(origin + scale * f64::from(side)));
         let (lo, hi) = (p.min(q), p.max(q));
         (hi - lo >= 1.0 && lo.abs() < 1e6 && hi.abs() < 1e6).then_some((lo, hi))
     };
@@ -489,6 +843,9 @@ pub(crate) struct Renderer {
     /// render, every nested renderer starting empty) and so to one `preview` setting: a mask
     /// drawn for a preview, which may leave out tiny images, never reaches a final render.
     pub(crate) soft_mask_cache: HashMap<u128, Mask>,
+    /// PdfCraft patch (30): coloured tiling cells drawn during this render (see [`TilingCells`]).
+    /// Like `soft_mask_cache` it belongs to one renderer, so to one `preview` setting.
+    tiling_cells: TilingCells,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
@@ -500,6 +857,40 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+}
+
+/// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
+/// pattern (`TilingPattern::instance`) and the cell's size and scale. A page that fills many
+/// shapes with one pattern (pdf.js issue 8078 paints 73,047 stencil masks with a pattern whose
+/// cell is 3.5 MB) drew and kept a cell per fill, which ran out of memory; the fills now share
+/// one. A handful of entries covers a run of fills with one pattern, and bounds what the cache
+/// keeps besides what the scene holds anyway.
+#[derive(Default)]
+struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>)>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TilingCellKey {
+    instance: u64,
+    /// Whether this is the bordered cell of a pattern whose step shows one cell (patch (20)).
+    one_cell: bool,
+    is_stroke: bool,
+    pixels: (u16, u16),
+    scale: (u64, u64),
+}
+
+impl TilingCells {
+    const MAX_ENTRIES: usize = 8;
+
+    fn get(&self, key: &TilingCellKey) -> Option<Arc<Pixmap>> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, cell)| cell.clone())
+    }
+
+    fn insert(&mut self, key: TilingCellKey, cell: Arc<Pixmap>) {
+        if self.0.len() >= Self::MAX_ENTRIES {
+            self.0.remove(0);
+        }
+        self.0.push((key, cell));
+    }
 }
 
 /// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
@@ -600,6 +991,7 @@ impl Renderer {
             erase_groups: 0,
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
+            tiling_cells: TilingCells::default(),
             outline_cache: cache.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
@@ -706,6 +1098,7 @@ impl Renderer {
                 erase_groups: 0,
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
+                tiling_cells: TilingCells::default(),
                 outline_cache: self.outline_cache.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
@@ -714,7 +1107,7 @@ impl Renderer {
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
             };
-            let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
+            let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
                 data: dummy_rgb,
                 width: alpha_data.width,
@@ -935,17 +1328,51 @@ impl Renderer {
             return;
         }
         let interpolate = image_data.interpolate();
-        if let Some(a) = &alpha_data {
+        let requested_resize = x_scale < 1.0 || y_scale < 1.0;
+        // PdfCraft patch: an image that did not ask for interpolation and is drawn below its
+        // resolution is shrunk by area averaging (`area_shrink`), not nearest-neighbour, which
+        // broke up the text of scans shown at screen size. Type 3 glyph images keep the nearest
+        // shrink of #624: they are drawn with a frame of their own and never snapped.
+        let area = !interpolate
+            && requested_resize
+            && !self.in_type3_glyph
+            // Wider sources keep #624's bounded nearest-neighbour shrink (`area_shrink` refuses
+            // them): skipping them, as a refused shrink at source size would, loses the image.
+            && source_width.max(source_height) <= MAX_RESAMPLING_SOURCE_SIDE;
+        let mut alpha_data = alpha_data;
+        if let Some(a) = alpha_data.take() {
             if source_byte_len(a.width, a.height, 1, MAX_IMAGE_PIXELS) != Some(a.data.len()) {
                 log::warn!("Image has invalid or over-limit alpha dimensions/data and was skipped");
                 return;
             }
             if a.width != source_width || a.height != source_height || a.interpolate != interpolate
             {
-                if let Some(alpha) = alpha_data {
-                    self.draw_image_with_alpha_mask(image_data, alpha);
+                // PdfCraft patch: a soft mask no larger than its area-shrunk image is sampled onto
+                // the image's grid, so colour and mask are averaged together, premultiplied. Drawn
+                // as a mask layer over the image instead, the averaged colour (transparent samples
+                // included) was multiplied by the averaged mask, and the colour of transparent
+                // samples showed at the mask's edges. A larger mask carries detail the image does
+                // not (#1649) and keeps the layer.
+                let on_grid = (area && a.width <= source_width && a.height <= source_height)
+                    .then(|| mask_on_image_grid(&a, source_width, source_height))
+                    .flatten();
+                match on_grid {
+                    Some(data) => {
+                        alpha_data = Some(LumaData {
+                            data,
+                            width: source_width,
+                            height: source_height,
+                            interpolate,
+                            ..a
+                        });
+                    }
+                    None => {
+                        self.draw_image_with_alpha_mask(image_data, a);
+                        return;
+                    }
                 }
-                return;
+            } else {
+                alpha_data = Some(a);
             }
         }
         let mut quality = if interpolate {
@@ -955,7 +1382,6 @@ impl Renderer {
         };
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
-        let requested_resize = x_scale < 1.0 || y_scale < 1.0;
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
@@ -985,12 +1411,28 @@ impl Renderer {
         if requested_resize && self.in_type3_glyph && interpolate {
             quality = ImageQuality::High;
         }
-        // PdfCraft patch: an interpolated image that is shrunk, with its axes along the device's
-        // (upright, mirrored or a quarter turn), lands on whole device pixels. It is shrunk once to
-        // exactly its snapped device rectangle and drawn 1:1 from the snapped corner. Otherwise the
-        // shrunk raster (rounded up to a whole size) is sampled a second time at a fractional scale
-        // and offset, which blurs scans and photos.
-        let snapped = if interpolate
+        // PdfCraft patch: an image the size of a page scan is smoothed when drawn above its
+        // resolution, even without `/Interpolate`: bilinearly, as images that ask for it are.
+        // Scans rarely ask, and drawn nearest-neighbour each sample of a zoomed scan became a
+        // block, so the edges of its text were staircases. Bicubic looked the same on a zoomed
+        // 300 dpi scan and drew its tiles five times slower. Smaller images (icons, QR codes,
+        // pixel art) keep their hard pixels. A scan shrunk on one side and stretched on the other
+        // is smoothed too: the area shrink leaves the shrunk side at 1:1, where bilinear adds
+        // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
+        if !interpolate
+            && !self.in_type3_glyph
+            && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
+            && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
+        {
+            quality = ImageQuality::Medium;
+        }
+        // PdfCraft patch: an image that is shrunk (filtered or area-averaged), with its axes along
+        // the device's (upright, mirrored or a quarter turn), lands on whole device pixels. It is
+        // shrunk once to exactly its snapped device rectangle and drawn 1:1 from the snapped
+        // corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a second time
+        // at a fractional scale and offset, which blurs scans and photos (or, by the nearest
+        // sampler of a non-interpolated image, drops samples again).
+        let snapped = if (interpolate || area)
             && requested_resize
             && !self.in_type3_glyph
             && (new_width, new_height) != (source_width, source_height)
@@ -1000,13 +1442,31 @@ impl Renderer {
             None
         };
         let (new_width, new_height) = snapped.map_or((new_width, new_height), |s| (s.0, s.1));
+        // PdfCraft patch: an area shrink never enlarges. A side drawn at or above its resolution
+        // (an image shrunk across and stretched down, as a 204 × 98 dpi fax is, or a snapped side
+        // rounded past its source) keeps its samples and is enlarged by the sampler; the snap
+        // then no longer matches, so the full transform places the image.
+        let (new_width, new_height) = if area {
+            (new_width.min(source_width), new_height.min(source_height))
+        } else {
+            (new_width, new_height)
+        };
         let needs_resize = (new_width, new_height) != (source_width, source_height);
 
-        // PdfCraft patch (#624): a minified image with a soft mask that is not interpolated is
-        // nearest-sampled straight into premultiplied target RGBA. That skips the full-resolution
-        // RGBA copy below and the premultiply pass after it.
+        // PdfCraft patch (#624): a minified image with a soft mask that is neither interpolated nor
+        // area-averaged (a Type 3 glyph image, or a source wider than MAX_RESAMPLING_SOURCE_SIDE)
+        // is nearest-sampled straight into premultiplied target RGBA. That skips the
+        // full-resolution RGBA copy below and the premultiply pass after it. PdfCraft patch: an
+        // area-averaged one (a stencil's ink, or an image under its mask) skips them too, and is
+        // premultiplied a source row at a time as it is averaged (`area_shrink_premultiplied`).
         let direct = match &alpha_data {
-            Some(alpha) if needs_resize && !interpolate => nearest_premultiplied_rgba(
+            Some(alpha) if needs_resize && !interpolate && !area => nearest_premultiplied_rgba(
+                &image_data,
+                &alpha.data,
+                (source_width, source_height),
+                (new_width, new_height),
+            ),
+            Some(alpha) if needs_resize && area => area_shrink_premultiplied(
                 &image_data,
                 &alpha.data,
                 (source_width, source_height),
@@ -1014,7 +1474,7 @@ impl Renderer {
             ),
             _ => None,
         };
-        let premultiplied = direct.is_some();
+        let mut premultiplied = direct.is_some();
         // Preserve the single-channel/RGB fast paths. With alpha, expand directly to RGBA;
         // every source and alpha length was validated before zipping or allocating.
         let (data, format) = match (direct, image_data, alpha_data) {
@@ -1057,6 +1517,15 @@ impl Renderer {
         };
         let (data, mut img_width, mut img_height) = if premultiplied {
             (data, new_width, new_height)
+        } else if needs_resize && area {
+            let mut data = data;
+            if matches!(format, ImagePixelFormat::Rgba) {
+                // Averaging straight colours would bleed the colour of transparent samples into
+                // their neighbours; premultiplied colours count each by its coverage.
+                premultiply_rgba(&mut data);
+                premultiplied = true;
+            }
+            area_resize(data, (source_width, source_height), (new_width, new_height), format)
         } else if needs_resize {
             self.resize_image_data(
                 data,
@@ -1103,14 +1572,7 @@ impl Renderer {
             rgba
         };
         if has_alpha && !premultiplied {
-            let (chunks, _) = rgba_data.as_chunks_mut::<4>();
-            for chunk in chunks {
-                let [r, g, b, a] = *chunk;
-                *chunk = AlphaColor::from_rgba8(r, g, b, a)
-                    .premultiply()
-                    .to_rgba8()
-                    .to_u8_array();
-            }
+            premultiply_rgba(&mut rgba_data);
         }
         // Type 3 glyphs get a transparent two-pixel frame for interpolation. Check the padded
         // RGBA allocation and u16 dimensions too, before narrowing or growing either side.
@@ -1158,6 +1620,52 @@ impl Renderer {
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
 
+    /// PdfCraft patch (30): the cell pixmap of tiling pattern `t`, `size` pixels drawn at
+    /// `initial_transform`; a cell with a `key` is drawn once and then taken from `tiling_cells`.
+    fn tiling_cell(
+        &mut self,
+        t: &hayro_interpret::pattern::TilingPattern<'_>,
+        key: Option<TilingCellKey>,
+        size: (u16, u16),
+        initial_transform: Affine,
+        is_stroke: bool,
+    ) -> Arc<Pixmap> {
+        if let Some(cell) = key.and_then(|key| self.tiling_cells.get(&key)) {
+            return cell;
+        }
+        let mut renderer = Self {
+            ctx: RenderContext::new_with(size.0, size.1, derive_settings(self.ctx.render_settings())),
+            // PdfCraft patch: a pattern cell is painted as one artwork, so its content is never
+            // remapped by the reading-colours setting.
+            color_replacement: None,
+            in_annotations: false,
+            knockout: Vec::new(),
+            erasing: false,
+            knockout_passes: Vec::new(),
+            erase_groups: 0,
+            cur_mask: None,
+            inside_pattern: true,
+            soft_mask_cache: HashMap::default(),
+            tiling_cells: TilingCells::default(),
+            outline_cache: self.outline_cache.clone(),
+            in_type3_glyph: false,
+            scaler: self.scaler,
+            preview: self.preview,
+            image_transparency_stack: Vec::new(),
+            ink: InkState::default(),
+        };
+        t.interpret(&mut renderer, initial_transform, is_stroke);
+        let mut pix = offscreen_pixmap(size.0, size.1, true);
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+        let pix = Arc::new(pix);
+        if let Some(key) = key {
+            self.tiling_cells.insert(key, pix.clone());
+        }
+        pix
+    }
+
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
         let old_transform = *self.ctx.transform();
 
@@ -1203,6 +1711,7 @@ impl Renderer {
             in_annotations: self.in_annotations,
             inside_pattern: self.inside_pattern,
             soft_mask_cache: HashMap::default(),
+            tiling_cells: TilingCells::default(),
             outline_cache: self.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
@@ -1227,7 +1736,7 @@ impl Renderer {
         if renderer.ink.unsupported {
             return None;
         }
-        let mut pix = Pixmap::new(width, height);
+        let mut pix = offscreen_pixmap(width, height, false);
         renderer.ctx.flush();
         let mut resources = vello_cpu::Resources::default();
         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
@@ -1359,7 +1868,9 @@ impl Renderer {
                 AlphaColor::from_rgba8(c[0], c[1], c[2], c[3]).into()
             }
             Paint::Pattern(p) => {
-                let path_transform = self.ctx.transform();
+                // PdfCraft patch (30): a copy, so a tiling cell can be drawn and kept on `self`.
+                let current_transform = *self.ctx.transform();
+                let path_transform = &current_transform;
 
                 match *p {
                     Pattern::Shading(s) => {
@@ -1466,39 +1977,20 @@ impl Renderer {
                             const BORDER: f64 = 1.0;
                             let pix_width = ((bbox.width() as f32 * xs).ceil() as u16).saturating_add(2);
                             let pix_height = ((bbox.height() as f32 * ys).ceil() as u16).saturating_add(2);
-                            let mut renderer = Self {
-                                ctx: RenderContext::new_with(
-                                    pix_width,
-                                    pix_height,
-                                    derive_settings(self.ctx.render_settings()),
-                                ),
-                                color_replacement: None,
-                                in_annotations: false,
-                                knockout: Vec::new(),
-                                erasing: false,
-                                knockout_passes: Vec::new(),
-                                erase_groups: 0,
-                                cur_mask: None,
-                                inside_pattern: true,
-                                soft_mask_cache: HashMap::default(),
-                                outline_cache: self.outline_cache.clone(),
-                                in_type3_glyph: false,
-                                scaler: self.scaler,
-                                preview: self.preview,
-                                image_transparency_stack: Vec::new(),
-                                ink: InkState::default(),
-                            };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
                                 * Affine::translate((-bbox.x0, -bbox.y0));
-                            t.interpret(&mut renderer, initial_transform, is_stroke);
-                            let mut pix = Pixmap::new(pix_width, pix_height);
-                            renderer.ctx.flush();
-                            let mut resources = vello_cpu::Resources::default();
-                            renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                            let key = t.is_coloured().then(|| TilingCellKey {
+                                instance: t.instance(),
+                                one_cell: true,
+                                is_stroke,
+                                pixels: (pix_width, pix_height),
+                                scale: (u64::from(xs.to_bits()), u64::from(ys.to_bits())),
+                            });
+                            let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
                             paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
                             let image = Image {
-                                image: ImageSource::Pixmap(Arc::new(pix)),
+                                image: ImageSource::Pixmap(pix),
                                 sampler: ImageSampler {
                                     x_extend: peniko::Extend::Pad,
                                     y_extend: peniko::Extend::Pad,
@@ -1528,37 +2020,17 @@ impl Renderer {
                         let scaled_width = bbox.width() * xs;
                         let scaled_height = bbox.height() * ys;
 
-                        let mut renderer = Self {
-                            ctx: RenderContext::new_with(
-                                pix_width,
-                                pix_height,
-                                derive_settings(self.ctx.render_settings()),
-                            ),
-                            // PdfCraft patch: a pattern cell is painted as one artwork, so its
-                            // content is never remapped by the reading-colours setting.
-                            color_replacement: None,
-                            in_annotations: false,
-                            knockout: Vec::new(),
-                            erasing: false,
-                            knockout_passes: Vec::new(),
-                            erase_groups: 0,
-                            cur_mask: None,
-                            inside_pattern: true,
-                            soft_mask_cache: HashMap::default(),
-                            outline_cache: self.outline_cache.clone(),
-                            in_type3_glyph: false,
-                            scaler: self.scaler,
-                            preview: self.preview,
-                            image_transparency_stack: Vec::new(),
-                            ink: InkState::default(),
-                        };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
-                        t.interpret(&mut renderer, initial_transform, is_stroke);
-                        let mut pix = Pixmap::new(pix_width, pix_height);
-                        renderer.ctx.flush();
-                        let mut resources = vello_cpu::Resources::default();
-                        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                        // PdfCraft patch (30): a coloured cell is drawn once per setting and scale.
+                        let key = t.is_coloured().then(|| TilingCellKey {
+                            instance: t.instance(),
+                            one_cell: false,
+                            is_stroke,
+                            pixels: (pix_width, pix_height),
+                            scale: (xs.to_bits(), ys.to_bits()),
+                        });
+                        let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
 
                         // TODO: Fix these
                         if t.x_step < 0.0 {
@@ -1575,7 +2047,7 @@ impl Renderer {
                             path_transform.inverse() * t.matrix * initial_transform.inverse();
 
                         let image = Image {
-                            image: ImageSource::Pixmap(Arc::new(pix)),
+                            image: ImageSource::Pixmap(pix),
                             sampler: ImageSampler {
                                 x_extend: peniko::Extend::Repeat,
                                 y_extend: peniko::Extend::Repeat,
@@ -1813,69 +2285,57 @@ impl<'a> Device<'a> for Renderer {
                                 self.ctx.set_fill_rule(old_rule);
                             }
                             Paint::Pattern(_) => {
-                                let (width, height) = (self.ctx.width(), self.ctx.height());
                                 let stencil_rect = Rect::new(
                                     0.0,
                                     0.0,
                                     stencil.width as f64,
                                     stencil.height as f64,
                                 );
-                                let mask_pix = {
-                                    let rgb_bytes = ImageData::Rgb(RgbData {
-                                        data: vec![
-                                            255;
-                                            stencil.width as usize
-                                                * stencil.height as usize
-                                                * 3
-                                        ],
-                                        width: stencil.width,
-                                        height: stencil.height,
-                                        interpolate: stencil.interpolate,
-                                        scale_factors: stencil.scale_factors,
-                                    });
-                                    let mut sub_renderer = Self {
-                                        ctx: RenderContext::new_with(
-                                            width,
-                                            height,
-                                            derive_settings(self.ctx.render_settings()),
-                                        ),
-                                        // PdfCraft patch: a stencil mask must keep its original
-                                        // coverage values, so its content is never remapped by
-                                        // the reading-colours setting.
-                                        color_replacement: None,
-                                        in_annotations: false,
-                                        knockout: Vec::new(),
-                                        erasing: false,
-                                        knockout_passes: Vec::new(),
-                                        erase_groups: 0,
-                                        inside_pattern: false,
-                                        soft_mask_cache: HashMap::default(),
-                                        outline_cache: self.outline_cache.clone(),
-                                        cur_mask: None,
-                                        in_type3_glyph: false,
-                                        scaler: self.scaler,
-                                        preview: self.preview,
-                                        image_transparency_stack: Vec::new(),
-                                        ink: InkState::default(),
-                                    };
-                                    let mut sub_pix = Pixmap::new(width, height);
-                                    sub_renderer.ctx.set_transform(transform);
-                                    sub_renderer.draw_image(rgb_bytes, Some(stencil));
-                                    sub_renderer.ctx.flush();
-                                    let mut resources = vello_cpu::Resources::default();
-                                    sub_renderer
-                                        .ctx
-                                        .render_to_pixmap(&mut resources, &mut sub_pix);
-                                    sub_pix
+                                let Some(len) = source_byte_len(
+                                    stencil.width,
+                                    stencil.height,
+                                    3,
+                                    MAX_IMAGE_PIXELS,
+                                ) else {
+                                    log::warn!(
+                                        "Stencil mask dimensions exceeded the buffer limit; image skipped"
+                                    );
+                                    return;
                                 };
-
-                                self.ctx.push_layer(
-                                    None,
-                                    Some(self.ctx.blend_mode()),
-                                    None,
-                                    Some(Mask::new_luminance(&mask_pix)),
-                                    None,
-                                );
+                                let Some(mut white) = image_buffer(len) else {
+                                    log::warn!(
+                                        "Stencil mask buffer could not be allocated; image skipped"
+                                    );
+                                    return;
+                                };
+                                white.resize(len, 255);
+                                // PdfCraft patch (30): under a clip of the stencil's device
+                                // rectangle, the pattern is painted into a layer of its own and
+                                // cut to the stencil by a layer holding the stencil, composited
+                                // with `Compose::DestIn`; a layer is only as large as the clip,
+                                // so a draw costs what its rectangle covers. A luminance mask
+                                // (which vello_cpu only takes at canvas size) cost a
+                                // canvas-sized render, mask and composite per draw: a page of
+                                // 73,047 patterned 16 × 16 stencils took minutes. The clip is
+                                // padded past the rectangle so that a stencil snapped to whole
+                                // device pixels lies inside it; the cut clears the padding.
+                                let device_rect = (transform * stencil_rect.to_path(0.1))
+                                    .bounding_box()
+                                    .inflate(2.0, 2.0);
+                                if ![device_rect.x0, device_rect.y0, device_rect.x1, device_rect.y1]
+                                    .iter()
+                                    .all(|v| v.is_finite())
+                                {
+                                    log::warn!("Stencil mask has an invalid transform; image skipped");
+                                    return;
+                                }
+                                let layer_clip = device_rect.to_path(0.1);
+                                let blend_mode = self.ctx.blend_mode();
+                                self.ctx.set_transform(Affine::IDENTITY);
+                                self.ctx.push_clip_layer(&layer_clip);
+                                // Unclipped, so isolated: a layer with only a clip draws
+                                // straight into what is under it, which the cut would clear.
+                                self.ctx.push_layer(None, Some(blend_mode), None, None, None);
                                 self.ctx.set_transform(transform);
 
                                 // PdfCraft patch: a stencil mask is painted with the fill
@@ -1893,6 +2353,37 @@ impl<'a> Device<'a> for Renderer {
                                     }
                                 }
 
+                                // The stencil, as white ink under its own coverage, keeps the
+                                // pattern where it paints and clears the rest of the clip.
+                                let paint_blend = self.ctx.blend_mode();
+                                self.ctx.set_blend_mode(peniko::BlendMode::default());
+                                // The pattern left its own paint transform, which would place
+                                // the stencil's pixels.
+                                self.ctx.set_paint_transform(Affine::IDENTITY);
+                                self.ctx.push_blend_layer(peniko::BlendMode::new(
+                                    Mix::Normal,
+                                    Compose::DestIn,
+                                ));
+                                self.ctx.set_transform(transform);
+                                // The coverage is drawn as a stencil outside a Type 3 glyph is:
+                                // a glyph's image rules (nearest shrink, padded frame) are for
+                                // the glyph's own images.
+                                let in_type3_glyph = std::mem::replace(&mut self.in_type3_glyph, false);
+                                self.draw_image(
+                                    ImageData::Rgb(RgbData {
+                                        data: white,
+                                        width: stencil.width,
+                                        height: stencil.height,
+                                        interpolate: stencil.interpolate,
+                                        scale_factors: stencil.scale_factors,
+                                    }),
+                                    Some(stencil),
+                                );
+                                self.in_type3_glyph = in_type3_glyph;
+                                self.ctx.pop_layer();
+                                self.ctx.set_blend_mode(paint_blend);
+
+                                self.ctx.pop_layer();
                                 self.ctx.pop_layer();
                             }
                         };
@@ -1984,7 +2475,7 @@ impl<'a> Device<'a> for Renderer {
             return false;
         }
 
-        let mut result = Pixmap::new(width, height);
+        let mut result = offscreen_pixmap(width, height, false);
         for ((px, rgb), coverage) in result.data_mut().iter_mut().zip(rgb.chunks_exact(3)).zip(cmy.data()) {
             let a = u32::from(coverage.a);
             let premul = |v: u8| ((u32::from(v) * a + 127) / 255) as u8;
@@ -2368,6 +2859,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         inside_pattern: false,
         cur_mask: None,
         soft_mask_cache: HashMap::default(),
+        tiling_cells: TilingCells::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -2395,7 +2887,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         renderer.ctx.pop_layer();
     }
 
-    let mut pix = Pixmap::new(width, height);
+    let mut pix = offscreen_pixmap(width, height, false);
     renderer.ctx.flush();
     let mut resources = vello_cpu::Resources::default();
     renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
@@ -2633,5 +3125,203 @@ mod snap_tests {
         assert!(snap_minified_image(&noisy, source, planned).is_some());
         let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
         assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
+}
+
+/// PdfCraft patch: the area-averaging shrink of non-interpolated images.
+#[cfg(test)]
+mod area_shrink_tests {
+    use super::{
+        AREA_ONE, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
+        area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba,
+    };
+
+    /// Deterministic samples that vary from one to the next.
+    fn noise(len: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The shrink as two whole passes, every row averaged down and then every row across, each
+    /// rounded to a byte: what `area_shrink` did before it worked a row at a time.
+    fn two_pass_shrink<const N: usize>(data: &[u8], (sw, sh): (u32, u32), (tw, th): (u32, u32)) -> Vec<u8> {
+        let round = |acc: u64| ((acc + AREA_ONE / 2) >> 16).min(255) as u8;
+        let row_len = sw as usize * N;
+        let tall: Vec<u8> = (0..th)
+            .flat_map(|t| {
+                (0..row_len).map(move |i| {
+                    round(area_taps(sh, th, t).map(|(s, w)| w * u64::from(data[s * row_len + i])).sum())
+                })
+            })
+            .collect();
+        tall.chunks_exact(row_len)
+            .flat_map(|row| {
+                (0..tw).flat_map(move |t| {
+                    (0..N).map(move |c| round(area_taps(sw, tw, t).map(|(s, w)| w * u64::from(row[s * N + c])).sum()))
+                })
+            })
+            .collect()
+    }
+
+    /// Working a row at a time gives the same bytes as two whole passes, in both directions, one
+    /// direction alone, and with source rows shared by neighbouring targets.
+    #[test]
+    fn a_row_at_a_time_shrink_equals_two_whole_passes() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((13, 11), (1, 1)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let gray = noise((source.0 * source.1) as usize, i as u32);
+            assert_eq!(area_shrink::<1>(&gray, source, target), Some(two_pass_shrink::<1>(&gray, source, target)), "{source:?} → {target:?}");
+            let rgba = noise((source.0 * source.1 * 4) as usize, i as u32 + 99);
+            assert_eq!(area_shrink::<4>(&rgba, source, target), Some(two_pass_shrink::<4>(&rgba, source, target)), "{source:?} → {target:?}");
+        }
+    }
+
+    /// Premultiplying a row at a time as it is averaged gives the same bytes as premultiplying the
+    /// whole expanded RGBA first and shrinking that, for gray and RGB colour.
+    #[test]
+    fn premultiplying_row_by_row_equals_premultiplying_the_whole_image() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let (w, h) = source;
+            let pixels = (w * h) as usize;
+            let alpha = noise(pixels, i as u32 + 7);
+            let gray = noise(pixels, i as u32 + 11);
+            let rgb = noise(pixels * 3, i as u32 + 13);
+            let colors = [
+                ImageData::Luma(LumaData { data: gray.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+                ImageData::Rgb(RgbData { data: rgb.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+            ];
+            for color in &colors {
+                let mut whole: Vec<u8> = match color {
+                    ImageData::Luma(_) => gray.iter().zip(&alpha).flat_map(|(g, a)| [*g, *g, *g, *a]).collect(),
+                    ImageData::Rgb(_) => rgb.chunks_exact(3).zip(&alpha).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect(),
+                };
+                premultiply_rgba(&mut whole);
+                assert_eq!(
+                    area_shrink_premultiplied(color, &alpha, source, target),
+                    area_shrink::<4>(&whole, source, target),
+                    "{source:?} → {target:?}"
+                );
+            }
+            let short = alpha.get(1..).unwrap_or_default();
+            assert_eq!(area_shrink_premultiplied(&colors[0], short, source, target), None, "alpha shorter than the image");
+        }
+    }
+
+    fn mask(data: &[u8], width: u32, height: u32) -> LumaData {
+        LumaData { data: data.to_vec(), width, height, interpolate: false, scale_factors: (1.0, 1.0) }
+    }
+
+    /// Each image sample takes the mask sample under its centre, at whole and fractional ratios.
+    #[test]
+    fn a_mask_is_sampled_onto_the_image_grid() {
+        assert_eq!(mask_on_image_grid(&mask(&[10, 20], 2, 1), 4, 2), Some(vec![10, 10, 20, 20, 10, 10, 20, 20]));
+        // Centres of 7 samples over 3: 0.5/7·3 = 0.21 → 0, 1.5/7·3 = 0.64 → 0, 2.5/7·3 = 1.07 → 1, …
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3], 3, 1), 7, 1), Some(vec![1, 1, 2, 2, 2, 3, 3]));
+    }
+
+    /// A mask that asks for `/Interpolate` is blended between the samples around each centre,
+    /// and held at its ends: the centres of 4 samples over 2 lie at -¼, ¼, ¾ and 1¼.
+    #[test]
+    fn an_interpolated_mask_is_blended_onto_the_image_grid() {
+        let smooth = |data: &[u8], width, height| LumaData { interpolate: true, ..mask(data, width, height) };
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 2, 1), 4, 2), Some(vec![0, 64, 191, 255, 0, 64, 191, 255]));
+        // Centres of 7 samples over 3 lie 3/7 apart, from -2/7 to 2 2/7: a ramp, flat at the ends.
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 70, 140], 3, 1), 7, 1), Some(vec![0, 10, 40, 70, 100, 130, 140]));
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 1, 2), 1, 4), Some(vec![0, 64, 191, 255]));
+        assert_eq!(mask_on_image_grid(&smooth(&[7, 9], 2, 1), 2, 1), Some(vec![7, 9]), "same size is unchanged");
+    }
+
+    #[test]
+    fn malformed_masks_are_not_sampled() {
+        assert_eq!(mask_on_image_grid(&mask(&[], 0, 1), 4, 1), None, "an empty mask");
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2], 2, 1), 0, 1), None, "an empty image");
+        assert_eq!(mask_on_image_grid(&mask(&[1], 2, 1), 4, 1), None, "mask data shorter than its size");
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3, 4], 1, 4), 1, 2), None, "a mask larger than the image");
+    }
+
+    /// Every target sample's weights add up to exactly one, and together the targets take every
+    /// source sample exactly once (each `dst / src` of it, in fixed point within rounding).
+    #[test]
+    fn taps_are_exact_partitions_of_unity() {
+        for src in 1..=40_u32 {
+            for dst in 1..=src {
+                let mut taken = vec![0_u64; src as usize];
+                for t in 0..dst {
+                    let taps: Vec<_> = area_taps(src, dst, t).collect();
+                    assert_eq!(taps.iter().map(|(_, w)| w).sum::<u64>(), AREA_ONE, "{src} → {dst}, target {t}");
+                    assert!(taps.iter().all(|(_, w)| *w > 0), "{src} → {dst}, target {t}: an empty tap");
+                    for (s, w) in taps {
+                        taken[s] += w;
+                    }
+                }
+                // Source s is dst/src of one target in all; scaled by src/dst, that is one.
+                for (s, w) in taken.iter().enumerate() {
+                    let share = (*w * u64::from(src)) as f64 / (AREA_ONE * u64::from(dst)) as f64;
+                    assert!((share - 1.0).abs() < 1e-3, "{src} → {dst}: source {s} weighs {share}");
+                }
+            }
+        }
+    }
+
+    /// The table the horizontal pass reads holds exactly the taps of every target, in order.
+    #[test]
+    fn the_tap_table_holds_every_targets_taps() {
+        for src in 1..=40_u32 {
+            for dst in 1..=src {
+                let axis = AreaAxis::new(src, dst).expect("table");
+                for t in 0..dst {
+                    let (first, weights) = axis.get(t as usize).expect("target");
+                    let expected: Vec<(usize, u64)> = area_taps(src, dst, t).collect();
+                    let got: Vec<(usize, u64)> = weights.iter().enumerate().map(|(k, w)| (first + k, u64::from(*w))).collect();
+                    assert_eq!(got, expected, "{src} → {dst}, target {t}");
+                }
+                assert_eq!(axis.get(dst as usize), None, "{src} → {dst}: no target past the last");
+            }
+        }
+    }
+
+    /// The largest side an image may have still computes in u64 without overflowing.
+    #[test]
+    fn taps_at_the_pixel_limit_do_not_overflow() {
+        let side = MAX_IMAGE_PIXELS as u32;
+        for (dst, t) in [(1, 0), (3, 2), (side - 1, side - 2), (side, side - 1)] {
+            assert_eq!(area_taps(side, dst, t).map(|(_, w)| w).sum::<u64>(), AREA_ONE, "{side} → {dst}, target {t}");
+        }
+    }
+
+    #[test]
+    fn flat_images_keep_their_exact_value() {
+        for (source, target) in [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((13, 11), (1, 1))] {
+            let data = vec![77_u8; (source.0 * source.1 * 3) as usize];
+            let out = area_shrink::<3>(&data, source, target).expect("shrinks");
+            assert_eq!(out.len(), (target.0 * target.1 * 3) as usize);
+            assert!(out.iter().all(|v| *v == 77), "{source:?} → {target:?}: {out:?}");
+        }
+    }
+
+    /// A side over the resampling limit is refused before any work buffer is allocated.
+    #[test]
+    fn sides_over_the_resampling_limit_are_refused() {
+        let wide = (super::MAX_RESAMPLING_SOURCE_SIDE + 1) as usize;
+        assert_eq!(area_shrink::<1>(&vec![0_u8; wide], (wide as u32, 1), (10, 1)), None, "too wide");
+        assert_eq!(area_shrink::<1>(&vec![0_u8; wide], (1, wide as u32), (1, 10)), None, "too tall");
+    }
+
+    #[test]
+    fn malformed_shrinks_are_refused() {
+        let data = vec![0_u8; 4 * 4];
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (4, 4)), None, "nothing shrinks");
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (5, 2)), None, "a side grows");
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
+        assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
+        assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
     }
 }
