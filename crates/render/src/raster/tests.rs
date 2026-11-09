@@ -4302,9 +4302,14 @@ fn jbig2_segment(out: &mut Vec<u8>, number: u32, kind: u8, refs: &[u8], data: &[
 /// The page information of a 16 × 2 JBIG2 page whose default pixel is black, so that the image, if
 /// it decodes, draws black whatever its other segments hold.
 fn black_jbig2_page() -> Vec<u8> {
+    black_jbig2_page_of(16, 2)
+}
+
+/// [`black_jbig2_page`], `width` × `height`.
+fn black_jbig2_page_of(width: u32, height: u32) -> Vec<u8> {
     let mut page = Vec::new();
-    page.extend_from_slice(&16u32.to_be_bytes());
-    page.extend_from_slice(&2u32.to_be_bytes());
+    page.extend_from_slice(&width.to_be_bytes());
+    page.extend_from_slice(&height.to_be_bytes());
     page.extend_from_slice(&[0; 8]); // resolution
     page.extend_from_slice(&[4, 0, 0]); // flags (default pixel black), striping
     let mut stream = Vec::new();
@@ -4513,10 +4518,10 @@ fn a_symbol_dictionary_holds_as_many_pixels_as_a_page() {
 /// A JBIG2 mask one of the decoder's limits refuses takes its picture with it, as one left out for
 /// the page's allowance does: the file isn't to blame, and a scan's colour layer drawn without its
 /// mask covers the page in noise (#6722). A mask the file damaged leaves its picture whole, as
-/// upstream draws it.
+/// upstream draws it. A size the file damaged can read as past a limit, and is taken for one.
 #[test]
 fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
-    let draws = |entry: &str, mask: &[u8]| {
+    let draws = |entry: &str, (width, height): (u32, u32), mask: &[u8]| {
         let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
         let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
         pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
@@ -4527,8 +4532,11 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
         );
         let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
         pdf.extend_from_slice(
-            format!("6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter /JBIG2Decode /Length {} >> stream\n", mask.len())
-                .as_bytes(),
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 1 {kind} /Filter /JBIG2Decode /Length {} >> stream\n",
+                mask.len()
+            )
+            .as_bytes(),
         );
         pdf.extend_from_slice(mask);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
@@ -4548,63 +4556,92 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
         };
         (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
     };
-    // A page of 65,535 rows and columns, past the pixels a bitmap may hold.
-    let mut too_large = Vec::new();
-    let mut info = 65535u32.to_be_bytes().to_vec();
-    info.extend_from_slice(&65535u32.to_be_bytes());
-    info.extend_from_slice(&[0; 8]);
-    info.extend_from_slice(&[4, 0, 0]);
-    jbig2_segment(&mut too_large, 0, 48, &[], &info);
+    let out = (false, true);
+    // A page a column wider than the decoder's bound on a side, as the mask's dictionary says too.
+    let wide = black_jbig2_page_of(65536, 2);
+    assert_eq!(draws("/SMask", (65536, 2), &wide), out, "a soft mask past the decoder's bound on a side");
+    assert_eq!(draws("/Mask", (65536, 2), &wide), out, "a stencil mask past it");
+    // A page of 65,535 rows and columns, past the pixels the renderer decodes, as the dictionary
+    // says too.
+    let large = black_jbig2_page_of(65535, 65535);
+    assert_eq!(draws("/SMask", (65535, 65535), &large), out, "a soft mask past the renderer's bound on pixels");
+    assert_eq!(draws("/Mask", (65535, 65535), &large), out, "a stencil mask past it");
     // A dictionary of more symbol pixels than a page holds.
     let mut dictionary = black_jbig2_page();
     jbig2_segment(&mut dictionary, 1, 0, &[], &wide_jbig2_dictionary(65535, &[2048, 2049]));
-    let out = (false, true);
-    assert_eq!(draws("/SMask", &too_large), out, "a soft mask past the bitmap bound");
-    assert_eq!(draws("/Mask", &too_large), out, "a stencil mask past it");
-    assert_eq!(draws("/SMask", &dictionary), out, "a soft mask whose dictionary is past its bound");
+    assert_eq!(draws("/SMask", (16, 2), &dictionary), out, "a soft mask whose dictionary is past its bound");
     // Cut short in its dictionary: the file's damage, not a limit.
     let mut damaged = black_jbig2_page();
     jbig2_segment(&mut damaged, 1, 0, &[], &wide_jbig2_dictionary(100, &[100])[..12]);
-    assert_eq!(draws("/SMask", &damaged), (true, false), "a damaged mask is no mask");
+    assert_eq!(draws("/SMask", (16, 2), &damaged), (true, false), "a damaged mask is no mask");
+    // Control: the stream's page is far larger than the dictionary says. That is damage, which
+    // reads as past the decoder's bound on pixels, and is taken for it: it can't be told from a
+    // hostile size, and leaving the picture out is the safe side.
+    let disagreeing = black_jbig2_page_of(65535, 65535);
+    assert_eq!(draws("/SMask", (16, 2), &disagreeing), out, "a size damaged past a limit is taken for one");
+}
 
-    // A stencil a limit refused leaves nothing behind for the next picture: one whose mask is never
-    // decoded (it has no /Width) is drawn whole, as upstream draws it.
-    let content = b"q 4 0 0 4 30 30 cm /St Do Q q 20 0 0 20 5 5 cm /Im1 Do Q";
-    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R /St 7 0 R >> >> >> endobj\n".to_vec();
-    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
-    pdf.extend_from_slice(content);
-    pdf.extend_from_slice(b"\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /SMask 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n");
-    let mask = black_jbig2_page();
-    pdf.extend_from_slice(format!("6 0 obj << /Type /XObject /Subtype /Image /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", mask.len()).as_bytes());
-    pdf.extend_from_slice(&mask);
-    pdf.extend_from_slice(format!("\nendstream endobj\n7 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /ImageMask true /Filter /JBIG2Decode /Length {} >> stream\n", too_large.len()).as_bytes());
-    pdf.extend_from_slice(&too_large);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
-    let page = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest {
-        page: 0,
-        kind: RequestKind::Pixels,
-        tile: None,
-        scale: 1.0,
-        tag: 0,
-        ..Default::default()
-    });
-    assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], [0, 0, 0, 255], "the picture is drawn whole");
+/// What refused one image says nothing of the next: after a picture one of the decoder's limits
+/// refused, a stencil mask and a soft mask whose filters fail before JBIG2 is reached (LZW data that
+/// doesn't decode) are bad, not refused by a limit, on that page and on the next. The decoder's
+/// note of the refusal was read before a decode had set it, and outlived its page: the stencil
+/// said content was left out, and the picture under the soft mask wasn't drawn.
+#[test]
+fn a_limit_refusal_says_nothing_of_the_next_image() {
+    let refused = black_jbig2_page_of(65536, 2);
+    let bad = [0xff; 64];
+    let page = |number: u8, content: u8| {
+        format!("{number} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents {content} 0 R /Resources << /XObject << /Big 7 0 R /St 8 0 R /Im 9 0 R >> >> >> endobj\n").into_bytes()
+    };
+    let content = |number: u8, text: &str| format!("{number} 0 obj << /Length {} >> stream\n{text}\nendstream endobj\n", text.len()).into_bytes();
+    let object = |number: u8, dict: &str, data: &[u8]| {
+        let mut object = format!("{number} 0 obj << {dict} /Length {} >> stream\n", data.len()).into_bytes();
+        object.extend_from_slice(data);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n".to_vec();
+    pdf.extend(page(3, 5));
+    pdf.extend(page(4, 6));
+    pdf.extend(content(5, "q 10 0 0 10 30 30 cm /Big Do Q q 10 0 0 10 30 0 cm 0 g /St Do Q q 20 0 0 20 5 5 cm /Im Do Q"));
+    pdf.extend(content(6, "q 10 0 0 10 30 0 cm 0 g /St Do Q q 20 0 0 20 5 5 cm /Im Do Q"));
+    pdf.extend(object(
+        7,
+        "/Type /XObject /Subtype /Image /Width 65536 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode",
+        &refused,
+    ));
+    pdf.extend(object(8, "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ImageMask true /Filter [/LZWDecode /JBIG2Decode]", &bad));
+    pdf.extend(object(9, "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /SMask 10 0 R", &[0]));
+    pdf.extend(object(
+        10,
+        "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter [/LZWDecode /JBIG2Decode]",
+        &bad,
+    ));
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    // Both pages from one renderer, on one thread.
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let [first, second] =
+        [0, 1].map(|page| renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
+    let drawn = |page: &RenderedPage| {
+        assert!(page.error.is_none(), "{:?}", page.error);
+        (page.rgba[((25 * 40 + 15) * 4)..][..4] == [0, 0, 0, 255], page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    // The next page first: on the page of the refusal, the stale note shows whether or not it
+    // outlives the page.
+    assert_eq!(drawn(&second), (true, false), "on the next page, the picture is drawn and nothing was left out");
+    assert_eq!(drawn(&first), (true, false), "on its page, the picture is drawn and nothing was left out");
 }
 
 /// A JPX picture is decoded again for each size a page draws it at, while a soft mask far larger
 /// than where it is drawn is averaged down once and kept for the sizes it serves (patch 82). A
-/// JBIG2 mask a decoder limit refused isn't kept, so the picture drawn at another size is left out
-/// again, not drawn whole because the mask's failure was kept. The scans of #6722 are JPX under
-/// such a mask.
+/// JBIG2 mask a decoder limit refused is kept refused, so the picture drawn at another size is left
+/// out again, not drawn whole because the mask wasn't decoded that time. The scans of #6722 are
+/// JPX under such a mask.
 #[test]
 fn a_jpx_picture_whose_jbig2_mask_a_limit_refuses_stays_out_at_every_size() {
-    // A page of 65,535 rows and columns, past the pixels a bitmap may hold.
-    let mut too_large = Vec::new();
-    let mut info = 65535u32.to_be_bytes().to_vec();
-    info.extend_from_slice(&65535u32.to_be_bytes());
-    info.extend_from_slice(&[0; 8]);
-    info.extend_from_slice(&[4, 0, 0]);
-    jbig2_segment(&mut too_large, 0, 48, &[], &info);
+    // A page a column wider than the decoder's bound on a side, as the mask's dictionary says too.
+    let wide = black_jbig2_page_of(65536, 2);
     // A 64 × 64 grey JPX codestream, every sample 128 (as `jpx_midpoint_pdf`'s, larger): larger
     // than where it is drawn, it is decoded for each size it is drawn at.
     let mut codestream = vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0]; // SOC, SIZ, Rsiz.
@@ -4629,10 +4666,10 @@ fn a_jpx_picture_whose_jbig2_mask_a_limit_refuses_stays_out_at_every_size() {
     );
     pdf.extend_from_slice(&codestream);
     pdf.extend_from_slice(
-        format!("\nendstream endobj\n6 0 obj << /Type /XObject /Subtype /Image /Width 100 /Height 100 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", too_large.len())
+        format!("\nendstream endobj\n6 0 obj << /Type /XObject /Subtype /Image /Width 65536 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", wide.len())
             .as_bytes(),
     );
-    pdf.extend_from_slice(&too_large);
+    pdf.extend_from_slice(&wide);
     pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
     let page = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest {
         page: 0,

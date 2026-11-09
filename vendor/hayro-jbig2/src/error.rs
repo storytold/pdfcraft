@@ -321,7 +321,9 @@ impl DecodeError {
     /// PdfCraft patch: whether one of the decoder's limits refused the stream (on a bitmap's size,
     /// a dictionary's symbols, a region's instances, the bitmaps retained, the segments or the
     /// decoding work) rather than its data failing to decode. A file within the format can reach
-    /// these, so a caller can tell a refusal of its own from a damaged file.
+    /// these, so a caller can tell a refusal of its own from a damaged file. A size or count the
+    /// file damaged can read as past one of them, and is a limit here too: it can't be told from a
+    /// hostile one.
     pub fn is_limit(&self) -> bool {
         matches!(
             self,

@@ -24,6 +24,8 @@ use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
 use std::iter;
 use std::ops::Deref;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) enum XObject<'a> {
     FormXObject(FormXObject<'a>),
@@ -939,7 +941,15 @@ fn decode_context<'a>(
     // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
     // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
     if !image_size_ok(obj.width, obj.height) {
-        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        // PdfCraft patch (73): a JBIG2 mask of a size this bound refuses is one a limit refused,
+        // as when the decoder refuses it (below), and its size is the stream's own.
+        let limited = obj.is_mask && obj.width > 0 && obj.height > 0 && uses_jbig2(&obj.stream);
+        crate::cache::note_stream_limited(limited);
+        (obj.warning_sink)(if limited {
+            InterpreterWarning::ContentTruncated
+        } else {
+            InterpreterWarning::ImageDecodeFailure
+        });
         return None;
     }
     let dict = obj.stream.dict();
@@ -958,17 +968,22 @@ fn decode_context<'a>(
         height: obj.height,
     };
 
+    // PdfCraft patch (73): what refused an image decoded before this one says nothing about it,
+    // whether or not its filters reach JBIG2.
+    hayro_syntax::clear_jbig2_limited();
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
         .map_err(|_| {
             // PdfCraft patch (73): left out for the page's allowance, it is content the page's
             // budget skipped, which is reported, and no failure of this image. So is a mask one of
-            // the decoder's limits refused, which takes its image with it (below): reported so, its
-            // failure isn't kept by the decoded-image cache (patch 91), so a later draw decodes it
-            // again and leaves the image out again.
+            // the decoder's limits refused, which takes its image with it (`decode_raster`).
+            // Reported so, the decoded-image cache (patch 91) keeps the failure only when the
+            // limit is one the stream reaches by itself, whatever the page had left.
             let limited = obj.is_mask && hayro_syntax::jbig2_limited();
-            (obj.warning_sink)(if (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream) {
+            let left_out = (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream);
+            crate::cache::note_stream_limited(left_out && obj.is_mask && hayro_syntax::jbig2_limited_by_stream());
+            (obj.warning_sink)(if left_out {
                 InterpreterWarning::ContentTruncated
             } else {
                 InterpreterWarning::ImageDecodeFailure
@@ -1201,8 +1216,20 @@ fn decode_raster(
 
     let mut image = image_data?;
 
-    // PdfCraft patch (73): what decodes the mask, below, says whether a limit refused it.
-    hayro_syntax::take_jbig2_limited();
+    // PdfCraft patch (73): whether the mask, decoded below or kept failed by the decoded-image
+    // cache, was left out for the page's allowance or a decoder's limit: only those report
+    // `ContentTruncated` there (`decode_context`).
+    let left_out = Arc::new(AtomicBool::new(false));
+    let sink: WarningSinkFn = {
+        let (left_out, sink) = (left_out.clone(), obj.warning_sink.clone());
+        Arc::new(move |warning| {
+            if matches!(warning, InterpreterWarning::ContentTruncated) {
+                left_out.store(true, Ordering::Relaxed);
+            }
+            sink(warning);
+        })
+    };
+    let obj = &obj.reporting_to(&sink);
     let alpha = if let Some((alpha, matte_rgb)) =
         resolve_matte(obj, &ctx.color_space, target_dimension)
         && alpha.width == ctx.width
@@ -1232,10 +1259,11 @@ fn decode_raster(
     // allowance, or refused by one of the decoder's limits, takes the image with it. Both are
     // reported, and only there is the file not to blame for what the mask would have hidden being
     // shown: a scan's colour layer drawn without its JBIG2 mask covers the page in noise (#6722).
-    let limited = hayro_syntax::take_jbig2_limited();
+    // A size or count the file damaged can read as past a limit, and is taken for one: it can't
+    // be told from a hostile one, and leaving the image out is the safe side.
     let dict = obj.stream.dict();
     let mask = dict.get::<Stream<'_>>(SMASK).or_else(|| dict.get::<Stream<'_>>(MASK));
-    if alpha.is_none() && (hayro_syntax::page_jbig2_work_spent() || limited) && mask.is_some_and(|m| uses_jbig2(&m)) {
+    if alpha.is_none() && left_out.load(Ordering::Relaxed) && mask.is_some_and(|m| uses_jbig2(&m)) {
         return None;
     }
 
