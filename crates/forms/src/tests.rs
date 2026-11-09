@@ -6547,6 +6547,65 @@ fn a_read_only_button_is_not_turned_on_by_number() {
     assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
 }
 
+/// Two check box fields of two kids each: `pair` with the on states `A` and `B` (and `/DV /B`),
+/// `same` with `Yes` twice.
+fn check_box_kids() -> Document {
+    let kid = |parent: usize, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{state} 10 0 R /Off 11 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                 // 4
+        "<< /FT /Btn /T (pair) /V /Off /DV /B /Kids [6 0 R 7 0 R] >>".into(),       // 5
+        kid(5, 100, "A"),                                                           // 6
+        kid(5, 200, "B"),                                                           // 7
+        kid(12, 100, "Yes"),                                                        // 8
+        kid(12, 200, "Yes"),                                                        // 9
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 10
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 11
+        "<< /FT /Btn /T (same) /V /Off /Kids [8 0 R 9 0 R] >>".into(),              // 12
+    ];
+    document(&objs)
+}
+
+/// ISO 32000-2 §12.7.5.2.3: a check box field's `/V` is the on state of its kid that is on, and
+/// its kids can have different on states (Table 230). Naming `B` ticks `B` and clears `A`;
+/// "checked" keeps the kid that is on; a reset goes back to `/DV /B`. Kids sharing `Yes` tick
+/// together (EXAMPLE 2).
+#[test]
+fn check_box_kids_with_different_on_states_tick_one_at_a_time() {
+    let mut doc = check_box_kids();
+    set_value(&mut doc, "pair", &FieldValue::Text("A".into())).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![true, false], vec!["A".to_string()]));
+    set_value(&mut doc, "pair", &FieldValue::Text("B".into())).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "B, after a save");
+    set_value(&mut doc, "pair", &FieldValue::Check(true)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair").0, [false, true], "checked keeps the kid that is on");
+    set_value(&mut doc, "pair", &FieldValue::Check(false)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, false], vec![]));
+    set_value(&mut doc, "pair", &FieldValue::Check(true)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair").0, [true, false], "from off, checked takes the first kid");
+    reset(&mut doc, None).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "reset goes back to /DV /B");
+    // Kids sharing an on state tick and untick together.
+    set_value(&mut doc, "same", &FieldValue::Text("Yes".into())).unwrap();
+    assert_eq!(on_widgets(&doc, "same"), (vec![true, true], vec!["Yes".to_string()]));
+    set_value(&mut doc, "same", &FieldValue::Check(false)).unwrap();
+    assert_eq!(on_widgets(&doc, "same").0, [false, false]);
+    assert!(matches!(set_value(&mut doc, "pair", &FieldValue::Text("C".into())), Err(FormError::Invalid(_))));
+    // A script that sets the value to B ticks B.
+    let to_b = FieldChange { name: "pair".into(), value: Some(vec!["B".into()]), ..FieldChange::default() };
+    set_value(&mut doc, "pair", &FieldValue::Text("A".into())).unwrap();
+    apply_script_changes(&mut doc, &[to_b], &mut NoScripts).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "a script's B");
+}
+
 /// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
 /// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
 #[test]

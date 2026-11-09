@@ -252,6 +252,17 @@ impl Field {
             && self.widgets.iter().position(|x| sharing(x) && x.state.is_none()) == Some(i)
     }
 
+    /// The value that gives this check box the stored value `value` (`/V`, `/DV`, imported or
+    /// script data): the on state it names (or whose `/Opt` export it is), so that of kids with
+    /// different on states the right one turns on (ISO 32000-2 §12.7.5.2.3, Table 230); checked
+    /// for any other value but Off, unchecked for none.
+    pub fn check_box_value(&self, value: Option<&str>) -> FieldValue {
+        match value.filter(|v| !v.is_empty() && *v != "Off") {
+            Some(v) => self.state_for(v).map_or(FieldValue::Check(true), |s| FieldValue::Text(s.to_owned())),
+            None => FieldValue::Check(false),
+        }
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
