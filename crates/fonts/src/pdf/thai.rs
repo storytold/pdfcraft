@@ -24,8 +24,9 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
         return None;
     }
     let desc = dict(doc, font.get(b"DescendantFonts").and_then(|a| doc.resolve(a).as_array().and_then(|a| a.first()).cloned()).as_ref())?;
-    // A map given by reference is the name it refers to, and a missing one is Identity, the
-    // default (ISO 32000-2 Table 115), as `composite_glyph_maps` reads them.
+    // A map given by reference is the name it refers to. A missing one is taken as Identity, the
+    // default of PDF 1.x (ISO 32000-1), as `composite_glyph_maps` and the renderer take it; PDF 2.0
+    // gives it no default and requires it with a `/FontFile2`.
     if desc.get(b"CIDToGIDMap").is_some_and(|m| doc.resolve(m).as_name() != Some(b"Identity".as_slice())) {
         return None;
     }
@@ -555,7 +556,7 @@ mod tests {
         indirect.set(b"Encoding".to_vec(), Object::Ref(doc.add(Object::name("Identity-H"))));
         assert_eq!(recovered_thai_map(&doc, &indirect), recovered_thai_map(&doc, &font));
         // `/CIDToGIDMap` given through a reference is the name it refers to, and a missing one is
-        // Identity, the default (ISO 32000-2 Table 115).
+        // taken as Identity, the default of PDF 1.x (ISO 32000-1), as the renderer takes it.
         let with_map = |map: Option<Object>| {
             let mut f = font.clone();
             let Some(Object::Array(desc)) = f.get(b"DescendantFonts").cloned() else { panic!("fixture") };
@@ -572,6 +573,10 @@ mod tests {
         let by_reference = with_map(Some(Object::Ref(doc.add(Object::name("Identity")))));
         assert_eq!(recovered_thai_map(&doc, &by_reference), recovered_thai_map(&doc, &font), "a map by reference");
         assert_eq!(recovered_thai_map(&doc, &with_map(None)), recovered_thai_map(&doc, &font), "a missing map");
+        // Any other map is refused: one that moves glyphs, and another name.
+        let moved = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1, 0, 0]))));
+        assert_eq!(recovered_thai_map(&doc, &with_map(Some(moved))), None, "a map that moves glyphs");
+        assert_eq!(recovered_thai_map(&doc, &with_map(Some(Object::name("Foo")))), None, "another name");
         // 259–261 are ฮ, ฯ and ะ, between the last anchor (อ, 258) and the first mark: a font that
         // put Mai Han-akat one glyph earlier passes every anchor and only this check sees it.
         let mut shifted = thai_ordered_program();
