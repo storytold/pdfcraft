@@ -11,7 +11,7 @@ use pdfcraft_print::{Content, Raster};
 use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest};
 
 use crate::export::encode_png;
-use crate::{Document, guard};
+use crate::{Document, guard, print_layer_states};
 
 /// `doc`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
 /// page per entry, the size of the source page as displayed, drawing what `content` prints.
@@ -22,11 +22,19 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
     let mut config = src.config.clone();
     // The copy below holds only what prints, so the viewer's own comment hiding plays no part.
     config.hide_comments = false;
-    let printed = guard(|| -> Result<Vec<u8>, String> {
+    // Printing is not the View event: a layer the auto state turns off on screen keeps its
+    // configured state on paper, as in a print that goes out as vectors.
+    config.for_print = true;
+    let (printed, layers) = guard(|| -> Result<(Vec<u8>, Option<Vec<pdfcraft_render::Layer>>), String> {
         let mut cos = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), config.password.as_deref()).map_err(|e| e.to_string())?;
         pdfcraft_print::keep_printed(&mut cos, content);
-        write_incremental(&cos, &SaveOptions::default()).map_err(|e| e.to_string())
+        // The layers as the vector print sets them: as shown, then the Print event's auto state.
+        let layers = print_layer_states(&cos, &doc.info.layers);
+        Ok((write_incremental(&cos, &SaveOptions::default()).map_err(|e| e.to_string())?, layers))
     })??;
+    if let Some(layers) = layers {
+        config.layers = std::sync::Arc::new(layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect());
+    }
     let mut renderer = PageRenderer::new(std::sync::Arc::new(printed), config);
     let mut images: Vec<(String, Vec<u8>)> = Vec::with_capacity(pages.len());
     let mut used: Option<f64> = None;
