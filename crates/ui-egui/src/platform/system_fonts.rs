@@ -37,6 +37,7 @@ const UNIX_GURMUKHI_FILES: &[&str] = &[
     "noto/NotoSansGurmukhi[wdth,wght].ttf",
     "lohit-gurmukhi/Lohit-Gurmukhi.ttf",
     "truetype/lohit-punjabi/Lohit-Gurmukhi.ttf",
+    "lohit-gurmukhi-fonts/Lohit-Gurmukhi.ttf",
 ];
 /// Telugu letter ka: the face must have it to cover Telugu.
 const TELUGU_PROBE: char = '\u{0C15}';
@@ -743,6 +744,15 @@ mod tests {
         }
     }
 
+    /// A standard distro fallback remains reachable when fontconfig yields no installed files.
+    #[test]
+    fn opencloudos_gurmukhi_is_available_without_fontconfig() {
+        let candidates = unix_candidates(UNIX_GURMUKHI_FILES, &[]);
+        for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            assert!(candidates.contains(&Path::new(root).join("lohit-gurmukhi-fonts/Lohit-Gurmukhi.ttf")));
+        }
+    }
+
     /// Both distro paths and fontconfig selections retain Noto priority and filename filtering.
     #[test]
     fn lohit_gurmukhi_candidates_follow_noto_in_unix_layouts() {
@@ -753,7 +763,8 @@ mod tests {
             "google-noto-vf/NotoSansGurmukhi[wdth,wght].ttf",
             "noto/NotoSansGurmukhi[wdth,wght].ttf",
         ];
-        let lohit_files = ["lohit-gurmukhi/Lohit-Gurmukhi.ttf", "truetype/lohit-punjabi/Lohit-Gurmukhi.ttf"];
+        let lohit_files =
+            ["lohit-gurmukhi/Lohit-Gurmukhi.ttf", "truetype/lohit-punjabi/Lohit-Gurmukhi.ttf", "lohit-gurmukhi-fonts/Lohit-Gurmukhi.ttf"];
         let standard = unix_candidates(UNIX_GURMUKHI_FILES, &[]);
         let mut expected = Vec::new();
         for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
