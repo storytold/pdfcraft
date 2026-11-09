@@ -2081,6 +2081,8 @@ mod group_tests {
             fill_sign: false,
             no_rotate: false,
             points: Vec::new(),
+            text_box: None,
+            popup: None,
         }
     }
 

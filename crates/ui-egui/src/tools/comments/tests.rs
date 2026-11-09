@@ -579,6 +579,8 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     let all =
         vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];

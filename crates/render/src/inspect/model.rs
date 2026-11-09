@@ -616,11 +616,8 @@ impl<'a> ReviewStates<'a> {
         let mut reaches: HashMap<(usize, usize), Option<(usize, usize)>> = HashMap::new();
         let mut by_target: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
         // A state set on a group subordinate is the group's, its primary's (ISO 32000-2 §12.5.6.2).
-        let primary_of: HashMap<(usize, usize), (usize, usize)> = all
-            .iter()
-            .zip(group_primaries(all))
-            .filter_map(|(a, p)| all.get(p?).map(|p| ((a.page, a.index), (p.page, p.index))))
-            .collect();
+        let primary_of: HashMap<(usize, usize), (usize, usize)> =
+            all.iter().zip(group_primaries(all)).filter_map(|(a, p)| all.get(p?).map(|p| ((a.page, a.index), (p.page, p.index)))).collect();
         for r in all.iter().filter(|a| a.state.is_some()) {
             let (mut path, mut seen, mut up) = (vec![(r.page, r.index)], HashSet::from([(r.page, r.index)]), r.parent);
             let target = loop {
@@ -823,6 +820,8 @@ mod review_state_tests {
                 fill_sign: false,
                 no_rotate: false,
                 points: Vec::new(),
+                text_box: None,
+                popup: None,
             })
             .collect();
         link_replies(&mut all);
