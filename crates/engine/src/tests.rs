@@ -7427,8 +7427,8 @@ fn a_widget_the_field_doesnt_have_runs_no_focus_scripts() {
 
 /// Each radio button of a group is a field of its own: reaching the second button runs its
 /// enter script, reaching the first (which has none) runs nothing. Choosing the button changes
-/// the group's value, which runs the group's scripts, not the button's: leaving the button
-/// still runs its exit.
+/// the group's value, which runs the group's scripts and the new button's (its exit among them,
+/// as when leaving it), so leaving the button does not run that exit a second time.
 #[test]
 fn a_radio_buttons_own_focus_scripts_run() {
     use crate::js::FieldFocus::{Enter, Exit};
@@ -7440,7 +7440,8 @@ fn a_radio_buttons_own_focus_scripts_run() {
     assert!(!s.field_focus(id, &group, 2, Enter).unwrap(), "there is no third button");
     assert_eq!(field_text(&s, id, "picks"), "1");
     s.apply(id, Edit::SetFieldValue { name: group.clone(), value: FieldValue::Radio(Some("L".into())) }).unwrap();
-    assert!(s.field_focus(id, &group, 1, Exit).unwrap(), "the button's exit runs on leaving it");
+    assert_eq!(field_text(&s, id, "drops"), "1", "the click ran the button's exit");
+    assert!(!s.field_focus(id, &group, 1, Exit).unwrap(), "that exit is not run again on leaving");
     assert_eq!(field_text(&s, id, "drops"), "1");
 }
 
