@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,6 +575,15 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    DateLanguage {
+        code: "sv",
+        name: "Svenska",
+        months: ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"],
+        months_with_day: None,
+        months_short: ["jan.", "feb.", "mars", "apr.", "maj", "juni", "juli", "aug.", "sep.", "okt.", "nov.", "dec."],
+        days: ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"],
+        days_short: ["sön", "mån", "tis", "ons", "tor", "fre", "lör"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -1010,6 +1019,39 @@ mod tests {
         let e = s.today_text_for_pdf(Some("dddd d mmmm yyyy"), Some("vi")).unwrap_err();
         assert!(e.contains("can't be written into the PDF yet") && e.contains("dd.mm.yyyy"), "{e}");
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("vi")).is_ok());
+    }
+
+    #[test]
+    fn swedish_month_and_weekday_names() {
+        let sv = date_language("sv").expect("sv registered");
+        assert_eq!(date_language("SV"), Some(sv), "case-insensitive lookup");
+        assert_eq!(sv.name, "Svenska");
+        assert_eq!(sv.months.len(), 12);
+        assert_eq!(sv.months_short.len(), 12);
+        assert_eq!(sv.days.len(), 7);
+        assert_eq!(sv.days_short.len(), 7);
+        assert_eq!(sv.months[0], "januari");
+        assert_eq!(sv.months[11], "december");
+        assert_eq!(sv.months_short[0], "jan.");
+        assert_eq!(sv.months_short[11], "dec.");
+        // Weekdays start on Sunday:
+        assert_eq!(sv.days[0], "söndag");
+        assert_eq!(sv.days[1], "måndag");
+        assert_eq!(sv.days[6], "lördag");
+        assert_eq!(sv.days_short[0], "sön");
+        assert_eq!(sv.days_short[1], "mån");
+        assert_eq!(sv.days_short[6], "lör");
+
+        assert_eq!(in_lang("dddd d mmmm yyyy", "sv"), "lördag 7 mars 2026");
+        assert_eq!(in_lang("ddd d mmm", "sv"), "lör 7 mars");
+
+        // Swedish month and weekday names contain å, ä, ö which are WinAnsi-representable,
+        // so Fill & Sign can write them into a PDF.
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("sv")).unwrap();
+        assert_eq!(s.date_language(), Some("sv"));
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("11/14/2023"));
+        assert_eq!(s.today_text_for_pdf(Some("dddd d mmmm yyyy"), Some("sv")).as_deref(), Ok("tisdag 14 november 2023"));
     }
 
     #[test]
