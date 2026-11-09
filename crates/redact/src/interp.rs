@@ -1063,7 +1063,7 @@ fn sanitize_stream_form(
     }
     // Strict, like page content: a Form read only in part counts as undecodable.
     let data = if scope.budget.enter_form() {
-        scope.budget.decode_strict(s)
+        scope.budget.decode_strict(doc, s)
     } else {
         Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
     };

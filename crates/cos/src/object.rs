@@ -297,13 +297,18 @@ impl Stream {
 
     /// [`Stream::decoded_within`] for a caller charging an allowance: the filter error is kept
     /// typed, so a caller can tell a spent limit from corrupt data, `max` bounds all filter
-    /// stages together, and the result gives the bytes they decoded (the work done, on success
-    /// and on failure).
-    pub(crate) fn decoded_within_counted(&self, max: usize) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)> {
+    /// stages together, and the result gives whether the data stopped at damage (it is then what
+    /// decoded before it) and the bytes the stages decoded (the work done, on success and on
+    /// failure).
+    pub(crate) fn decoded_within_counted(&self, max: usize) -> Result<(Vec<u8>, bool, usize), (pdfcraft_filters::FilterError, usize)> {
+        let mut damaged = false;
         let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
-            pdfcraft_filters::decode_tolerant_counted(chain, data, max).map(|(v, _, spent)| (v, spent))
+            pdfcraft_filters::decode_tolerant_counted(chain, data, max).map(|(v, partial, spent)| {
+                damaged = partial;
+                (v, spent)
+            })
         };
-        self.decode_chain(max, decode)
+        self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
     }
 
     /// [`Stream::decoded_within`] spending from `work`, what an operation may still do across a
@@ -337,8 +342,14 @@ impl Stream {
 
     /// Decoded data, bounded by [`MAX_DECODED`]; any corruption is an error.
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
+        self.decoded_strict_within(MAX_DECODED)
+    }
+
+    /// Like [`Stream::decoded_strict`], bounded by `max` (and [`MAX_DECODED`]): for data that
+    /// will be copied elsewhere, where a damaged stream must not pass for a shorter one.
+    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let decode = |chain: &[(Filter, Params)], data: &[u8], max| pdfcraft_filters::decode(chain, data, max).map(|v| (v, 0)).map_err(|e| (e, 0));
-        self.decode_chain(MAX_DECODED, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
+        self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
     }
 
     /// [`Stream::decoded_strict`] bounded by `max` and counted like

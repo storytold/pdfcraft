@@ -188,6 +188,46 @@ fn the_template_parses_with_fonts_captions_and_rich_text() {
     assert!(last.break_before_page);
 }
 
+/// A page area that declares far more content areas than any real master keeps only the first
+/// 128, with a warning. `split_block` walks every content area of a page before starting a new
+/// one, re-scanning the unplaced items each time, so tens of thousands of them cost time
+/// quadratic in a splittable subform's paragraphs. Capping the count bounds that walk.
+#[test]
+fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
+    let areas = (0..200).map(|i| format!("<contentArea x=\"0.5in\" y=\"{}pt\" w=\"7in\" h=\"1pt\"/>", i)).collect::<String>();
+    let xml = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="front"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>
+ </pageSet>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    );
+    let (tpl, warnings) = parse(&xml).unwrap();
+    let ps = tpl.root.page_set.as_ref().unwrap();
+    assert_eq!(ps.areas[0].content.len(), 128, "the content areas are capped");
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "a warning records the cap: {warnings:?}");
+    // Still said after a hundred other warnings (CodeRabbit review on #5844): images that can't
+    // be decoded, parsed before the page set, fill the warnings' shared cap first.
+    let bad = "<draw w=\"1in\" h=\"1in\"><value><image contentType=\"image/png\">!!!</image></value></draw>".repeat(120);
+    let crowded = xml.replace("<subform name=\"form\" layout=\"tb\">", &format!("<subform name=\"form\" layout=\"tb\">{bad}"));
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert!(warnings.len() > 100, "the other warnings came first: {}", warnings.len());
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "the cap is still recorded");
+    // Many capped page areas say it once, found without scanning every warning (it comes first).
+    let page_area = |n: usize| format!(r#"<pageArea name="p{n}"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>"#);
+    let many: String = (0..50).map(page_area).collect();
+    let crowded = crowded.replacen(&page_area(0).replace("p0", "front"), &many, 1);
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.contains("content areas")).count(), 1, "said once");
+    assert!(warnings[0].contains("content areas"), "kept first: {:?}", warnings.first());
+}
+
 #[test]
 fn rich_text_max_length_reaches_the_field_and_layout() {
     for (attribute, expected) in [
@@ -676,6 +716,29 @@ fn empty_repeating_subforms_spend_the_layout_budget() {
     // Three levels (125,000 instances) still lay out.
     let tpl = format!("<template><subform layout=\"tb\">{}{}</subform></template>", level.repeat(3), "</subform>".repeat(3));
     assert!(layout_xml(&tpl).is_ok());
+}
+
+#[test]
+fn a_block_split_across_very_many_pages_spends_the_layout_budget() {
+    // One-point content areas slice a flowed subform's paragraphs one line to a page, so the
+    // block is split across hundreds of pages; split_block rescans the still-unplaced
+    // paragraphs once per page, which is quadratic in their number. Fewer paragraphs than this
+    // lay out (188 pages here), so the page limit does not catch it; the rescans spend the
+    // work budget instead.
+    let areas: String = (0..128).map(|i| format!("<contentArea x=\"0.5in\" y=\"{i}pt\" w=\"7in\" h=\"1pt\"/>")).collect();
+    let paras: String = (0..2500).map(|i| format!("<p>Paragraph number {i} with a few words to fill a line.</p>")).collect();
+    let tpl = format!(
+        "<template><subform name=\"form\" layout=\"tb\"><pageSet><pageArea name=\"p\">\
+         <medium stock=\"letter\" short=\"8.5in\" long=\"11in\"/>{areas}</pageArea></pageSet>\
+         <subform name=\"body\" layout=\"tb\"><field name=\"t\" w=\"7in\"><ui><textEdit multiLine=\"1\"/></ui>\
+         <value><exData contentType=\"text/html\"><body xmlns=\"http://www.w3.org/1999/xhtml\">{paras}</body></exData></value>\
+         </field></subform></subform></template>"
+    );
+    match layout_xml(&tpl) {
+        // It says what ran out, not that the form is nested too deeply (CodeRabbit review on #5844).
+        Err(XfaError::TooLarge(m)) => assert!(m.contains("split across"), "{m}"),
+        other => panic!("a block split across very many pages must be refused: {other:?}"),
+    }
 }
 
 #[test]
