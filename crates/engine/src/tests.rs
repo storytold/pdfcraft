@@ -3303,19 +3303,7 @@ fn one_line_page_with(resources: &str, stream_entries: &str, body: &str) -> Vec<
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
         format!("<< /Length {} {stream_entries} >>\nstream\n{body}\nendstream", body.len()),
     ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    pdf_of(&objs)
 }
 
 /// Put a redaction mark over `needle` where page 1 shows it, as Find text and redact does.
@@ -3380,6 +3368,55 @@ fn text_after_an_inline_image_is_redacted_where_the_page_shows_it() {
         !reopened.scan_objects().any(|(_, o)| matches!(&*o, pdfcraft_cos::Object::Stream(st) if st.decoded().is_ok_and(|d| held(&d)))),
         "a saved stream holds the redacted word"
     );
+}
+
+/// #2539 review: Apply redactions tells the caller where the removed text is still held that
+/// it leaves as it is (here a bookmark title), and the next edit, or an undo, forgets it.
+#[test]
+fn applied_redactions_report_a_bookmark_that_still_holds_the_removed_text() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page("/Font << /F1 4 0 R >>", "BT /F1 10 Tf 20 150 Td (Codename BLUEFIN report) Tj ET");
+    let id = s.open("bookmark.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Bluefin plans".into(), page: 0, left: None, top: None }).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 1, title: "Annual figures".into(), page: 0, left: None, top: None }).unwrap();
+    mark_shown_text(&mut s, id, "BLUEFIN");
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "only applying redactions reports it");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let found = s.get(id).unwrap().redaction_elsewhere().expect("applying reports what it left");
+    assert_eq!(found, crate::RedactionElsewhere { bookmarks: 1, ..Default::default() });
+    // One of the edit notices, so tools and the interface say it with the others.
+    let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
+    assert_eq!(said, ["the redacted text also appears in 1 bookmark title, which redaction doesn't change (Remove hidden information removes them)"]);
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Bluefin plans→1", "Annual figures→1"], "the bookmark is reported, not changed");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "an undo forgets it");
+}
+
+/// #2539 review: applying redactions that remove the document's XMP packet, which named the
+/// redacted word and said the file conforms to PDF/A-2b, writes the identification back and
+/// says so; tools list it with the other edit notices, and an undo forgets it.
+#[test]
+fn applied_redactions_report_the_pdfa_identification_written_back() {
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="2" pdfaid:conformance="B"/><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bluefin report</dc:title></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+    let body = "BT /F1 10 Tf 20 150 Td (Codename BLUEFIN report) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len()),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("pdfa.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    mark_shown_text(&mut s, id, "BLUEFIN");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let kept = crate::RedactionIdentification { pdfa: crate::RedactionClaim::Kept, pdfua: crate::RedactionClaim::None };
+    assert_eq!(s.get(id).unwrap().redaction_identification(), Some(kept));
+    let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
+    assert_eq!(said, ["the document's XMP metadata held the redacted text and was removed; its PDF/A identification was written back on its own"]);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_identification(), None, "an undo forgets it");
 }
 
 /// A word whose font and size an ExtGState /Font entry (`gs`) sets is placed where the renderer
