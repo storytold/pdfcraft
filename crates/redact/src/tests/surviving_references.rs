@@ -342,3 +342,238 @@ fn a_type3_glyphs_form_with_non_dictionary_resources_fails_closed() {
     mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
     assert!(apply(&mut doc, None).is_err());
 }
+
+/// A Type 3 font with glyphs A, B and C, whose programs are objects `a`, `a + 1` and `a + 2`.
+fn type3_abc(a: u32) -> Vec<u8> {
+    let (b, c) = (a + 1, a + 2);
+    format!(
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 67 /Widths [500 500 500] /Encoding << /Differences [65 /A /B /C] >> /CharProcs << /A {a} 0 R /B {b} 0 R /C {c} 0 R >> >>"
+    )
+    .into_bytes()
+}
+
+/// An annotation's appearance shows glyph B of a Type 3 font the page lists too. The appearance
+/// still draws it, so its program is kept; the redacted glyph A goes.
+#[test]
+fn a_type3_glyph_an_annotation_appearance_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        type3_abc(9),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /DA (/T3 10 Tf 0 g) /AP << /N 8 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /T3 6 0 R >> >>", b"BT /T3 10 Tf 2 5 Td (B) Tj ET"),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% APPEARANCE_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "the glyph the appearance shows was unlinked");
+    assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
+}
+
+/// The same annotation also has an `/AP` entry no reader draws (`/X`), which shows the redacted
+/// glyph A. It keeps nothing: A's program goes, and B, which the normal appearance shows, stays.
+#[test]
+fn a_type3_glyph_only_an_undrawn_appearance_entry_shows_is_unlinked() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        type3_abc(10),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /DA (/T3 10 Tf 0 g) /AP << /N 8 0 R /X 9 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /T3 6 0 R >> >>", b"BT /T3 10 Tf 2 5 Td (B) Tj ET"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /T3 6 0 R >> >>", b"BT /T3 10 Tf 2 5 Td (A) Tj ET"),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% APPEARANCE_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "an undrawn appearance entry kept the redacted glyph program");
+    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "the glyph the normal appearance shows was unlinked");
+    assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
+}
+
+/// An appearance without /Resources shows glyph B of a second Type 3 font, which the page lists
+/// but its content never selects. The appearance draws through the page's resources, so the
+/// rewritten page still lists that font and B's program stays.
+#[test]
+fn a_type3_font_only_an_appearance_without_resources_selects_stays_on_the_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [8 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R /T4 7 0 R >> >>".to_vec(),
+        type3_abc(10),
+        type3_abc(13),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /DA (/T4 10 Tf 0 g) /AP << /N 9 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20]", b"BT /T4 10 Tf 2 5 Td (B) Tj ET"),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% UNUSED_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+        stream("", b"% UNUSED_T4_GLYPH_A"),
+        stream("", b"% APPEARANCE_GLYPH_B"),
+        stream("", b"% UNUSED_T4_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "the glyph the appearance shows was unlinked");
+    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the appearance selects");
+}
+
+/// The operators of a page's appearances count toward one total, as the content's do. Two
+/// appearances under the cap alone pass it together, and the redaction is refused rather than
+/// judged on part of what draws through the page's fonts.
+#[test]
+fn a_page_s_appearances_share_one_operator_total() {
+    let big = || stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20]", b"n\n".repeat(1_100_000));
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R 8 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        type3_abc(11),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /AP << /N 9 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 240 250 260] /P 3 0 R /AP << /N 10 0 R >> >>".to_vec(),
+        big(),
+        big(),
+        stream("", b"% GLYPH_A"),
+        stream("", b"% GLYPH_B"),
+        stream("", b"% GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    let refused = apply(&mut doc, None);
+    assert!(refused.is_err(), "two appearances over the operator cap together were judged in part: {refused:?}");
+}
+
+/// Their decoded bytes share one page's allowance too. Two compressed appearances, each under it
+/// but past it together (and blank, so far from the operator cap), refuse the redaction rather
+/// than being decoded and held in full.
+#[test]
+fn a_page_s_appearances_share_one_decoded_byte_allowance() {
+    let packed = pdfcraft_filters::encode_flate(&vec![b' '; pdfcraft_cos::MAX_PAGE_DECODED / 2 + 1]);
+    let big = || stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Filter /FlateDecode", packed.as_slice());
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R 8 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        type3_abc(11),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /AP << /N 9 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 240 250 260] /P 3 0 R /AP << /N 10 0 R >> >>".to_vec(),
+        big(),
+        big(),
+        stream("", b"% GLYPH_A"),
+        stream("", b"% GLYPH_B"),
+        stream("", b"% GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    let refused = apply(&mut doc, None);
+    assert!(refused.is_err(), "two appearances past the page's decoded-byte allowance together were read in full: {refused:?}");
+}
+
+/// Whether the first page of a full save of `doc` lists the font `name` in its resources.
+fn saved_first_page_lists_font(doc: &Document, name: &[u8]) -> bool {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let page = pdfcraft_model::pages(&saved).swap_remove(0);
+    let res = saved.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    res.get(b"Font").and_then(|f| saved.resolve(f).as_dict().map(|fonts| fonts.contains(name))).unwrap_or(false)
+}
+
+/// The group of a soft mask without /Resources shows glyph B of a second Type 3 font, which the
+/// page lists but its content never selects. The group draws through the page's resources, so the
+/// rewritten page still lists that font and B's program stays.
+#[test]
+fn a_type3_font_only_a_soft_mask_without_resources_selects_stays_on_the_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /GS1 gs 150 150 100 100 re f"),
+        b"<< /Font << /T3 6 0 R /T4 7 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >> >> >>"
+            .to_vec(),
+        type3_abc(9),
+        type3_abc(12),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>",
+            b"1 g BT /T4 40 Tf 160 180 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% UNUSED_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+        stream("", b"% UNUSED_T4_GLYPH_A"),
+        stream("", b"% MASK_GLYPH_B"),
+        stream("", b"% UNUSED_T4_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "the glyph the soft mask shows was unlinked");
+    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
+}
+
+/// The cell of a tiling pattern another page fills with shows glyph B: its program is kept. (On
+/// the redacted page itself, a pattern that shows text refuses the redaction: `pattern_guard`.)
+#[test]
+fn a_type3_glyph_a_tiling_pattern_on_another_page_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 9 0 R >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 7 0 R /Resources 8 0 R >>".to_vec(),
+        stream("", b"/Pattern cs /P1 scn 200 200 50 50 re f"),
+        b"<< /Pattern << /P1 10 0 R >> >>".to_vec(),
+        type3_abc(11),
+        stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << /Font << /T3 9 0 R >> >>",
+            b"BT /T3 10 Tf 2 5 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% PATTERN_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"PATTERN_GLYPH_B"), "the glyph the pattern shows was unlinked");
+    assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
+}
+
+/// The group of a soft mask the page sets shows glyph B: its program is kept.
+#[test]
+fn a_type3_glyph_a_soft_mask_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /GS1 gs 150 150 100 100 re f"),
+        b"<< /Font << /T3 6 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 7 0 R >> >> >> >>".to_vec(),
+        type3_abc(8),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /T3 6 0 R >> >>",
+            b"1 g BT /T3 40 Tf 160 180 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% MASK_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "the glyph the soft mask shows was unlinked");
+    assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
+}
