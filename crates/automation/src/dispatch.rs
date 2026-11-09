@@ -53,6 +53,7 @@ impl Automation {
         tools::check_args(def, args)?;
         let a = Args(args);
         let out = match name {
+            "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
@@ -68,6 +69,7 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "page_render" => return self.page_render(&a),
+            "model_render" => return self.model_render(&a),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
@@ -135,6 +137,7 @@ impl Automation {
                 out["detected"] = json!(given.is_none());
                 out
             }
+            "page_enhance_scan" => self.page_enhance_scan(&a)?,
             "page_delete" => {
                 let pages = self.pages(&a, "pages")?;
                 self.apply(&a, Edit::DeletePages { pages })?
@@ -195,6 +198,9 @@ impl Automation {
                 out
             }
             "bookmark_list" => self.bookmark_listing(&a)?,
+            "bookmark_export" => self.bookmark_export(&a)?,
+            "bookmark_import" => self.bookmark_import(&a)?,
+            "bookmark_copy" => self.bookmark_copy(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -323,13 +329,13 @@ impl Automation {
                 let id = self.doc(&a)?.id;
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
-                let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
+                let (bytes, merged, images_refused) = self.session.reduced_bytes(id).map_err(failed)?;
                 // As in the app, a copy that isn't smaller is not written (#490).
                 let written = bytes.len() < before;
                 if written {
                     write_atomic(&path, &bytes)?;
                 }
-                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged, "images_refused": images_refused })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -461,6 +467,7 @@ impl Automation {
                         "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
                         "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
                         "remove_crop" => ImageEdit::RemoveCrop,
+                        "ungroup" => ImageEdit::Ungroup,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;
@@ -473,6 +480,10 @@ impl Automation {
                     };
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
+            }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                self.prepare_text(&a, page)?
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
@@ -727,6 +738,8 @@ impl Automation {
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
             "object_move" => self.object_move(&a)?,
+            "object_copy" => self.object_copy(&a)?,
+            "object_paste" => self.object_paste(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -734,6 +747,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_fix_hairlines" => self.fix_hairlines(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;
@@ -768,6 +782,7 @@ impl Automation {
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,
+            "model_add" => self.model_add(&a)?,
             "comment_reply" => self.comment_reply(&a)?,
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
@@ -805,6 +820,9 @@ impl Automation {
             "form_set_actions" => self.form_set_actions(&a)?,
             "ocr_status" => self.ocr_status()?,
             "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
+            "ocr_words" => self.ocr_words(&a)?,
+            "ocr_review_apply" => self.ocr_review_apply(&a)?,
+            "ocr_dictionary" => self.ocr_dictionary(&a)?,
             "accessibility_report" => self.a11y_report(&a)?,
             "accessibility_review_record" => self.a11y_review_record(&a)?,
             "accessibility_review_save" => self.a11y_review_save(&a)?,
@@ -817,6 +835,7 @@ impl Automation {
             "accessibility_tag_content" => self.accessibility_tag_content(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
             "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
+            "accessibility_layout_table_to_blocks" => self.accessibility_layout_table_to_blocks(&a)?,
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
@@ -860,6 +879,8 @@ impl Automation {
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
+            "comments_copy" => self.comments_copy(&a)?,
+            "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
         Ok(vec![Content::Json(out)])
@@ -910,6 +931,38 @@ impl Automation {
             _ => json!({}),
         };
         out["script"] = json!(name);
+        Ok(out)
+    }
+}
+
+impl Automation {
+    /// `page_enhance_scan`: Enhance ▸ Scanned document on the chosen pages (all by default).
+    fn page_enhance_scan(&mut self, a: &Args) -> Result<Value> {
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => Vec::new(),
+        };
+        let level = match a.opt_int("level")? {
+            None => pdfcraft_engine::scan_clean::ScanCleanSettings::default().level,
+            Some(l @ 0..=100) => l as u8,
+            Some(l) => return Err(ToolError::InvalidArgs(format!("level must be between 0 and 100, not {l}"))),
+        };
+        let mut settings = pdfcraft_engine::scan_clean::ScanCleanSettings::at(level);
+        if let Some(on) = a.opt_bool("edge_shadows")? {
+            settings.edge_shadows = on;
+        }
+        if let Some(on) = a.opt_bool("despeckle")? {
+            settings.despeckle = on;
+        }
+        let id = self.doc(a)?.id;
+        let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
+        let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
+        let skipped: Vec<Value> = report.skipped.iter().map(|k| json!({ "pages": numbered(&k.pages), "name": k.name, "reason": k.reason })).collect();
+        let mut out = summary(self.doc(a)?);
+        out["pages_cleaned"] = json!(numbered(&report.pages));
+        out["images"] = json!(report.images);
+        out["not_scanned"] = json!(numbered(&report.not_scanned));
+        out["skipped"] = json!(skipped);
         Ok(out)
     }
 }
