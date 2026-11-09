@@ -5512,7 +5512,12 @@ fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
     let mut h = harness(move |app| {
         app.set_startup_update_check(true);
         app.set_update_source(Arc::new(move || {
+            // Not forever: a test that fails before the square is selected leaves no thread behind.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             while !answer.load(Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Ok(Some(craft_update::Release {

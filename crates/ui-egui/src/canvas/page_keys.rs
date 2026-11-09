@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn the_pages_take_the_presses_they_want_with_their_own_modifiers() {
         let shifted = Event::Key { key: Key::ArrowLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT };
-        frame(vec![press(Key::ArrowRight), shifted, press(Key::Escape)], |ctx| {
+        frame(vec![press(Key::ArrowRight), shifted, Event::Copy, press(Key::Escape)], |ctx| {
             let mut seen = Vec::new();
             PageKeys::new(true).take_presses(ctx, |key, _| {
                 seen.push(key);
@@ -143,6 +143,7 @@ mod tests {
             assert_eq!(seen, [Key::ArrowRight, Key::ArrowLeft, Key::Escape]);
             assert!(!ctx.input(|i| i.key_pressed(Key::ArrowLeft)), "the press taken is gone");
             assert!(ctx.input(|i| i.key_pressed(Key::ArrowRight) && i.key_pressed(Key::Escape)), "the others stay");
+            assert!(ctx.input(|i| i.events.contains(&Event::Copy)), "and so does what isn't a key");
         });
     }
 
@@ -151,6 +152,10 @@ mod tests {
         frame(vec![Event::Copy, Event::Paste("text".into())], |ctx| {
             assert_eq!(PageKeys::new(true).clipboard(ctx), Clipboard::default());
             assert_eq!(PageKeys::new(false).clipboard(ctx), Clipboard { copy: true, cut: false, paste: true });
+        });
+        frame(vec![Event::Cut], |ctx| {
+            assert_eq!(PageKeys::new(true).clipboard(ctx), Clipboard::default());
+            assert_eq!(PageKeys::new(false).clipboard(ctx), Clipboard { copy: false, cut: true, paste: false });
         });
     }
 
