@@ -89,6 +89,70 @@ impl ScanDuplex {
     }
 }
 
+/// Paper size preset for scanner acquisition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScanPageSize {
+    #[default]
+    A4,
+    Letter,
+    Legal,
+    A5,
+    Auto,
+}
+
+impl ScanPageSize {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::A4 => "A4 (210 × 297 mm)",
+            Self::Letter => "Letter (8.5 × 11 in)",
+            Self::Legal => "Legal (8.5 × 14 in)",
+            Self::A5 => "A5 (148 × 210 mm)",
+            Self::Auto => "Auto / Max",
+        }
+    }
+
+    /// Extents in pixels (width, height) at the given DPI.
+    /// Returns None for Auto (scanner default / unconstrained).
+    pub fn extents_px(self, dpi: u32) -> Option<(u32, u32)> {
+        let dpi_f = dpi as f64;
+        match self {
+            Self::A4 => {
+                let w = ((210.0 / 25.4) * dpi_f).round() as u32;
+                let h = ((297.0 / 25.4) * dpi_f).round() as u32;
+                Some((w, h))
+            }
+            Self::Letter => {
+                let w = (8.5 * dpi_f).round() as u32;
+                let h = (11.0 * dpi_f).round() as u32;
+                Some((w, h))
+            }
+            Self::Legal => {
+                let w = (8.5 * dpi_f).round() as u32;
+                let h = (14.0 * dpi_f).round() as u32;
+                Some((w, h))
+            }
+            Self::A5 => {
+                let w = ((148.0 / 25.4) * dpi_f).round() as u32;
+                let h = ((210.0 / 25.4) * dpi_f).round() as u32;
+                Some((w, h))
+            }
+            Self::Auto => None,
+        }
+    }
+
+    /// Millimeter dimensions (width, height) for SANE.
+    /// Returns None for Auto.
+    pub fn dimensions_mm(self) -> Option<(f64, f64)> {
+        match self {
+            Self::A4 => Some((210.0, 297.0)),
+            Self::Letter => Some((215.9, 279.4)),
+            Self::Legal => Some((215.9, 355.6)),
+            Self::A5 => Some((148.0, 210.0)),
+            Self::Auto => None,
+        }
+    }
+}
+
 /// A discovered physical or network scanner device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScannerDevice {
@@ -102,6 +166,7 @@ pub struct ScanOptions {
     pub device_id: Option<String>,
     pub color_mode: ScanColorMode,
     pub resolution: ScanResolution,
+    pub page_size: ScanPageSize,
     pub source: ScanSource,
     pub duplex: ScanDuplex,
     pub all_pages: bool,
@@ -114,6 +179,7 @@ impl Default for ScanOptions {
             device_id: None,
             color_mode: ScanColorMode::Color,
             resolution: ScanResolution::Dpi300,
+            page_size: ScanPageSize::A4,
             source: ScanSource::Auto,
             duplex: ScanDuplex::Simplex,
             all_pages: true,
@@ -212,6 +278,10 @@ pub fn acquire_scan_pages(options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanErr
         ScanColorMode::BlackAndWhite => 4,
     };
     let dpi_num = options.resolution.as_dpi();
+    let (x_extent, y_extent) = options
+        .page_size
+        .extents_px(dpi_num)
+        .unwrap_or((0, 0));
 
     let script = if options.use_native_ui {
         format!(
@@ -306,6 +376,17 @@ try {{
         if ($p.Name -eq 'Current Intent') {{ try {{ $p.Value = {intent} }} catch {{}} }}
     }}
 
+    $xExtent = {x_extent}
+    $yExtent = {y_extent}
+    if ($xExtent -gt 0 -and $yExtent -gt 0) {{
+        foreach ($p in $item.Properties) {{
+            if ($p.PropertyID -eq 6149) {{ try {{ $p.Value = 0 }} catch {{}} }}
+            if ($p.PropertyID -eq 6150) {{ try {{ $p.Value = 0 }} catch {{}} }}
+            if ($p.PropertyID -eq 6151) {{ try {{ $p.Value = $xExtent }} catch {{}} }}
+            if ($p.PropertyID -eq 6152) {{ try {{ $p.Value = $yExtent }} catch {{}} }}
+        }}
+    }}
+
     Add-Type -AssemblyName System.Drawing
     $pageIdx = 0
     $maxPages = {max_pages}
@@ -364,6 +445,8 @@ try {{
             handling_select = handling_select,
             dpi = dpi_num,
             intent = intent_num,
+            x_extent = x_extent,
+            y_extent = y_extent,
             max_pages = max_pages,
             all_pages_val = all_pages_val,
             out_dir = out_dir_str.replace('\'', "''"),
@@ -487,6 +570,11 @@ pub fn acquire_scan(options: &ScanOptions) -> Result<Vec<u8>, ScanError> {
         cmd.arg(format!("--device={dev}"));
     }
 
+    if let Some((w, h)) = options.page_size.dimensions_mm() {
+        cmd.arg(format!("-x={w}"));
+        cmd.arg(format!("-y={h}"));
+    }
+
     let file = std::fs::File::create(&out_file)
         .map_err(|e| ScanError::AcquisitionFailed(format!("Failed to create temp file: {e}")))?;
     cmd.stdout(file);
@@ -545,7 +633,25 @@ mod tests {
         let opt = ScanOptions::default();
         assert_eq!(opt.resolution, ScanResolution::Dpi300);
         assert_eq!(opt.color_mode, ScanColorMode::Color);
+        assert_eq!(opt.page_size, ScanPageSize::A4);
         assert!(opt.device_id.is_none());
+    }
+
+    #[test]
+    fn test_scan_page_size_extents() {
+        assert_eq!(ScanPageSize::Auto.extents_px(300), None);
+        // A4 at 300 DPI: 2480 x 3508
+        let (a4_w, a4_h) = ScanPageSize::A4.extents_px(300).expect("A4 extents");
+        assert_eq!((a4_w, a4_h), (2480, 3508));
+        // Letter at 300 DPI: 2550 x 3300
+        let (let_w, let_h) = ScanPageSize::Letter.extents_px(300).expect("Letter extents");
+        assert_eq!((let_w, let_h), (2550, 3300));
+        // Legal at 300 DPI: 2550 x 4200
+        let (leg_w, leg_h) = ScanPageSize::Legal.extents_px(300).expect("Legal extents");
+        assert_eq!((leg_w, leg_h), (2550, 4200));
+        // A5 at 300 DPI: 1748 x 2480
+        let (a5_w, a5_h) = ScanPageSize::A5.extents_px(300).expect("A5 extents");
+        assert_eq!((a5_w, a5_h), (1748, 2480));
     }
 
     #[test]

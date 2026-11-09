@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 use egui::{Align, Layout};
-use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanError, ScanOptions, ScanResolution, ScanSource, ScannerDevice};
+use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanError, ScanOptions, ScanPageSize, ScanResolution, ScanSource, ScannerDevice};
 use crate::theme::{self, Tokens};
 use crate::{widgets, PdfCraftApp};
 
@@ -99,7 +99,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     .map(|s| s.name.as_str())
                     .unwrap_or("Default Scanner");
 
-                egui::ComboBox::from_id_salt("scanner_select")
+                craft_ui::ComboBox::from_id_salt("scanner_select")
                     .selected_text(current_label)
                     .width(280.0)
                     .show_ui(ui, |ui| {
@@ -134,7 +134,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Options", &mut |ui| {
         #[cfg(target_os = "windows")]
         {
-            ui.checkbox(&mut d.options.use_native_ui, tl!("Use system scan dialog (Windows basic)"));
+            ui.add(widgets::checkbox(&mut d.options.use_native_ui, tl!("Use system scan dialog (Windows basic)")));
             ui.add_space(6.0);
         }
 
@@ -152,8 +152,18 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             });
             if d.options.source == ScanSource::Feeder || d.options.duplex == ScanDuplex::Duplex {
                 ui.add_space(4.0);
-                ui.checkbox(&mut d.options.all_pages, tl!("Scan all sheets in feeder (continuous)"));
+                ui.add(widgets::checkbox(&mut d.options.all_pages, tl!("Scan all sheets in feeder (continuous)")));
             }
+            ui.add_space(6.0);
+
+            ui.label(egui::RichText::new(tl!("Page Size:")).small().color(t.text_muted));
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.options.page_size, ScanPageSize::A4, tl!("A4"));
+                widgets::radio_value(ui, &mut d.options.page_size, ScanPageSize::Letter, tl!("Letter"));
+                widgets::radio_value(ui, &mut d.options.page_size, ScanPageSize::Legal, tl!("Legal"));
+                widgets::radio_value(ui, &mut d.options.page_size, ScanPageSize::A5, tl!("A5"));
+                widgets::radio_value(ui, &mut d.options.page_size, ScanPageSize::Auto, tl!("Auto"));
+            });
             ui.add_space(6.0);
 
             ui.label(egui::RichText::new(tl!("Resolution:")).small().color(t.text_muted));
@@ -180,7 +190,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             widgets::radio_value(ui, &mut d.target, ScanTarget::AppendActive, tl!("Append page to active document"));
         }
         ui.add_space(6.0);
-        ui.checkbox(&mut d.recognize_text, tl!("Recognize text (OCR) after scan"));
+        ui.add(widgets::checkbox(&mut d.recognize_text, tl!("Recognize text (OCR) after scan")));
     });
 
     if is_running {
@@ -209,11 +219,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 impl PdfCraftApp {
     /// Open the scanner acquisition modal and refresh discovered devices.
     pub fn open_scanner_dialog(&mut self) {
-        if self.scan_acquire_draft.scanners.is_empty() {
-            if let Ok(devices) = scanner::list_scanners() {
-                self.scan_acquire_draft.scanners = devices;
-                self.scan_acquire_draft.selected_scanner = 0;
-            }
+        if self.scan_acquire_draft.scanners.is_empty()
+            && let Ok(devices) = scanner::list_scanners()
+        {
+            self.scan_acquire_draft.scanners = devices;
+            self.scan_acquire_draft.selected_scanner = 0;
         }
         self.dialog = Some(crate::Dialog::ScanAcquire);
     }

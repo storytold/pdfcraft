@@ -1,7 +1,7 @@
 //! Scanner automation tools: list scanners, and scan documents into PDF.
 
 use serde_json::{Value, json};
-use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanOptions, ScanResolution, ScanSource};
+use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanOptions, ScanPageSize, ScanResolution, ScanSource};
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
 impl Automation {
@@ -44,6 +44,13 @@ impl Automation {
                 }
             }
         };
+        let page_size = match a.opt_str("size")? {
+            Some("letter" | "carta") => ScanPageSize::Letter,
+            Some("legal" | "oficio") => ScanPageSize::Legal,
+            Some("a5") => ScanPageSize::A5,
+            Some("auto" | "max") => ScanPageSize::Auto,
+            _ => ScanPageSize::A4,
+        };
         let all_pages = a.opt_bool("all")?.unwrap_or(true);
         let use_native_ui = a.opt_bool("ui")?.unwrap_or(false);
 
@@ -51,6 +58,7 @@ impl Automation {
             device_id,
             color_mode,
             resolution,
+            page_size,
             source,
             duplex,
             all_pages,
