@@ -1,5 +1,5 @@
 use super::common::clean_name;
-use super::items::{Item, Rounded};
+use super::items::{Item, Rounded, Turned};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
@@ -35,7 +35,27 @@ impl Layouter<'_> {
         }
         let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
         let (x, y) = c.top_left(w, h);
-        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
+        let rect = Rect::new(inner.x + x, inner.y + y, w, h);
+        let start = self.item_count();
+        self.draw_node(k, rect, ctx, depth + 1, sib)?;
+        if c.rotate != 0 && matches!(k, Node::Draw(_)) {
+            let stands = k.standing_box(w, h);
+            let extent = (inner.y + stands.y, inner.y + stands.bottom());
+            self.turn(start, (inner.x + c.x.unwrap_or(0.0), inner.y + c.y.unwrap_or(0.0)), c.rotate, extent);
+        }
+        Ok(())
+    }
+
+    /// Turn the items the last page got since `start`, a draw, about `about`.
+    fn turn(&mut self, start: usize, about: (f64, f64), quarters: u8, extent: (f64, f64)) {
+        let Some(page) = self.pages.last_mut().filter(|p| start < p.items.len()) else { return };
+        let items = page.items.split_off(start);
+        page.items.push(Item::Turned(Box::new(Turned { about, quarters, extent, items })));
+        // One item now, kept whole by what it is: the record of its items, the last one kept,
+        // would fall on the next.
+        if self.leaves.last().is_some_and(|leaf| leaf.0 == start) {
+            self.leaves.pop();
+        }
     }
 
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
@@ -202,19 +222,50 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para) -> Result<(), XfaError> {
+    /// Draw `v` in `rect`; `scope` is the SOM of what holds it, for the fields it embeds.
+    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para, scope: &str) -> Result<(), XfaError> {
         let rich = match v {
             Value::Text(t) => text::plain(t),
             Value::Rich(r) => r.clone(),
             _ => return Ok(()),
         };
         let face = Face::of(font);
+        // Each pass over the text — a re-measure that shrinks it, or the final layout — counts
+        // its characters against the draw budget, so large text drawn in many instances stops.
+        let cost = rich.plain().chars().count().max(1);
+        // The values of embedded fields are laid out with it, so each pass counts those too: a
+        // short text embedding a long value is as much work as the value written out.
+        let embed = |id: &str, max: usize| {
+            let v = self.embed_in(id, max, scope);
+            self.drawn_chars.set(self.drawn_chars.get().saturating_add(v.chars().count()));
+            v
+        };
         // Text that doesn't fit the height it was given (the template's face is narrower than
         // the standard one drawn in its place, so it wraps to more lines) is drawn smaller,
         // down to 70%, rather than over what lies below.
-        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &|id, max| self.embed(id, max)) <= rect.h / k + 1.0;
-        let scale = if rect.h < 4.0 || fits(1.0) { 1.0 } else { [0.95, 0.9, 0.85, 0.8, 0.75].into_iter().find(|k| fits(*k)).unwrap_or(0.7) };
-        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &|id, max| self.embed(id, max));
+        // A pass is not started once the budget is spent, and one that spends it stops the rest.
+        let fits = |k: f64| -> Result<bool, XfaError> {
+            self.check_drawn_chars()?;
+            self.drawn_chars.set(self.drawn_chars.get().saturating_add(cost));
+            let fit = text::measure_height(&rich, rect.w / k, para, &face, &embed) <= rect.h / k + 1.0;
+            self.check_drawn_chars()?;
+            Ok(fit)
+        };
+        let mut scale = 1.0;
+        if rect.h >= 4.0 && !fits(1.0)? {
+            scale = 0.7;
+            for k in [0.95, 0.9, 0.85, 0.8, 0.75] {
+                if fits(k)? {
+                    scale = k;
+                    break;
+                }
+            }
+        }
+        self.drawn_chars.set(self.drawn_chars.get().saturating_add(cost));
+        self.check_drawn_chars()?;
+        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &embed);
+        // The layout itself expands the embedded values once more.
+        self.check_drawn_chars()?;
         if scale < 1.0 {
             for s in &mut block.spans {
                 s.x = rect.x + (s.x - rect.x) * scale;
@@ -232,7 +283,7 @@ impl Layouter<'_> {
         let ctx = ctx.child(&d.common);
         let inner = rect.inset(&d.common.margin);
         match &d.value {
-            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
+            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para, &ctx.som),
             Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {

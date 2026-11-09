@@ -7,6 +7,36 @@ const MAX_BOOKMARK_POSITION: f64 = 1_000_000.0;
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
+/// The most bookmark levels `bookmark_from_text_styles` takes.
+const MAX_STYLE_LEVELS: usize = 9;
+
+/// bookmark_from_text_styles' `levels`: one style per bookmark level, the first level 1, each
+/// `{ font, size, bold, italic }` as text_styles lists them.
+pub(crate) fn text_style_levels(a: &Args) -> Result<Vec<pdfcraft_engine::text_style_bookmarks::TextStyle>> {
+    let levels =
+        a.get("levels").and_then(Value::as_array).ok_or_else(|| ToolError::InvalidArgs("levels must list a style for each bookmark level".into()))?;
+    if levels.is_empty() || levels.len() > MAX_STYLE_LEVELS {
+        return Err(ToolError::InvalidArgs(format!("levels must list 1 to {MAX_STYLE_LEVELS} styles")));
+    }
+    levels
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let bad = |what: &str| ToolError::InvalidArgs(format!("levels[{i}]: {what}"));
+            let font =
+                v.get("font").and_then(Value::as_str).filter(|f| !f.is_empty()).ok_or_else(|| bad("font must be a font name from text_styles"))?;
+            let size =
+                v.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).ok_or_else(|| bad("size must be a positive number"))?;
+            let flag = |key: &str| match v.get(key) {
+                None | Some(Value::Null) => Ok(false),
+                Some(Value::Bool(b)) => Ok(*b),
+                Some(_) => Err(bad(&format!("{key} must be true or false"))),
+            };
+            Ok(pdfcraft_engine::text_style_bookmarks::TextStyle { font: font.to_string(), size, bold: flag("bold")?, italic: flag("italic")? })
+        })
+        .collect()
+}
+
 pub(crate) fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<pdfcraft_engine::RangeStyle>> {
     let Some(value) = value else { return Ok(Vec::new()) };
     let values = value.as_array().filter(|v| v.len() <= 1024).ok_or_else(|| Args::wrong("ranges", "an array of at most 1024 style objects"))?;
@@ -249,6 +279,8 @@ pub(crate) fn summary(d: &Document) -> Value {
     })
 }
 
+/// What `doc_info` returns for an open document: its metadata, security, pages, bookmarks,
+/// comments, fields, links, layers, transitions, attachments, fonts, warnings and repairs.
 pub(crate) fn info(d: &Document) -> Value {
     let i = &d.info;
     let page1 = |p: usize| p + 1;
@@ -283,7 +315,7 @@ pub(crate) fn info(d: &Document) -> Value {
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
-        "outline": outline(&i.outline),
+        "outline": outline(i, &i.outline),
         "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
         // comment_list and link_list), not raw PDF user space, so they can be fed back to
@@ -299,34 +331,15 @@ pub(crate) fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
-            "target": match &l.target {
-                pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
-                pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
-                pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
-                    "layers": changes.iter().map(|(op, ocg)| json!({
-                        "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
-                        "state": match op {
-                            pdfcraft_render::LayerOp::On => "on",
-                            pdfcraft_render::LayerOp::Off => "off",
-                            pdfcraft_render::LayerOp::Toggle => "toggle",
-                        },
-                    })).collect::<Vec<_>>(),
-                    "preserve_rb": preserve_rb,
-                }),
-                pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
-                    "action": if *launch { "Launch" } else { "GoToR" },
-                    "remote_document": file,
-                    "destination": match destination {
-                        pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
-                        pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
-                        pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
-                    },
-                    "new_window": new_window,
-                }),
-                pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
-            },
+            "target": link_target(i, &l.target),
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),
+        // The Layers panel's rows, the default configuration's /Order (ISO 32000-2 Table 99): a
+        // layer by its 1-based position in `layers`, or a label; `depth` 0 at the top.
+        "layer_order": i.layer_order.iter().map(|r| match &r.item {
+            pdfcraft_render::LayerItem::Layer(n) => json!({ "depth": r.depth, "layer": n.saturating_add(1), "name": i.layers.get(*n).map(|l| l.name.as_str()) }),
+            pdfcraft_render::LayerItem::Label(s) => json!({ "depth": r.depth, "label": s }),
+        }).collect::<Vec<_>>(),
         // Full-screen presentation settings a page carries (ISO 32000-2 §12.4.4): only pages with
         // a `/Trans` or `/Dur` appear; `style` is null for a display time alone.
         "transitions": i.transitions.iter().map(|t| json!({
@@ -345,6 +358,9 @@ pub(crate) fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "warnings": i.warnings,
         "repairs": d.repair_log(),
+        // Objects that could not be read (each reads as null): nothing was repaired, what they held is
+        // lost. Last, so it includes what reading the fields above failed on.
+        "unreadable_objects": d.unreadable_objects(),
     })
 }
 
@@ -356,6 +372,50 @@ pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [
     i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
 }
 
-fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
-    Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
+/// Bookmarks with the page each goes to, or the action it runs instead (as a link's `target`).
+fn outline(i: &pdfcraft_render::DocInfo, items: &[pdfcraft_render::OutlineItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|o| {
+                json!({
+                    "title": o.title, "page": o.page.map(|p| p + 1),
+                    "action": o.action.as_ref().map(|a| link_target(i, a)), "children": outline(i, &o.children),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Where a link goes, or what a bookmark's action does: a 1-based page, a web address, layer
+/// changes, another PDF, or the name of an action that isn't run.
+fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarget) -> Value {
+    // A remote page number is the file's, however large.
+    let page1 = |p: usize| p.saturating_add(1);
+    match target {
+        pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
+        pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+        pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
+            "layers": changes.iter().map(|(op, ocg)| json!({
+                "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
+                "state": match op {
+                    pdfcraft_render::LayerOp::On => "on",
+                    pdfcraft_render::LayerOp::Off => "off",
+                    pdfcraft_render::LayerOp::Toggle => "toggle",
+                },
+            })).collect::<Vec<_>>(),
+            "preserve_rb": preserve_rb,
+        }),
+        pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
+            "action": if *launch { "Launch" } else { "GoToR" },
+            "remote_document": file,
+            "destination": match destination {
+                pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
+                pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+            },
+            "new_window": new_window,
+        }),
+        pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+    }
 }

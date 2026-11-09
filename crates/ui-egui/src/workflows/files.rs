@@ -3,6 +3,7 @@
 //! Files are picked asynchronously and used on a later frame: desktop builds through `pickers`
 //! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -28,49 +29,81 @@ pub enum FilePurpose {
     RedactWords,
 }
 
-/// Discover installed document fonts off the GUI thread, only when the picker is opened.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
+fn discover_fonts_safely(
+    discover: impl FnOnce() -> Vec<pdfcraft_engine::text_fonts::FontFile> + std::panic::UnwindSafe,
+) -> Vec<pdfcraft_engine::text_fonts::FontFile> {
+    std::panic::catch_unwind(discover).unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FontScanCache {
+    files: Option<Vec<pdfcraft_engine::text_fonts::FontFile>>,
+    loading: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FontScanCache {
+    fn begin(&mut self, reload: bool) -> bool {
+        if self.loading || (!reload && self.files.is_some()) {
+            return false;
+        }
+        self.loading = true;
+        self.files = None;
+        true
+    }
+
+    fn finish(&mut self, files: Vec<pdfcraft_engine::text_fonts::FontFile>) {
+        self.files = Some(files);
+        self.loading = false;
+    }
+}
+
+/// Discover installed document fonts off the GUI thread. Reload permits retrying a
+/// failed scan or discovering newly installed fonts without restarting the app.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
     use std::sync::{Mutex, OnceLock};
-    type Files = Arc<Mutex<Option<Vec<pdfcraft_engine::text_fonts::FontFile>>>>;
+    type Files = Arc<Mutex<FontScanCache>>;
     static CACHE: OnceLock<Files> = OnceLock::new();
-    let files = CACHE.get_or_init(|| {
-        let files: Files = Arc::new(Mutex::new(None));
+    let files = CACHE.get_or_init(|| Arc::new(Mutex::new(FontScanCache::default())));
+    let start = files.lock().is_ok_and(|mut state| state.begin(reload));
+    if start {
         let result = files.clone();
         let ctx = ctx.clone();
         if std::thread::Builder::new()
             .name("document-font-discovery".into())
             .spawn(move || {
-                let fonts = pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories());
+                let fonts = discover_fonts_safely(|| pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories()));
                 if let Ok(mut result) = result.lock() {
-                    *result = Some(fonts);
+                    result.finish(fonts);
                 }
                 ctx.request_repaint();
             })
             .is_err()
             && let Ok(mut result) = files.lock()
         {
-            *result = Some(Vec::new());
+            result.finish(Vec::new());
         }
-        files
-    });
-    files.lock().ok().and_then(|f| f.clone())
+    }
+    files.lock().ok().and_then(|f| f.files.clone())
 }
 
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
     if matches!(purpose, FilePurpose::TextFont { .. }) {
-        return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
+        return dialog.add_filter_any_case("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
-        return dialog.add_filter(tl!("Text"), &["txt"]);
+        return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
-        return dialog.add_filter("PDF", &["pdf"]);
+        return dialog.add_filter_any_case("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
-    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
+    dialog.add_filter_any_case(tl!("PDF, images and text"), &all).add_filter_any_case("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -116,6 +149,8 @@ pub struct FileRequest {
     purpose: FilePurpose,
     target: Option<PickTarget>,
     files: Vec<(String, Vec<u8>)>,
+    /// Dropped on the Combine files tab rather than picked: what Combine can't take is left out.
+    dropped: bool,
 }
 
 /// Files picked asynchronously (web), waiting to be used.
@@ -277,6 +312,11 @@ fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, Stri
     }
 }
 
+/// The name of a file dropped on the window ("dropped.pdf" when it has none).
+pub(crate) fn dropped_name(f: &egui::DroppedFileHandle) -> String {
+    f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into())
+}
+
 impl PdfCraftApp {
     /// Ask for files to add to the Combine files list (its Add files… button).
     pub fn combine_dialog(&mut self) {
@@ -418,37 +458,53 @@ impl PdfCraftApp {
         }
     }
 
-    /// A file dropped on the Combine files tab: added to its list.
+    /// Files dropped on the Combine files tab join its list in the order dropped (see
+    /// [`Self::add_dropped_to_combine`]); a folder adds the files in it and its subfolders.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
-        // A folder: the PDFs in it and in the folders inside it.
-        if f.path().is_absolute() && f.path().is_dir() {
-            self.add_folder_to_combine(f.path(), true);
-            return;
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, _ctx: &egui::Context) {
+        let mut files = Vec::new();
+        for f in dropped {
+            let path = f.path();
+            if path.is_absolute() && path.is_dir() {
+                // After the files dropped before it.
+                self.add_dropped_to_combine(std::mem::take(&mut files));
+                self.add_folder_to_combine(path, true);
+                continue;
+            }
+            let name = dropped_name(&f);
+            // A file on disk is read from there, with when it was last modified; a drop that
+            // carries only bytes (no path) as it is.
+            let (read, modified) = if path.is_absolute() {
+                (std::fs::read(path).map_err(|e| e.to_string()), std::fs::metadata(path).and_then(|m| m.modified()).ok())
+            } else {
+                (f.bytes(), None)
+            };
+            match read {
+                Ok(bytes) => files.push(crate::combine_ui::Incoming { modified, ..crate::combine_ui::Incoming::new(name, bytes) }),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
+            }
         }
-        if f.path().is_absolute() {
-            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
-            return;
-        }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-        match f.bytes() {
-            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
-        }
+        self.add_dropped_to_combine(files);
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) {
         let requests = self.requests.clone();
-        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let request = FileRequest { dropped: true, ..self.file_request(FilePurpose::Combine, Vec::new()) };
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-            if let Ok(bytes) = f.bytes_async().await
+            // One after another, so they join the list in the order dropped.
+            let mut files = Vec::new();
+            for f in dropped {
+                if let Ok(bytes) = f.bytes_async().await {
+                    files.push((dropped_name(&f), bytes));
+                }
+            }
+            if !files.is_empty()
                 && let Ok(mut q) = requests.lock()
             {
-                q.push(FileRequest { files: vec![(name, bytes)], ..request });
+                q.push(FileRequest { files, ..request });
                 ctx.request_repaint();
             }
         });
@@ -459,7 +515,7 @@ impl PdfCraftApp {
     /// `requests` once the files are read; it is used on a later frame.
     pub fn file_request(&self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) -> FileRequest {
         let target = if purpose.edits_active_document() { self.pick_target(self.active_ids().map(|(_, id)| id)) } else { None };
-        FileRequest { purpose, target, files }
+        FileRequest { purpose, target, files, dropped: false }
     }
 
     /// `doc` as it is now, for a pick that will edit it.
@@ -483,12 +539,19 @@ impl PdfCraftApp {
     /// Handle files picked asynchronously.
     pub(crate) fn process_file_requests(&mut self) {
         let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for FileRequest { purpose, target, files } in pending {
+        for FileRequest { purpose, target, files, dropped } in pending {
             if !self.still_pick_target(target) {
                 continue;
             }
             // Last-resort guard (AGENTS.md §4), as for desktop picks and commands.
-            if let Err(m) = pdfcraft_engine::guard(|| self.use_files(purpose, files)) {
+            let used = pdfcraft_engine::guard(|| {
+                if dropped {
+                    self.add_dropped_to_combine(files.into_iter().map(|(name, bytes)| crate::combine_ui::Incoming::new(name, bytes)).collect());
+                } else {
+                    self.use_files(purpose, files);
+                }
+            });
+            if let Err(m) = used {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
         }
@@ -868,10 +931,24 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
 }
 
 impl PdfCraftApp {
-    /// Comments ▸ Import comments / Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
+    /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
     pub fn import_data_dialog(&mut self) {
+        self.import_dialog(false);
+    }
+
+    /// Comments ▸ Import comments: the files Import data takes, or another PDF to copy the
+    /// comments of.
+    pub fn import_comments_dialog(&mut self) {
+        self.import_dialog(true);
+    }
+
+    fn import_dialog(&mut self, pdf: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let mut extensions = vec!["xfdf", "fdf", "xml", "xdp", "csv", "txt"];
+            if pdf {
+                extensions.insert(2, "pdf");
+            }
             let import = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
                 Ok(bytes) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -880,11 +957,11 @@ impl PdfCraftApp {
                 Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             };
             match self.save_override.clone() {
-                Some(p) if [".xfdf", ".fdf", ".xml", ".xdp", ".csv", ".txt"].iter().any(|e| p.ends_with(e)) => import(self, p.into()),
+                Some(p) if extensions.iter().any(|e| p.ends_with(&format!(".{e}"))) => import(self, p.into()),
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &["xfdf", "fdf", "xml", "xdp", "csv", "txt"])
+                        .add_filter_any_case(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -892,7 +969,10 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        {
+            let _ = pdf;
+            self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        }
     }
 
     /// Export all comments / form data: the format follows the file name's extension.
@@ -922,7 +1002,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Export").to_string())
-                        .add_filter(ext.to_uppercase(), &[ext])
+                        .add_filter_any_case(ext.to_uppercase(), &[ext])
                         .set_file_name(format!("{stem}.{ext}"));
                     let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
@@ -942,7 +1022,7 @@ impl PdfCraftApp {
         {
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(tl!("Select data files to merge").to_string())
-                .add_filter(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
+                .add_filter_any_case(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
             self.ask(crate::pickers::Ask::Files(dialog), None, |app, paths| {
                 let mut files = Vec::new();
                 for p in paths {
@@ -987,7 +1067,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Save the spreadsheet").to_string())
-                        .add_filter("CSV", &["csv"])
+                        .add_filter_any_case("CSV", &["csv"])
                         .set_file_name("report.csv");
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                 }
@@ -1030,22 +1110,22 @@ impl PdfCraftApp {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
                     let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(format!("{stem}.xfdf"));
                     let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
+                        d.add_filter_any_case("XFDF", &["xfdf"]).add_filter_any_case("FDF", &["fdf"])
                     } else if xfa {
                         // An XFA form's data, as Acrobat exports it, first.
                         d.set_file_name(format!("{stem}.xml"))
-                            .add_filter("XML", &["xml"])
-                            .add_filter("XDP", &["xdp"])
-                            .add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("XDP", &["xdp"])
+                            .add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                        d.add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     };
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
@@ -1158,5 +1238,30 @@ mod stem_tests {
             if path.is_dir() { out.extend(walk(&path)) } else { out.push(path) }
         }
         out
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod font_scan_tests {
+    #[test]
+    fn completed_and_failed_font_scans_can_be_reloaded_without_duplicate_workers() {
+        let mut cache = super::FontScanCache::default();
+        assert!(cache.begin(false));
+        assert!(!cache.begin(true), "a reload during discovery must not start another worker");
+        cache.finish(Vec::new());
+        assert!(!cache.begin(false), "reuse a finished scan until explicitly reloaded");
+        assert!(cache.begin(true), "an empty or failed scan can be retried");
+        cache.finish(vec![pdfcraft_engine::text_fonts::FontFile {
+            path: "installed.ttf".into(),
+            family: "Installed".into(),
+            face: "Installed".into(),
+        }]);
+        assert!(cache.begin(true), "a populated scan can discover newly installed fonts");
+        assert!(cache.files.is_none());
+    }
+
+    #[test]
+    fn a_panicking_font_scan_finishes_with_an_empty_list() {
+        assert!(super::discover_fonts_safely(|| panic!("synthetic font scan failure")).is_empty());
     }
 }

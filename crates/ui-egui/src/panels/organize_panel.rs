@@ -159,7 +159,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if row(ui, t, "tag", tl!("Page labels"), Availability::Ready, false).clicked() {
             act = Some(Act::Command("page.number"));
         }
-        row(ui, t, "info", tl!("Page properties"), Availability::Later, false);
+        if row(ui, t, "info", tl!("Page properties"), Availability::Ready, false).clicked() {
+            act = Some(Act::Command("page.properties"));
+        }
     });
 
     if close {
@@ -180,6 +182,30 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if back && !close {
         app.enter_mode(crate::Mode::AllTools);
     }
+}
+
+/// Page Properties ▸ Tab Order for the pages it opened on: Use Row Order, Use Column Order, Use
+/// Document Structure and Unspecified, then OK and Cancel. OK is off until a choice is made.
+/// Returns (OK, Cancel).
+pub(crate) fn page_props_body(ui: &mut egui::Ui, d: &mut crate::PagePropsDraft) -> (bool, bool) {
+    use pdfcraft_engine::TabOrder;
+    ui.label(egui::RichText::new(tl!("Page Properties")).font(theme::semibold(18.0)));
+    widgets::section_title(ui, tl!("Tab Order"));
+    for (order, label) in [
+        (TabOrder::Row, tl!("Use Row Order")),
+        (TabOrder::Column, tl!("Use Column Order")),
+        (TabOrder::Structure, tl!("Use Document Structure")),
+        (TabOrder::Annotations, tl!("Unspecified")),
+    ] {
+        widgets::radio_value(ui, &mut d.tab_order, Some(order), label);
+    }
+    let (mut ok, mut cancel) = (false, false);
+    ui.add_space(12.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ok = ui.add_enabled_ui(d.tab_order.is_some(), |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked();
+        cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+    });
+    (ok, cancel)
 }
 
 /// Whether a row works in this build.

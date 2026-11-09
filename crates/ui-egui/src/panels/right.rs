@@ -24,6 +24,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
+    let bm_can_paste = app.bookmark_clipboard.is_some();
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
     {
@@ -48,7 +49,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Bookmarks => ("Bookmarks", None),
                     RightPanel::Pages => ("Pages", Some(info.pages.len())),
                     RightPanel::Fields => ("Fields", Some(info.fields.len())),
-                    RightPanel::Layers => ("Layers", Some(info.layers.len())),
+                    RightPanel::Layers => {
+                        ("Layers", Some(info.layer_order.iter().filter(|r| matches!(r.item, pdfcraft_render::LayerItem::Layer(_))).count()))
+                    }
                     RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
                     RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
                     RightPanel::Accessibility => ("Accessibility Checker", None),
@@ -105,6 +108,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 ui.set_min_width(200.0);
                                 if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
                                     bm_action = Some(BmAction::FromStructure);
+                                    ui.close();
+                                }
+                                if bm_editable && ui.button(tl!("New bookmarks from text styles…")).clicked() {
+                                    bm_action = Some(BmAction::FromTextStyles);
+                                    ui.close();
+                                }
+                                if bm_editable && ui.add_enabled(bm_can_paste, egui::Button::new(tl!("Paste bookmarks"))).clicked() {
+                                    bm_action = Some(BmAction::Paste { parent: Vec::new(), index: usize::MAX });
                                     ui.close();
                                 }
                                 if !info.outline.is_empty() {
@@ -178,7 +189,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
                     RightPanel::Comments => {
-                        if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
+                        if let Some(e) = crate::comments_panel::show(ui, &t, doc, view, prefs, comment_allowed, &mut nav) {
                             panel_edit = Some(e);
                         }
                     }
@@ -191,6 +202,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             action: &mut bm_action,
                             rename: &mut bm_rename,
                             editable: bm_editable,
+                            can_paste: bm_can_paste,
                             current: view.current,
                             expand: bm_expand,
                             matches: &bookmark_matches,
@@ -224,8 +236,31 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
                             empty(ui, &t, "layers", "This document has no layers.");
+                        } else if info.layer_order.is_empty() {
+                            // ISO 32000-2 Table 99: only the groups /Order lists are presented.
+                            empty(ui, &t, "layers", "This document lists no layers to show.");
                         }
-                        for (li, l) in info.layers.iter().enumerate() {
+                        // The default configuration's /Order, as a tree: a level is indented
+                        // 16 points, up to eight levels; a label is a heading, not a layer.
+                        for row in &info.layer_order {
+                            let indent = 16.0 * row.depth.min(8) as f32;
+                            let li = match &row.item {
+                                pdfcraft_render::LayerItem::Layer(li) => *li,
+                                pdfcraft_render::LayerItem::Label(label) => {
+                                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+                                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
+                                    crate::widgets::paint_left(
+                                        ui,
+                                        rect.left_center() + vec2(8.0 + indent, 0.0),
+                                        label,
+                                        theme::medium(12.0),
+                                        t.text_faint,
+                                        (rect.width() - 12.0 - indent).max(0.0),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let Some(l) = info.layers.get(li) else { continue };
                             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, l.visible, &l.name));
                             let press = theme::Press::track(ui, &resp);
@@ -233,7 +268,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let body = rect.translate(press.offset());
                             icons::paint(
                                 ui,
-                                Rect::from_min_size(body.min + vec2(4.0, 7.0), vec2(18.0, 18.0)),
+                                Rect::from_min_size(body.min + vec2(4.0 + indent, 7.0), vec2(18.0, 18.0)),
                                 if l.visible { "eye" } else { "eye-off" },
                                 16.0,
                                 t.icon,
@@ -241,11 +276,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let fg = if l.visible { t.text } else { t.text_faint };
                             crate::widgets::paint_left(
                                 ui,
-                                body.left_center() + vec2(32.0, 0.0),
+                                body.left_center() + vec2(32.0 + indent, 0.0),
                                 &l.name,
                                 theme::regular(13.0),
                                 fg,
-                                (rect.width() - 40.0).max(0.0),
+                                (rect.width() - 40.0 - indent).max(0.0),
                             );
                             if theme::hand(resp).on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
                                 toggle_layer = Some((li, !l.visible));
@@ -435,6 +470,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
             None => app.views[index].go_to_page(p),
         },
+        Some(Nav::Action(target)) => {
+            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
+                app.open_remote_link(source, file, destination);
+            }
+        }
         Some(Nav::Flash(p, r)) => {
             let v = &mut app.views[index];
             if let Some(doc) = app.session.get(id) {

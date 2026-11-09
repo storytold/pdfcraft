@@ -5,7 +5,7 @@ use crate::font::{Font, StandardFont};
 use crate::interpret::state::{ClipType, State, TextStateFont};
 use crate::ocg::OcgState;
 use crate::util::{BezPathExt, Float64Ext};
-use crate::{ClipPath, Device, FillRule, InterpreterSettings, StrokeProps};
+use crate::{ClipPath, Device, FillRule, InterpreterSettings, InterpreterWarning, StrokeProps};
 use hayro_syntax::content::ops::Transform;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -37,6 +37,12 @@ std::thread_local! {
     // PdfCraft patch (18): whether this page's content budget ran out, reported as
     // `InterpreterWarning::ContentTruncated`.
     static CONTENT_TRUNCATED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
+    // the contexts of the tiling patterns, Type 3 glyphs, soft masks and groups painted while
+    // they draw. A form already on it draws itself and is skipped. Its length is bounded by the
+    // nesting limits: every form on it is nested in the ones before it.
+    static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// PdfCraft patch: decoded content-stream bytes one page may hold at once: its contents, and
@@ -86,6 +92,37 @@ pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'
     Some(DecodedContent { data, held })
 }
 
+/// PdfCraft patch (87): what is left of this page's [`MAX_PAGE_CONTENT`].
+pub(crate) fn content_left() -> usize {
+    CONTENT_LEFT.with(core::cell::Cell::get)
+}
+
+/// PdfCraft patch (87): `len` bytes of content held within the page's [`MAX_PAGE_CONTENT`]
+/// until dropped, as [`DecodedContent`] holds what it decoded: content kept from an earlier
+/// decode (a cached Type 3 glyph procedure) counts as it did when it was decoded.
+pub(crate) struct HeldContent(usize);
+
+impl Drop for HeldContent {
+    fn drop(&mut self) {
+        let held = self.0;
+        CONTENT_LEFT.with(|c| c.set(c.get().saturating_add(held).min(MAX_PAGE_CONTENT)));
+    }
+}
+
+/// PdfCraft patch (87): hold `len` bytes of content within what is left of the page's
+/// [`MAX_PAGE_CONTENT`]. `None`, and the page reported truncated, when they don't fit, as
+/// [`decode_content`] skips content the budget can't hold.
+pub(crate) fn hold_content(len: usize) -> Option<HeldContent> {
+    let left = content_left();
+    if left == 0 || left < len {
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+        warn!("page content budget exceeded");
+        return None;
+    }
+    charge_content(len);
+    Some(HeldContent(len))
+}
+
 /// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
 pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
@@ -123,6 +160,22 @@ pub struct InterpreterCache<'a> {
     /// PdfCraft patch: decoded images, shared by every render through this cache so a tile
     /// no longer decodes its page's images again.
     pub(crate) decoded_cache: DecodedImageCache,
+    /// PdfCraft patch (87): what the Type 3 fonts of this cache keep of their decoded glyph
+    /// procedures, together (see `font::type3`).
+    pub(crate) type3_procs: Rc<Type3Procs>,
+}
+
+/// PdfCraft patch (87): decoded Type 3 glyph procedure bytes all the fonts of one
+/// [`InterpreterCache`] keep together. Fonts live as long as the cache, so the bound is on the
+/// cache, not on each font: a document can have thousands of Type 3 fonts.
+pub(crate) const MAX_CACHED_TYPE3_PROCS: usize = 32 << 20;
+
+/// PdfCraft patch (87): the decoded glyph procedure bytes the Type 3 fonts of a cache keep,
+/// and how many procedures they decoded.
+#[derive(Default)]
+pub(crate) struct Type3Procs {
+    pub(crate) held: core::cell::Cell<usize>,
+    pub(crate) decodes: core::cell::Cell<usize>,
 }
 
 impl<'a> Default for InterpreterCache<'a> {
@@ -138,7 +191,15 @@ impl<'a> InterpreterCache<'a> {
             font_cache: Rc::new(RefCell::new(HashMap::new())),
             object_cache: Cache::new(),
             decoded_cache: DecodedImageCache::new(),
+            type3_procs: Rc::default(),
         }
+    }
+
+    /// PdfCraft patch (87): how many Type 3 glyph procedures the fonts of this cache decoded,
+    /// for diagnostics and tests. A procedure kept from an earlier copy of its glyph isn't
+    /// decoded again.
+    pub fn type3_proc_decodes(&self) -> usize {
+        self.type3_procs.decodes.get()
     }
 
     /// PdfCraft patch (32): how many images were decoded through this cache (its misses, not
@@ -147,11 +208,24 @@ impl<'a> InterpreterCache<'a> {
         self.decoded_cache.decodes()
     }
 
+    /// PdfCraft patch (82): how many of [`Self::decoded_image_decodes`] were of soft masks and
+    /// `/Mask` images, for diagnostics and tests.
+    pub fn decoded_mask_decodes(&self) -> usize {
+        self.decoded_cache.mask_decodes()
+    }
+
     /// PdfCraft patch (48): how many `/ICCBased` profiles were read through this cache, for
     /// diagnostics and tests. A profile used again, by the same stream object or by a copy with
     /// the same dictionary and bytes, is read once.
     pub fn icc_profile_reads(&self) -> usize {
         self.object_cache.icc_profile_reads()
+    }
+
+    /// PdfCraft patch (80): how many `/Indexed` lookup tables were read through this cache, for
+    /// diagnostics and tests. A colour space named by a resource is built, and its table read,
+    /// once however many images or colours use it.
+    pub fn indexed_lookup_reads(&self) -> usize {
+        self.object_cache.indexed_lookup_reads()
     }
 }
 
@@ -173,6 +247,10 @@ pub struct Context<'a> {
     /// a limit was reached, the clip count to return to at its `Q`.
     saved_bytes: usize,
     skipped_saves: Vec<usize>,
+    /// PdfCraft patch (68): the `num_states` at which the nested content stream (a form, an
+    /// appearance, a glyph or pattern cell) being interpreted started, or 0 in page content. A
+    /// `Q` there has no `q` of its own stream to match (see `stream_floor_reached`).
+    stream_floor: usize,
     // PdfCraft patch (63).
     /// This is the content of a luminosity soft mask whose group colour space is `/DeviceCMYK`,
     /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
@@ -214,6 +292,10 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (89): no form of another page is being drawn.
+        FORMS_DRAWING.with(|forms| forms.borrow_mut().clear());
+        // PdfCraft patch (73): and fresh JBIG2 decoding, which every image of it shares.
+        hayro_syntax::set_page_jbig2_work(settings.jbig2_work);
         // PdfCraft patch (55): a fallback left over from another page is not this page's.
         crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
@@ -233,7 +315,7 @@ impl<'a> Context<'a> {
         let mut ocg_state = {
             let root_ref = xref.root_id();
             xref.get::<Dict<'_>>(root_ref)
-                .map(|catalog| OcgState::from_catalog(&catalog))
+                .map(|catalog| OcgState::from_catalog(&catalog, xref, settings.view_auto_state))
                 .unwrap_or_default()
         };
         // PdfCraft patch: apply viewer layer toggles.
@@ -256,7 +338,58 @@ impl<'a> Context<'a> {
             nesting_depth,
             saved_bytes: 0,
             skipped_saves: Vec::new(),
+            stream_floor: 0,
             luminosity_in_device_cmyk: false,
+        }
+    }
+
+    /// PdfCraft patch (89): begins drawing the form `id`; `false` when that form is already
+    /// being drawn, so drawing it again would never end (ISO 32000-2 §8.10.1: a form is a
+    /// self-contained description; one that contains itself describes nothing finite). The
+    /// skip is reported as `InterpreterWarning::ContentTruncated`. A form without an object
+    /// number can't be told apart and is only bounded by the nesting limits.
+    ///
+    /// The forms being drawn are those of this page's context and of every context painting
+    /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
+    /// reaches itself through one of those is skipped too, while a form drawn again after it
+    /// has finished draws as usual.
+    pub(crate) fn enter_form(
+        &mut self,
+        id: Option<hayro_syntax::object::ObjectIdentifier>,
+    ) -> bool {
+        let Some(id) = id else {
+            return true;
+        };
+        // The stack is never borrowed across a call, so the borrow succeeds; if it didn't,
+        // the form draws, bounded by the nesting limits as before this patch.
+        let entered = FORMS_DRAWING.with(|forms| {
+            let Ok(mut forms) = forms.try_borrow_mut() else {
+                return None;
+            };
+            if forms.contains(&id) {
+                return Some(false);
+            }
+            forms.push(id);
+            Some(true)
+        });
+        if entered == Some(false) {
+            warn!("form XObject draws itself; the inner drawing is skipped");
+            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+            return false;
+        }
+        true
+    }
+
+    /// PdfCraft patch (89): ends drawing a form begun with `enter_form`.
+    pub(crate) fn leave_form(&mut self, id: Option<hayro_syntax::object::ObjectIdentifier>) {
+        if let Some(id) = id {
+            FORMS_DRAWING.with(|forms| {
+                if let Ok(mut forms) = forms.try_borrow_mut()
+                    && forms.last() == Some(&id)
+                {
+                    forms.pop();
+                }
+            });
         }
     }
 
@@ -439,6 +572,8 @@ impl<'a> Context<'a> {
         self.get_mut().ctm *= transform;
     }
 
+    /// PdfCraft patch (80): an `/Indexed` resource with no lookup table is built, marked
+    /// tableless, for the image and colour operators to handle (see `Indexed::new`).
     pub(crate) fn get_color_space(
         &mut self,
         resources: &Resources<'_>,
@@ -448,12 +583,34 @@ impl<'a> Context<'a> {
         self.interpreter_cache
             .object_cache
             .get_or_insert_with(cs_object.cache_key(), || {
-                ColorSpace::new(cs_object.clone(), &self.interpreter_cache.object_cache)
+                ColorSpace::new_allowing_tableless(
+                    cs_object.clone(),
+                    &self.interpreter_cache.object_cache,
+                )
             })
     }
 
     pub(crate) fn stroke_props(&self) -> StrokeProps {
         self.get().graphics_state.stroke_props.clone()
+    }
+
+    /// PdfCraft patch (68): starts a nested content stream at the current depth and returns the
+    /// floor of the stream it runs inside, for `leave_stream`.
+    pub(crate) fn enter_stream(&mut self) -> usize {
+        let depth = self.num_states();
+        std::mem::replace(&mut self.stream_floor, depth)
+    }
+
+    /// PdfCraft patch (68): ends a content stream begun with `enter_stream`.
+    pub(crate) fn leave_stream(&mut self, outer_floor: usize) {
+        self.stream_floor = outer_floor;
+    }
+
+    /// PdfCraft patch (68): every `q` of the current content stream has been matched, so a `Q`
+    /// now would restore a state its caller saved (a stream balances its own `q` and `Q`,
+    /// ISO 32000-2 §8.4.2, §8.10.1).
+    pub(crate) fn stream_floor_reached(&self) -> bool {
+        self.num_states() <= self.stream_floor
     }
 
     pub(crate) fn num_states(&self) -> usize {
@@ -501,6 +658,12 @@ impl<'a> Context<'a> {
                 })
                 .clone()
         };
+
+        // PdfCraft patch (90): tell the caller a Type 3 font lacks the /Widths it requires,
+        // so the spacing taken from its glyph procedures can be reported.
+        if resolved.as_ref().is_some_and(Font::type3_widths_missing) {
+            (self.settings.warning_sink)(InterpreterWarning::Type3WidthsMissing);
+        }
 
         if let Some(resolved) = resolved {
             Some(TextStateFont::Font(resolved))

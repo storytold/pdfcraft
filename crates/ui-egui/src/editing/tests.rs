@@ -1,4 +1,15 @@
-use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+use super::{
+    SaveTarget, is_mail_temp_copy, save_dialog_folder, unredacted_file_name, write_atomically, write_atomically_syncing, write_atomically_with,
+};
+
+#[test]
+fn restored_content_is_not_proposed_under_the_redacted_name() {
+    assert_eq!(unredacted_file_name("contract_Redacted.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("SCAN_Redacted.PDF"), "SCAN.PDF");
+    assert_eq!(unredacted_file_name("Untitled_Redacted"), "Untitled");
+    assert_eq!(unredacted_file_name("contract.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("_Redacted.pdf"), "_Redacted.pdf");
+}
 
 #[test]
 fn save_dialogs_open_in_the_documents_folder() {
@@ -296,6 +307,46 @@ fn one_page_pdf() -> Vec<u8> {
     out
 }
 
+/// `one_page_pdf`, opening without a password, whose permissions refuse changes.
+fn no_changes_pdf() -> Vec<u8> {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(one_page_pdf())).unwrap();
+    let encryption = pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    };
+    doc.set_encryption(&encryption).unwrap();
+    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+}
+
+/// Undo with a new text box open on a document that refuses changes: the box is put back as
+/// it was. Finishing it had asked for the new item to be selected, and that request stayed
+/// behind once the add was refused.
+#[test]
+fn a_refused_text_box_is_put_back_whole() {
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
+    let style = crate::content_ui::default_style();
+    app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+        page: 0,
+        index: None,
+        rect: [20.0, 20.0, 120.0, 40.0],
+        text: "Typed".into(),
+        style,
+        focus: false,
+        selection: None,
+        typing_from: None,
+    });
+    app.undo();
+    let content = &app.views[0].content;
+    assert_eq!(content.draft.as_ref().map(|d| d.text.as_str()), Some("Typed"), "the refused box stays open");
+    assert_eq!(content.select_added, None, "nothing was added to select");
+}
+
 #[test]
 fn save_commits_the_open_text_box() {
     let dir = staging_dir("open-text-box");
@@ -305,8 +356,16 @@ fn save_commits_the_open_text_box() {
     app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
     app.save_override = Some(dest.to_string_lossy().into_owned());
     let style = crate::content_ui::default_style();
-    app.views[0].content.draft =
-        Some(crate::content_ui::TextDraft { page: 0, index: None, rect: [20.0, 20.0, 120.0, 40.0], text: "Typed text".into(), style, focus: true });
+    app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+        page: 0,
+        index: None,
+        rect: [20.0, 20.0, 120.0, 40.0],
+        text: "Typed text".into(),
+        style,
+        focus: true,
+        selection: None,
+        typing_from: None,
+    });
 
     assert!(app.save_active(SaveTarget::InPlace));
     let id = app.views[0].id;
@@ -342,4 +401,67 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     assert!(app.save_active(SaveTarget::InPlace));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #6440: recolouring gray or CMYK text in its open box drops the ink at once. Finishing the box
+/// then adds no empty Undo step (the draft equals the item the page reads back), picking the
+/// ink's own look again in the same box paints RGB rather than bringing the ink back, and new
+/// boxes don't take the ink.
+#[test]
+fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
+    // 100 K text, open in its box.
+    let open = || {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };
+        text.set_ink(Some(pdfcraft_engine::TextInk::Cmyk([0.0, 0.0, 0.0, 1.0])));
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        let stored = item(&app);
+        assert!(stored.painted_ink().is_some());
+        app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+            page: 0,
+            index: Some(0),
+            rect: stored.rect,
+            text: stored.text.clone(),
+            style: stored,
+            focus: true,
+            selection: None,
+            typing_from: None,
+        });
+        app
+    };
+    fn item(app: &crate::PdfCraftApp) -> pdfcraft_engine::AddedText {
+        match &app.session.get(app.views[0].id).unwrap().added()[0].content {
+            pdfcraft_engine::AddedContent::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+    // The box's style with another colour, set as the Format panel hands it over.
+    let recolour = |app: &mut crate::PdfCraftApp, color: [f64; 3]| {
+        let style = app.views[0].content.draft.as_ref().map(|d| d.style.clone()).unwrap();
+        app.restyle_draft(0, pdfcraft_engine::AddedText { color, ..style });
+    };
+    let finish = |app: &mut crate::PdfCraftApp| {
+        let added = app.session.get(app.views[0].id).unwrap().added().to_vec();
+        app.views[0].content.finish_draft(&added)
+    };
+
+    // Red, then Done.
+    let mut app = open();
+    recolour(&mut app, [1.0, 0.0, 0.0]);
+    assert_eq!(item(&app).ink, None, "the page paints red in RGB");
+    let finished = finish(&mut app);
+    assert!(finished.is_none(), "an empty Undo step: {finished:?}");
+    assert_eq!(app.text_style.ink, None, "new boxes don't take the ink");
+
+    // Red, then black in the same box: RGB black, not the 100 K back.
+    let mut app = open();
+    recolour(&mut app, [1.0, 0.0, 0.0]);
+    recolour(&mut app, [0.0; 3]);
+    let now = item(&app);
+    assert_eq!((now.ink, now.color), (None, [0.0; 3]));
+    assert_eq!(app.text_style.ink, None);
+    let finished = finish(&mut app);
+    assert!(finished.is_none(), "an empty Undo step: {finished:?}");
 }

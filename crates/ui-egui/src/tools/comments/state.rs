@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::geometry::{corner_ratio, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
@@ -27,6 +29,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Copied comments hanging on the pointer as one bundle (their box `bounds` in user space,
+    /// `count` of them, their `outlines` drawn along so the drop can be aimed): a click puts
+    /// their centre there, on the page clicked; Escape or a right-click lets them go.
+    Place { xfdf: String, bounds: [f64; 4], count: usize, outlines: Vec<pdfcraft_engine::CommentOutline> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,7 +91,10 @@ const SETTLE_MAX: usize = 16;
 impl CommentView {
     /// Remember a released drag drawing so it stays on screen until its page is re-rendered.
     pub(crate) fn settle(&mut self, now: f64, page: usize, tool: CommentTool, points: &[[f64; 2]]) {
-        if !matches!(tool, CommentTool::Ink | CommentTool::Line | CommentTool::Arrow | CommentTool::Rectangle | CommentTool::Oval) {
+        if !matches!(
+            tool,
+            CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Line | CommentTool::Arrow | CommentTool::Rectangle | CommentTool::Oval
+        ) {
             return;
         }
         self.settling.retain(|s| now - s.since < SETTLE_SECS);
@@ -122,14 +131,25 @@ impl CommentView {
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
-    /// The selected comment: (page, index in `/Annots`).
+    /// The selected comment: (page, index in `/Annots`). With several selected (`also`), the one
+    /// the handles, the properties and the context menu act on.
     pub selected: Option<(usize, usize)>,
+    /// The other selected comments (⌘/Ctrl-click or ⇧-click on the page adds one, ⇧-click in the
+    /// Comments panel a range): Delete, Copy, Properties and a drag act on them with `selected`.
+    pub also: Vec<(usize, usize)>,
+    /// Copy the selected comments (set by the menus; the app has the clipboard).
+    pub copy_request: bool,
+    /// Paste the copied comments onto this page, centred at this user-space point (set by the
+    /// page's menu, which knows where it was opened).
+    pub paste_request: Option<(usize, [f64; 2])>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// Finish the connected lines, polygon or cloud being drawn (the context menu's Complete).
+    pub finish_request: bool,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -184,6 +204,55 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Every selected comment, the one the handles belong to first.
+    pub fn selection(&self) -> Vec<(usize, usize)> {
+        let mut all: Vec<(usize, usize)> = self.selected.into_iter().collect();
+        all.extend(self.also.iter().copied().filter(|k| Some(*k) != self.selected));
+        all
+    }
+
+    /// Whether `key` (page, index) is among the selected comments.
+    pub fn is_selected(&self, key: (usize, usize)) -> bool {
+        self.selected == Some(key) || self.also.contains(&key)
+    }
+
+    /// Select `key` alone.
+    pub fn select_only(&mut self, key: (usize, usize)) {
+        self.selected = Some(key);
+        self.also.clear();
+    }
+
+    /// ⇧-click in a list (`order`, as shown): every comment from the one with the handles to
+    /// `key` is selected, and only those, so another ⇧-click from the same comment changes the
+    /// range. Without a comment with the handles, or with either end not in the list, `key` is
+    /// added as by ⌘/Ctrl-click.
+    pub fn select_range(&mut self, order: &[(usize, usize)], key: (usize, usize)) {
+        let ends = self.selected.and_then(|anchor| Some((order.iter().position(|k| *k == anchor)?, order.iter().position(|k| *k == key)?)));
+        let Some((a, b)) = ends else { return self.toggle(key) };
+        let anchor = self.selected;
+        self.also = order.get(a.min(b)..=a.max(b)).unwrap_or_default().iter().copied().filter(|k| Some(*k) != anchor).collect();
+    }
+
+    /// ⌘/Ctrl-click: add `key` to the selection, or take it out again. The handles go to the
+    /// comment clicked last.
+    pub fn toggle(&mut self, key: (usize, usize)) {
+        if self.selected == Some(key) {
+            self.selected = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|k| *k == key) {
+            self.also.remove(at);
+        } else {
+            if let Some(previous) = self.selected.replace(key) {
+                self.also.push(previous);
+            }
+        }
+    }
+
+    /// Nothing selected.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.also.clear();
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -216,6 +285,79 @@ impl CommentView {
             self.editor_focus = None;
         }
     }
+
+    /// The annotation at `gone` was just deleted; `before` and `after` are the document's
+    /// annotations until then and now. The selection and the inline editor stay on what they
+    /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
+    /// went too.
+    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
+        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.also = std::mem::take(&mut self.also).into_iter().filter_map(|k| after_delete(before, after, gone, k)).collect();
+        self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
+        if self.editing.is_none() {
+            self.editor_focus = None;
+        }
+    }
+
+    /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
+    /// page, so a (page, index) held here may now name another one. The selection and the inline
+    /// editor close, its unsaved text with it, rather than Save writing that text over whatever
+    /// took its place.
+    pub(crate) fn history_stepped(&mut self) {
+        self.clear_selection();
+        self.editing = None;
+        self.editor_focus = None;
+    }
+}
+
+/// Where the annotation at `keep` is once the one at `gone` was deleted, or `None` when it went
+/// with it. Deleting takes the annotation's replies (at any depth) and pop-ups out of its page's
+/// `/Annots` (`pdfcraft_annot::delete_annotation`), and everything after them moves up, so `keep`
+/// is found by its place among the page's annotations that stay. When the page lost other
+/// annotations than those, or the one in that place reads differently, it is not guessed at.
+pub(super) fn after_delete(before: &[Annotation], after: &[Annotation], gone: (usize, usize), keep: (usize, usize)) -> Option<(usize, usize)> {
+    if keep == gone {
+        return None;
+    }
+    if keep.0 != gone.0 {
+        return Some(keep);
+    }
+    let (old, new) = (on_page(before, gone.0), on_page(after, gone.0));
+    let goes = in_thread(&old, gone);
+    let stays: Vec<&Annotation> = old.iter().copied().filter(|a| !goes(a.index)).collect();
+    if stays.len() != new.len() {
+        return None;
+    }
+    let rank = stays.iter().position(|a| a.index == keep.1)?;
+    let (was, now) = (stays.get(rank)?, new.get(rank)?);
+    let same = (&was.subtype, &was.name, &was.author, &was.contents, was.rect) == (&now.subtype, &now.name, &now.author, &now.contents, now.rect);
+    same.then_some((now.page, now.index))
+}
+
+/// Whether the annotation at an index on `top`'s page is `top` or a reply to it at any depth:
+/// what deleting `top` takes along. `page` is that page's listed annotations. Only replies on the
+/// page go with it (`pdfcraft_annot::delete_annotation` follows `/IRT` through the page's
+/// `/Annots`).
+fn in_thread(page: &[&Annotation], top: (usize, usize)) -> impl Fn(usize) -> bool {
+    let parents: HashMap<usize, usize> = page.iter().filter_map(|a| a.parent.filter(|p| p.0 == top.0).map(|p| (a.index, p.1))).collect();
+    move |mut i: usize| {
+        // `link_replies` settles every chain within 64 steps.
+        for _ in 0..=64 {
+            if i == top.1 {
+                return true;
+            }
+            let Some(&up) = parents.get(&i) else { return false };
+            i = up;
+        }
+        false
+    }
+}
+
+/// The annotations listed on `page`, in `/Annots` order.
+fn on_page(list: &[Annotation], page: usize) -> Vec<&Annotation> {
+    let mut v: Vec<&Annotation> = list.iter().filter(|a| a.page == page).collect();
+    v.sort_by_key(|a| a.index);
+    v
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).
@@ -307,9 +449,24 @@ impl PageCx<'_> {
             .collect()
     }
 
-    /// The topmost comment under `p`.
-    pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
+    /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
+    /// comments by position, not in paint order). A Replace Text strikeout is grouped under its
+    /// caret (`/RT /Group`), which holds the proposal, so the strikeout is hit as that caret: the
+    /// proposal is picked by either part, not only by its small caret.
+    pub(super) fn comment_at(&self, p: Pos2) -> Option<&Annotation> {
+        let under = |a: &&Annotation| self.screen_rects(a).any(|r| r.expand(3.0).contains(p));
+        let strikes = self
+            .info
+            .annotations
+            .iter()
+            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit"))
+            .filter(under)
+            .filter_map(|s| {
+                let (page, index) = s.parent?;
+                let caret = self.get(index).filter(|c| page == self.page && c.subtype == "Caret")?;
+                Some((s.index, caret))
+            });
+        self.comments().filter(under).map(|a| (a.index, a)).chain(strikes).max_by_key(|(i, _)| *i).map(|(_, a)| a)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {

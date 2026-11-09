@@ -355,6 +355,59 @@ fn save_as_keeps_a_signed_document_incremental() {
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
 
+/// A one-page document whose only signature field is signed but named far past the 4096 bytes the
+/// signature field walk reads, with a cross-reference table so it opens as written.
+fn signature_past_the_field_walk() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(64 << 10)),
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
+    // The walk stops short of the signed field, so its signature is not listed; Save As must still
+    // treat the document as signed and append to it, or that signature would no longer cover it.
+    let bytes = signature_past_the_field_walk();
+    let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    // An edit to save: an unedited copy is the original's bytes, appended to or not.
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
+    let saved = std::fs::read(&out).expect("file written");
+    assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("copy.pdf", None, std::sync::Arc::new(saved), None).expect("the copy opens");
+    let notes: Vec<_> = s.get(id).unwrap().info.annotations.iter().filter_map(|a| a.contents.as_deref()).collect();
+    assert!(notes.contains(&"Checked"), "the copy has the comment added before Save As: {notes:?}");
+}
+
 /// The fixture with an empty signature field across the bottom of the page.
 const WITH_FIELD: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >> endobj
@@ -369,13 +422,25 @@ fn clicking_an_empty_signature_field_signs_it() {
     let dir = dir().join("field");
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let s = h.state();
+    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+    assert!(sig.signed && sig.visible);
+}
+
+/// The centre of `WITH_FIELD`'s signature field, opened as the second document.
+fn field_centre(h: &Harness<'static, PdfCraftApp>) -> Pos2 {
+    let r = h.state().views[1].page_screen_rect(0).expect("on screen");
+    pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
+}
+
+/// Opens `WITH_FIELD` as the second document and signs its empty field with the test ID, by
+/// clicking the field.
+fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
     h.state_mut().open_bytes("form.pdf", None, WITH_FIELD.to_vec()).unwrap();
     h.state_mut().active = Some(1);
     h.run_steps(6);
-    let p = {
-        let r = h.state().views[1].page_screen_rect(0).expect("on screen");
-        pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
-    };
+    let p = field_centre(h);
     h.hover_at(p);
     h.run_steps(1);
     h.drag_at(p);
@@ -399,11 +464,41 @@ fn clicking_an_empty_signature_field_signs_it() {
         d.password = "test".into();
     }
     h.run_steps(2);
-    support::outside_menus(&h, "Sign").click();
+    support::outside_menus(h, "Sign").click();
     h.run_steps(6);
-    let s = h.state();
-    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
-    assert!(sig.signed && sig.visible);
+}
+
+/// Whether the page's hover tip shows and says `text`.
+fn tip_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
+    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover")).filter(|_| m.areas().is_visible(&layer))) else { return false };
+    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+}
+
+/// A signed field's validation badge is the viewer's own mark, not part of the page: its verdict
+/// is the tip with any tool, beside that tool's cursor.
+#[test]
+fn a_signature_badge_says_its_verdict_with_any_tool() {
+    let dir = dir().join("badge");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let verdict = {
+        let s = h.state();
+        let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+        sig.summary()
+    };
+    let p = field_centre(&h);
+    let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, at: Pos2| {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(4);
+        h.hover_at(at);
+        h.run_steps(4);
+        (h.output().platform_output.cursor_icon, tip_says(h, verdict))
+    };
+    assert!(hover(&mut h, QuickTool::Select, p).1, "the Select tool shows the verdict");
+    let stamp = QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved);
+    assert_eq!(hover(&mut h, stamp, p + egui::vec2(1.0, 0.0)), (egui::CursorIcon::Crosshair, true), "so does a stamp, beside its crosshair");
 }
 
 #[test]
@@ -494,6 +589,9 @@ fn stamped(path: &std::path::Path) -> String {
 /// so under the preview: signing neither fails nor writes `?` for them.
 #[test]
 fn the_signature_labels_follow_the_interface_language() {
+    if crate::support::skip_without_catalogs("the_signature_labels_follow_the_interface_language") {
+        return;
+    }
     use pdfcraft_ui_egui::i18n::{Lang, tr};
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;

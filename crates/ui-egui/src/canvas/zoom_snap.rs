@@ -5,6 +5,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::{PdfCraftApp, QuickTool};
 
@@ -12,31 +13,35 @@ use crate::{PdfCraftApp, QuickTool};
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
 pub type Marquee = (usize, Rect, [f32; 4]);
 
-/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView) {
+/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot), with a press nobody holds (`free`).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, free: bool, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started()
+    // The tool's own press, of the primary button: one nobody holds.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.marquee = Some((page, o));
     }
     if let Some((p, start)) = view.marquee
         && p == page
-        && let Some(end) = pointer
     {
+        // Where the pointer is, or where it went down when it is off the window.
+        let end = pointer.unwrap_or(start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.marquee = None;
             let (a, b) = (xf.screen_to_view(r.left_top()), xf.screen_to_view(r.right_bottom()));
             view.marquee_done = Some((page, r, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));
         }
     }
-    if resp.clicked()
+    if free
+        && resp.clicked()
         && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
     {
         let v = xf.screen_to_view(p);
@@ -115,13 +120,13 @@ impl PdfCraftApp {
         Ok(())
     }
 
-    /// Render `view_rect` (page view points) of `page` at the current zoom and copy it to the
-    /// clipboard (and keep it in `last_snapshot`).
+    /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it
+    /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = (view.zoom * ppp).clamp(0.5, 8.0);
+        let scale = snapshot_scale(view.render_scale(ppp), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
@@ -141,11 +146,25 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.system_clipboard {
             let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&out.rgba) };
-            arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
         }
         self.last_snapshot = Some((w, h, out.rgba));
         Ok((w, h))
     }
+}
+
+/// The fewest pixels per point a snapshot is drawn at: 300 ppi, so what it copies stays readable
+/// however far the page is zoomed out (#5716).
+const SNAPSHOT_MIN_SCALE: f32 = 300.0 / 72.0;
+
+/// The longest side a snapshot has, in pixels: the renderer draws at most 4096 a side in one tile
+/// and cuts a larger area short, and this leaves room for rounding up.
+const SNAPSHOT_MAX_SIDE: f32 = 4095.0;
+
+/// The pixels per point to draw a `width` × `height` point area at, given the `on_screen` scale:
+/// the finer of that and the minimum, or as fine as the renderer can draw the whole area.
+fn snapshot_scale(on_screen: f32, width: f32, height: f32) -> f32 {
+    on_screen.max(SNAPSHOT_MIN_SCALE).min(SNAPSHOT_MAX_SIDE / width.max(height).max(1.0)).max(0.01)
 }
 
 /// The normalised bounds [u0, v0, u1, v1] of the pixels that aren't (near) white, if any.
@@ -170,6 +189,37 @@ pub(crate) fn ink_bounds(w: usize, h: usize, rgba: &[u8]) -> Option<[f32; 4]> {
 
 #[cfg(test)]
 mod tests {
+    use super::{SNAPSHOT_MAX_SIDE, SNAPSHOT_MIN_SCALE, snapshot_scale};
+
+    #[test]
+    fn a_snapshot_is_drawn_at_the_finer_of_the_zoom_and_the_minimum() {
+        assert_eq!(snapshot_scale(0.5, 100.0, 100.0), SNAPSHOT_MIN_SCALE, "zoomed out");
+        assert_eq!(snapshot_scale(SNAPSHOT_MIN_SCALE, 100.0, 100.0), SNAPSHOT_MIN_SCALE);
+        assert_eq!(snapshot_scale(8.0, 100.0, 100.0), 8.0, "zoomed in further, it keeps the detail on screen");
+    }
+
+    #[test]
+    fn a_snapshot_stays_within_what_the_renderer_draws_at_once() {
+        // Past 983 pt a side, 300 ppi is more than one tile holds.
+        for (on_screen, w, h) in [(1.0, 2384.0, 3370.0), (1.0, 3370.0, 100.0), (8.0, 1000.0, 1000.0), (8.0, 14_400.0, 14_400.0)] {
+            let scale = snapshot_scale(on_screen, w, h);
+            let side = (w * scale).ceil().max((h * scale).ceil());
+            assert!(side <= SNAPSHOT_MAX_SIDE + 1.0, "{on_screen} on {w} × {h}: {side} pixels");
+        }
+    }
+
+    #[test]
+    fn a_snapshot_of_no_area_is_drawn_at_the_minimum() {
+        assert_eq!(snapshot_scale(1.0, 0.0, 0.0), SNAPSHOT_MIN_SCALE);
+    }
+
+    #[test]
+    fn a_snapshot_scale_survives_numbers_that_are_not() {
+        for scale in [snapshot_scale(f32::NAN, 5000.0, 5000.0), snapshot_scale(1.0, f32::NAN, 100.0), snapshot_scale(1.0, f32::INFINITY, 100.0)] {
+            assert!(scale.is_finite() && scale > 0.0, "{scale}");
+        }
+    }
+
     #[test]
     fn ink_bounds_finds_the_marked_area() {
         let (w, h) = (10, 20);

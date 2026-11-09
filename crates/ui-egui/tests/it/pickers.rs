@@ -377,6 +377,45 @@ fn export_comments_writes_on_a_later_frame() {
 }
 
 #[test]
+fn import_comments_takes_the_comments_of_another_pdf() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (from the review) /P 3 0 R >>",
+    ];
+    let mut review = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(review.len());
+        review.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = review.len();
+    review.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        review.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    review.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let dir = scratch("import-pdf-comments");
+    let path = dir.join("review.pdf");
+    std::fs::write(&path, review).unwrap();
+    let mut h = harness(&[1]);
+    // Through the save path a test uses in place of the picker, and through the picker.
+    for chosen in [Some(path.to_string_lossy().into_owned()), None] {
+        h.state_mut().save_override = chosen.clone();
+        h.state_mut().pick_override = chosen.is_none().then(|| vec![path.to_string_lossy().into_owned()]);
+        h.state_mut().run_command("comment.import");
+        h.run_steps(2);
+        let app = h.state();
+        let contents: Vec<Option<String>> = app.session.get(app.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone()).collect();
+        assert_eq!(contents, [Some("from the review".to_string())], "the review's comment is imported once ({chosen:?})");
+        h.state_mut().run_command("edit.undo");
+        h.run_steps(1);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn extracted_pages_are_not_deleted_if_the_document_was_edited_while_choosing_the_folder() {
     let dir = scratch("extract-edited");
     let mut h = harness(&[3]);
@@ -991,6 +1030,34 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.info.attachments[index].name, raw_name);
     assert_eq!(doc.bytes.as_ref(), &original);
+}
+
+/// Windows: a saved attachment keeps the Mark-of-the-Web of the PDF it came from, and gets the
+/// Internet zone when that PDF has none or isn't a file (#3990).
+#[cfg(windows)]
+#[test]
+fn a_saved_attachment_carries_the_documents_zone() {
+    let dir = AttachmentDir::new();
+    let zone_of = |p: &std::path::Path| std::fs::read(format!("{}:Zone.Identifier", p.display())).ok();
+    let mail = dir.0.join("from mail.pdf");
+    std::fs::write(&mail, attachment_fixture()).unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://mail.example/invoice.pdf\r\n";
+    std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
+    let local = dir.0.join("local.pdf");
+    std::fs::write(&local, attachment_fixture()).unwrap();
+    let mut h = harness(&[]);
+    let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
+    for (i, (path, expected)) in opened.into_iter().enumerate() {
+        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        h.run_steps(2);
+        let id = h.state().views.last().unwrap().id;
+        let chosen = dir.0.join(format!("saved{i}.exe"));
+        h.state_mut().pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+        h.state_mut().attachment_action(id, 0, false);
+        h.run_steps(2);
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
+        assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");
+    }
 }
 
 /// Every file under `dir`, recursively, sorted.

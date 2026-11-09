@@ -1,8 +1,8 @@
 use super::ast::{Expr, Stmt};
 use super::value::{Val, is_numeric_text, num_text};
 use super::{
-    CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, R, Rc, TOO_DEEP, XfaEffect, child_named, clip,
-    descendants_named, instances, reset_names, resolve_som,
+    CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, Message, MessageButtons, MessageIcon, R, Rc,
+    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, instances, reset_names, resolve_som,
 };
 
 impl Interp<'_> {
@@ -237,13 +237,21 @@ impl Interp<'_> {
         Ok(out)
     }
 
+    /// Call `method` on `base` (`$host`, a form object, an instance manager…) with `args`.
     fn method(&mut self, base: Val, method: &str, args: &[Expr]) -> R<Val> {
         let m = method.to_ascii_lowercase();
         match base {
             Val::Host => match m.as_str() {
                 "messagebox" => {
-                    let t = self.arg_str(args, 0)?;
-                    self.h.push(XfaEffect::MessageBox(t));
+                    // `$host.messageBox(message, title, icon, buttons)`; a missing number is 0,
+                    // the default icon and buttons.
+                    let text = self.arg_str(args, 0)?;
+                    let title = Some(self.arg_str(args, 1)?).filter(|t| !t.is_empty());
+                    let icon = MessageIcon::from_code(Some(self.arg_num(args, 2)?));
+                    let buttons = MessageButtons::from_code(Some(self.arg_num(args, 3)?));
+                    self.h.push(XfaEffect::MessageBox(Message { text, title, icon, buttons }));
+                    // Always OK for now: the viewer can't ask the user and run the script on
+                    // with the answer yet (#4291).
                     Ok(Val::Num(1.0))
                 }
                 "resetdata" => {
@@ -284,15 +292,23 @@ impl Interp<'_> {
                 }
                 _ => Ok(Val::Null),
             },
-            Val::Layout => match m.as_str() {
-                "page" | "abspage" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
-                "pagecount" | "abspagecount" => Ok(Val::Num(self.h.doc.page_count as f64)),
-                "relayout" | "relayoutpagearea" => {
-                    self.h.push(XfaEffect::Relayout);
-                    Ok(Val::Null)
+            Val::Layout => {
+                // No layout method reads its arguments, but each is evaluated once, for what it
+                // does (a message box in an argument still shows), as the other objects' are.
+                for i in 0..args.len() {
+                    self.arg(args, i)?;
                 }
-                _ => Ok(Val::Num(0.0)),
-            },
+                match m.as_str() {
+                    // On screen every page is a sheet of its own (see the JavaScript `sheet`).
+                    "page" | "abspage" | "sheet" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
+                    "pagecount" | "abspagecount" | "sheetcount" => Ok(Val::Num(self.h.doc.page_count as f64)),
+                    "relayout" | "relayoutpagearea" => {
+                        self.h.push(XfaEffect::Relayout);
+                        Ok(Val::Null)
+                    }
+                    _ => Ok(Val::Num(0.0)),
+                }
+            }
             Val::Xfa => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;

@@ -20,39 +20,50 @@ pub use save::{SaveTarget, write_atomically};
 #[cfg(test)]
 pub(crate) use save::{is_mail_temp_copy, save_dialog_folder};
 #[cfg(test)]
-use save::{write_atomically_syncing, write_atomically_with};
+use save::{unredacted_file_name, write_atomically_syncing, write_atomically_with};
 
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
-/// Keeps the pages (or comment) the user acted on selected, where they now are.
-fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_render::DocInfo, quick_tool: crate::QuickTool) {
+/// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
+/// is the page's annotations before a delete or a paste of comments (empty for other edits).
+fn select_after_edit(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    info: &pdfcraft_render::DocInfo,
+    annots_before: &[pdfcraft_render::Annotation],
+    quick_tool: crate::QuickTool,
+) {
     match edit {
         Edit::MovePages { pages, to } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-            let to = to.min(info.pages.len() - n);
+            let to = (*to).min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
         Edit::DuplicatePages { pages, at: Some(at) } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-            let at = at.min(info.pages.len().saturating_sub(n));
+            let at = (*at).min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());
         }
-        Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
+        Edit::InsertBlankPage { at, .. } => view.select_pages(&[(*at).min(info.pages.len() - 1)]),
         Edit::DeletePages { .. } => view.select_pages(&[]),
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
-            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
-                && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. } | pdfcraft_engine::Shape::FreehandHighlight { .. })
+                && matches!(
+                    quick_tool,
+                    crate::QuickTool::Comment(crate::comments::CommentTool::Ink | crate::comments::CommentTool::FreehandHighlight)
+                ) =>
         {
-            view.comments.selected = None;
+            view.comments.clear_selection();
         }
         Edit::AddAnnotation(a) => {
-            // Select the new comment (appended last among the page's comments).
+            // Select the new comment alone (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
+            view.comments.clear_selection();
             view.comments.selected = newest.map(|n| (a.page, n));
             view.comments.reveal = true;
             // A new highlight opens its note for typing straight away, as in Acrobat,
@@ -64,7 +75,26 @@ fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_rend
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
+        // A group moved together stays selected (its positions don't change), so it
+        // can be moved or copied again; anything else in a batch clears the selection.
+        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+        Edit::Batch { .. } => view.comments.clear_selection(),
+        // The copies the paste added (and nothing that was there before): select them all.
+        Edit::PasteComments { page, .. } => {
+            let mut new: Vec<(usize, usize)> = info
+                .annotations
+                .iter()
+                .filter(|x| x.page == *page && !x.is_reply() && !annots_before.iter().any(|b| b.name == x.name))
+                .map(|x| (*page, x.index))
+                .collect();
+            view.comments.clear_selection();
+            if !new.is_empty() {
+                view.comments.selected = Some(new.remove(0));
+                view.comments.also = new;
+                view.comments.reveal = true;
+            }
+        }
         _ => {}
     }
 }
@@ -105,10 +135,38 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
-        let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
-            (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
+        let target_arrange_image = match &edit {
+            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
+                let doc = self.session.get(id);
+                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
+                let ambiguous = doc.is_some_and(|d| {
+                    if let Some(t) = &target {
+                        d.page_images(*page)
+                            .iter()
+                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
+                            .count()
+                            > 1
+                    } else {
+                        false
+                    }
+                });
+                target.map(|t| (t, ambiguous))
+            }
+            _ => None,
+        };
+        let (form_before, page_count_before, had_xfa, signatures_before) = if let Some(d) = self.session.get(id) {
+            (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some(), Some(std::sync::Arc::clone(&d.signatures)))
         } else {
-            (None, 0, false)
+            (None, 0, false, None)
+        };
+        // A deletion moves the comments after it on the page: these say where the selected one,
+        // and the one open in the panel's editor, went.
+        let annots_before = match (&edit, self.session.get(id)) {
+            // A paste selects what it adds: the page's comments before it are the ones it didn't.
+            (Edit::DeleteAnnotation { page, .. } | Edit::PasteComments { page, .. }, Some(d)) => {
+                d.info.annotations.iter().filter(|a| a.page == *page).cloned().collect()
+            }
+            _ => Vec::new(),
         };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
@@ -132,16 +190,29 @@ impl PdfCraftApp {
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
-                if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
+                // A form edit that leaves the pages and XFA as they were: the pages its fields are
+                // on, and the values that show over them until those pages' rasters have them.
+                let form_edit = form_before
+                    .filter(|_| doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit))
+                    .map(|before| form_edit_pages(&before, &doc.form));
+                let one_page = comment_page(&edit).or_else(|| content_page(&edit));
+                if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
+                    // A signature shows its state on its own page, which an edit elsewhere can
+                    // change (a certification forbidding it, say): every page redraws. An edit that
+                    // moves no page (a form edit, or one to a page's comments or content) keeps the
+                    // values typed, in it and before it, showing until their pages redraw.
+                    let waiting = (form_edit.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
+                    view.document_changed(info);
+                    if let Some(waiting) = waiting {
+                        view.forms.unbaked = waiting;
+                    }
+                    if let Some((_, unbaked)) = form_edit {
+                        view.forms.unbaked.extend(unbaked);
+                    }
+                } else if let Some(page) = one_page {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
-                } else if let Some(form_before) = form_before
-                    && doc.info.pages.len() == page_count_before
-                    && doc.xfa.is_some() == had_xfa
-                    && doc.xfa.is_none()
-                    && is_form_edit(&edit)
-                {
-                    let (changed_pages, unbaked) = form_edit_pages(&form_before, &doc.form);
+                } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
@@ -153,14 +224,22 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, edit, info, self.quick_tool);
+                select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
+                if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
+                    let page_images = doc.page_images(*page);
+                    re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
+                }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
-                // Text saved as typed but drawn with `?` (its font can't draw it): said, not silent.
-                // Before the scripts' output, so an alert they raise still shows.
+                // Text saved as typed but drawn with `?` (its font can't draw it), or pages whose
+                // own backdrop stays off: said, not silent. Before the scripts' output, so an alert
+                // they raise still shows.
                 if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(crate::content_ui::undrawn_message(&n));
+                    self.notify(match &n {
+                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                    });
                 }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
@@ -170,6 +249,9 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
+                    if matches!(&edit, Edit::EditPageImage { change, .. } if !matches!(change, pdfcraft_engine::ImageEdit::Arrange(_))) {
+                        view.image_selection = None;
+                    }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
                     if let Edit::EditTextBlock { page, block, .. } = &edit
@@ -198,28 +280,117 @@ impl PdfCraftApp {
         }
         if self.combine_showing() {
             self.combine_history_step(true);
-        } else {
+        } else if !self.undo_in_page_box() {
             self.history_step(true);
         }
+    }
+
+    /// Undo from the menu or toolbar while a box on the page holds typing the page doesn't have
+    /// yet: the box takes the step, as it does for the key, one step of its typing at a time.
+    /// Applying the typing first was a new edit, which dropped the document's Redo, and then the
+    /// typing was taken back all at once. True when the box took the step.
+    fn undo_in_page_box(&mut self) -> bool {
+        let Some(ctx) = self.ctx.clone() else { return false };
+        let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
+        let (doc, place) = (view.id, view.place());
+        if let Some(ed) = view.line_editor.as_mut().filter(|ed| ed.has_unsaved_text()) {
+            ed.claim_typing(&ctx, doc, place);
+            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, true) else { return false };
+            let before = std::mem::replace(&mut ed.text, text);
+            ed.selection = None;
+            ed.follow_typed_rows(&ctx, &before, place);
+            return true;
+        }
+        if let Some(d) = view.content.draft.as_mut().filter(|d| d.has_unapplied_typing()) {
+            d.claim_typing(&ctx, doc);
+            let Some(text) = typing_step(&ctx, crate::content_ui::input_id(), &d.text, true) else { return false };
+            let before = std::mem::replace(&mut d.text, text);
+            d.selection = None;
+            crate::edit_text_ui::follow_typing(&ctx, crate::content_ui::input_id(), &before, &d.text, &mut [&mut d.style.aligns]);
+            return true;
+        }
+        false
     }
 
     pub fn redo(&mut self) {
         if self.combine_showing() {
             self.combine_history_step(false);
-        } else {
+        } else if !self.redo_in_page_box() {
             self.history_step(false);
         }
     }
 
+    /// Redo from the menu or toolbar while a box on the page has typing of its own: the step is
+    /// the box's, as the key's is. What Undo took back in the box comes back; typing the page
+    /// doesn't have yet stays as it is, since applying it first is a new edit, which drops the
+    /// document's Redo. True when the box took the step.
+    fn redo_in_page_box(&mut self) -> bool {
+        let Some(ctx) = self.ctx.clone() else { return false };
+        let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
+        let (doc, place) = (view.id, view.place());
+        if let Some(ed) = view.line_editor.as_mut() {
+            ed.claim_typing(&ctx, doc, place);
+            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, false) else { return ed.has_unsaved_text() };
+            let before = std::mem::replace(&mut ed.text, text);
+            ed.selection = None;
+            ed.follow_typed_rows(&ctx, &before, place);
+            return true;
+        }
+        if let Some(d) = view.content.draft.as_mut() {
+            d.claim_typing(&ctx, doc);
+            let Some(text) = typing_step(&ctx, crate::content_ui::input_id(), &d.text, false) else { return d.has_unapplied_typing() };
+            let before = std::mem::replace(&mut d.text, text);
+            d.selection = None;
+            crate::edit_text_ui::follow_typing(&ctx, crate::content_ui::input_id(), &before, &d.text, &mut [&mut d.style.aligns]);
+            return true;
+        }
+        false
+    }
+
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        if !self.close_text_editors(i, id) {
+            return;
+        }
+        let target_image = self.views.get(i).and_then(|v| v.image_selection.as_ref()).and_then(|s| {
+            let doc = self.session.get(id)?;
+            let images = doc.page_images(s.page);
+            let target = images.get(s.index).cloned()?;
+            let ambiguous =
+                images.iter().filter(|img| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect)).count() > 1;
+            Some((s.page, target, ambiguous))
+        });
+        let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
-                if let Some(doc) = self.session.get(id) {
-                    self.views[i].document_changed(&doc.info);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    view.document_changed(&doc.info);
+                    view.picked_image = None;
+                    if let Some((page, target, ambiguous_before)) = target_image {
+                        let page_images = doc.page_images(page);
+                        re_resolve_image_selection(view, page, &target, ambiguous_before, &page_images);
+                    } else if had_selection {
+                        view.image_selection = None;
+                    }
                 }
-                self.views[i].comments.selected = None;
+                if let Some(view) = self.views.get_mut(i) {
+                    view.comments.selected = None;
+                    view.comments.history_stepped();
+                }
+                if label == (Edit::ApplyRedactions { pages: None }).label() {
+                    let view = &mut self.views[i];
+                    let (applied, undone) = (view.redactions_applied, view.redactions_undone_after_save);
+                    // Undo past the last save counts as undone; Redo first takes those back.
+                    match (undo, applied, undone) {
+                        (true, 0, _) => view.redactions_undone_after_save = undone.saturating_add(1),
+                        (true, _, _) => view.redactions_applied = applied.saturating_sub(1),
+                        (false, _, 0) => view.redactions_applied = applied.saturating_add(1),
+                        (false, _, _) => view.redactions_undone_after_save = undone.saturating_sub(1),
+                    }
+                }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);
@@ -231,11 +402,100 @@ impl PdfCraftApp {
         }
     }
 
+    /// Before Undo or Redo: a paragraph or added text box open on the page shows the document as
+    /// it is before the step, so it is applied as clicking away applies it, then closed. Left
+    /// open, it kept showing what the step took away, and wrote from it when it was next applied.
+    /// What was typed is then the step Undo takes back. False (nothing is undone, and the box
+    /// stays open) while it holds text the standard fonts can't draw, or text that couldn't be
+    /// applied: it is shown, never lost.
+    pub(crate) fn close_text_editors(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
+        let Some(view) = self.views.get_mut(i) else { return true };
+        if let Some(c) = view.content.blocked() {
+            view.content.hold_blocked();
+            self.notify(crate::content_ui::undrawable_message(c));
+            return false;
+        }
+        if let Some(ed) = view.line_editor.take()
+            && let Some(edit) = crate::edit_text_ui::finished_edit(ed.clone())
+            && !self.apply_edit(edit)
+        {
+            if let Some(view) = self.views.get_mut(i) {
+                view.line_editor = Some(ed);
+            }
+            return false;
+        }
+        let added = self.session.get(id).map(|d| d.added().to_vec()).unwrap_or_default();
+        let Some(view) = self.views.get_mut(i) else { return true };
+        // Finishing new text also asks for it to be selected once it exists: put that back too.
+        let (draft, select_added) = (view.content.draft.clone(), view.content.select_added);
+        if let Some(edit) = view.content.finish_draft(&added)
+            && !self.apply_edit(edit)
+        {
+            if let Some(view) = self.views.get_mut(i) {
+                (view.content.draft, view.content.select_added) = (draft, select_added);
+            }
+            return false;
+        }
+        true
+    }
+
+    /// Whether the keyboard is in a box typed into on the page: a paragraph being edited, or added
+    /// text.
+    pub(crate) fn page_box_focused(&self, ctx: &egui::Context) -> bool {
+        let focused = ctx.memory(|m| m.focused());
+        let paragraph = self.active.and_then(|i| self.views.get(i)).map(|v| crate::edit_text_ui::input_id(v.place()));
+        focused.is_some() && (focused == paragraph || focused == Some(crate::content_ui::input_id()))
+    }
+
+    /// Whether the focused box on the page has typing its own Redo would put back: after Undo in
+    /// the box restores what the page has, Redo still belongs to the box, not the document. The
+    /// same test egui makes when it handles the key.
+    pub(crate) fn page_box_can_redo(&self, ctx: &egui::Context) -> bool {
+        let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
+        let focused = ctx.memory(|m| m.focused());
+        let (id, text) = if focused == Some(crate::edit_text_ui::input_id(view.place()))
+            && let Some(ed) = &view.line_editor
+        {
+            (crate::edit_text_ui::input_id(view.place()), &ed.text)
+        } else if focused == Some(crate::content_ui::input_id())
+            && let Some(d) = &view.content.draft
+        {
+            (crate::content_ui::input_id(), &d.text)
+        } else {
+            return false;
+        };
+        has_typing_to_redo(ctx, id, text)
+    }
+
+    /// Whether the box open on the page has a Redo of its own, the step
+    /// [`Self::redo_in_page_box`] takes for Redo from the menu or toolbar: focus has moved to the
+    /// menu by then, so unlike [`Self::page_box_can_redo`] this doesn't ask for it.
+    pub(crate) fn open_box_can_redo(&self) -> bool {
+        let Some(ctx) = &self.ctx else { return false };
+        let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
+        if let Some(ed) = &view.line_editor {
+            return has_typing_to_redo(ctx, crate::edit_text_ui::input_id(view.place()), &ed.text);
+        }
+        view.content.draft.as_ref().is_some_and(|d| has_typing_to_redo(ctx, crate::content_ui::input_id(), &d.text))
+    }
+
+    /// Typing in a box on the page (a paragraph being edited, added text) that the page doesn't
+    /// have yet: Undo and Redo keys take it back in the box first.
+    pub(crate) fn page_typing_unapplied(&self) -> bool {
+        self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
+            v.line_editor.as_ref().is_some_and(|ed| ed.has_unsaved_text()) || v.content.draft.as_ref().is_some_and(|d| d.has_unapplied_typing())
+        })
+    }
+
     /// Apply any edit a view queued this frame (organize toolbar, keys).
     /// Returns false when a field refused the typing queued for it (its editor is open again).
     pub(crate) fn process_pending_edits(&mut self) -> bool {
         let Some(i) = self.active else { return true };
-        let applied = self.apply_queued_edit(i);
+        // Split view: the other pane's tab can hold an edit too (its field committed when the
+        // click that brought this pane forward took the focus). It goes in first, as it came first.
+        let (other_applied, stay) = self.apply_other_pane_edit(i);
+        let modal = self.modal_open();
+        let applied = self.apply_queued_edit(i) && other_applied;
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -275,7 +535,54 @@ impl PdfCraftApp {
             }
             None => {}
         }
+        // That tab comes forward when its value was refused (its editor is open again with the
+        // text) or its edit opened a dialog for its document, unless this tab's action opened one.
+        if let Some(key) = stay
+            && self.active == Some(i)
+            && (modal || !self.modal_open())
+        {
+            self.active = self.tab_with_key(key).or(self.active);
+        }
         applied
+    }
+
+    /// Split view: apply the edit queued on the tab the other pane shows, with that tab active
+    /// while it goes in (tab `i`, the active one, is active again afterwards). Left queued, it was
+    /// lost when the next frame replaced that tab to follow a change made through tab `i`
+    /// (`settle_panes`). Returns false when a field refused it, and that tab's view key when it
+    /// should come forward: its value was refused, or its edit opened a dialog.
+    fn apply_other_pane_edit(&mut self, i: usize) -> (bool, Option<u64>) {
+        use crate::panes::Place;
+        let Some(place) = self.views.get(i).map(|v| v.place()) else { return (true, None) };
+        let other = if place == Place::Main { Place::Second } else { Place::Main };
+        let Some((k, key, id)) = self
+            .panes
+            .split
+            .and_then(|_| self.pane_front(other))
+            .filter(|&k| k != i)
+            .and_then(|k| self.views.get(k).filter(|v| v.pending_edit.is_some()).map(|v| (k, v.view_key(), v.id)))
+        else {
+            return (true, None);
+        };
+        let generation = |app: &Self| app.session.get(id).map(|d| d.edit_generation());
+        let (before, modal) = (generation(self), self.modal_open());
+        self.active = Some(k);
+        let applied = self.apply_queued_edit(k);
+        let opened = !modal && self.modal_open();
+        self.active = Some(i);
+        // Tab `i` on the same document catches up now, keeping what it holds (this frame's click
+        // may have queued an edit or opened a field): the next frame replaces only the tab that
+        // isn't active, as if this change had come through the active one.
+        if generation(self) != before
+            && let Some(doc) = self.session.get(id)
+        {
+            for (j, v) in self.views.iter_mut().enumerate() {
+                if j != k && v.id == id {
+                    v.document_changed(&doc.info);
+                }
+            }
+        }
+        (applied, (!applied || opened).then_some(key))
     }
 
     /// Enhance ▸ Camera image ▸ clean-up slider: undo the enhancement (and the turns made since)
@@ -508,8 +815,27 @@ impl PdfCraftApp {
     /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
     /// panel answering later, Close All). If its tab has typing or a queued edit, the tab is
     /// brought forward first, so the commit and any field scripts act on that document.
+    ///
+    /// Each tab of the document holds typing of its own (split view). The tab in use stays active
+    /// when the others have been committed.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let keep = self.active_ids().filter(|(_, active)| *active == id).and_then(|(i, _)| self.views.get(i)).map(|v| v.pane.key);
+        let tabs: Vec<u64> = self.views.iter().filter(|v| v.id == id).map(|v| v.pane.key).collect();
+        for key in tabs {
+            if let Some(i) = self.tab_with_key(key)
+                && !self.commit_typing_of_tab(i, id)
+            {
+                return false;
+            }
+        }
+        if let Some(i) = keep.and_then(|k| self.tab_with_key(k)) {
+            self.active = Some(i);
+        }
+        true
+    }
+
+    /// [`Self::commit_typing_in`] for one tab of the document.
+    fn commit_typing_of_tab(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
         // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
         // Its page is brought into view, so the text, the warning and Discard are on screen.
         let blocked = self.views.get_mut(i).and_then(|v| {
@@ -538,15 +864,15 @@ impl PdfCraftApp {
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+        self.commit_form_typing() && self.commit_open_fill_text(i, id) && self.commit_open_text_edits(i, id)
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
     /// click-away. Save does that first, so the typed text is in the file instead of being left
     /// open on the screen (#3496).
-    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    fn commit_open_text_edits(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
         let Some(doc) = self.session.get(id) else { return true };
-        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        let Some(view) = self.views.get_mut(i) else { return true };
         // Both are taken out of the view before either edit runs, so keep what is needed to put
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
@@ -554,7 +880,7 @@ impl PdfCraftApp {
         let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
-        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+        if let Some(view) = self.views.get_mut(i) {
             if !added_ok {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
             }
@@ -567,9 +893,8 @@ impl PdfCraftApp {
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
     /// the file (and can be flattened) instead of being left on the screen.
-    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+    fn commit_open_fill_text(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
+        let Some(tb) = self.views.get(i).and_then(|v| v.fill_text.clone()) else { return true };
         let text = tb.text.trim().to_string();
         if text.is_empty() {
             if let Some(view) = self.views.get_mut(i) {
@@ -579,7 +904,8 @@ impl PdfCraftApp {
         }
         let author = self.comment_prefs.author.clone();
         let rotation = self.session.get(id).map_or(0, |doc| crate::comments::page_rotation(&doc.info, tb.page));
-        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, tb.size, rotation, &author);
+        let look = crate::fill_sign::TypedLook { color: tb.color, border: tb.border };
+        let edit = crate::fill_sign::typed_with(tb.page, tb.at, &text, tb.size, rotation, &author, look);
         if self.apply_edit(edit) {
             if let Some(view) = self.views.get_mut(i) {
                 view.fill_text = None;
@@ -604,8 +930,9 @@ impl PdfCraftApp {
         let after = self.session.get(id).map(|d| d.edit_generation());
         if before != after
             && let Some(doc) = self.session.get(id)
-            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+            && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
         {
+            // The tab in use: `sync_views` brings any other tab of the document up to date.
             view.document_changed(&doc.info);
         }
         true
@@ -613,10 +940,16 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty) || self.has_unsaved_typing(index)
+    }
+
+    /// Whether tab `index` holds work of its own that isn't in its document yet: form typing not
+    /// committed, an edit waiting, text being typed. (The document's own edits are shared with
+    /// any other tab of it, in split view.)
+    pub(crate) fn has_unsaved_typing(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
-            || v.pending_edit.is_some()
+        v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
@@ -625,11 +958,54 @@ impl PdfCraftApp {
     }
 }
 
+fn rect_matches(a: [f64; 4], b: [f64; 4]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+fn re_resolve_image_selection(
+    view: &mut crate::DocView,
+    page: usize,
+    target: &pdfcraft_engine::PageImage,
+    ambiguous_before: bool,
+    page_images: &[pdfcraft_engine::PageImage],
+) {
+    let exact_matches: Vec<usize> = page_images
+        .iter()
+        .enumerate()
+        .filter(|(_, img)| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect))
+        .map(|(idx, _)| idx)
+        .collect();
+    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
+        exact_matches.first().copied()
+    } else if !ambiguous_before && exact_matches.is_empty() {
+        let name_obj_matches: Vec<usize> =
+            page_images.iter().enumerate().filter(|(_, img)| img.name == target.name && img.object == target.object).map(|(idx, _)| idx).collect();
+        if name_obj_matches.len() == 1 {
+            name_obj_matches.first().copied()
+        } else if name_obj_matches.is_empty() {
+            let name_matches: Vec<usize> = page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
+            if name_matches.len() == 1 { name_matches.first().copied() } else { None }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == page) {
+        if let Some(idx) = new_idx {
+            s.index = idx;
+        } else {
+            view.image_selection = None;
+        }
+    }
+}
+
 /// The single page a content edit changes (`None` for other edits). Like comment edits,
 /// these leave every other page's bytes, geometry and text alone, so their rasters stay valid.
 fn content_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::MoveObjects { page, .. }
+        | Edit::DeleteObjects { page, .. }
         | Edit::EditTextLine { page, .. }
         | Edit::EditTextBlock { page, .. }
         | Edit::EditPageImage { page, .. }
@@ -637,7 +1013,8 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
-        | Edit::ReplaceImage { page, .. } => Some(*page),
+        | Edit::ReplaceImage { page, .. }
+        | Edit::PasteObjects { page, .. } => Some(*page),
         _ => None,
     }
 }
@@ -654,7 +1031,10 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
+        | Edit::PartOpacity { page, .. }
         | Edit::FontSizeAnnotation { page, .. }
+        | Edit::BorderColorAnnotation { page, .. }
+        | Edit::BorderShapeAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
@@ -668,6 +1048,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::ResetForm { .. }
             | Edit::AddField { .. }
             | Edit::DeleteField { .. }
+            | Edit::DeleteWidget { .. }
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
@@ -726,12 +1107,73 @@ impl PdfCraftApp {
                 let at = parent[parent.len() - 1] + 1;
                 Edit::MoveBookmark { from: path, to_parent: grand, index: at }
             }
+            A::Copy(path) => {
+                self.copy_bookmark(id, &path);
+                return;
+            }
+            A::Cut(path) => match self.copy_bookmark(id, &path) {
+                Some(false) => Edit::DeleteBookmark { path },
+                // Paste could not bring back what the copy left out, so the bookmarks stay.
+                Some(true) => {
+                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
+                    return;
+                }
+                None => return,
+            },
+            A::Paste { parent, index } => {
+                self.paste_bookmarks(id, parent, index);
+                return;
+            }
             A::FromStructure => {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
             }
+            // A dialog chooses the styles; it makes the edit.
+            A::FromTextStyles => {
+                self.open_text_style_bookmarks(id);
+                return;
+            }
         };
         self.apply_edit(edit);
+    }
+}
+
+impl PdfCraftApp {
+    /// Put the bookmark at `path` and its subtree on the bookmark clipboard. `Some(true)` when
+    /// bookmarks nested too deep to list were left out; `None` if it could not be read (the reason
+    /// is shown).
+    fn copy_bookmark(&mut self, id: pdfcraft_engine::DocId, path: &[usize]) -> Option<bool> {
+        match self.session.outline_tree(id, path) {
+            Some(Ok(tree)) => {
+                if tree.truncated {
+                    self.notify_tr("Bookmarks nested too deep to list were left out of the copy.");
+                }
+                self.bookmark_clipboard = Some(tree.nodes);
+                Some(tree.truncated)
+            }
+            Some(Err(e)) => {
+                self.notify_error(e);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Paste the bookmark clipboard as one undoable edit. Bookmarks whose page this document lacks
+    /// arrive without a destination, and the toast says how many.
+    fn paste_bookmarks(&mut self, id: pdfcraft_engine::DocId, parent: Vec<usize>, index: usize) {
+        let Some(bookmarks) = self.bookmark_clipboard.clone() else { return };
+        let pages = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let unmapped = pdfcraft_engine::outline_unmapped(&bookmarks, pages).len();
+        if self.apply_edit(Edit::ImportBookmarks { parent, index, bookmarks, replace: false }) && unmapped > 0 {
+            let n = u64::try_from(unmapped).unwrap_or(u64::MAX);
+            self.notify(crate::i18n::trn(
+                crate::i18n::current(),
+                n,
+                "{n} pasted bookmark points past the last page of this document and has no destination.",
+                "{n} pasted bookmarks point past the last page of this document and have no destination.",
+            ));
+        }
     }
 }
 
@@ -739,6 +1181,26 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
     let (first, rest) = path.split_first()?;
     let item = items.get(*first)?;
     if rest.is_empty() { Some(item) } else { bookmark_at(&item.children, rest) }
+}
+
+/// Whether the page text box `id`, showing `text`, has typing its own Redo would put back: the
+/// test egui makes when it handles the key.
+fn has_typing_to_redo(ctx: &egui::Context, id: egui::Id, text: &str) -> bool {
+    egui::TextEdit::load_state(ctx, id)
+        .is_some_and(|state| state.cursor.char_range().is_some_and(|range| state.undoer().has_redo(&(range, text.to_owned()))))
+}
+
+/// The box's own Undo (or Redo), as the key does it: the box's text one step back (or forward) in
+/// its typing, with the box's history and cursor moved along. None when there is no such step.
+fn typing_step(ctx: &egui::Context, id: egui::Id, text: &str, undo: bool) -> Option<String> {
+    let mut state = egui::TextEdit::load_state(ctx, id)?;
+    let mut undoer = state.undoer();
+    let current = (state.cursor.char_range()?, text.to_owned());
+    let (range, stepped) = if undo { undoer.undo(&current) } else { undoer.redo(&current) }?.clone();
+    state.set_undoer(undoer);
+    state.cursor.set_char_range(Some(range));
+    egui::TextEdit::store_state(ctx, id, state);
+    Some(stepped)
 }
 
 #[cfg(test)]
@@ -750,9 +1212,11 @@ mod revert_draft_tests {
     use crate::forms_ui::Focus;
     use pdfcraft_engine::FieldValue;
 
+    /// An open editor on the first widget of the field "name", holding `text` as typed.
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            obj: None,
             widget: 0,
             text: text.into(),
             picked: Vec::new(),
@@ -762,6 +1226,7 @@ mod revert_draft_tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            list: Default::default(),
             had_focus: false,
         }
     }
@@ -816,6 +1281,9 @@ mod revert_draft_tests {
     /// interface language; a drawable value says nothing.
     #[test]
     fn a_value_its_font_cannot_draw_is_kept_and_explained() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = app();
         let fill =
             |app: &mut PdfCraftApp, text: &str| app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text(text.into()) });
@@ -854,7 +1322,16 @@ mod revert_draft_tests {
     fn text_typed_into_a_new_text_box_counts_as_unsaved_work() {
         use crate::content_ui::{TextDraft, default_style};
         let mut app = app();
-        let draft = |text: &str| TextDraft { page: 0, index: None, rect: [0.0; 4], text: text.into(), style: default_style(), focus: true };
+        let draft = |text: &str| TextDraft {
+            page: 0,
+            index: None,
+            rect: [0.0; 4],
+            text: text.into(),
+            style: default_style(),
+            focus: true,
+            selection: None,
+            typing_from: None,
+        };
         assert!(!app.has_unsaved_work(0));
         app.views[0].content.draft = Some(draft("  \n"));
         assert!(!app.has_unsaved_work(0));
@@ -879,7 +1356,16 @@ mod revert_draft_tests {
             let mut app = PdfCraftApp::new();
             app.open_bytes("source.pdf", Some(path.clone()), bytes).unwrap();
             let rect = [72.0, 72.0, 272.0, 92.0];
-            app.views[0].content.draft = Some(TextDraft { page: 0, index: None, rect, text: "Typed".into(), style: default_style(), focus: true });
+            app.views[0].content.draft = Some(TextDraft {
+                page: 0,
+                index: None,
+                rect,
+                text: "Typed".into(),
+                style: default_style(),
+                focus: true,
+                selection: None,
+                typing_from: None,
+            });
             let ctx = egui::Context::default();
             if quit {
                 assert!(!app.request_quit(&ctx));

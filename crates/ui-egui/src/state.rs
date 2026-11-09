@@ -109,8 +109,14 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
+    /// Organize pages ▸ Page properties (the tab order of the selected pages).
+    PageProps,
     /// Protect Using Password.
     Protect,
+    /// Bookmarks ▸ New bookmarks from text styles (#1693).
+    BookmarksFromTextStyles,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
     /// Add / Update Header and Footer, Watermark, Background.
@@ -162,6 +168,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -182,6 +190,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Pin tools to Home: selection modal.
+    PinTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,6 +221,26 @@ pub struct DuplicateDraft {
     pub all: bool,
     pub from: usize,
     pub to: usize,
+}
+
+/// Page Properties: the document and pages it applies to (0-based), the document's edit
+/// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
+/// differ) and as chosen (`None` until one is chosen).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PagePropsDraft {
+    pub doc: DocId,
+    pub generation: u64,
+    pub pages: Vec<usize>,
+    pub before: Option<pdfcraft_engine::TabOrder>,
+    pub tab_order: Option<pdfcraft_engine::TabOrder>,
+}
+
+/// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentClip {
+    pub xfdf: String,
+    /// How many comments (replies not counted) were copied.
+    pub count: usize,
 }
 
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
@@ -313,6 +343,8 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -344,6 +376,11 @@ impl UnlockPrompt {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
 }
+
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {
