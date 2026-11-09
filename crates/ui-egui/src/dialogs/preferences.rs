@@ -797,6 +797,11 @@ fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx:
     ctx.label_secondary(ui, tl!("Text, marks and signatures become part of the page. Other comments stay editable."), t);
     ui.add_space(8.0);
     date_format(ui, app, t, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.add_space(8.0);
+        crate::tools::sign_ui::pkcs11_preferences_section(ui, app, t);
+    }
 }
 
 /// Content for Card 6: JavaScript

@@ -539,6 +539,9 @@ pub struct PdfCraftApp {
     pub sign_draft: Option<SignDraft>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
+    /// PKCS #11 modules (token driver paths) the user added in Preferences ▸ Signatures.
+    /// Paths only: listing and signing load them on demand, nothing at startup.
+    pub pkcs11_modules: Vec<String>,
     /// Signatures panel: expanded entries (field names).
     pub sig_expanded: Vec<String>,
     /// Accessibility Checker: options, the last check, and rules skipped by hand.

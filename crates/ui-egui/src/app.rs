@@ -202,6 +202,7 @@ impl PdfCraftApp {
             summary_sort: Default::default(),
             sign_draft: None,
             digital_ids: Vec::new(),
+            pkcs11_modules: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
             ocr_draft: ocr_ui::OcrDraft::default(),

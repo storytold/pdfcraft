@@ -140,7 +140,8 @@ impl PdfCraftApp {
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
-            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
+            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:")).collect::<Vec<_>>(),
+            "pkcs11_modules": self.pkcs11_modules,
             "trusted": trusted,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
@@ -458,6 +459,11 @@ impl PdfCraftApp {
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
+        }
+        // The settings file is the user's own, but garbage in it still must not stick: keep
+        // strings, capped in count and length.
+        if let Some(modules) = v.get("pkcs11_modules").and_then(|m| m.as_array()) {
+            self.pkcs11_modules = modules.iter().filter_map(|m| m.as_str()).take(32).map(|s| s.chars().take(1024).collect()).collect();
         }
         self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
         self.custom_actions = actions_ui::decode(&v["actions"]);
