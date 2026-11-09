@@ -1,5 +1,5 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, point_handle, reaches_points, reshapable, reshaped,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, on_text, point_handle, reaches_points, reshapable, reshaped,
     resizable, resized, snapped_caret,
 };
 use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
@@ -137,7 +137,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
     }
-    let markup = is_markup(&a.subtype);
+    let markup = on_text(a);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // Text markup does not move: a click selects it, a drag across it selects the text.
     Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
@@ -173,13 +173,18 @@ pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView)
     view.comments.selected = index.map(|i| (cx.page, i));
 }
 
+/// Whether the page shows a tip for what lies under the pointer (a comment, a signature's badge)
+/// with `tool`: not with Fill & Sign, whose placement stays clear; not while drawing freehand,
+/// where it would cover the next stroke (#429); and not while a comment is moved, resized or drawn.
+pub(crate) fn tips_shown(tool: QuickTool, view: &DocView) -> bool {
+    let freehand = matches!(tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
+    !(matches!(tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some())
+}
+
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
-/// shows a comment's tooltip whatever tool is active. Not with Fill & Sign, whose placement stays
-/// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
-/// comment is moved, resized or drawn.
+/// shows a comment's tooltip whatever tool is active. Not where [`tips_shown`] says no.
 pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
-    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
-    if matches!(cx.tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some() {
+    if !tips_shown(cx.tool, view) {
         return;
     }
     let Some(p) = cx.ptr.pos else { return };
@@ -248,7 +253,7 @@ fn select_input(
                 cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
                 consumed = true;
             }
-            CommentPart::Body if !is_markup(&a.subtype) => {
+            CommentPart::Body if !on_text(a) => {
                 // Dragging one of several selected comments moves them all; any other drag starts
                 // a selection of its own.
                 let grabbed = (cx.page, a.index);
@@ -336,14 +341,14 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
             let (a, b) = (cx.to_user(from), cx.to_user(p));
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             if from.distance(p) >= 2.0 {
-                // The other selected comments on this page (not text markup, which is where
-                // its text is, nor a locked one, which would refuse the whole step) move with
-                // the dragged one, as one undo step.
+                // The other selected comments on this page (not text markup or a Replace Text
+                // caret, which are where their text is, nor a locked one, which would refuse the
+                // whole step) move with the dragged one, as one undo step.
                 let others: Vec<usize> = view
                     .comments
                     .also
                     .iter()
-                    .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !is_markup(&a.subtype) && !a.locked))
+                    .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !on_text(a) && !a.locked))
                     .map(|(_, i)| *i)
                     .collect();
                 view.pending_edit = Some(if others.is_empty() {
@@ -754,7 +759,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
         return;
     }
     let Some((page, index)) = cv.selected else { return };
-    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !is_markup(&a.subtype) && !a.locked);
+    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !on_text(a) && !a.locked);
     let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
     if !movable {
         return;

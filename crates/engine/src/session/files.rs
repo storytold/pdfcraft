@@ -1,7 +1,7 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_layer_states, print_raster,
+    set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -164,11 +164,27 @@ impl Session {
                 pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
             }
         };
+        // Comments and fields without an appearance print as the page shows them (and as Print
+        // as Image already printed them): the vector print drew only appearance streams, so a
+        // text box without one was on screen but not on paper. ISO 32000-2 §12.5.3: an
+        // annotation with the Print flag is printed.
+        if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
+            cos = displayed;
+        }
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.
-        if !doc.config.layers.is_empty() {
+        // On top of either, the configuration's auto state for the Print event sets the layers it
+        // names (`print_layer_states`), as printing does in a viewer (ISO 32000-2 §8.11.4.4).
+        if let Some(printed) = print_layer_states(&cos, &doc.info.layers) {
+            set_default_layer_state(&mut cos, &printed);
+        } else if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
+        }
+        // Signature states as the screen shows them, so not when its display copy could not be
+        // written. This copy is only printed, never saved.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
