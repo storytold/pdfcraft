@@ -169,9 +169,10 @@ pub(crate) fn reopen_text_object(tlm: [f64; 6], tm: [f64; 6], size: Option<f64>,
 /// the text matrix as far as that operator's text did without drawing anything (as
 /// [`super::clear_block`] does). Text shown later in the same text object without its own `Td`
 /// or `Tm`, such as a run in another style or column on the same baseline, then stays where it
-/// was. An advance a `TJ` can't express (spacing at a zero font size) is left out. `resources` is
-/// the page's resource dictionary; a page whose text can't be interpreted is an error, as for
-/// [`super::clear_block`].
+/// was. Only an advance such a run relies on is kept: none when the text object ends, or its next
+/// kept run starts a line of its own (`Td`, `TD`, `Tm`, `T*`, `'`, `"`), first. An advance a `TJ`
+/// can't express (spacing at a zero font size) is left out. `resources` is the page's resource
+/// dictionary; a page whose text can't be interpreted is an error, as for [`super::clear_block`].
 pub(crate) fn dropped_advances(
     doc: &Document,
     ops: &[Op],
@@ -179,8 +180,9 @@ pub(crate) fn dropped_advances(
     drop: &std::collections::HashSet<usize>,
 ) -> Result<HashMap<usize, Op>, EditError> {
     let mut out = HashMap::new();
+    let follows = kept_run_follows(ops, drop);
     for s in interpret(doc, ops, resources, &mut HashMap::new(), &mut Carry::new(), None, None)? {
-        if !drop.contains(&s.op) || s.advance == 0.0 {
+        if !drop.contains(&s.op) || s.advance == 0.0 || !follows.get(s.op).copied().unwrap_or(false) {
             continue;
         }
         let denominator = s.state.size * s.state.scale;
@@ -190,6 +192,25 @@ pub(crate) fn dropped_advances(
         }
     }
     Ok(out)
+}
+
+/// For each operator: whether a run shown after it in its text object, and not in `drop`, is
+/// placed by the pen it left rather than by a line move of its own (see [`dropped_advances`]).
+/// One pass from the end, so a page of many dropped runs stays linear.
+fn kept_run_follows(ops: &[Op], drop: &std::collections::HashSet<usize>) -> Vec<bool> {
+    let mut out = vec![false; ops.len()];
+    let mut follows = false;
+    for (i, op) in ops.iter().enumerate().rev() {
+        if let Some(slot) = out.get_mut(i) {
+            *slot = follows;
+        }
+        match op.op.as_slice() {
+            b"ET" | b"BT" | b"Td" | b"TD" | b"Tm" | b"T*" | b"'" | b"\"" => follows = false,
+            b"Tj" | b"TJ" if !drop.contains(&i) => follows = true,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The page's streams joined into the one stream they are: an operator may span two of them.
