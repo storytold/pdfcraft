@@ -13,3 +13,4 @@ mod office_export_images;
 mod private_image_resize;
 mod private_text_glyphs;
 mod scan_ocr;
+mod xfa_repeat;
