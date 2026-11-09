@@ -147,6 +147,29 @@ pub fn smooth_segments(pts: &[(f64, f64)]) -> Vec<[(f64, f64); 3]> {
         .collect()
 }
 
+/// The points where the cubic Bézier segment from `p0` (control points `c1`, `c2`) to `p3` turns
+/// back in x or in y, strictly between its ends: with its ends, they bound the segment.
+fn cubic_extremes(p0: (f64, f64), c1: (f64, f64), c2: (f64, f64), p3: (f64, f64)) -> Vec<(f64, f64)> {
+    let at = |t: f64| {
+        let u = 1.0 - t;
+        let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+        (w[0] * p0.0 + w[1] * c1.0 + w[2] * c2.0 + w[3] * p3.0, w[0] * p0.1 + w[1] * c1.1 + w[2] * c2.1 + w[3] * p3.1)
+    };
+    let mut out = Vec::new();
+    for (q0, q1, q2, q3) in [(p0.0, c1.0, c2.0, p3.0), (p0.1, c1.1, c2.1, p3.1)] {
+        // The derivative over 3: a t² + 2 b t + c.
+        let (a, b, c) = (-q0 + 3.0 * q1 - 3.0 * q2 + q3, q0 - 2.0 * q1 + q2, q1 - q0);
+        let roots = if a.abs() < 1e-12 {
+            if b.abs() < 1e-12 { vec![] } else { vec![-c / (2.0 * b)] }
+        } else {
+            let disc = b * b - a * c;
+            if disc < 0.0 { vec![] } else { vec![(-b + disc.sqrt()) / a, (-b - disc.sqrt()) / a] }
+        };
+        out.extend(roots.into_iter().filter(|t| *t > 0.0 && *t < 1.0).map(at));
+    }
+    out
+}
+
 /// `c` operators for [`smooth_segments`] (the path already starts at the first point).
 fn smooth_curve(pts: &[(f64, f64)]) -> String {
     smooth_segments(pts).iter().map(|[a, b, e]| format!("{} {} {} {} {} {} c\n", n(a.0), n(a.1), n(b.0), n(b.1), n(e.0), n(e.1))).collect()
@@ -545,7 +568,15 @@ impl AppearanceDrawing {
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(doc: &Document, d: &Dict) -> Option<Stream> {
-    let context = appearance_context(doc, d)?;
+    build_on_page(doc, d, None)
+}
+
+/// [`build`] for an annotation on a page whose visible region is `page` (`Page::crop` in
+/// pdfcraft-model): a text markup, line, polyline, polygon or ink annotation whose points reach
+/// past its `/Rect` is drawn through them as far as the page shows ([`point_reach`]), and its
+/// appearance's `/BBox` says how far ([`widened_rect`]). Without a page it is drawn within `/Rect`.
+pub(crate) fn build_on_page(doc: &Document, d: &Dict, page: Option<[f64; 4]>) -> Option<Stream> {
+    let context = appearance_context(doc, d, page)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
@@ -559,15 +590,15 @@ pub fn build(doc: &Document, d: &Dict) -> Option<Stream> {
     finish_appearance(&context, drawing)
 }
 
-fn appearance_context<'a>(doc: &'a Document, d: &'a Dict) -> Option<AppearanceContext<'a>> {
+fn appearance_context<'a>(doc: &'a Document, d: &'a Dict, page: Option<[f64; 4]>) -> Option<AppearanceContext<'a>> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
         return None;
     }
     let subtype = d.name(b"Subtype")?;
-    let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
-    let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let rect = normalised_rect(d)?;
+    let rect = page.and_then(|page| point_reach(doc, d, rect, page)).unwrap_or(rect);
     // Cloudy borders (§12.5.4) are drawn for polygons only.
     let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
@@ -584,6 +615,170 @@ fn appearance_context<'a>(doc: &'a Document, d: &'a Dict) -> Option<AppearanceCo
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
+}
+
+/// `/Rect` as lower-left and upper-right corners (a rectangle may be written with either pair of
+/// opposite corners, ISO 32000-2 §7.9.5); `None` unless it is four numbers.
+fn normalised_rect(d: &Dict) -> Option<[f64; 4]> {
+    let [x0, y0, x1, y1] = <[f64; 4]>::try_from(nums(d, b"Rect")?).ok()?;
+    Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
+}
+
+/// The subtypes drawn through points of their own rather than within `/Rect`: text markup over
+/// its `/QuadPoints` (ISO 32000-2 §12.5.6.10), lines along `/L` (§12.5.6.7), polygons and
+/// polylines through `/Vertices` (§12.5.6.9) and ink through `/InkList` (§12.5.6.13).
+pub(crate) fn is_drawn_from_points(d: &Dict) -> bool {
+    matches!(d.name(b"Subtype"), Some(b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink"))
+}
+
+/// At most this many quadrilaterals widen a text markup's box ([`point_reach`]). Each takes in a
+/// word or a group of contiguous words (ISO 32000-2 Table 182), usually a line, so even written
+/// word by word a markup over a whole dense page stays well below it; a larger one is drawn
+/// within its `/Rect`, as before the box was widened.
+pub(crate) const MAX_MARKUP_QUADS: usize = 10_000;
+
+/// At most this many points widen a line's, polyline's, polygon's or ink annotation's box
+/// ([`point_reach`]): as many as [`MAX_MARKUP_QUADS`] quadrilaterals have. A larger one is drawn
+/// within its `/Rect`.
+pub(crate) const MAX_REACH_POINTS: usize = 4 * MAX_MARKUP_QUADS;
+
+/// The points `d` is drawn through, as `x y` pairs, and how far its strokes reach past them:
+/// half the border width, and for a line ending (`/LE`) or a cloudy border (§12.5.4) the size
+/// they are drawn at. `None` for other subtypes, more points than the caps allow, and points that
+/// aren't all finite numbers.
+fn drawn_points(doc: &Document, d: &Dict) -> Option<(Vec<f64>, f64)> {
+    let w = border_width(d);
+    let has_ending = || d.get(b"LE").and_then(Object::as_array).is_some_and(|e| e.iter().any(|e| e.as_name().is_some_and(|e| e != b"None")));
+    let (points, margin) = match d.name(b"Subtype")? {
+        subtype @ (b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly") => {
+            // The quads `draw_markup` draws (`quads`: resolved, malformed ones skipped), counted
+            // before the numbers are read.
+            let array = doc.resolve(d.get(b"QuadPoints")?);
+            let entries = array.as_array()?;
+            if entries.len() / 8 > MAX_MARKUP_QUADS {
+                return None;
+            }
+            let quads = pdfcraft_geom::quad_points::usable_quads(entries.iter().map(|x| doc.resolve(x).as_f64()));
+            if quads.is_empty() {
+                return None;
+            }
+            // How far each quad's stroke reaches past it: half the line's width, and a squiggle's
+            // peaks above a quad lower than they are (`draw_markup`).
+            let margin = quads.iter().map(|q| markup_overreach(subtype, (q[0] - q[4]).hypot(q[1] - q[5]))).fold(0.0, f64::max);
+            (quads.into_iter().flatten().collect(), margin)
+        }
+        b"Ink" => {
+            let strokes = d.get(b"InkList")?.as_array()?;
+            let count = strokes.iter().try_fold(0usize, |sum, s| sum.checked_add(s.as_array()?.len()))?;
+            if count / 2 > MAX_REACH_POINTS {
+                return None;
+            }
+            let mut points = Vec::with_capacity(count.saturating_mul(3));
+            for s in strokes {
+                let stroke: Vec<f64> = s.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+                // A stroke's odd last number is no point (`draw_ink` skips it too).
+                let pts: Vec<(f64, f64)> = stroke.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+                points.extend(pts.iter().flat_map(|p| [p.0, p.1]));
+                // The smooth curve through three or more points (`smooth_segments`) can bulge
+                // past them: its turning points count too.
+                if pts.len() > 2 {
+                    let mut start = pts.first().copied().unwrap_or_default();
+                    for [c1, c2, end] in smooth_segments(&pts) {
+                        points.extend(cubic_extremes(start, c1, c2, end).iter().flat_map(|p| [p.0, p.1]));
+                        start = end;
+                    }
+                }
+            }
+            (points, w / 2.0)
+        }
+        subtype @ (b"PolyLine" | b"Polygon") => {
+            let count = d.get(b"Vertices")?.as_array()?.len();
+            if count < 4 || count % 2 != 0 || count / 2 > MAX_REACH_POINTS {
+                return None;
+            }
+            let cloudy = d.get(b"BE").and_then(Object::as_dict).is_some_and(|b| b.name(b"S") == Some(b"C"));
+            // A cloud's bumps are drawn at up to twice their nominal radius (`draw_polygon`).
+            let reach = match subtype {
+                b"Polygon" if cloudy => 2.0 * cloud_radius(w),
+                b"PolyLine" if has_ending() => arrow_size(w),
+                _ => 0.0,
+            };
+            (nums(d, b"Vertices")?, w / 2.0 + reach)
+        }
+        b"Line" => {
+            let [x0, y0, x1, y1] = <[f64; 4]>::try_from(nums(d, b"L")?).ok()?;
+            if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            // Leader lines move the line off `/L` (§12.5.6.7, Table 178).
+            let layout = line_layout(d, [(x0, y0), (x1, y1)], w);
+            let mut points = vec![x0, y0, x1, y1];
+            for (x, y) in layout.line.iter().chain(layout.leaders.iter().flatten()).chain(layout.tick.iter().flatten()) {
+                points.extend([*x, *y]);
+            }
+            // The caption's box: its width along the text matrix, from the descender to the
+            // cap height and a little over (Helvetica, as `draw_line` sets it).
+            if let Some((text, m)) = &layout.caption {
+                let width = text_width(text, CAPTION_SIZE);
+                for (x, y) in [(0.0, -0.25), (width, -0.25), (0.0, 1.0), (width, 1.0)].map(|(x, y)| (x, y * CAPTION_SIZE)) {
+                    points.extend([m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+                }
+            }
+            (points, w / 2.0 + if has_ending() { arrow_size(w) } else { 0.0 })
+        }
+        _ => return None,
+    };
+    (points.iter().all(|v| v.is_finite()) && margin.is_finite()).then_some((points, margin))
+}
+
+/// An annotation's `/Rect` (normalised, `rect`) grown to take in the points it is drawn through
+/// ([`drawn_points`]) where they reach past it, as far as the page's visible region `page` goes;
+/// `None` when they don't, aren't usable or number more than the caps allow, and for subtypes
+/// drawn within `/Rect` ([`is_drawn_from_points`]). The points are what the annotation draws (ISO
+/// 32000-2 Table 182 `/QuadPoints`, Table 178 `/L`, Table 181 `/Vertices`, Table 185 `/InkList`),
+/// and the appearance is mapped onto `/Rect` (§12.5.5), so a `/Rect` that leaves them out would
+/// cut off what is drawn: a highlight or ink stroke whose `/Rect` lies beside it drew nothing.
+/// Once a point is outside, the box takes in the strokes' width and line endings too. Nothing
+/// outside the crop box is shown or printed (§14.11.2), so the box grows no further than it; it
+/// never shrinks `rect`, and a `/Rect` that holds every point is kept as it is.
+fn point_reach(doc: &Document, d: &Dict, rect: [f64; 4], page: [f64; 4]) -> Option<[f64; 4]> {
+    if !rect.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let (points, margin) = drawn_points(doc, d)?;
+    let mut reach = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for p in points.as_chunks::<2>().0 {
+        reach = [reach[0].min(p[0]), reach[1].min(p[1]), reach[2].max(p[0]), reach[3].max(p[1])];
+    }
+    let clip = |b: [f64; 4]| [b[0].max(page[0]), b[1].max(page[1]), b[2].min(page[2]), b[3].min(page[3])];
+    let shown = clip(reach);
+    // Strokes wholly off the page widen nothing. Points `/Rect` already holds don't either, and
+    // points off the page whose strokes reach onto it only as far as `/Rect` holds.
+    let stroked = clip([reach[0] - margin, reach[1] - margin, reach[2] + margin, reach[3] + margin]);
+    if stroked[0] > stroked[2] || stroked[1] > stroked[3] {
+        return None;
+    }
+    let inside = |b: [f64; 4]| rect[0] <= b[0] && rect[1] <= b[1] && b[2] <= rect[2] && b[3] <= rect[3];
+    let on_page = shown[0] <= shown[2] && shown[1] <= shown[3];
+    if inside(if on_page { shown } else { stroked }) {
+        return None;
+    }
+    let reach = stroked;
+    let out = [rect[0].min(reach[0]), rect[1].min(reach[1]), rect[2].max(reach[2]), rect[3].max(reach[3])];
+    // A `/Rect` of its own can still be too wide for a width or height (`-1e308` to `1e308`).
+    let usable = (out[2] - out[0]).is_finite() && (out[3] - out[1]).is_finite();
+    (usable && out != rect).then_some(out)
+}
+
+/// The `/Rect` an annotation takes with its built appearance `stream`: the appearance's `/BBox`
+/// where [`point_reach`] widened it past `/Rect`, as the appearance is mapped onto `/Rect`
+/// (§12.5.5); `None` (keep `/Rect`) otherwise and for subtypes drawn within `/Rect`.
+pub(crate) fn widened_rect(d: &Dict, stream: &Stream) -> Option<[f64; 4]> {
+    if !is_drawn_from_points(d) {
+        return None;
+    }
+    let bbox = <[f64; 4]>::try_from(nums(&stream.dict, b"BBox")?).ok()?;
+    (bbox.iter().all(|v| v.is_finite()) && Some(bbox) != normalised_rect(d)).then_some(bbox)
 }
 
 fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
@@ -621,6 +816,30 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
     Some(form(context.rect, &out, drawing.resources))
 }
 
+/// The line width of an underline or strike-out over a quad `h` high.
+fn markup_line_width(h: f64) -> f64 {
+    (h * 0.07).clamp(0.5, 3.0)
+}
+
+/// A squiggle's line width and amplitude over a quad `h` high: its peaks stand twice the
+/// amplitude above the quad's bottom edge.
+fn squiggle(h: f64) -> (f64, f64) {
+    ((h * 0.05).clamp(0.5, 2.0), (h * 0.06).max(0.75))
+}
+
+/// How far a text markup of `subtype` drawn over a quad `h` high reaches past the quad: half its
+/// line's width, and for a squiggle, how far its peaks stand above a quad lower than they are.
+fn markup_overreach(subtype: &[u8], h: f64) -> f64 {
+    match subtype {
+        b"Underline" | b"StrikeOut" => markup_line_width(h) / 2.0,
+        b"Squiggly" => {
+            let (lw, amp) = squiggle(h);
+            lw / 2.0 + (amp * 2.0 - h).max(0.0)
+        }
+        _ => 0.0,
+    }
+}
+
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
     let subtype = context.subtype;
     let stroke = context.stroke;
@@ -639,15 +858,14 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
                 c.push_str(&format!("{} {} m {} {} l {} {} l {} {} l h f\n", n(p1.0), n(p1.1), n(p2.0), n(p2.1), n(p4.0), n(p4.1), n(p3.0), n(p3.1)));
             }
             b"Underline" | b"StrikeOut" => {
-                let lw = (h * 0.07).clamp(0.5, 3.0);
+                let lw = markup_line_width(h);
                 let t = if subtype == b"Underline" { 0.08 } else { 0.42 };
                 let (a, b) = (at(p3, p1, t), at(p4, p2, t));
                 c.push_str(&format!("{}{} w\n{} {} m {} {} l S\n", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1)));
             }
             _ => {
                 // Squiggly: a zigzag along the bottom of the quad.
-                let lw = (h * 0.05).clamp(0.5, 2.0);
-                let amp = (h * 0.06).max(0.75);
+                let (lw, amp) = squiggle(h);
                 let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
                 let step = (h / 4.0).max(1.5);
                 let steps = ((len / step).ceil() as usize).clamp(1, 10_000);
