@@ -10,13 +10,13 @@
   **two conflicts** (`crates/annot/src/lib.rs`, `crates/engine/src/lib.rs`,
   both export lists), each resolved by hand; §4 records them. The branch is 0
   behind and `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: `5b76f7e99` (refactor: the `apply_edit`
-  dispatcher, which the merged `ui-egui` needed to stay under the clippy
-  complexity limit) on `4a691c53a` (style: the rustfmt wrap of the two merged
-  export lists) on `19f49f812` (docs: the idle forced commit) on `270e1c11e`
-  (code: the idle forced commit) — 71 commits on `d2139e58a`. Commits named
-  below and in §4 by their pre-rebase hashes are mapped in the rebase section
-  of §4.
+- Local head before this STATUS commit: `362f9c72b` (feat: split/combine pages
+  as server-ordered operations) on `a6577074a` (docs: the rebase record) on
+  `5b76f7e99` (refactor: the `apply_edit` dispatcher, which the merged
+  `ui-egui` needed to stay under the clippy complexity limit) on `4a691c53a`
+  (style: the rustfmt wrap of the two merged export lists) — 73 commits on
+  `d2139e58a`. Commits named below and in §4 by their pre-rebase hashes are
+  mapped in the rebase section of §4.
 - PR #6622 on GitHub still has the pushed head `4eea573be` and reports
   `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` (observed 2026-11-09,
   13:59Z and 14:33Z). The `MERGEABLE` an earlier session saw belongs to the
@@ -27,7 +27,7 @@
   is not re-edited for `d2139e58a` in this pass (nothing is pushed, so the PR
   still describes `4eea573be`).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the rebased head `5b76f7e99`.
+  §4 are green at the head `362f9c72b`.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -35,7 +35,8 @@
   restyle and status replies (`ce5c38798`), the publication queue
   (`a639f30c0`), presence selections (`b4e9179d8`), the conflict-resolution
   endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
-  replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`).
+  replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
+  page split/combine (`362f9c72b`).
 - Known gaps before production are listed in §5, the plan in §6. The one this
   pass leaves explicitly open: a kill between the base write and the `CURRENT`
   rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
@@ -320,6 +321,88 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Splitting and combining pages — §5 p.3 / limitation 3 (2026-11-09, local; not pushed)
+
+`362f9c72b` on `a6577074a`. Limitation 3 said split/combine were not shared:
+the app's Split and Combine are file workflows (`Session::split`/`combine`
+produce a new document, `study.md` §6), so a session had nothing to offer. They
+are server-ordered structural operations now, with the §3.1.4–3.1.5 contract: the
+operation carries the pages that move, both sides of the page set are named, the
+epoch moves, and the undo is the operation that puts the page set back.
+
+- **`page.split`** (`{"action":"page.split","count":c}`, target `page` = the
+  first page of the part) takes `count` pages out of the document. The part is
+  cut by the server from the authoritative document (`Session::extract`) and
+  travels in the accepted operation as `bytes` (base64, ≤
+  `MAX_RESTORE_PAGE_BYTES` = 160 KiB), so every replica and the journal can join
+  it back without a second channel. A client-supplied `bytes` is ignored: the
+  server always cuts the part itself, or an undo could put content into the
+  document through a split. The accepted payload names both sides — `from`,
+  `to`, `count`, `kept` (the pages left in the document) and `bytes` — and the
+  result adds `part: {sha256, len}`.
+- **Numbering is deterministic.** The pages before `from` keep their index, the
+  pages from `to` on move down by `count`, and the part is numbered from its own
+  first page. A combine inserts `count` pages at `at` (the page count appends)
+  and every page from `at` on moves up by `count`.
+- **The boundaries are the document's.** A split with `count == 0`, a range that
+  runs past the last page, an address that is not a page, and a split that would
+  leave no page in the document (`count == page count`) are `invalid` before
+  anything changes; a part over the budget is `limit`. A combine with a position
+  past the last page, no or zero `count`, a part that is not a readable PDF, or
+  a `count` that is not the part's own page count is `invalid`, and a part over
+  the budget `limit`. None of the refusals moves `version`/`epoch`, writes a
+  journal line or is applied locally.
+- **`page.combine`** (`{"action":"page.combine","count":c,"bytes":"<part>"}`,
+  target = insert position) is the in-room form of Combine Files and the undo of
+  a split: a whole part joins the document in one version and one epoch step,
+  where an insert from file is one operation per page (`page.insert`).
+- **Undo is the other operation.** The inverse of a split is `page.combine` at
+  `from` with the part the accepted operation carries (`inverse_after`); the
+  inverse of a combine is `page.split` of the same range at the same index
+  (`inverse_for`, re-addressed by `inverse_after` in the epoch the combine
+  left). Both are ordinary operations, so a later structural change makes the
+  undo `stale` and it is retried, never forced.
+- **Replay needs no client file.** A journaled split is cut again from the
+  document in replay order; a combine inserts the bytes it recorded. The extract
+  writes a `ModDate` from the session clock, so a replayed split's part is
+  byte-different from the accepted one, but the journal keeps the accepted bytes
+  and a replica's undo comes from its own `applied` frame — the page set is the
+  same either way.
+- **Client projection.** `edit_for` turns an accepted split into
+  `Edit::DeletePages` of the range and a combine into `Edit::InsertPagesFrom`
+  (`pages: None`, the whole part); `split_pages_op`/`combine_pages_op` build the
+  intents, with the same boundary and budget checks on this side so nothing the
+  room would refuse is sent. The app's Split/Combine dialogs still export files
+  locally (they do not change the document, so a session is not broken by them);
+  routing them through these operations is the next UX step.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-pdf` | `a_split_takes_a_range_out_and_carries_the_part` (the range leaves, both sides are numbered, the part is the page that left, the join puts it back at the index), `a_split_at_the_documents_edge_is_refused` (empty, whole-document, past-the-end, missing page, no count → `invalid`; a part over the budget → `limit`; nothing changes), `a_split_addressed_to_another_epoch_is_retryable` (stale + retryable, then applied re-addressed), `a_combine_inserts_the_part_it_carries_in_one_step` (whole part in one version, deterministic numbering, a split of the range undoes it), `a_combine_refuses_a_part_it_cannot_carry` (past the end, count mismatch, bad base64, not a PDF, no count, no bytes → `invalid`; over the budget → `limit`), `a_split_and_a_combine_replay_from_their_operations` (a fresh room reaches the same page set from the journal alone) |
+| `collab-client-pdf` | `a_split_removes_its_range_and_the_accepted_operation_joins_it_back` (the replica deletes the range, the accepted part becomes one `page.combine` at the old index), `a_combine_inserts_its_part_and_splits_it_back` (whole-part insert, `inverse_for` and `inverse_after` name the same range), `split_and_combine_boundaries_are_refused_before_sending` |
+| `collab-ws` e2e | `two_clients_split_the_document_in_halves_and_join_it_back` (both replicas lose the same range and number the rest the same, the undo joins the part back, a combine past the last page is refused), `a_split_addressed_to_a_passed_epoch_is_stale_and_retried` (after a rotation the old-epoch split is stale/retryable and changes nothing; the re-addressed intent applies on both replicas) |
+
+Gates at `362f9c72b` (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **224**: proto 12, server 29, hub 5, client 13, client-pdf 31, session 5, ws 8 unit, pdf 47, annot 18, daemon 31 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1, e2e 22/22 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **22/22** (inside the run above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+
+What this does **not** cover: a part travels inside one operation, so a split or
+a combine whose part is larger than 160 KiB is refused with `limit` until the
+blob channel lands (RFC §4.1); the Split/Combine dialogs are not wired to these
+operations yet (they still export files locally); and a split's undo depends on
+the part the accepted operation carried, so a client that lost its history
+before the part was applied cannot rebuild it (the room never kept a copy — the
+operation is the copy). Bookmarks, layers, attachments, form structure and
+content edits are still not shared.
 
 ### Conflict resolution — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
 
@@ -1621,16 +1704,20 @@ Ordered by the risk they pose to production.
    comment: part opacity, moving/resizing a comment and reshaping a line or
    polygon — a Comment Properties batch that carries them is refused whole.
 3. **Structural coverage.** Page rotate, move, delete and restore, insert and
-   duplicate (§4, `b13933e9b`), and now replace and blank insert
-   (`e9756d138`, §4, RFC §3.1.4). An insert, a duplicate or a replacement
+   duplicate (§4, `b13933e9b`), replace and blank insert
+   (`e9756d138`, §4, RFC §3.1.4), and now split and combine
+   (`362f9c72b`, §4, RFC §3.1.5). An insert, a duplicate or a replacement
    carries the page as a one-page PDF inside the operation (base64, ≤
    `MAX_RESTORE_PAGE_BYTES` = 160 KiB); a page over that is refused with
    `limit` before the document changes and is not applied locally — a
    replacement over the budget still happens, but its undo is a `conflict`
-   (no copy). A blank insert names its size in points. All of them bump the
-   epoch, so an operation addressed to a passed epoch is `stale` (retryable).
-   Split/combine, bookmarks, layers, attachments, form structure and content
-   edits are still not shared.
+   (no copy). A blank insert names its size in points. A split carries the
+   part it cuts out in the same budget (a bigger part is `limit`) and a combine
+   inserts a whole part in one operation; both name both sides of the page set,
+   so the numbering is deterministic, and their undo is the other operation.
+   All of them bump the epoch, so an operation addressed to a passed epoch is
+   `stale` (retryable). Bookmarks, layers, attachments, form structure and
+   content edits are still not shared.
 4. ~~**Presence has cursors, not selections.**~~ Closed on the client in
    `b4e9179d8` (§4): presence now carries the selected comment's `/NM` or a
    rectangle in user space (a text range's bounding box, a column select), under
@@ -1973,6 +2060,16 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
+- **Split and combine are done locally in §4** (`362f9c72b`, 2026-11-09, not
+  pushed): `page.split` takes a range out and carries the part in the accepted
+  operation, `page.combine` joins a whole part in one operation, both are
+  structural (head version + lease, epoch bump, `stale` on a passed epoch),
+  refuse the document's boundaries and the 160 KiB frame budget before any
+  change, and undo each other. Tests: `collab-pdf` (6), `collab-client-pdf`
+  (3) and `collab-ws` e2e (2, two clients: converge, stale-retry, undo). What
+  is left: the Split/Combine dialogs still export files locally instead of
+  sending these operations, and a part over the budget waits for the blob
+  channel (RFC §4.1).
 - **The publication queue (limitation 6 / §5 p.6) is done locally in §4**
   (2026-11-09, not pushed): a retryable cabinet failure is retried by the
   daemon's background queue with a doubling backoff (1 s → 60 s) and a derived
