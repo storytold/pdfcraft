@@ -169,7 +169,9 @@ pub(crate) struct LazyStructure {
 impl LazyStructure {
     pub(crate) fn new(bytes: Arc<Vec<u8>>, password: Option<&str>) -> std::result::Result<Self, String> {
         let source = Document::open_with_stream_limit(bytes, password, 256 << 20).map_err(|e| e.to_string())?;
-        if !source.repair_log().is_empty() {
+        // A file rebuilt because its last update has no `/Prev` is read here as rebuilt: the
+        // renderer rebuilds it too, and the fallback reader would follow the cut-off chain.
+        if !source.repair_log().is_empty() && !source.rebuilt_unlinked_update() {
             return Err("the structure requires compatibility repair".into());
         }
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
