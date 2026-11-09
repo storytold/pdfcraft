@@ -135,14 +135,6 @@ impl PdfCraftApp {
         self.refresh_view_of(id);
     }
 
-    fn refresh_view_of(&mut self, id: DocId) {
-        if let Some(doc) = self.session.get(id)
-            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
-        {
-            view.document_changed(&doc.info);
-        }
-    }
-
     /// Remove `chosen` and save the document to `dest`, a file other than its own. When the
     /// save fails the removal is undone, so the document is as it was and nothing is claimed.
     #[cfg(not(target_arch = "wasm32"))]
