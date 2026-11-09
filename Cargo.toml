@@ -24,11 +24,11 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "7ee35a9fbd47af572d55fd63dbf0333d1f00da17" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["egui"] }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.18.1" }
 pdfcraft-filters = { path = "crates/filters", version = "0.18.1" }
@@ -63,12 +63,18 @@ pdfcraft-engine = { path = "crates/engine", version = "0.18.1" }
 pdfcraft-platform = { path = "crates/platform", version = "0.18.1" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.18.1" }
 pdfcraft-automation = { path = "crates/automation", version = "0.18.1", default-features = false }
+pdfcraft-prc = { path = "crates/prc", version = "0.18.1" }
+pdfcraft-prc-render = { path = "crates/prc-render", version = "0.18.1" }
 
 # pdf
 hayro = "0.7.1"
 hayro-syntax = "0.7.2"
 lopdf = "0.45"
-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+# zlib-rs: miniz_oxide took about 1.7 µs for every fixed-Huffman block, empty or not
+# (`pdfcraft_filters::FLATE_READ_WORK`). Other dependencies still build flate2's default
+# miniz_oxide backend; flate2 prefers zlib-rs when both are built, as the Windows build already did
+# through craft-update. `flate::tests::a_copy_from_before_the_start_is_damage` shows which runs.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 weezl = "0.2"
 # CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
 fax = "0.2.7"
@@ -78,6 +84,9 @@ hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"
+# Linear-time matching (no backtracking) for caller-supplied redaction patterns. `perf-dfa` gives
+# the lazy-DFA cache that `RegexBuilder::dfa_size_limit` bounds (the limit is inert without it).
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf-dfa"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"

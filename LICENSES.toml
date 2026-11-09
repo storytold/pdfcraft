@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "9f854f730719af962cd840529324d089e05e68a30bd245c50e33f96e009b4314"
+sha256 = "d9ba162ad2bc95d22ab9885065e253bb823bd6795068828e7b39858344b660eb"
 
 [[document]]
 source = "assets/app-icon/LICENSE-document.txt"
@@ -61,6 +61,13 @@ sha256 = "742665db9c8e1bc72603c6d319ca3e90b83bd6d95202f0cd4ef11068a07a9c29"
 origin = "https://static.crates.io/crates/hayro-cmap/hayro-cmap-0.1.0.crate#assets/LICENSE.txt"
 
 [[document]]
+source = "licenses/ICU4X-LICENSE.txt"
+licences = ["Unicode-3.0"]
+destination = "licenses/ICU4X-LICENSE.txt"
+sha256 = "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+origin = "https://static.crates.io/crates/icu_segmenter_data/icu_segmenter_data-2.3.0.crate#LICENSE"
+
+[[document]]
 source = "licenses/egui-Hack-Regular.txt"
 licences = ["MIT", "Bitstream-Vera"]
 destination = "licenses/egui-Hack-Regular.txt"
@@ -87,6 +94,13 @@ licences = ["MIT"]
 destination = "licenses/egui-emoji-icon-font-mit-license.txt"
 sha256 = "b9d2c1d909aa149996fd4c91dcb92b2362a04431640c1d200959da94caf8cde1"
 origin = "https://raw.githubusercontent.com/emilk/egui/0.36.2/crates/epaint_default_fonts/fonts/emoji-icon-font-mit-license.txt"
+
+[[document]]
+source = "licenses/prc-rs-LICENSE.txt"
+licences = ["MIT"]
+destination = "licenses/prc-rs-LICENSE.txt"
+sha256 = "ddb846513d92153d8fa16b18ed3e7c86953a582f0d2f49f02b29f1bd569dac58"
+origin = "https://raw.githubusercontent.com/ralovich/prc-rs/287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d/LICENSE"
 
 [[document]]
 source = "vendor/hayro-interpret/LICENSE-APACHE"
@@ -157,3 +171,9 @@ crate = "hayro-interpret"
 path = "src/font/generated/metrics.rs"
 licence = "MIT OR Apache-2.0"
 documents = ["vendor/hayro-interpret/LICENSE-MIT", "vendor/hayro-interpret/LICENSE-APACHE"]
+
+[[bundled]]
+crate = "icu_segmenter_data"
+path = "data/segmenter_dictionary_extended_v1.rs.data"
+licence = "Unicode-3.0"
+documents = ["licenses/ICU4X-LICENSE.txt"]
