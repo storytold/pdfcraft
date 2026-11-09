@@ -156,6 +156,48 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
 }
 
+/// Shift keeps a dragged field on the axis it set off along, even when the drag then turns and
+/// crosses the diagonal: 40 points right and then 60 down still moves it 40 points right and not
+/// at all down, where choosing the axis from the whole drag each frame made it jump to 60 down.
+#[test]
+fn a_shift_drag_keeps_its_axis_when_it_crosses_the_diagonal() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    // The default text field is 144 by 22 points with its top-left at the click.
+    let c = at(&h, 110.0, 261.0);
+    let (right, down) = (at(&h, 150.0, 261.0), at(&h, 150.0, 321.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + (right - c) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    for k in 1..=4 {
+        h.hover_at(right + (down - right) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(down);
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    let after = rect_of(&h, &name);
+    assert!((after[0] - before[0] - 40.0).abs() < 1.5, "40 points right: {before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() < 0.01, "not down: {before:?} → {after:?}");
+}
+
 /// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
 /// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
 /// frame has no modifiers and only the press carries Alt.
@@ -1561,4 +1603,86 @@ fn button_export_properties_apply_cancel_and_undo() {
         let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
         assert_eq!(f.export_of(0), Some(original.as_str()));
     }
+}
+
+/// The screen rectangle of widget 0 of field `name` on the first view.
+fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+    pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+}
+
+/// A right-click while a field is dragged leaves the dragged field selected, so the drag moves it
+/// and not the field right-clicked. The right-click used to select the other field, and the release
+/// moved that one.
+#[test]
+fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let (name, city) = (field_rect(&h, "name"), field_rect(&h, "city"));
+    let a = name.center();
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(a + egui::vec2(0.0, 30.0));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: city.center(), button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(1);
+    let end = a + egui::vec2(0.0, 60.0);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(field_rect(&h, "city"), city, "the field right-clicked stays where it was");
+    assert_ne!(field_rect(&h, "name"), name, "the dragged field moved");
+}
+
+/// With Prepare open, a drag with a shape tool on the page's empty part draws Prepare's selection
+/// rectangle and no comment, as before: Prepare takes the press nobody holds. It used to draw both.
+#[test]
+fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.square"));
+    h.run_steps(3);
+    assert!(h.state().is_preparing(), "picking the tool leaves Prepare open");
+    // Below the fields.
+    let (from, to) = (at(&h, 40.0, 260.0), at(&h, 200.0, 360.0));
+    drag(&mut h, from, to);
+    let s = h.state();
+    let squares = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Square").count();
+    assert_eq!(squares, 0, "no rectangle under Prepare's selection rectangle");
+}
+
+/// With Prepare open, a double-click on a field is the field's (it opens its properties) and leaves
+/// a polygon being clicked out unfinished, as before. It used to finish the polygon too.
+#[test]
+fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.polygon"));
+    h.run_steps(3);
+    // Three points below the fields.
+    for (x, y) in [(40.0, 260.0), (200.0, 260.0), (120.0, 360.0)] {
+        let p = at(&h, x, y);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+    }
+    let on_field = field_rect(&h, "name").center();
+    crate::support::input::double_click(&mut h, on_field);
+    let s = h.state();
+    let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
+    assert_eq!(polygons, 0, "the polygon is not finished");
+    assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
 }

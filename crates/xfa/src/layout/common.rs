@@ -1,29 +1,64 @@
 use super::items::{Action, BorderShape, Item, Rounded, Widget, WidgetBorder};
-use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
+use super::{DataNode, DataPath, HashMap, Layout, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
+use crate::data::{data_date_letters, data_to_iso, fields_with_ids};
 
-pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
-    if depth > MAX_DEPTH {
-        return;
+/// The value of each field with an `id`, for the rich text that embeds it (floating fields,
+/// XFA 3.3 pp. 221–222, p. 1222), with its data path and its template default: the data's value
+/// as the field shows it (a multi-select list's picks on separate lines), else the default.
+pub(super) fn collect_values(tpl: &Template, data: Option<&DataNode>) -> HashMap<String, EmbedSource> {
+    let mut out = HashMap::new();
+    for (id, som, f) in fields_with_ids(tpl) {
+        let path = data_path(tpl, &som);
+        // A date shows in its picture clause, as the field does (p. 221): the display picture,
+        // else the one it is edited in.
+        let date = (f.ui == Ui::DateTimeEdit)
+            .then(|| f.display_picture.as_deref().or(f.picture.as_deref()).and_then(date_letters))
+            .flatten()
+            .map(|pattern| (pattern, data_date_letters(f)));
+        let mut src = EmbedSource { path, default: f.value.plain().unwrap_or_default(), value: String::new(), date };
+        src.value = src.shown(data_value(data, &src.path));
+        out.insert(id.to_string(), src);
     }
-    for n in nodes {
-        match n {
-            Node::Field(f) => {
-                if let Some(id) = &f.common.id {
-                    out.insert(id.clone(), f.value.plain().unwrap_or_default());
-                }
-            }
-            Node::Subform(s) => {
-                collect_values(&s.children, out, depth + 1);
-                if let Some(ps) = &s.page_set {
-                    for a in &ps.areas {
-                        collect_values(&a.items, out, depth + 1);
-                    }
-                }
-            }
-            Node::Area(a) => collect_values(&a.children, out, depth + 1),
-            Node::ExclGroup(_) | Node::Draw(_) => {}
+    out
+}
+
+/// What an embedded field shows: see [`collect_values`].
+pub(super) struct EmbedSource {
+    pub(super) path: DataPath,
+    pub(super) default: String,
+    /// The value of its first instance, as shown.
+    pub(super) value: String,
+    /// A date field's display pattern and data pattern.
+    date: Option<(String, Option<String>)>,
+}
+
+impl EmbedSource {
+    /// What the field shows for the data's value `data` (the default without one).
+    pub(super) fn shown(&self, data: Option<String>) -> String {
+        match (data, &self.date) {
+            (Some(v), Some((pattern, data_pattern))) => iso_to_pattern(&data_to_iso(&v, data_pattern.as_deref()), pattern),
+            (Some(v), None) => v,
+            (None, _) => self.default.clone(),
         }
     }
+}
+
+/// `path` with the instance numbers `scope` gives the same names, segment by segment from the
+/// root, up to where the two part: the instance of a repeating subform the text is laid out in.
+pub(super) fn instance_path(path: &DataPath, scope: &DataPath) -> DataPath {
+    let mut at = path.clone();
+    for (seg, (name, index)) in at.iter_mut().zip(scope) {
+        if seg.0 != *name {
+            break;
+        }
+        seg.1 = *index;
+    }
+    at
+}
+
+/// The value a field shows from `data` at `path`: unless it is blank, the data's wins.
+pub(super) fn data_value(data: Option<&DataNode>, path: &DataPath) -> Option<String> {
+    data.and_then(|d| d.value_at(path)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 pub(super) fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {
