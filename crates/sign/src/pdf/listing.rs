@@ -182,21 +182,15 @@ pub(super) struct Field {
     pub(super) r: Option<ObjRef>,
     pub(super) dict: Dict,
     pub(super) widgets: Vec<(Option<ObjRef>, Dict)>,
+    /// Effective ReadOnly flag (`/Ff` bit 1), carried down the `/Kids` walk from the ancestors it
+    /// visited: no second look at `/Parent`, and no dictionary cloned per field.
+    pub(super) read_only: bool,
 }
 
 impl Field {
-    /// The field's ReadOnly flag (`/Ff` bit 1, inheritable from its ancestors).
-    pub(super) fn read_only(&self, doc: &Document) -> bool {
-        let mut d = self.dict.clone();
-        for _ in 0..64 {
-            if let Some(ff) = d.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()) {
-                return ff & 1 != 0;
-            }
-            let Some(parent) = d.get(b"Parent").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return false };
-            d = parent;
-        }
-        // a chain too deep to read to its end: refuse (a ReadOnly bit may sit past the limit)
-        true
+    /// The field's ReadOnly flag, inherited as the walk that found it inherited it.
+    pub(super) fn read_only(&self) -> bool {
+        self.read_only
     }
 
     /// The signature dictionary in /V. A field without one is unsigned, whether /V is missing,
@@ -221,8 +215,8 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
     };
     let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return out };
     let mut seen = HashSet::new();
-    let mut stack: Vec<(Object, String, Option<Vec<u8>>)> = fields.into_iter().rev().map(|f| (f, String::new(), None)).collect();
-    while let Some((o, prefix, inherited_ft)) = stack.pop() {
+    let mut stack: Vec<(Object, String, Option<Vec<u8>>, i64)> = fields.into_iter().rev().map(|f| (f, String::new(), None, 0)).collect();
+    while let Some((o, prefix, inherited_ft, inherited_ff)) = stack.pop() {
         if let Some(r) = o.as_ref()
             && !seen.insert(r)
         {
@@ -236,11 +230,13 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
             (None, _) => prefix.clone(),
         };
         let ft = d.name(b"FT").map(<[u8]>::to_vec).or(inherited_ft);
+        // `/Ff` is inheritable: a field without its own takes its ancestor's, as a reader does.
+        let ff = d.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()).unwrap_or(inherited_ff);
         let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
         // Kids with a /T are fields; others are this field's widgets.
         let (sub, widgets): (Vec<Object>, Vec<Object>) = kids.into_iter().partition(|k| doc.resolve(k).as_dict().is_some_and(|kd| kd.contains(b"T")));
         for k in sub.into_iter().rev() {
-            stack.push((k, name.clone(), ft.clone()));
+            stack.push((k, name.clone(), ft.clone(), ff));
         }
         if ft.as_deref() == Some(b"Sig") && part.is_some() {
             let mut ws: Vec<(Option<ObjRef>, Dict)> =
@@ -248,7 +244,7 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
             if d.name(b"Subtype") == Some(b"Widget") {
                 ws.insert(0, (o.as_ref(), d.clone()));
             }
-            out.push(Field { name, r: o.as_ref(), dict: d, widgets: ws });
+            out.push(Field { name, r: o.as_ref(), dict: d, widgets: ws, read_only: ff & 1 != 0 });
         }
     }
     out
@@ -300,7 +296,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         let mut info = SignatureInfo {
             field: f.name.clone(),
             signed: v.is_some(),
-            read_only: f.read_only(doc),
+            read_only: f.read_only(),
             page,
             rect,
             visible,
@@ -394,30 +390,43 @@ pub(super) fn mk_rotation(doc: &Document, widget: &Dict) -> i64 {
 mod read_only_tests {
     use super::*;
 
-    /// A field whose `/Parent` chain is `depth` dictionaries long, the topmost holding `ff`.
-    fn field(doc: &mut Document, depth: usize, ff: Option<i64>) -> Field {
+    /// A document whose AcroForm lists a signature field `depth` levels below a root field, with
+    /// `ff` on that root: the flag reaches the leaf through `/Kids`, not through `/Parent`.
+    fn field_doc(depth: usize, ff: Option<i64>) -> Document {
+        let mut doc = Document::new_empty();
+        let mut leaf = Dict::new();
+        leaf.set(b"T".to_vec(), Object::Name(b"leaf".to_vec()));
+        let mut kid = doc.add(Object::Dict(leaf));
+        for _ in 1..depth {
+            let mut d = Dict::new();
+            // Each level is a field of its own (`/T`), so the walk follows `/Kids` through it.
+            d.set(b"T".to_vec(), Object::Name(b"mid".to_vec()));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kid)]));
+            kid = doc.add(Object::Dict(d));
+        }
         let mut top = Dict::new();
+        top.set(b"T".to_vec(), Object::Name(b"root".to_vec()));
+        top.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
         if let Some(ff) = ff {
             top.set(b"Ff".to_vec(), Object::Int(ff));
         }
-        let mut parent = doc.add(Object::Dict(top));
-        for _ in 1..depth {
-            let mut d = Dict::new();
-            d.set(b"Parent".to_vec(), Object::Ref(parent));
-            parent = doc.add(Object::Dict(d));
-        }
-        let mut leaf = Dict::new();
-        leaf.set(b"Parent".to_vec(), Object::Ref(parent));
-        Field { name: "f".into(), r: None, dict: leaf, widgets: Vec::new() }
+        top.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kid)]));
+        let top_ref = doc.add(Object::Dict(top));
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(top_ref)]));
+        let form_ref = doc.add(Object::Dict(form));
+        let root = doc.root().expect("a catalog");
+        doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Ref(form_ref))).expect("catalog");
+        doc
     }
 
     #[test]
-    fn a_chain_too_deep_to_read_is_read_only() {
-        let mut doc = Document::new_empty();
-        assert!(field(&mut doc, 3, Some(1)).read_only(&doc));
-        assert!(!field(&mut doc, 3, Some(0)).read_only(&doc));
-        assert!(!field(&mut doc, 3, None).read_only(&doc), "a short chain with no flags is writable");
-        // the flag sits past the 64 dictionaries read: refused, not signed
-        assert!(field(&mut doc, 80, Some(1)).read_only(&doc));
+    fn a_read_only_flag_is_inherited_through_kids() {
+        let leaf = |doc: &Document| sig_fields(doc).into_iter().find(|f| f.name.ends_with("leaf")).expect("the leaf field");
+        assert!(leaf(&field_doc(3, Some(1))).read_only());
+        assert!(!leaf(&field_doc(3, Some(0))).read_only());
+        assert!(!leaf(&field_doc(3, None)).read_only(), "a short chain with no flags is writable");
+        // 80 levels deep the flag still reaches the leaf: the walk carries it, not a /Parent scan
+        assert!(leaf(&field_doc(80, Some(1))).read_only());
     }
 }
