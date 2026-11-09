@@ -363,7 +363,7 @@ mod tests {
             hub.send(client, ClientMessage::Op(op), 0)?;
             // What the transport does after every client message: the room
             // decides whether its journal crossed the threshold.
-            if let Some(mut pending) = hub.forced_commit(&doc) {
+            if let Some(mut pending) = hub.forced_commit(&doc, 0) {
                 let outcome = pending.publish();
                 let _ = hub.finish(pending, outcome);
                 forced += 1;

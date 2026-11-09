@@ -201,8 +201,8 @@ impl Adapter for CabinetAdapter {
         self.pdf.apply(actor, op)
     }
 
-    fn record(&mut self, version: u64, actor: &ActorId, op: &pdfcraft_collab_proto::Op) -> Result<(), AdapterError> {
-        self.pdf.record(version, actor, op)
+    fn record(&mut self, version: u64, actor: &ActorId, op: &pdfcraft_collab_proto::Op, recorded_ms: u64) -> Result<(), AdapterError> {
+        self.pdf.record(version, actor, op, recorded_ms)
     }
 
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
@@ -417,7 +417,7 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
     for record in records.into_iter().filter(|record| record.version > version) {
         let actor = ActorId::new(record.actor.clone()).map_err(|e| RoomError::invalid(format!("journal actor {:?}: {e}", record.actor)))?;
         let replay_version = record.version;
-        room.replay(actor, record.op, replay_version).map_err(|e| RoomError::invalid(e.message))?;
+        room.replay(actor, record.op, replay_version, record.ms).map_err(|e| RoomError::invalid(e.message))?;
     }
     let etag = Adapter::published(room.adapter()).map(|published| published.etag);
     Ok(Opened { version: room.version(), epoch: room.epoch(), created, etag })

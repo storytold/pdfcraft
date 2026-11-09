@@ -596,6 +596,147 @@ fn a_forced_commit_does_not_block_another_room_and_is_counted() -> Result<(), Bo
     Ok(())
 }
 
+/// The test's wall clock, for the sweep that the server itself calls with
+/// `std::time::SystemTime`.
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0)
+}
+
+/// RFC §4.6, limitation 10, the time threshold: a room whose journal is small
+/// and that sees no further edit compacts itself. No message arrives from any
+/// client — no edit, no join, no leave — so the background sweep is the only
+/// thing that can notice, and it counts the compaction like any other forced
+/// commit.
+#[test]
+fn an_idle_room_compacts_its_journal_without_another_edit() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counted {
+        inner: PdfAdapter,
+        runs: Arc<AtomicUsize>,
+    }
+
+    struct CountedPublication(Arc<AtomicUsize>);
+
+    impl Publication for CountedPublication {
+        fn run(&self) -> PublishOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+    }
+
+    impl Adapter for Counted {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+            Some(Box::new(CountedPublication(self.runs.clone())))
+        }
+        fn finish_publish(&mut self, _version: u64, _outcome: PublishOutcome) -> Result<(), AdapterError> {
+            Ok(())
+        }
+    }
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let doc = DocKey::new("file-1")?;
+    // One comment never reaches the operation or byte threshold: only the idle
+    // time can make this room compact itself.
+    let config = RoomConfig { forced_commit_ops: 1_000, forced_commit_bytes: 0, forced_commit_idle_secs: 1, ..RoomConfig::default() };
+    let mut hub = Hub::new(config);
+    hub.open_room(doc.clone(), Counted { inner: PdfAdapter::open("idle.pdf", fixture(1).into())?, runs: runs.clone() })?;
+    let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), Config::default()));
+    let handle = server.clone().bind_arc("127.0.0.1:0")?;
+
+    let mut ada = Peer::join(handle.local_addr(), "editor:ada", "ada")?;
+    let add = merge_op(doc.clone(), OpId::new("op-idle")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "idle", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)));
+    assert_eq!(server.metrics()?.forced_commits, 0, "one edit is below the count and byte thresholds");
+    assert_eq!(runs.load(Ordering::Relaxed), 0);
+
+    // No client says anything after the edit: a later clock is all the sweep
+    // needs. (The server's own clock is the wall clock; the test moves the
+    // sweep's clock past the one-second idle window.)
+    assert_eq!(server.sweep_forced_commits(wall_ms() + 10_000), 1);
+    assert_eq!(runs.load(Ordering::Relaxed), 1, "the idle room published the base its journal held");
+    assert_eq!(server.metrics()?.forced_commits, 1, "an idle compaction is counted like any forced commit");
+
+    // The base now holds the operation, so the journal is empty: another sweep
+    // queues nothing, however long the room stays quiet.
+    assert_eq!(server.sweep_forced_commits(wall_ms() + 60_000), 0);
+    assert_eq!(server.metrics()?.forced_commits, 1);
+    Ok(())
+}
+
+/// The same time threshold, reached by the daemon's background loop rather than
+/// by a hand-called sweep: the loop is the only thing running while a quiet
+/// room waits, so the wiring, not just the decision, has to be tested.
+#[test]
+fn the_background_loop_compacts_an_idle_room() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counted {
+        inner: PdfAdapter,
+        runs: Arc<AtomicUsize>,
+    }
+
+    struct CountedPublication(Arc<AtomicUsize>);
+
+    impl Publication for CountedPublication {
+        fn run(&self) -> PublishOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+    }
+
+    impl Adapter for Counted {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+            Some(Box::new(CountedPublication(self.runs.clone())))
+        }
+        fn finish_publish(&mut self, _version: u64, _outcome: PublishOutcome) -> Result<(), AdapterError> {
+            Ok(())
+        }
+    }
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let doc = DocKey::new("file-1")?;
+    let config = RoomConfig { forced_commit_ops: 1_000, forced_commit_bytes: 0, forced_commit_idle_secs: 1, ..RoomConfig::default() };
+    let mut hub = Hub::new(config);
+    hub.open_room(doc.clone(), Counted { inner: PdfAdapter::open("loop.pdf", fixture(1).into())?, runs: runs.clone() })?;
+    let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), Config::default()));
+    let handle = server.clone().bind_arc("127.0.0.1:0")?;
+    let queue = server.spawn_publication_retries(Duration::from_millis(20))?;
+
+    let mut ada = Peer::join(handle.local_addr(), "editor:ada", "ada")?;
+    let add = merge_op(doc.clone(), OpId::new("op-loop")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "loop", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while server.metrics()?.forced_commits == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(server.metrics()?.forced_commits, 1, "the background loop compacted the idle journal on its own");
+    assert_eq!(runs.load(Ordering::Relaxed), 1, "exactly one publication: the loop does not spin on an empty journal");
+    drop(queue);
+    Ok(())
+}
+
 /// RFC §8.2, limitation 6: a publication that fails with a retryable error is
 /// tried again in the background after a backoff — not on the next commit, and
 /// not on the last client leaving. The room stays `publishing` while the retry

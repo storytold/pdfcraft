@@ -37,6 +37,12 @@ pub struct JournalRecord {
     pub version: u64,
     pub actor: String,
     pub op: Op,
+    /// When the room accepted the operation (wall-clock milliseconds). The
+    /// room reads it back on replay so the idle forced-commit threshold is a
+    /// state that survives a restart. A record written before this field
+    /// existed reads as `0`, which arms no clock.
+    #[serde(default)]
+    pub ms: u64,
 }
 
 /// What the cabinet holds for this file: the version it has and the etag of its
@@ -185,9 +191,11 @@ impl Store {
     }
 
     /// Append one accepted operation and sync it. The room acknowledges the
-    /// operation only after this returns.
-    pub fn append(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
-        let record = JournalRecord { version, actor: actor.as_str().to_owned(), op: op.clone() };
+    /// operation only after this returns. `recorded_ms` is the room's clock for
+    /// the acceptance; it is stored so the idle threshold can be re-armed after
+    /// a restart.
+    pub fn append(&mut self, version: u64, actor: &ActorId, op: &Op, recorded_ms: u64) -> Result<(), AdapterError> {
+        let record = JournalRecord { version, actor: actor.as_str().to_owned(), op: op.clone(), ms: recorded_ms };
         let mut line =
             serde_json::to_vec(&record).map_err(|e| AdapterError::new(ErrorCode::Internal, format!("could not encode an operation: {e}"), false))?;
         line.push(b'\n');
@@ -351,8 +359,8 @@ mod tests {
             assert_eq!(store.base_state(), (0, 0));
             assert!(store.base()?.is_none());
             store.write_base(4, 2, b"%PDF-base")?;
-            store.append(5, &actor, &op("a5")?)?;
-            store.append(6, &actor, &op("a6")?)?;
+            store.append(5, &actor, &op("a5")?, 1_000)?;
+            store.append(6, &actor, &op("a6")?, 1_000)?;
         }
         let store = Store::open(&path)?;
         assert_eq!(store.base_state(), (4, 2));
@@ -362,6 +370,7 @@ mod tests {
         assert_eq!((records[0].version, records[1].version), (5, 6));
         assert_eq!(records[0].actor, "editor");
         assert_eq!(records[0].op.op_id.as_str(), "a5");
+        assert_eq!((records[0].ms, records[1].ms), (1_000, 1_000), "the acceptance time is durable, so the idle clock survives a restart");
         let _ = std::fs::remove_dir_all(&path);
         Ok(())
     }
@@ -373,7 +382,7 @@ mod tests {
         let mut store = Store::open(&path)?;
         store.write_base(0, 0, b"%PDF-base")?;
         for version in 1..=3 {
-            store.append(version, &actor, &op(&format!("a{version}"))?)?;
+            store.append(version, &actor, &op(&format!("a{version}"))?, 1_000)?;
         }
         store.truncate(2)?;
         let kept = store.journal()?;
@@ -426,7 +435,7 @@ mod tests {
         // the journal still holds the entry the commit was about to truncate.
         let mut store = Store::open(&path)?;
         assert_eq!(store.base_state(), (1, 0));
-        store.append(1, &editor, &op("a1")?)?;
+        store.append(1, &editor, &op("a1")?, 1_000)?;
         let records = store.journal()?;
         assert_eq!(records.len(), 1, "the stale entry is on disk");
         let bytes = store.base()?.ok_or("no base")?;
@@ -435,7 +444,7 @@ mod tests {
         let mut room = Room::resume(SessionId::new("s2")?, doc, adapter, 1, 0, RoomConfig::default());
         for record in records.into_iter().filter(|record| record.version > 1) {
             let actor = ActorId::new(record.actor)?;
-            room.replay(actor, record.op, record.version)?;
+            room.replay(actor, record.op, record.version, record.ms)?;
         }
         assert_eq!(room.version(), 1);
         let document = room.adapter().document().ok_or("no document")?;
@@ -449,7 +458,7 @@ mod tests {
         let path = dir("torn");
         let actor = ActorId::new("editor")?;
         let mut store = Store::open(&path)?;
-        store.append(1, &actor, &op("a1")?)?;
+        store.append(1, &actor, &op("a1")?, 1_000)?;
         let journal = path.join("journal.jsonl");
         let mut text = std::fs::read_to_string(&journal)?;
         text.push_str("{\"version\":2,\"actor\":\"edi");
@@ -504,7 +513,7 @@ mod tests {
         let mut room = Room::resume(SessionId::new("s2")?, doc, adapter, version, epoch, RoomConfig::default());
         for record in records {
             let actor = ActorId::new(record.actor)?;
-            room.replay(actor, record.op, record.version)?;
+            room.replay(actor, record.op, record.version, record.ms)?;
         }
         assert_eq!(room.version(), 1);
         let document = room.adapter().document().ok_or("no document")?;

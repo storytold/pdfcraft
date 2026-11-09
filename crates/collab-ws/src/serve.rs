@@ -135,13 +135,14 @@ impl<A: Adapter> Shared<A> {
         std::mem::take(&mut self.pending)
     }
 
-    /// Queue a journal compaction if the room crossed its threshold (RFC §4.6,
-    /// limitation 10). The base is written here under the lock; the caller runs
-    /// the returned publication outside it. A `busy` room (a publication
-    /// already in flight) queues nothing: the threshold stays crossed, so the
-    /// next message or the end of that publication retries.
-    fn queue_forced(&mut self, doc: &DocKey) {
-        if let Some(pending) = self.hub.forced_commit(doc) {
+    /// Queue a journal compaction if the room crossed one of its thresholds —
+    /// operations, bytes or idle time (RFC §4.6, limitation 10). The base is
+    /// written here under the lock; the caller runs the returned publication
+    /// outside it. A `busy` room (a publication already in flight) queues
+    /// nothing: the threshold stays crossed, so the next message, the end of
+    /// that publication or the background sweep retries.
+    fn queue_forced(&mut self, doc: &DocKey, now_ms: u64) {
+        if let Some(pending) = self.hub.forced_commit(doc, now_ms) {
             self.forced_commits = self.forced_commits.saturating_add(1);
             self.pending.push(pending);
         }
@@ -223,7 +224,7 @@ impl<A: Adapter> WsServer<A> {
                     shared.pending.push(next);
                 }
             }
-            shared.queue_forced(&doc);
+            shared.queue_forced(&doc, now_ms());
             shared.pump();
             pending.extend(shared.take_pending());
         }
@@ -262,7 +263,7 @@ impl<A: Adapter> WsServer<A> {
                     // Edits accepted while the publication was queued are not
                     // in the base that was just published. With nobody left to
                     // commit them, publish them now.
-                    shared.queue_forced(&doc);
+                    shared.queue_forced(&doc, now_ms);
                     if shared.hub.members(&doc) == 0
                         && let Some(next) = shared.hub.commit_if_dirty(&doc)
                     {
@@ -273,6 +274,29 @@ impl<A: Adapter> WsServer<A> {
             }
             self.run_pending(follow_up);
         }
+    }
+
+    /// Compact the rooms whose journal has been idle past
+    /// `RoomConfig::forced_commit_idle_secs` — the case no client message can
+    /// trigger, because nothing arrives (limitation 10). The daemon's background
+    /// loop calls this with the wall clock; a test can pass its own clock.
+    ///
+    /// Returns how many compactions were queued. Each one is counted in
+    /// `/metrics` as `pdfcraft_collab_forced_commits_total`, like the thresholds
+    /// a message triggers. The base is written under the hub lock and the
+    /// cabinet call runs outside it, through [`Self::run_pending`].
+    pub fn sweep_forced_commits(&self, now_ms: u64) -> usize {
+        let (queued, pending) = {
+            let Ok(mut shared) = lock(&self.shared) else { return 0 };
+            let docs = shared.hub.documents();
+            let before = shared.forced_commits;
+            for doc in docs {
+                shared.queue_forced(&doc, now_ms);
+            }
+            (shared.forced_commits.saturating_sub(before), shared.take_pending())
+        };
+        self.run_pending(pending);
+        usize::try_from(queued).unwrap_or(usize::MAX)
     }
 
     /// Open a room before clients connect. The adapter owns the authoritative
@@ -342,8 +366,10 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
         Ok(ServerHandle { local_addr, stop, thread: Some(thread) })
     }
 
-    /// Run the publication queue in the background: every `interval` the loop
-    /// tries the failed publications whose backoff has elapsed. The daemon
+    /// Run the background maintenance loop: every `interval` it tries the failed
+    /// publications whose backoff has elapsed and compacts the rooms whose
+    /// journal has been idle past their time threshold (a room nobody edits
+    /// sends no message, so the transport cannot notice on its own). The daemon
     /// starts one; tests start one with a short interval and a synthetic clock
     /// is not needed because the loop reads the wall clock.
     ///
@@ -361,6 +387,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                     break;
                 }
                 server.retry_publications(now_ms());
+                server.sweep_forced_commits(now_ms());
             }
         })?;
         Ok(PublicationRetries { stop, thread: Some(thread) })
@@ -432,7 +459,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                     // A room resumed with a journal past the threshold is
                     // compacted as soon as somebody is there to keep the work
                     // alive (limitation 10).
-                    shared.queue_forced(&doc);
+                    shared.queue_forced(&doc, now_ms());
                     let pending = shared.take_pending();
                     drop(shared);
                     self.run_pending(pending);
@@ -530,7 +557,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
             // while the client stays connected (limitation 10). A ping or a
             // presence frame retries a commit that was refused as busy.
             if let Some(doc) = doc {
-                shared.queue_forced(&doc);
+                shared.queue_forced(&doc, now_ms());
             }
             shared.pump();
             pending.extend(shared.take_pending());

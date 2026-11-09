@@ -987,9 +987,9 @@ impl Adapter for PdfAdapter {
         Ok(ApplyOutcome { result, op: effective, epoch: self.epoch })
     }
 
-    fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
+    fn record(&mut self, version: u64, actor: &ActorId, op: &Op, recorded_ms: u64) -> Result<(), AdapterError> {
         let Some(store) = self.store.as_mut() else { return Ok(()) };
-        store.append(version, actor, op)
+        store.append(version, actor, op, recorded_ms)
     }
 
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
@@ -1901,7 +1901,7 @@ mod tests {
         let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
         let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
         fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
-        fresh.replay(editor.clone(), applied, 1)?;
+        fresh.replay(editor.clone(), applied, 1, 0)?;
         assert_eq!(fresh.epoch(), 1);
         assert_eq!(fresh.adapter().document().ok_or("gone")?.info.pages.len(), 3);
         let version = fresh.version();
@@ -2013,7 +2013,7 @@ mod tests {
         let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
         let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
         fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
-        fresh.replay(editor.clone(), applied, 1)?;
+        fresh.replay(editor.clone(), applied, 1, 0)?;
         let document = fresh.adapter().document().ok_or("gone")?;
         assert_eq!(document.info.pages.len(), 4, "the journal's copy inserted the page");
         assert_eq!(fresh.epoch(), 1);
@@ -2046,7 +2046,7 @@ mod tests {
         let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
         fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
         for (version, op) in applied_ops.into_iter().enumerate() {
-            fresh.replay(editor.clone(), op, version as u64 + 1)?;
+            fresh.replay(editor.clone(), op, version as u64 + 1, 0)?;
         }
         let document = fresh.adapter().document().ok_or("gone")?;
         assert_eq!(document.info.annotations.len(), 1);

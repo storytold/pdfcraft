@@ -62,8 +62,8 @@ pub trait Adapter {
     /// headless session) has nothing to replay. An adapter that returns an
     /// error here has already changed the document, so the room is poisoned:
     /// see [`Room::apply`].
-    fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
-        let _ = (version, actor, op);
+    fn record(&mut self, version: u64, actor: &ActorId, op: &Op, recorded_ms: u64) -> Result<(), AdapterError> {
+        let _ = (version, actor, op, recorded_ms);
         Ok(())
     }
     /// Write the document as it stands at `version`/`epoch` and make it the
@@ -164,6 +164,13 @@ pub struct RoomConfig {
     /// The same in bytes of journal records appended since the last base.
     /// `0` disables the byte threshold.
     pub forced_commit_bytes: u64,
+    /// Compact a room whose journal has not grown past either threshold but has
+    /// seen no accepted operation for this long: a small journal that nobody is
+    /// editing would otherwise wait for a join or the last leave. "Idle" is the
+    /// time since the newest journaled operation, kept as room state (a
+    /// reconnect does not reset it) and read back from the journal's records
+    /// after a restart. `0` disables the time threshold.
+    pub forced_commit_idle_secs: u64,
 }
 
 impl Default for RoomConfig {
@@ -178,6 +185,10 @@ impl Default for RoomConfig {
             // first, instead of waiting for the last client to leave.
             forced_commit_ops: 2_000,
             forced_commit_bytes: 8 << 20,
+            // Five minutes without an accepted operation: a comment written and
+            // then left alone reaches the cabinet without waiting for a join or
+            // for the last participant to leave.
+            forced_commit_idle_secs: 300,
         }
     }
 }
@@ -224,6 +235,12 @@ pub struct Room<A: Adapter> {
     /// serialises them. An estimate of the on-disk journal, kept by the room so
     /// the threshold does not need a `stat` per operation.
     journal_bytes: u64,
+    /// When the newest journaled operation was accepted, in wall-clock
+    /// milliseconds. `None` when the journal is empty (the base has everything)
+    /// or when a replayed record predates timestamps. This is room state, not
+    /// connection state: a reconnect leaves it alone, and [`Self::replay`] reads
+    /// it back from the journal after a restart.
+    last_activity_ms: Option<u64>,
     applied_order: VecDeque<String>,
     applied: HashMap<String, Applied>,
     /// Set when the adapter could not persist an accepted operation. The
@@ -268,6 +285,7 @@ impl<A: Adapter> Room<A> {
             committed_version: version,
             base_version: version,
             journal_bytes: 0,
+            last_activity_ms: None,
             applied_order: VecDeque::new(),
             applied: HashMap::new(),
             poisoned: None,
@@ -466,15 +484,16 @@ impl<A: Adapter> Room<A> {
         // lose the document's last edits, but never one the client was told
         // about. The adapter has already changed the document, so a failure
         // here cannot be retried on top of it.
-        if let Err(e) = self.adapter.record(self.version, actor, &applied.op) {
+        if let Err(e) = self.adapter.record(self.version, actor, &applied.op, now_ms) {
             self.poisoned = Some(e.message.clone());
             let hint = Some(VersionHint { version: self.version, epoch: self.epoch });
             return Err(Rejected { op_id: applied.op_id, code: ErrorCode::Internal, retryable: false, hint, message: e.message });
         }
         // The record is on disk now: it counts towards the forced-commit
-        // threshold. Counting after `record` keeps a poisoned room from
+        // thresholds. Counting after `record` keeps a poisoned room from
         // claiming bytes the journal does not hold.
-        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(self.version, actor, &applied.op));
+        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(self.version, actor, &applied.op, now_ms));
+        self.last_activity_ms = Some(now_ms);
         Ok(applied)
     }
 
@@ -497,7 +516,13 @@ impl<A: Adapter> Room<A> {
     /// journal and the base disagree about the document). The adapter's
     /// document is at the base, so its epoch is advanced by the replayed
     /// structural operations, not by the caller.
-    pub fn replay(&mut self, actor: ActorId, op: Op, version: u64) -> Result<(), ServerError> {
+    ///
+    /// `recorded_ms` is the wall-clock time the record was appended (the
+    /// journal's `ms`). It is what makes the idle threshold a state that
+    /// survives a restart: the room re-arms its clock from the newest entry
+    /// instead of starting at zero. An older journal without timestamps passes
+    /// `0`, which arms nothing until the next operation.
+    pub fn replay(&mut self, actor: ActorId, op: Op, version: u64, recorded_ms: u64) -> Result<(), ServerError> {
         if version != self.version.saturating_add(1) {
             return Err(server_error(ErrorCode::Invalid, format!("the journal jumps from version {} to {version}", self.version), false));
         }
@@ -514,7 +539,10 @@ impl<A: Adapter> Room<A> {
         }
         self.version = version;
         self.epoch = outcome.epoch;
-        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(version, &actor, &outcome.op));
+        self.journal_bytes = self.journal_bytes.saturating_add(journal_line_bytes(version, &actor, &outcome.op, recorded_ms));
+        if recorded_ms > 0 {
+            self.last_activity_ms = Some(recorded_ms);
+        }
         let applied = Applied { op_id: op.op_id.clone(), actor_id: actor, version, epoch: self.epoch, op: outcome.op, result: outcome.result };
         if let Ok(op_value) = serde_json::to_value(&applied.op) {
             self.journal.push_back(JournalEntry { version, op: op_value });
@@ -598,7 +626,14 @@ impl<A: Adapter> Room<A> {
     /// (RFC §4.6, limitation 10). `publishing` is deliberately ignored: the
     /// caller retries when another publication is in flight, and a refused
     /// commit leaves the threshold crossed so the next call tries again.
-    pub fn forced_commit_due(&self) -> bool {
+    ///
+    /// `now_ms` is the caller's wall clock. The operation and byte thresholds
+    /// are counts; the time threshold is the idle time of the journal — the
+    /// newest accepted operation is `forced_commit_idle_secs` old and nobody has
+    /// added to it since. It needs a non-empty journal: a room whose base is
+    /// written but not published is dirty without journal work, and republishing
+    /// that base is the queued publication's job, not a compaction.
+    pub fn forced_commit_due(&self, now_ms: u64) -> bool {
         if self.conflict.is_some() {
             // The cabinet moved on: only a re-seed can resolve it, and a commit
             // storm would not. The room stays readable and the journal keeps the
@@ -606,8 +641,10 @@ impl<A: Adapter> Room<A> {
             return false;
         }
         let ops = self.version.saturating_sub(self.base_version);
+        let idle_ms = self.config.forced_commit_idle_secs.saturating_mul(1_000);
         (self.config.forced_commit_ops > 0 && ops >= self.config.forced_commit_ops)
             || (self.config.forced_commit_bytes > 0 && self.journal_bytes >= self.config.forced_commit_bytes)
+            || (idle_ms > 0 && ops > 0 && self.last_activity_ms.is_some_and(|last| now_ms.saturating_sub(last) >= idle_ms))
     }
 
     /// Declare which version the cabinet already holds. A room resumed from a
@@ -771,6 +808,7 @@ impl<A: Adapter> Room<A> {
         // journal starts empty whatever the publication does next.
         self.base_version = version;
         self.journal_bytes = 0;
+        self.last_activity_ms = None;
         Ok(Commit {
             result: CommitResult { version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict },
             publication: self.adapter.take_publication(),
@@ -814,15 +852,16 @@ fn is_retryable(outcome: &PublishOutcome) -> bool {
 }
 
 /// The size of the line the durable adapter writes for one accepted operation:
-/// `{"version":N,"actor":"…","op":{…}}` plus the newline
+/// `{"version":N,"actor":"…","op":{…},"ms":T}` plus the newline
 /// (`collab_pdf::store::JournalRecord`). The room keeps a byte counter so the
 /// forced-commit threshold costs no `stat` per operation; the fields and their
 /// values are the ones the adapter serialises, so the sum matches the file.
-fn journal_line_bytes(version: u64, actor: &ActorId, op: &Op) -> u64 {
+fn journal_line_bytes(version: u64, actor: &ActorId, op: &Op, recorded_ms: u64) -> u64 {
     serde_json::to_vec(&serde_json::json!({
         "version": version,
         "actor": actor.as_str(),
         "op": op,
+        "ms": recorded_ms,
     }))
     .map(|line| line.len() as u64 + 1)
     .unwrap_or(0)
@@ -867,7 +906,7 @@ mod tests {
             Ok(ApplyOutcome { result: json!({"n": self.applied}), op: op.clone(), epoch: self.epoch })
         }
 
-        fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
+        fn record(&mut self, version: u64, actor: &ActorId, op: &Op, _recorded_ms: u64) -> Result<(), AdapterError> {
             if let Some(message) = self.record_error {
                 return Err(AdapterError::new(ErrorCode::Internal, message, false));
             }
@@ -1506,8 +1545,8 @@ mod tests {
     fn replay_rebuilds_the_head_epoch_and_the_retry_window() -> Result<(), Box<dyn std::error::Error>> {
         let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), 0, 0, RoomConfig::default());
         let editor = actor("editor")?;
-        room.replay(editor.clone(), op("a1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1)?;
-        room.replay(editor.clone(), op("s1", OpKind::Structural, ConflictClass::Structural, 1, 0)?, 2)?;
+        room.replay(editor.clone(), op("a1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1, 0)?;
+        room.replay(editor.clone(), op("s1", OpKind::Structural, ConflictClass::Structural, 1, 0)?, 2, 0)?;
         assert_eq!(room.version(), 2);
         assert_eq!(room.epoch(), 1);
         assert_eq!(room.journal_len(), 2);
@@ -1528,10 +1567,10 @@ mod tests {
     fn a_journal_gap_or_a_foreign_document_is_refused() -> Result<(), Box<dyn std::error::Error>> {
         let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), 4, 2, RoomConfig::default());
         let editor = actor("editor")?;
-        assert!(room.replay(editor.clone(), op("a2", OpKind::Primitive, ConflictClass::Merge, 4, 2)?, 3).is_err(), "version 3 is behind the base");
+        assert!(room.replay(editor.clone(), op("a2", OpKind::Primitive, ConflictClass::Merge, 4, 2)?, 3, 0).is_err(), "version 3 is behind the base");
         let mut foreign = op("a5", OpKind::Primitive, ConflictClass::Merge, 4, 2)?;
         foreign.doc = DocKey::new("file-2")?;
-        assert!(room.replay(editor, foreign, 5).is_err());
+        assert!(room.replay(editor, foreign, 5, 0).is_err());
         assert_eq!(room.version(), 4);
         Ok(())
     }
@@ -1548,21 +1587,77 @@ mod tests {
         let editor = actor("editor")?;
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
         room.apply(&editor, &op("f1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
-        assert!(!room.forced_commit_due(), "one operation is below the threshold");
+        assert!(!room.forced_commit_due(0), "one operation is below the threshold");
         room.apply(&editor, &op("f2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
-        assert!(room.forced_commit_due(), "the journal reached the operation threshold");
+        assert!(room.forced_commit_due(0), "the journal reached the operation threshold");
 
         let commit = room.commit_now()?;
         let outcome = commit.publish();
         room.finish(commit, outcome)?;
-        assert!(!room.forced_commit_due(), "the base contains both operations, so the journal is empty again");
+        assert!(!room.forced_commit_due(0), "the base contains both operations, so the journal is empty again");
         assert_eq!(room.version(), 2);
 
         // The counter is real state, not a one-shot latch: the next two
         // operations fill the journal again.
         room.apply(&editor, &op("f3", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
         room.apply(&editor, &op("f4", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
-        assert!(room.forced_commit_due());
+        assert!(room.forced_commit_due(0));
+        Ok(())
+    }
+
+    #[test]
+    fn an_idle_journal_compacts_without_a_new_edit_and_a_reconnect_keeps_its_clock() -> Result<(), Box<dyn std::error::Error>> {
+        let config = RoomConfig { forced_commit_ops: 1_000, forced_commit_bytes: 0, forced_commit_idle_secs: 120, ..RoomConfig::default() };
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), config);
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 1_000)?;
+        room.apply(&editor, &op("i1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1_000)?;
+        // One operation, far below the operation and byte thresholds: only time
+        // can make this room compact itself.
+        assert!(!room.forced_commit_due(1_000 + 119_999), "less than the idle time has passed");
+
+        // A reconnect is not an edit: the clock belongs to the journal, so it
+        // keeps running from the operation, not from the join.
+        room.disconnect(&editor);
+        room.hello(editor.clone(), Role::Editor, &hello, 60_000)?;
+        assert!(!room.forced_commit_due(60_000), "the rejoined room is still within its idle window");
+        assert!(room.forced_commit_due(1_000 + 120_000), "the journal has been idle long enough");
+
+        // The compaction writes the base and empties the journal: nothing is
+        // due until somebody edits again.
+        let commit = room.commit_now()?;
+        let outcome = commit.publish();
+        room.finish(commit, outcome)?;
+        assert!(!room.forced_commit_due(1_000 + 10 * 120_000), "an empty journal has no idle clock");
+
+        // `0` disables the time threshold; the operation count still works.
+        let mut off = Room::new(
+            SessionId::new("session-2")?,
+            DocKey::new("file-1")?,
+            Fake::new(),
+            RoomConfig { forced_commit_ops: 0, forced_commit_bytes: 0, forced_commit_idle_secs: 0, ..RoomConfig::default() },
+        );
+        off.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        off.apply(&editor, &op("i2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert!(!off.forced_commit_due(u64::MAX), "a disabled time threshold never fires");
+        Ok(())
+    }
+
+    #[test]
+    fn a_replayed_journal_carries_its_idle_clock_across_a_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let config = RoomConfig { forced_commit_ops: 1_000, forced_commit_bytes: 0, forced_commit_idle_secs: 120, ..RoomConfig::default() };
+        let editor = actor("editor")?;
+        let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), 0, 0, config.clone());
+        room.replay(editor.clone(), op("r1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1, 5_000)?;
+        assert!(!room.forced_commit_due(5_000 + 119_999), "the restart did not reset the clock to zero");
+        assert!(room.forced_commit_due(5_000 + 120_000), "the record's timestamp is the idle start");
+
+        // A journal written before records carried timestamps arms nothing:
+        // the next edit starts the clock, and an operator can still commit.
+        let mut old = Room::resume(SessionId::new("session-2")?, DocKey::new("file-1")?, Fake::new(), 0, 0, config);
+        old.replay(editor, op("r2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1, 0)?;
+        assert!(!old.forced_commit_due(u64::MAX / 2), "a record without a timestamp does not guess one");
         Ok(())
     }
 
@@ -1580,7 +1675,7 @@ mod tests {
         let first = op("b1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
         room.apply(&editor, &first, 0)?;
         assert!(room.journal_bytes() > 0, "the room counts the line the adapter appended");
-        assert!(room.forced_commit_due(), "one byte is past a one-byte threshold");
+        assert!(room.forced_commit_due(0), "one byte is past a one-byte threshold");
         Ok(())
     }
 
@@ -1611,10 +1706,10 @@ mod tests {
         let editor = actor("editor")?;
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
         room.apply(&editor, &op("c1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
-        assert!(room.forced_commit_due());
+        assert!(room.forced_commit_due(0));
         assert!(room.commit_now().is_err());
         assert_eq!(room.conflict(), Some("the cabinet holds another version"));
-        assert!(!room.forced_commit_due(), "a conflict cannot be committed away: a retry storm would help nobody");
+        assert!(!room.forced_commit_due(0), "a conflict cannot be committed away: a retry storm would help nobody");
         assert_eq!(room.version(), 1, "the edit and its journal entry are still there for an operator");
         Ok(())
     }
@@ -1637,7 +1732,7 @@ mod tests {
         // room answers `busy` until that publication finishes.
         let commit = room.commit(&editor, 1)?;
         room.apply(&editor, &op("p2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
-        assert!(room.forced_commit_due());
+        assert!(room.forced_commit_due(0));
         assert!(matches!(room.commit_now(), Err(e) if e.code == ErrorCode::Busy && e.retryable));
         let outcome = commit.publish();
         room.finish(commit, outcome)?;
@@ -1646,7 +1741,7 @@ mod tests {
         let forced = room.commit_now()?;
         let outcome = forced.publish();
         room.finish(forced, outcome)?;
-        assert!(!room.forced_commit_due());
+        assert!(!room.forced_commit_due(0));
         Ok(())
     }
 }
