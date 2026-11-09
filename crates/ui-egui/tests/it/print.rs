@@ -585,6 +585,92 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
     h.get_by_label_contains(note);
 }
 
+/// A list that already says which drivers take two-sided settings is used as it is: no driver is
+/// asked again, whichever printer is picked.
+#[test]
+fn a_listed_two_sided_answer_is_not_asked_again() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        None
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h.state_mut().print_draft.printer = Some("Office PS".into());
+    h.run_steps(4);
+    h.get_by_label_contains("doesn't take two-sided settings");
+    assert!(asked.lock().unwrap().is_empty(), "the list's answers are used: {:?}", asked.lock().unwrap());
+}
+
+/// Reads that hang (printers Windows can't reach) don't pile up as the user picks printer after
+/// printer: at most four run at once, and the printer picked is asked once one finishes.
+#[test]
+fn hanging_two_sided_reads_are_capped() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let names: Vec<String> = (1..=6).map(|i| format!("Away WSD {i}")).collect();
+    let listed = names.clone();
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(move || {
+        listed.iter().enumerate().map(|(i, n)| Printer { name: n.clone(), default: i == 0, two_sided: None, description: String::new() }).collect()
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let released = Arc::new(AtomicBool::new(false));
+    let (log, gate) = (asked.clone(), released.clone());
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        // Hold the read like an unreachable printer, until the test lets it go (10 s at most).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !gate.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Some(true)
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for name in &names {
+        h.state_mut().print_draft.printer = Some(name.clone());
+        h.run_steps(2);
+    }
+    let started = |a: &Arc<Mutex<Vec<String>>>| a.lock().unwrap().len();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while started(&asked) < 4 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    let mut first = asked.lock().unwrap().clone();
+    first.sort();
+    assert_eq!(first, names[..4], "four reads at once, the rest wait");
+    released.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !h.state().print_draft.two_sided.contains_key(&names[5]) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.two_sided.get(&names[5]), Some(&Some(true)), "the printer picked is asked once a read finishes");
+    assert!(!h.state().print_draft.two_sided.contains_key(&names[4]), "a printer no longer picked isn't asked");
+}
+
 /// Print as image (Acrobat's Advanced Print Setup) is a choice in the Print dialog's Advanced
 /// section: the saved print-ready PDF carries the page as a picture, no text.
 #[test]

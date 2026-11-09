@@ -25,6 +25,11 @@ pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PRE
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
 /// the UI thread); further pages print whole.
 pub(crate) const LABEL_CROP_PAGES: usize = 50;
+/// Two-sided reads running at once. A driver Windows can't reach holds its read for about 48 s,
+/// so picking printer after printer could otherwise start a thread for each; past this, the
+/// printer picked is asked once a read finishes.
+#[cfg(not(target_arch = "wasm32"))]
+const TWO_SIDED_READS: usize = 4;
 
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
 /// CUPS' driverless discovery can wait on the network. Without a source the dialog reads them as
@@ -399,7 +404,7 @@ impl PdfCraftApp {
     }
 
     /// Pick up two-sided answers that arrived, and ask for the picked printer's when the list
-    /// doesn't say and nobody has asked yet.
+    /// doesn't say, nobody has asked yet and fewer than [`TWO_SIDED_READS`] reads are running.
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_two_sided(&mut self) {
         let d = &mut self.print_draft;
@@ -422,6 +427,7 @@ impl PdfCraftApp {
         if printer.two_sided.is_some()
             || d.two_sided.contains_key(&printer.name)
             || self.print_tasks.two_sided.iter().any(|(n, _)| *n == printer.name)
+            || self.print_tasks.two_sided.len() >= TWO_SIDED_READS
         {
             return;
         }
