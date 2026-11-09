@@ -1,4 +1,4 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
+use super::layout::{Flow, LayoutDeadline, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache, InterpreterSettings,
     InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt,
@@ -114,8 +114,13 @@ const MAX_RECOVERED_GLYPHS: usize = 1 << 20;
 /// recovered one.
 pub(super) const RECOVERY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(crate::raster::STUCK_AFTER.as_secs() / 2);
 
+/// When the recovered layout gives up ([`LayoutDeadline`]), counted from the start of the page's
+/// text extraction: three quarters of the render pool's watchdog, so the request still answers,
+/// with the strict layer alone, before the watchdog gives up on it.
+pub(super) const RECOVERY_LAYOUT_END: std::time::Duration = std::time::Duration::from_secs(crate::raster::STUCK_AFTER.as_secs() * 3 / 4);
+
 /// When a page's text extraction started, to hold the recovered layout to [`RECOVERY_DEADLINE`]
-/// (wasm has no clock and no watchdog).
+/// and [`RECOVERY_LAYOUT_END`] (wasm has no clock and no watchdog).
 #[derive(Clone, Copy)]
 struct Started(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
 
@@ -125,6 +130,14 @@ impl Started {
         return Self(std::time::Instant::now());
         #[cfg(target_arch = "wasm32")]
         return Self();
+    }
+
+    /// When the recovered layout gives up: [`RECOVERY_LAYOUT_END`] after the start (none on wasm).
+    fn layout_end(self) -> Option<std::time::Instant> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.0.checked_add(RECOVERY_LAYOUT_END);
+        #[cfg(target_arch = "wasm32")]
+        return None;
     }
 
     /// Whether [`RECOVERY_DEADLINE`] has passed since (never on wasm).
@@ -973,7 +986,12 @@ fn extract_page_with(
         // doubles one goes instead ([`drop_doubles`], and `arrange` with `protected`).
         let (combined, source) = drop_doubles(combined, source, &strict_at, &mut work_left);
         let protected: Vec<bool> = source.iter().map(|(j, _)| j.is_some()).collect();
+        // A layout that runs out of time is discarded: the page keeps its strict layer alone.
+        let deadline = LayoutDeadline::until(started.layout_end());
         let (mut text, order) = lay_out(combined, w, h, &protected);
+        if deadline.gave_up() {
+            return None;
+        }
         text.truncated = truncated;
         let mut strict_index = Vec::with_capacity(order.len());
         let mut recovery = Vec::with_capacity(order.len());
@@ -985,9 +1003,9 @@ fn extract_page_with(
             recovery.push(r);
             style.push(s);
         }
-        RecoveredText::new(std::sync::Arc::new(text), recovery, strict_index, style, strict_order.len())
+        Some(RecoveredText::new(std::sync::Arc::new(text), recovery, strict_index, style, strict_order.len()))
     }));
-    Ok((strict, recovered.ok()))
+    Ok((strict, recovered.ok().flatten()))
 }
 
 /// Where a glyph of the recovered layer comes from: its strict glyph (index into the strict

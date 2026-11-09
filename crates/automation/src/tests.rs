@@ -735,21 +735,28 @@ fn html_extraction_reads_each_page_in_one_pass() {
 }
 
 /// Review on #6733: a second `text_extract` with HTML reuses the pages' layers read by the first,
-/// and gives the same result.
+/// and gives the same result; after an edit, the new version of the document is read again
+/// (every page, as the strict text cache drops a changed document's pages) and the result shows
+/// the edit.
 #[test]
-fn html_extraction_reuses_the_layers_it_read() {
+fn html_extraction_reuses_the_layers_it_read_until_an_edit() {
     let mut a = Automation::new();
     let id = search_document(&mut a, 3);
     let args = json!({ "doc": id.0, "format": "html" });
-    let mut asked = Vec::new();
+    let asked = std::cell::RefCell::new(Vec::new());
     let mut count = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
-        asked.extend_from_slice(pages);
+        asked.borrow_mut().extend_from_slice(pages);
         pages::extract_recovering(bytes, password, pages)
     };
     let first = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
     let again = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
-    assert_eq!(asked, [0, 1, 2], "each page is read once");
+    assert_eq!(*asked.borrow(), [0, 1, 2], "each page is read once");
     assert_eq!(first, again);
+    json(&mut a, "page_delete", json!({ "doc": id.0, "pages": [1] }));
+    let edited = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
+    assert_eq!(*asked.borrow(), [0, 1, 2, 0, 1], "the edited document is read again");
+    let texts: Vec<&Value> = edited["pages"].as_array().unwrap().iter().map(|p| &p["text"]).collect();
+    assert_eq!(texts, ["Page 2", "Page 3"]);
 }
 
 /// Review finding: a page whose recovered-text pass failed fails `text_extract` with HTML, as a
