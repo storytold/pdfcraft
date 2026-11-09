@@ -1,6 +1,6 @@
 use super::common::{
     FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
-    walk_xfdf,
+    walk_xfdf, xml_nesting_depth,
 };
 use super::*;
 
@@ -99,6 +99,226 @@ fn read_own_keys(node: roxmltree::Node, d: &mut Dict) {
     }
 }
 
+/// Rich text deeper than this is written as text rather than as markup, so the XFDF it goes into
+/// stays well inside the nesting the reader accepts (`MAX_XML_DEPTH`).
+const MAX_RICH_DEPTH: usize = 512;
+
+/// Rich text (`/RC`) as `<contents-richtext>` holds it: its root element alone (no XML
+/// declaration), when the text is well-formed XML; `None` otherwise.
+fn rich_text_element(rc: &str) -> Option<&str> {
+    let t = rc.trim_start_matches('\u{feff}');
+    if xml_nesting_depth(t) > MAX_RICH_DEPTH {
+        return None;
+    }
+    let parsed = parse_form_xml(t).ok()?;
+    t.get(parsed.root_element().range())
+}
+
+/// The formatting attributes of a comment: XFDF 3.0 "Border style attributes" (`width`, `style`,
+/// `dashes`), "Border effect attributes" (`style="cloudy"`, `intensity`), and the free text
+/// (`rotation`, `justification`), stamp (`rotation`), circle/square/caret (`fringe`), line
+/// (`leaderLength`, `leaderExtend`, `leader-offset`, `caption`, `caption-style`,
+/// `caption-offset-h`/`-v`), caret (`symbol`) and redaction (`overlay-text`,
+/// `overlay-text-repeat`, `justification`) attributes.
+fn format_attrs(doc: &Document, d: &Dict, sub: &[u8], attrs: &mut String) {
+    let num = |k: &[u8]| d.get(k).and_then(|o| doc.resolve(o).as_f64()).filter(|v| v.is_finite());
+    let name = |k: &[u8]| d.get(k).and_then(|o| doc.resolve(o).as_name().map(<[u8]>::to_vec));
+    let list = |v: &[f64]| v.iter().map(|x| n(*x)).collect::<Vec<_>>().join(",");
+    // The border: /BS, or (without one) the older /Border array [h v width dashes].
+    let (width, style, dashes) = match d.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned()) {
+        Some(bs) => (
+            bs.get(b"W").and_then(|w| doc.resolve(w).as_f64()),
+            bs.get(b"S").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec)),
+            nums_of(doc, bs.get(b"D")),
+        ),
+        None => {
+            let border = d.get(b"Border").map(|b| doc.resolve(b)).and_then(|b| b.as_array().cloned()).unwrap_or_default();
+            let dash = border.get(3).map(|x| nums_of(doc, Some(x))).unwrap_or_default();
+            (border.get(2).and_then(|w| doc.resolve(w).as_f64()), (!dash.is_empty()).then(|| b"D".to_vec()), dash)
+        }
+    };
+    if let Some(w) = width.filter(|w| w.is_finite()) {
+        let _ = write!(attrs, " width=\"{}\"", n(w));
+    }
+    // One `style` attribute names both: a cloudy border effect (/BE /S /C) takes it.
+    let cloudy = d.get(b"BE").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).filter(|b| b.name(b"S") == Some(b"C".as_slice()));
+    if let Some(be) = cloudy {
+        attrs.push_str(" style=\"cloudy\"");
+        if let Some(i) = be.get(b"I").and_then(|i| doc.resolve(i).as_f64()).filter(|i| i.is_finite()) {
+            let _ = write!(attrs, " intensity=\"{}\"", n(i));
+        }
+    } else if let Some(s) = match style.as_deref() {
+        Some(b"D") => Some("dash"),
+        Some(b"B") => Some("bevelled"),
+        Some(b"I") => Some("inset"),
+        Some(b"U") => Some("underline"),
+        _ => None,
+    } {
+        let _ = write!(attrs, " style=\"{s}\"");
+    }
+    // The dash array (/D) whatever the style, as `dashes` maps it; only `style="dash"` draws it.
+    if !dashes.is_empty() && dashes.iter().all(|v| v.is_finite()) {
+        let _ = write!(attrs, " dashes=\"{}\"", list(&dashes));
+    }
+    if let Some(r) = d.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()) {
+        let _ = write!(attrs, " rotation=\"{r}\"");
+    }
+    if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
+        // Free text names its justification; a redaction mark gives the number (XFDF 3.0).
+        match (sub, q) {
+            (b"FreeText", 0) => attrs.push_str(" justification=\"left\""),
+            (b"FreeText", 1) => attrs.push_str(" justification=\"centered\""),
+            (b"FreeText", 2) => attrs.push_str(" justification=\"right\""),
+            (b"FreeText", _) => {}
+            (_, q) => {
+                let _ = write!(attrs, " justification=\"{q}\"");
+            }
+        }
+    }
+    let rd = nums_of(doc, d.get(b"RD"));
+    if rd.len() == 4 && rd.iter().all(|v| v.is_finite()) {
+        let _ = write!(attrs, " fringe=\"{}\"", list(&rd));
+    }
+    if let Some(ll) = num(b"LL") {
+        let _ = write!(attrs, " leaderLength=\"{}\"", n(ll));
+    }
+    if let Some(lle) = num(b"LLE") {
+        let _ = write!(attrs, " leaderExtend=\"{}\"", n(lle));
+    }
+    if let Some(llo) = num(b"LLO") {
+        let _ = write!(attrs, " leader-offset=\"{}\"", n(llo));
+    }
+    if let Some(Object::Bool(cap)) = d.get(b"Cap").map(|o| doc.resolve(o)).as_deref() {
+        let _ = write!(attrs, " caption=\"{}\"", if *cap { "yes" } else { "no" });
+    }
+    if let Some(cp) = name(b"CP") {
+        let _ = write!(attrs, " caption-style=\"{}\"", esc(&String::from_utf8_lossy(&cp)));
+    }
+    if let [h, v] = nums_of(doc, d.get(b"CO")).as_slice()
+        && h.is_finite()
+        && v.is_finite()
+    {
+        let _ = write!(attrs, " caption-offset-h=\"{}\" caption-offset-v=\"{}\"", n(*h), n(*v));
+    }
+    match name(b"Sy").as_deref() {
+        Some(b"P") => attrs.push_str(" symbol=\"paragraph\""),
+        Some(b"None") => attrs.push_str(" symbol=\"none\""),
+        _ => {}
+    }
+    if let Some(t) = text_of(doc, d, b"OverlayText") {
+        let _ = write!(attrs, " overlay-text=\"{}\"", esc(&t));
+    }
+    if let Some(Object::Bool(repeat)) = d.get(b"Repeat").map(|o| doc.resolve(o)).as_deref() {
+        let _ = write!(attrs, " overlay-text-repeat=\"{repeat}\"");
+    }
+}
+
+/// The formatting attributes of an XFDF comment element back as dictionary entries (see
+/// [`format_attrs`]). Values that are not numbers, or out of range, are left out.
+fn read_format(node: roxmltree::Node, d: &mut Dict) {
+    let num = |a: &str| node.attribute(a).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let style = node.attribute("style").map(str::trim);
+    let dashes = node.attribute("dashes").map(csv).filter(|v| !v.is_empty() && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
+    let bs_style = match style {
+        Some("dash") => Some("D"),
+        Some("bevelled" | "beveled") => Some("B"),
+        Some("inset") => Some("I"),
+        Some("underline") => Some("U"),
+        Some("solid") => Some("S"),
+        _ => None,
+    };
+    let width = num("width");
+    if width.is_some() || bs_style.is_some() || dashes.is_some() {
+        let mut bs = Dict::new();
+        // XFDF 3.0: the width is 1 and the style solid unless given.
+        bs.set(b"W".to_vec(), Object::Real(width.unwrap_or(1.0).max(0.0)));
+        bs.set(b"S".to_vec(), Object::name(bs_style.unwrap_or("S")));
+        if let Some(dv) = &dashes {
+            bs.set(b"D".to_vec(), arr(dv));
+        }
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    if style == Some("cloudy") {
+        let mut be = Dict::new();
+        be.set(b"S".to_vec(), Object::name("C"));
+        let intensity = num("intensity").unwrap_or(1.0);
+        be.set(b"I".to_vec(), Object::Real(intensity.clamp(0.0, 2.0)));
+        d.set(b"BE".to_vec(), Object::Dict(be));
+    }
+    if let Some(r) = node.attribute("rotation").and_then(|r| r.trim().parse::<i32>().ok()) {
+        d.set(b"Rotate".to_vec(), Object::Int(i64::from(r)));
+    }
+    let q = match node.attribute("justification").map(str::trim) {
+        Some("left" | "0") => Some(0),
+        Some("centered" | "center" | "1") => Some(1),
+        Some("right" | "2") => Some(2),
+        _ => None,
+    };
+    if let Some(q) = q {
+        d.set(b"Q".to_vec(), Object::Int(q));
+    }
+    if let Some(rd) = node.attribute("fringe").map(csv).filter(|r| r.len() == 4) {
+        d.set(b"RD".to_vec(), arr(&rd));
+    }
+    if let Some(ll) = num("leaderLength") {
+        d.set(b"LL".to_vec(), Object::Real(ll));
+    }
+    if let Some(lle) = num("leaderExtend").filter(|v| *v >= 0.0) {
+        d.set(b"LLE".to_vec(), Object::Real(lle));
+    }
+    if let Some(llo) = num("leader-offset").filter(|v| *v >= 0.0) {
+        d.set(b"LLO".to_vec(), Object::Real(llo));
+    }
+    match node.attribute("caption").map(str::trim) {
+        Some("yes" | "true") => d.set(b"Cap".to_vec(), Object::Bool(true)),
+        Some("no" | "false") => d.set(b"Cap".to_vec(), Object::Bool(false)),
+        _ => {}
+    }
+    if let Some(cp) = node.attribute("caption-style").map(str::trim).filter(|c| matches!(*c, "Inline" | "Top")) {
+        d.set(b"CP".to_vec(), Object::name(cp));
+    }
+    let (h, v) = (num("caption-offset-h"), num("caption-offset-v"));
+    if h.is_some() || v.is_some() {
+        d.set(b"CO".to_vec(), arr(&[h.unwrap_or(0.0), v.unwrap_or(0.0)]));
+    }
+    match node.attribute("symbol").map(str::trim) {
+        Some("paragraph" | "P") => d.set(b"Sy".to_vec(), Object::name("P")),
+        Some("none" | "None") => d.set(b"Sy".to_vec(), Object::name("None")),
+        _ => {}
+    }
+    if let Some(t) = node.attribute("overlay-text") {
+        d.set(b"OverlayText".to_vec(), PdfString::text(t));
+    }
+    match node.attribute("overlay-text-repeat").map(str::trim) {
+        Some("true" | "yes") => d.set(b"Repeat".to_vec(), Object::Bool(true)),
+        Some("false" | "no") => d.set(b"Repeat".to_vec(), Object::Bool(false)),
+        _ => {}
+    }
+}
+
+/// A `<contents-richtext>` element's plain text, a line per paragraph: what `/Contents` gets
+/// when the element comes without `<contents>`.
+fn rich_plain(node: roxmltree::Node) -> String {
+    let mut out = String::new();
+    for n in node.descendants() {
+        // A line break is a line of its own, so two in a row leave a blank line; a paragraph
+        // starts on a new line.
+        if n.is_element() && n.tag_name().name() == "br" {
+            out.push('\r');
+        } else if n.is_element() && matches!(n.tag_name().name(), "p" | "div" | "li") {
+            if !out.is_empty() && !out.ends_with('\r') {
+                out.push('\r');
+            }
+        } else if let Some(t) = n.text().filter(|_| n.is_text()) {
+            // Indentation between elements is not text.
+            if !(t.trim().is_empty() && t.contains('\n')) {
+                out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
+            }
+        }
+    }
+    out.trim_end_matches('\r').to_string()
+}
+
 /// The name of every annotation, for `inreplyto`: its /NM, or, for one without one (other tools
 /// leave /NM out) that is in `only` or that another annotation replies to or is grouped under
 /// (`/IRT`, ISO 32000-2 §12.5.6.2; a Replace Text pair is such a group), a name new to the
@@ -143,14 +363,41 @@ fn annotation_names(doc: &Document, pages: &[pdfcraft_model::Page], only: Option
     names
 }
 
-/// The elements inside a comment's XFDF element: its text, default appearance, ink, vertices
-/// and pop-up (on page `pi`).
-fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize) {
-    if let Some(c) = text_of(doc, d, b"Contents") {
-        let _ = write!(out, "<contents>{}</contents>", esc(&c));
+/// The elements inside a comment's XFDF element: its text (plain and rich), default appearance
+/// and style, ink, vertices, appearance (with `ap`) and pop-up (on page `pi`).
+fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap: Option<&mut usize>) {
+    let rc = text_of(doc, d, b"RC");
+    match text_of(doc, d, b"Contents") {
+        Some(c) => {
+            let _ = write!(out, "<contents>{}</contents>", esc(&c));
+        }
+        // Rich text written as text (below) is read back as rich text only beside `<contents>`;
+        // alone it would become the comment's plain text.
+        None if rc.as_deref().is_some_and(|rc| rich_text_element(rc).is_none()) => out.push_str("<contents></contents>"),
+        None => {}
+    }
+    if let Some(rc) = rc {
+        match rich_text_element(&rc) {
+            // Rich text is an XML (XHTML) document (ISO 32000-2 Table 172, RC): its element goes in as markup.
+            Some(markup) => {
+                let _ = write!(out, "<contents-richtext>{markup}</contents-richtext>");
+            }
+            // Text that is not well-formed XML goes in as text, so nothing is lost.
+            None => {
+                let _ = write!(out, "<contents-richtext>{}</contents-richtext>", esc(&rc));
+            }
+        }
     }
     if let Some(da) = text_of(doc, d, b"DA") {
         let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
+    }
+    if let Some(ds) = text_of(doc, d, b"DS") {
+        let _ = write!(out, "<defaultstyle>{}</defaultstyle>", esc(&ds));
+    }
+    if let Some(budget) = ap
+        && let Some(b64) = super::appearance::encode(doc, d, budget)
+    {
+        let _ = write!(out, "<appearance>{b64}</appearance>");
     }
     let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     if !ink.is_empty() {
@@ -191,6 +438,8 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
     // NM of every annotation, for inreplyto. A selected or replied-to annotation without one
     // (other tools leave /NM out) gets a name for this export, so its replies still find it.
     let names = annotation_names(doc, &pages, only);
+    // What the import reads of appearances, over all of the comments.
+    let mut appearance_budget = super::appearance::MAX_IMPORT_APPEARANCE_BYTES;
     for (pi, p) in pages.iter().enumerate() {
         for (ai, a) in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default().into_iter().enumerate() {
             if only.is_some_and(|only| !only.contains(&(pi, ai))) {
@@ -241,9 +490,7 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
             if let Some(o) = d.get(b"CA").and_then(|o| doc.resolve(o).as_f64()) {
                 let _ = write!(attrs, " opacity=\"{}\"", n(o));
             }
-            if let Some(w) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64))) {
-                let _ = write!(attrs, " width=\"{}\"", n(w));
-            }
+            format_attrs(doc, &d, sub, &mut attrs);
             let quads = nums_of(doc, d.get(b"QuadPoints"));
             if !quads.is_empty() {
                 let _ = write!(attrs, " coords=\"{}\"", quads.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
@@ -262,26 +509,14 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
             let cl = nums_of(doc, d.get(b"CL"));
             if cl.len() == 4 || cl.len() == 6 {
                 let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-                let rd = nums_of(doc, d.get(b"RD"));
-                if rd.len() == 4 {
-                    let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-                }
                 if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
                     let _ = write!(attrs, " head=\"{}\"", esc(&le));
                 }
             }
             // What the comment is meant as (/IT): typewriter text, a callout, a cloud, an arrow.
+            // Written under both spellings XFDF files use for it, `intent` and `IT`.
             if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
-                let _ = write!(attrs, " intent=\"{}\"", esc(&it));
-            }
-            // A cloudy border (/BE /S /C) and how far its arcs bulge.
-            if let Some(be) =
-                d.get(b"BE").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).filter(|b| b.name(b"S") == Some(b"C".as_slice()))
-            {
-                attrs.push_str(" style=\"cloudy\"");
-                if let Some(i) = be.get(b"I").and_then(Object::as_f64) {
-                    let _ = write!(attrs, " intensity=\"{}\"", n(i));
-                }
+                let _ = write!(attrs, " intent=\"{0}\" IT=\"{0}\"", esc(&it));
             }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
                 let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
@@ -290,7 +525,13 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
                 let _ = write!(attrs, " pdfcraft:keys=\"{}\"", esc(&keys));
             }
             let _ = write!(out, "<{tag}{attrs}>");
-            xfdf_annot_children(doc, out, &d, pi);
+            // XFDF 3.0 carries a stamp's appearance, and none for a rect with no area; a copy and
+            // paste (`own`) carries every comment's, so the copy looks the same, except a
+            // redaction mark's, which import never reads (PdfCraft draws the mark) and which would
+            // only use up the budget the others share.
+            let has_area = rect.len() == 4 && rect[0] != rect[2] && rect[1] != rect[3];
+            let carried = has_area && sub != b"Redact" && (own || sub == b"Stamp");
+            xfdf_annot_children(doc, out, &d, pi, carried.then_some(&mut appearance_budget));
             let _ = writeln!(out, "</{tag}>");
         }
     }
@@ -667,12 +908,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     if let Some(o) = node.attribute("opacity").and_then(|o| o.parse::<f64>().ok()) {
         d.set(b"CA".to_vec(), Object::Real(o.clamp(0.0, 1.0)));
     }
-    if let Some(w) = node.attribute("width").and_then(|w| w.parse::<f64>().ok()) {
-        let mut bs = Dict::new();
-        bs.set(b"W".to_vec(), Object::Real(w.max(0.0)));
-        bs.set(b"S".to_vec(), Object::name("S"));
-        d.set(b"BS".to_vec(), Object::Dict(bs));
-    }
+    read_format(node, &mut d);
     if let Some(q) = node.attribute("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));
     }
@@ -688,22 +924,14 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
     }
-    if let Some(it) = node.attribute("intent").filter(|it| !it.is_empty()) {
+    // The intent (/IT), spelt `intent` or `IT`.
+    let intent = node.attribute("intent").filter(|it| !it.is_empty()).or_else(|| node.attribute("IT").filter(|it| !it.is_empty()));
+    if let Some(it) = intent {
         d.set(b"IT".to_vec(), Object::name(it));
-    }
-    if node.attribute("style") == Some("cloudy") {
-        let mut be = Dict::new();
-        be.set(b"S".to_vec(), Object::name("C"));
-        let intensity = node.attribute("intensity").and_then(|i| i.parse::<f64>().ok()).filter(|i| i.is_finite()).unwrap_or(1.0);
-        be.set(b"I".to_vec(), Object::Real(intensity.clamp(0.0, 2.0)));
-        d.set(b"BE".to_vec(), Object::Dict(be));
     }
     if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
         d.set(b"CL".to_vec(), arr(&cl));
-        if let Some(rd) = node.attribute("fringe").map(csv).filter(|r| r.len() == 4) {
-            d.set(b"RD".to_vec(), arr(&rd));
-        }
-        d.set(b"IT".to_vec(), Object::name(node.attribute("intent").unwrap_or("FreeTextCallout")));
+        d.set(b"IT".to_vec(), Object::name(intent.unwrap_or("FreeTextCallout")));
         // A callout's /LE is one name, not the head/tail pair of a line.
         match node.attribute("head") {
             Some(h) => d.set(b"LE".to_vec(), Object::name(h)),
@@ -719,6 +947,9 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             }
             "defaultappearance" => {
                 d.set(b"DA".to_vec(), PdfString::literal(child.text().unwrap_or("").as_bytes().to_vec()));
+            }
+            "defaultstyle" => {
+                d.set(b"DS".to_vec(), PdfString::text(&child.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>()));
             }
             "inklist" => {
                 let list: Vec<Object> = child
@@ -739,9 +970,119 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             _ => {}
         }
     }
+    if let Some(rich) = node.children().find(|c| c.has_tag_name("contents-richtext")) {
+        read_rich_text(rich, node.children().any(|c| c.has_tag_name("contents")), &mut d);
+    }
     read_own_keys(node, &mut d);
     Some(d)
 }
+
+/// `<contents-richtext>` back as `/RC` (XFDF 3.0 "The contents and contents-richtext elements in
+/// annotations"): its markup, as written in the file, after an XML declaration. Plain text in it is the comment's text
+/// (`/Contents`) when the element comes alone; beside `<contents>` it is kept as `/RC` (rich text
+/// PdfCraft exported as text because it was not well-formed XML). Markup without `<contents>`
+/// gives `/Contents` its plain text too, so the comment's text shows where rich text is not read.
+fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
+    let elements: Vec<roxmltree::Node> = rich.children().filter(|c| c.is_element()).collect();
+    let (Some(first), Some(last)) = (elements.first(), elements.last()) else {
+        let text: String = rich.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+        if has_contents {
+            d.set(b"RC".to_vec(), PdfString::text(&text));
+        } else {
+            d.set(b"Contents".to_vec(), PdfString::text(&text.replace("\r\n", "\r").replace('\n', "\r")));
+        }
+        return;
+    };
+    let source = rich.document().input_text();
+    let Some(markup) = source.get(first.range().start..last.range().end) else { return };
+    let markup = match elements.as_slice() {
+        [_] => standalone(rich, markup),
+        _ => markup.to_string(),
+    };
+    // Rich text is an XML document of its own; export left its declaration out.
+    d.set(b"RC".to_vec(), PdfString::text(&format!("<?xml version=\"1.0\"?>{markup}")));
+    if !has_contents {
+        d.set(b"Contents".to_vec(), PdfString::text(&rich_plain(rich)));
+    }
+}
+
+/// Whether start tag `tag` (from `<` up to its closing `>`) declares attribute `name` (white
+/// space may come before the `=`). Attribute values are skipped: `title=" xmlns:b='x'"` declares
+/// nothing.
+fn declares(tag: &str, name: &str) -> bool {
+    let mut quote = None;
+    let mut after_space = false;
+    for (i, c) in tag.char_indices() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if after_space && tag.get(i..).and_then(|rest| rest.strip_prefix(name)).is_some_and(|a| a.trim_start().starts_with('=')) {
+            return true;
+        }
+        after_space = c.is_whitespace();
+    }
+    false
+}
+
+/// Where the start tag at the beginning of `markup` ends: its first `>` outside an attribute
+/// value (the end of `markup` when there is none).
+fn start_tag_end(markup: &str) -> usize {
+    let mut quote = None;
+    for (i, c) in markup.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '>' => return i,
+            None => {}
+        }
+    }
+    markup.len()
+}
+
+/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML
+/// document of its own: the namespaces it inherits from the XFDF around it are declared on it,
+/// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
+/// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
+/// inherited, or when the declarations would not make it parse.
+fn standalone(rich: roxmltree::Node, markup: &str) -> String {
+    // The start tag's name ends at white space, `/` or `>`.
+    let Some(name_end) = markup.get(1..).and_then(|t| t.find(|c: char| c.is_whitespace() || c == '/' || c == '>')).map(|i| i + 1) else {
+        return markup.to_string();
+    };
+    let start_tag = markup.get(..start_tag_end(markup)).unwrap_or(markup);
+    let mut declared = String::new();
+    // The default namespace in scope where the element sits: its own when it has no prefix, and
+    // its unprefixed descendants' when it has one.
+    if let Some(uri) = rich.namespaces().find(|ns| ns.name().is_none()).map(|ns| ns.uri())
+        && !uri.is_empty()
+        && uri != XFDF_NS
+        && !declares(start_tag, "xmlns")
+    {
+        let _ = write!(declared, " xmlns=\"{}\"", esc(uri));
+    }
+    for ns in rich.namespaces() {
+        let Some(prefix) = ns.name() else { continue };
+        if prefix == "xml" || !markup.contains(&format!("{prefix}:")) || declares(start_tag, &format!("xmlns:{prefix}")) {
+            continue;
+        }
+        let _ = write!(declared, " xmlns:{prefix}=\"{}\"", esc(ns.uri()));
+    }
+    if declared.is_empty() {
+        return markup.to_string();
+    }
+    let (Some(head), Some(tail)) = (markup.get(..name_end), markup.get(name_end..)) else { return markup.to_string() };
+    let fixed = format!("{head}{declared}{tail}");
+    if parse_form_xml(&fixed).is_ok() { fixed } else { markup.to_string() }
+}
+
+/// XFDF's own namespace (ISO 19444-1).
+const XFDF_NS: &str = "http://ns.adobe.com/xfdf/";
 
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
 /// reference.
@@ -772,6 +1113,11 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
         // without usable /QuadPoints removes its /Rect, which the outline is then drawn from.
         d.remove(b"CA");
         d.remove(b"ca");
+        // The outline is PdfCraft's own (an appearance the file carries could hide the mark), and
+        // a redaction has no border effect (ISO 32000-2 Table 195 lists none; §12.5.4 gives
+        // /BE to squares, circles, polygons and free text), which the outline could not draw.
+        d.remove(b"AP");
+        d.remove(b"BE");
         let quads_drawable = d.get(b"QuadPoints").and_then(Object::as_array).is_some_and(|q| {
             let v: Vec<f64> = q.iter().filter_map(Object::as_f64).filter(|v| v.is_finite()).collect();
             let (quads, rest) = v.as_chunks::<8>();
@@ -791,7 +1137,32 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
                 }
             }
         }
+        // The outline is drawn inside /Rect: it is grown to hold every quad, so the whole area
+        // the mark removes shows (a /Rect with no area would show none of it).
+        let quads: Vec<f64> =
+            d.get(b"QuadPoints").and_then(Object::as_array).map(|q| q.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
+        if !quads.is_empty() {
+            let rect = rect_strict(doc, d.get(b"Rect"));
+            let start = rect.map(|[x0, y0, x1, y1]| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
+            let bounds = quads
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .fold(start, |b, [x, y]| Some(b.map_or([*x, *y, *x, *y], |[l, bo, r, t]| [l.min(*x), bo.min(*y), r.max(*x), t.max(*y)])));
+            if let Some(b) = bounds
+                && Some(b) != rect
+            {
+                d.set(b"Rect".to_vec(), arr(&b));
+            }
+        }
     }
+    // An appearance the file carries is how the comment looked where it came from, and is kept
+    // (XFDF 3.0 "stamp": it takes precedence over the icon). A redaction mark is always drawn by
+    // PdfCraft, so what it marks for removal is shown.
+    let redact = d.name(b"Subtype") == Some(b"Redact".as_slice());
+    // A redaction mark with an area removes something when applied.
+    let marks = redact && d.contains(b"QuadPoints");
+    let keep_appearance = !redact && super::appearance::has_appearance(doc, &d);
     let nm = d.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text()));
     let annots: Vec<Object> = doc
         .get(page_ref)
@@ -835,8 +1206,17 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
         }
         None => doc.add(Object::Dict(d)),
     };
-    // Our own appearance where we can draw one; others keep none (viewers draw a default).
-    let _ = pdfcraft_annot::set_appearance(doc, r);
+    // Otherwise our own appearance where we can draw one; others keep none (viewers draw a default).
+    if !keep_appearance {
+        let drawn = pdfcraft_annot::set_appearance(doc, r);
+        // A redaction mark that removes something but shows nothing is refused: applying it
+        // would remove content the reviewer never saw marked.
+        if let Err(why) = drawn
+            && marks
+        {
+            return Err(DataError::Malformed(format!("a redaction mark could not be drawn, so what it removes would not show ({why})")));
+        }
+    }
     kept.push(Object::Ref(r));
     doc.update_dict(page_ref, |p| p.set(b"Annots".to_vec(), Object::Array(kept)))?;
     Ok(r)
@@ -872,19 +1252,35 @@ pub fn import_comments(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
 ) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, page, fresh, offset.filter(|o| o.iter().all(|v| v.is_finite())))
+    // Into a copy, kept only when the whole import succeeds.
+    let mut work = doc.clone();
+    let report = import_xfdf_with(
+        &mut work,
+        text,
+        page,
+        fresh,
+        offset.filter(|o| o.iter().all(|v| v.is_finite())),
+        super::appearance::MAX_IMPORT_APPEARANCE_BYTES,
+        true,
+    )?;
+    *doc = work;
+    Ok(report)
 }
 
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, None, None, None)
+    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES, false)
 }
 
-fn import_xfdf_with(
+/// The import, with `appearance_budget` decoded bytes of appearance for all of its comments;
+/// `comments_only` leaves the file's field values out (comments placed as copies).
+pub(crate) fn import_xfdf_with(
     doc: &mut Document,
     text: &str,
     target_page: Option<usize>,
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
+    mut appearance_budget: usize,
+    comments_only: bool,
 ) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -920,6 +1316,18 @@ fn import_xfdf_with(
             let own_page = node.attribute("page").and_then(|p| p.parse::<usize>().ok());
             let Some(page) = target_page.or(own_page).and_then(|p| pages.get(p).copied()) else { continue };
             let Some(mut d) = annot_from_xml(node, subtype, page) else { continue };
+            // The appearance the file carries (XFDF 3.0 "appearance"), when it can be read.
+            // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not read.
+            if let Some(ap) = node.children().find(|c| c.has_tag_name("appearance")).filter(|_| *subtype != "Redact") {
+                let text: String = ap.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+                match super::appearance::decode(&text, &mut appearance_budget) {
+                    Ok(tree) => {
+                        let ap = super::appearance::materialize(doc, tree);
+                        d.set(b"AP".to_vec(), ap);
+                    }
+                    Err(why) => report.skipped.push(format!("{}: {why}", node.attribute("name").unwrap_or(&tag))),
+                }
+            }
             let assigned = fresh.map(|prefix| format!("{prefix}-{}", n + 1));
             if let Some(name) = &assigned {
                 // A copy under a name of its own (one even where the original had none).
@@ -964,7 +1372,7 @@ fn import_xfdf_with(
         }
     }
     // Comments placed as copies: the file's field values are not part of the paste.
-    if fresh.is_some() || target_page.is_some() || offset.is_some() {
+    if comments_only {
         return Ok(report);
     }
     // Fields.

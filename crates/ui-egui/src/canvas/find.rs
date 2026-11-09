@@ -222,6 +222,19 @@ impl DocView {
     }
 }
 
+/// The id of a pane's find field: one per view, so two find bars open at once do not share an id
+/// (and so the focus).
+fn find_input_id(key: u64) -> egui::Id {
+    egui::Id::unique(("find-input", key))
+}
+
+impl DocView {
+    /// The id of this view's find field, for what needs to give it the focus or take it away.
+    pub fn find_input_id(&self) -> egui::Id {
+        find_input_id(self.pane.key)
+    }
+}
+
 /// Acrobat-style floating find bar at the top-right of the document area. In Edit text mode
 /// (`editing`) it offers a Replace row: Replace changes the highlighted match, Replace all every
 /// match, each inside its own paragraph.
@@ -235,7 +248,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
     let mut step: Option<bool> = None;
     let mut replace: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
-    egui::Area::new(egui::Id::unique("find-bar"))
+    egui::Area::new(egui::Id::unique(("find-bar", view.pane.key)))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -250,7 +263,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::unique("find-input"))
+                            .id(find_input_id(view.pane.key))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
