@@ -10536,7 +10536,7 @@ fn an_action_appends_to_a_file_whose_field_walk_passes_a_signature_over() {
     let bytes = Arc::new(signed_field_named(64 << 10));
     let steps = vec![actions::Step::from_id("set_title", "Checked").unwrap()];
     let title = actions::Action { name: "Title".into(), description: String::new(), steps, builtin: false };
-    let r = actions::run_on(&title, "form.pdf", bytes.clone(), |_, _| {}).unwrap();
+    let r = actions::run_on(&title, "form.pdf", bytes.clone(), true, |_, _| {}).unwrap();
     assert!(r.bytes.starts_with(&bytes[..]), "the action rewrote the file instead of appending to it");
     let mut s = Session::new();
     let id = s.open("out.pdf", None, r.bytes, None).unwrap();
