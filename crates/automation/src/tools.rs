@@ -154,6 +154,17 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("doc_fix_hairlines", "Fix hairlines", "Print production: strokes narrower than narrower_than points on the page (after every transformation; zero-width lines always) are given width points, in page content and form XObjects; Type 3 glyphs and tiling patterns only when asked, changed in place wherever they are used. Both widths at most 10. Returns fixed (strokes), pages, and elsewhere (glyphs and patterns changed that something outside pages also uses); nothing to fix gives 0 and no edit.")
+            .cmd("prepress.hairlines")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to fix (default all)"),
+                    "narrower_than": { "type": "number", "minimum": 0, "description": "Points on the page (default 0.216)." },
+                    "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points on the page (default 0.72)." },
+                    "type3": { "type": "boolean" }, "patterns": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),
@@ -206,7 +217,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
-        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value. Undoable.")
+        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
             .ro()
@@ -254,7 +265,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "pages": pages("to count (default: all)"),
                 "exclude_tables": { "type": "boolean" }, "exclude_code": { "type": "boolean" }, "exclude_images": { "type": "boolean" }
             }), &["doc"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab. With format \"html\", each page also carries html, the same text as Copy with formatting puts on the clipboard (paragraphs, bold, italic, size, colour and font family), and styles_incomplete when some styles had to be left out. With rect, the html is that text in line order, not split into the column's rows and cells. The HTML of one call is capped at 32 MiB in total; pages past the cap carry empty html with styles_incomplete. html_truncated is set when that cap is reached or when a page's own copy was cut at its span or size cap.")
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab. With format \"html\", each page also carries html, the same text as Copy with formatting puts on the clipboard (paragraphs, bold, italic, size, colour and font family), and styles_incomplete when some styles had to be left out. With rect, the html is that text in line order, not split into the column's rows and cells. A page whose content was cut at the renderer's limits carries truncated: true; its text is incomplete. The HTML of one call is capped at 32 MiB in total; pages past the cap carry empty html with styles_incomplete. html_truncated is set when that cap is reached or when a page's own copy was cut at its span or size cap.")
             .ro()
             .cmd("edit.column_select")
             .with(schema(
@@ -516,13 +527,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
-        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based).")
+        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based). Radio groups include on_widgets, the 1-based numbers of the buttons that are on (buttons sharing an option tell apart only there).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
             "form_fill",
             "Fill in form fields",
-            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
+            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists; {\"widget\": n} turns on button n (1-based) of a check box or radio group and never turns it off (to clear, use null for a radio group that allows it, false for a check box); of radio buttons sharing an option only that one is on unless the group has RadiosInUnison. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
         )
         .with(schema(json!({ "doc": doc(), "values": { "type": "object", "description": "Field name → value." } }), &["doc", "values"])),
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
@@ -749,7 +760,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
-                "paper": { "type": "string" },
+                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side)." },
                 "path": { "type": "string" },
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
@@ -832,9 +843,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("content_delete", "Delete added content", "Delete an added item (page, index from content_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
-        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom).")
+        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom). With text_links: true, also the web and email addresses written as plain page text with no link over them, which the viewer opens on a click: page, rects (one per line), url, and blocked (why it won't open) when the link check refuses it. Only http, https and mailto addresses are found. At most 100 pages are read per call, from text_links_from (default 1); text_links_next_page then gives the page to continue from.")
             .ro()
-            .with(schema(json!({ "doc": doc() }), &["doc"])),
+            .with(schema(json!({ "doc": doc(), "text_links": { "type": "boolean" }, "text_links_from": { "type": "integer", "minimum": 1 } }), &["doc"])),
         t("link_open", "Open a linked PDF", "Follow a local GoToR link in PdfCraft: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. Named destinations are reported but not applied. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
             .with(schema(
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "password": { "type": "string", "description": "Optional password for the linked PDF." }, "allow_absolute": { "type": "boolean", "description": "Explicitly allow an absolute local GoToR target (default false). Existing validation and --root confinement still apply." } }),
@@ -865,7 +876,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("link_delete", "Delete a link", "Delete one link (page, index from link_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
-        t("links_from_urls", "Create links from URLs", "Find web addresses (http://, https://, www.) in the text of every page and make them clickable links. Returns the URLs. Undoable.")
+        t("links_from_urls", "Create links from URLs", "Find web addresses (http://, https://, www.) in the text of every page and make them clickable links, leaving out text on a layer the viewer hides (layer_set). Returns the URLs. Undoable.")
             .cmd("edit.links_from_urls")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("links_remove", "Remove all links", "Remove every link in the document (or on the given pages). Undoable.")
@@ -1351,7 +1362,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the script's alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output, requests (print, page, url, submit), error, and the errors of document-level scripts that failed (the rest still ran).")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
             .cmd("tools.js_console")
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
@@ -1380,10 +1391,10 @@ pub fn tools() -> Vec<ToolDef> {
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
+        t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption, the file header, the file identifier). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"] } }), &["doc"])),
-        t("standards_remove_id", "Remove PDF/A or PDF/X identification", "Remove what identifies the document as PDF/A (its pdfaid: XMP properties) or PDF/X (GTS_PDFXVersion and GTS_PDFXConformance, in the document information and as pdfxid: XMP properties), e.g. after edits it no longer meets. Output intents and other metadata stay. Fails when the document declares nothing of the kind. Undoable.")
+        t("standards_remove_id", "Remove PDF/A or PDF/X identification", "Remove what identifies the document as PDF/A (its pdfaid: XMP properties) or PDF/X (GTS_PDFXVersion and GTS_PDFXConformance, in the document information and as pdfxid: or pdfx: XMP properties), e.g. after edits it no longer meets. Output intents and other metadata stay. Fails when the document declares nothing of the kind. Undoable.")
             .with(schema(json!({ "doc": doc(), "standard": { "type": "string", "enum": ["pdfa", "pdfx"] } }), &["doc", "standard"])),
         t("action_list", "List actions", "Action Wizard: the built-in actions (name, description, steps) and every step an action can use (id, label, whether it takes a text argument).")
             .ro()

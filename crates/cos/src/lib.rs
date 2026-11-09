@@ -31,7 +31,7 @@ pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, PUBSEC_FILTER, Permissions, PublicKeyEncryption, SecurityHandler, effective_password,
     pdfdoc_byte, pdfdoc_char, permission_bytes, permissions_from_envelope,
 };
-pub use writer::{SaveOptions, civil_from_days, pdf_date, reachable_objects, serialize, write_full, write_incremental};
+pub use writer::{SaveOptions, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
