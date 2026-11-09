@@ -42,6 +42,10 @@ pub const EDIT_LABELS: &[&str] = &[
     "Import bookmarks",
     "New bookmarks from structure",
     "New bookmarks from text styles",
+    "New destination",
+    "Set destination",
+    "Rename destination",
+    "Delete destination",
     "Number pages",
     "Measure distance",
     "Measure perimeter",
@@ -205,6 +209,10 @@ impl Edit {
             Edit::ImportBookmarks { .. } => Label::of("Import bookmarks"),
             Edit::BookmarksFromStructure => Label::of("New bookmarks from structure"),
             Edit::BookmarksFromTextStyles { .. } => Label::of("New bookmarks from text styles"),
+            Edit::AddDestination { .. } => Label::of("New destination"),
+            Edit::SetDestination { .. } => Label::of("Set destination"),
+            Edit::RenameDestination { .. } => Label::of("Rename destination"),
+            Edit::DeleteDestination { .. } => Label::of("Delete destination"),
             Edit::NumberPages { .. } => Label::of("Number pages"),
             // What was measured is part of the wording too, for the same reason.
             Edit::AddMeasurement(m) => Label::of(match m.kind {

@@ -146,6 +146,10 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::DeleteAttachment { .. }
         | Edit::ConvertColours { .. }
         | Edit::EditAttachmentDescription { .. }
+        | Edit::AddDestination { .. }
+        | Edit::SetDestination { .. }
+        | Edit::RenameDestination { .. }
+        | Edit::DeleteDestination { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -554,6 +558,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
+        Edit::AddDestination { name, page, left, top } => pdfcraft_organize::add_named_destination(doc, name, *page, *left, *top)?,
+        Edit::SetDestination { name, page, left, top } => pdfcraft_organize::set_named_destination(doc, name, *page, *left, *top)?,
+        Edit::RenameDestination { name, new_name } => pdfcraft_organize::rename_named_destination(doc, name, new_name)?,
+        Edit::DeleteDestination { name } => pdfcraft_organize::delete_named_destination(doc, name)?,
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
