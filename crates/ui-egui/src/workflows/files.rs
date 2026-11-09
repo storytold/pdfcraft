@@ -849,10 +849,12 @@ impl PdfCraftApp {
     /// Split the active document and write the parts: into a chosen folder (desktop, written on
     /// a later frame once the user has chosen it) or as downloads (web).
     ///
-    /// Inside a collaboration session there are no parts to write: the pages
+    /// Inside a collaboration session there are no files to write: the pages
     /// after the plan's first cut leave the shared document in one
-    /// `page.split`, and Undo (the inverse `page.combine`) brings them back
-    /// (RFC §3.1.5). The file workflow stays the single-user one.
+    /// `page.split`, and the accepted operation carries the part, which opens
+    /// in a document of its own (so the pages are not lost); Undo (the inverse
+    /// `page.combine`) brings them back (RFC §3.1.5). The file workflow stays
+    /// the single-user one.
     pub fn split_active(&mut self, plan: &SplitPlan) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
@@ -947,7 +949,10 @@ impl PdfCraftApp {
         if let Some(true) = self.collab_split_pages(id, cut, count) {
             let pages = count.to_string();
             let from = (cut + 1).to_string();
-            self.notify_fmt("Split off {n} pages from page {p}; Undo brings them back", &[("n", &pages), ("p", &from)]);
+            self.notify_fmt(
+                "Split off {n} pages from page {p}; they open in their own document, and Undo brings them back",
+                &[("n", &pages), ("p", &from)],
+            );
         }
         true
     }
@@ -964,6 +969,17 @@ impl PdfCraftApp {
     }
 
     pub(crate) fn open_created(&mut self, name: &str, bytes: Arc<Vec<u8>>, message: &str) {
+        self.open_created_with(name, bytes, message, true);
+    }
+
+    /// Open a created document without taking the focus: what a split's part
+    /// does in a room, so the shared document stays the one on screen.
+    #[cfg(feature = "collab")]
+    pub(crate) fn open_created_quiet(&mut self, name: &str, bytes: Arc<Vec<u8>>, message: &str) {
+        self.open_created_with(name, bytes, message, false);
+    }
+
+    fn open_created_with(&mut self, name: &str, bytes: Arc<Vec<u8>>, message: &str, activate: bool) {
         match self.session.open_new(name, bytes) {
             Ok(id) => {
                 // The reading-colours preference is app-wide: the newly created document starts with it.
@@ -974,7 +990,9 @@ impl PdfCraftApp {
                     view.enter_presentation();
                 }
                 self.views.push(view);
-                self.active = Some(self.views.len() - 1);
+                if activate {
+                    self.active = Some(self.views.len() - 1);
+                }
                 self.notify_tr(message);
             }
             Err(e) => self.notify_fmt("Couldn't open the result: {e}", &[("e", &e.to_string())]),

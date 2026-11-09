@@ -6,6 +6,12 @@ use super::parts::combinable_in;
 use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, takes, title_of};
 use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
 
+/// One combine-list entry as a shared confirmation sends it: the group (the
+/// file the entry is a part of), its title, the whole file's bytes, the page
+/// range and the password.
+#[cfg(feature = "collab")]
+type SharedEntry = (u64, String, Arc<Vec<u8>>, Option<String>, Option<String>);
+
 impl PdfCraftApp {
     /// Show the Combine files tab (File ▸ Combine files…), opening it if needed.
     pub fn open_combine_tab(&mut self) {
@@ -467,6 +473,10 @@ impl PdfCraftApp {
     /// Combine the listed files into a new, unsaved document; the tab makes way for it.
     /// Files that can't be read are left out (the user was asked).
     pub fn combine_staged(&mut self) {
+        #[cfg(feature = "collab")]
+        if self.combine_shared_parts() {
+            return;
+        }
         let files: Vec<&CombineFile> = self.combine_draft.iter().filter(|f| !f.unreadable()).collect();
         if files.is_empty() {
             return;
@@ -479,10 +489,6 @@ impl PdfCraftApp {
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
         match self.session.combine_grouped(&sources, &groups, &passwords) {
             Ok(bytes) => {
-                #[cfg(feature = "collab")]
-                if self.combine_shared(&bytes, count) {
-                    return;
-                }
                 self.close_combine_tab();
                 let message = crate::i18n::fmt(tl!("Combined {n} files"), &[("n", &count.to_string())]);
                 self.open_created("Combined.pdf", bytes, &message)
@@ -492,23 +498,55 @@ impl PdfCraftApp {
         }
     }
 
-    /// Combine inside a room: the whole part joins the shared document at its
-    /// end in one `page.combine` (RFC §3.1.5), instead of a new unsaved
-    /// document. Returns false when no session shares a document, so the
-    /// single-user path runs; true when the request was handled (sent, or
-    /// refused with a message — the list then stays so it can be fixed).
+    /// Combine inside a room: one `page.combine` per list entry, in the list's
+    /// order, sent one at a time (a structural operation is accepted only at
+    /// the head). The whole confirmation is one undo step, and a stale part
+    /// takes the parts already joined out again (RFC §3.1.5). Returns false
+    /// when no session shares a document, so the single-user path runs; true
+    /// when the request was handled (sent, or refused with a message — the
+    /// list then stays so it can be fixed).
     #[cfg(feature = "collab")]
-    fn combine_shared(&mut self, part: &[u8], files: usize) -> bool {
+    fn combine_shared_parts(&mut self) -> bool {
         let Some(doc) = self.collab_document() else { return false };
         let Some(n) = self.session.get(doc).map(|d| d.info.pages.len()) else { return false };
-        if let Some(true) = self.collab_combine_pages(doc, n, part) {
+        // One part per list entry: the entry keeps its own range and password,
+        // and the list's order is the page order of the confirmation.
+        let entries: Vec<SharedEntry> = self
+            .combine_draft
+            .iter()
+            .filter(|f| !f.unreadable())
+            .map(|f| {
+                (
+                    f.group,
+                    title_of(&f.name).to_string(),
+                    f.bytes.clone(),
+                    Some(f.range.clone()).filter(|range| !range.trim().is_empty()),
+                    f.password.as_ref().map(|password| password.0.clone()),
+                )
+            })
+            .collect();
+        if entries.is_empty() {
+            return false;
+        }
+        let files = entries.iter().map(|entry| entry.0).collect::<BTreeSet<u64>>().len();
+        let mut parts = Vec::with_capacity(entries.len());
+        for (group, title, bytes, range, password) in &entries {
+            let source: Vec<(String, Arc<Vec<u8>>, Option<String>)> = vec![(title.clone(), bytes.clone(), range.clone())];
+            match self.session.combine_grouped(&source, &[*group], &[password.as_deref()]) {
+                Ok(part) => parts.push(part),
+                Err(e) => {
+                    self.notify_fmt("Couldn't combine files: {e}", &[("e", &e.to_string())]);
+                    return true;
+                }
+            }
+        }
+        if let Some(true) = self.collab_combine_parts(doc, n, &parts, files) {
             if let Some(index) = self.views.iter().position(|view| view.id == doc) {
                 self.active = Some(index);
             }
             self.close_combine_tab();
-            let count = files.to_string();
-            self.notify_fmt("Combined {n} files into the shared document; Undo takes them out", &[("n", &count)]);
-            return true;
+            let (count, sent) = (files.to_string(), parts.len().to_string());
+            self.notify_fmt("Combining {n} files into the shared document in {k} parts…", &[("n", &count), ("k", &sent)]);
         }
         true
     }

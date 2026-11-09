@@ -14,8 +14,10 @@
 use crate::PdfCraftApp;
 use crate::canvas::{DocView, RemoteSelection, RemoteSelectionKind};
 use crate::hooks::HostSession;
-use pdfcraft_collab_client_pdf::{ProjectionError, apply, combine_pages_op, inverse_after, inverse_for, ops_for_edit, split_pages_op};
-use pdfcraft_collab_proto::{ActorId, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, Viewport};
+use pdfcraft_collab_client_pdf::{
+    ProjectionError, SplitPart, apply, combine_parts_ops, inverse_after, inverse_for, ops_for_edit, split_pages_op, split_part,
+};
+use pdfcraft_collab_proto::{ActorId, Applied, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, Target, Viewport};
 use pdfcraft_collab_session::{Config as WireConfig, Event, Sink};
 use pdfcraft_engine::{DocId, Document, Edit};
 use pdfcraft_render::DocInfo;
@@ -126,6 +128,10 @@ pub(crate) struct CollabUi {
     error: Option<String>,
     history: Vec<HistoryGroup>,
     redo: Vec<HistoryGroup>,
+    /// A Combine confirmation still joining its parts, if one is (RFC §3.1.5).
+    combine: Option<CombineBatch>,
+    /// An undo/redo whose operations must be sent one at a time (structural).
+    sequence: Option<OpSequence>,
     counter: u64,
     last_presence: Instant,
     /// What was last sent, so only a change (or the heartbeat) is sent again.
@@ -256,6 +262,88 @@ struct HistoryGroup {
     inverses: Vec<Option<Op>>,
 }
 
+/// The history label of the Split dialog's operation. A split with this label
+/// is a user's Split (the pages that leave are theirs to keep); a split sent as
+/// an undo or a rollback is somebody's inverse and opens nothing.
+const SPLIT_LABEL: &str = "Split pages";
+/// The history label of one Combine confirmation: all its parts are one undo step.
+const COMBINE_LABEL: &str = "Combine pages";
+
+/// One "Combine files" confirmation in a room: its parts join one at a time,
+/// because a structural operation is accepted only at the head of the version.
+/// The order is the list's order, and a refusal of any part takes the parts
+/// already joined out again in reverse order, so the confirmation is all or
+/// nothing (RFC §3.1.5).
+struct CombineBatch {
+    /// Parts not sent yet, in confirmation order.
+    pending: std::collections::VecDeque<Op>,
+    /// The part whose answer is awaited.
+    in_flight: Option<Op>,
+    /// Where each part that joined sits, oldest first: the split that takes it
+    /// out again is built from this once the answer is in.
+    joined: Vec<JoinedPart>,
+    /// Files the confirmation names (one file may be several parts).
+    files: usize,
+    /// The operation that opened the history group, so a rollback can drop it.
+    group_op: OpId,
+    /// The confirmation is being taken back; `pending` holds its splits.
+    rollback: bool,
+    /// A retry asked for a snapshot: the splits wait for it, or they would be
+    /// stale again with the old base version.
+    after_snapshot: bool,
+}
+
+#[derive(Clone, Copy)]
+struct JoinedPart {
+    at: usize,
+    count: usize,
+}
+
+/// Operations that must go out one at a time: a structural operation is
+/// accepted only at the head of the version, so an undo of a multi-part
+/// confirmation sends its splits in sequence, each addressed at the head the
+/// previous answer left.
+struct OpSequence {
+    pending: std::collections::VecDeque<Op>,
+    in_flight: Option<Op>,
+}
+
+/// What a Combine confirmation needs after an accepted part.
+enum CombineAdvance {
+    /// Not this confirmation's operation, or none in flight.
+    Idle,
+    /// Send the operation (the next part, or the next split of a rollback).
+    Send(Op),
+    /// The last part joined; the count for the message.
+    Finished(usize),
+    /// The rollback finished.
+    RolledBack,
+}
+
+/// The name of the document a split's part is kept in: the shared document's
+/// stem and the pages that left, as the single-user Split names its parts.
+fn part_name(document: &str, part: &SplitPart) -> String {
+    let stem = document.strip_suffix(".pdf").or_else(|| document.strip_suffix(".PDF")).unwrap_or(document);
+    if part.to == part.from.saturating_add(1) {
+        format!("{stem} (page {}).pdf", part.from + 1)
+    } else {
+        format!("{stem} (pages {}-{}).pdf", part.from + 1, part.to)
+    }
+}
+
+/// Address an operation, and the page its target names, at `version`/`epoch`:
+/// what the session does when it queues an intent, and what a sequence does for
+/// each step after the previous answer moved the head on.
+fn readdress(op: &mut Op, version: u64, epoch: u64) {
+    op.base_version = version;
+    op.epoch = epoch;
+    match &mut op.target {
+        Target::Page(page) => page.epoch = epoch,
+        Target::Annotation { page, .. } => page.epoch = epoch,
+        _ => {}
+    }
+}
+
 impl CollabUi {
     /// Start the session the desktop environment asks for, if it does. A
     /// refused configuration stops the attempts: the environment does not
@@ -320,6 +408,8 @@ impl CollabUi {
                     error: None,
                     history: Vec::new(),
                     redo: Vec::new(),
+                    combine: None,
+                    sequence: None,
                     counter: 0,
                     last_presence: Instant::now(),
                     sent_presence: None,
@@ -353,6 +443,118 @@ impl CollabUi {
             }
             return;
         }
+    }
+
+    /// True when the operation is a user's Split (the dialog action), not an
+    /// undo or a rollback that also takes pages out.
+    fn is_dialog_split(&self, op_id: &OpId) -> bool {
+        self.history.iter().chain(self.redo.iter()).any(|group| group.label == SPLIT_LABEL && group.originals.iter().any(|op| op.op_id == *op_id))
+    }
+
+    /// Advance a Combine confirmation with an accepted operation: keep where the
+    /// part joined, then send the next part or report the confirmation done.
+    fn combine_advance(&mut self, applied: &Applied) -> CombineAdvance {
+        let Some(batch) = self.combine.as_mut() else { return CombineAdvance::Idle };
+        if !batch.in_flight.as_ref().is_some_and(|op| op.op_id == applied.op_id) {
+            return CombineAdvance::Idle;
+        }
+        batch.in_flight = None;
+        if !batch.rollback {
+            let at = applied.op.payload.get("at").and_then(|at| at.as_u64()).and_then(|at| usize::try_from(at).ok());
+            let count = applied.op.payload.get("count").and_then(|count| count.as_u64()).and_then(|count| usize::try_from(count).ok());
+            if let (Some(at), Some(count)) = (at, count) {
+                batch.joined.push(JoinedPart { at, count });
+            }
+        }
+        let rollback = batch.rollback;
+        let next = batch.pending.pop_front().map(|mut op| {
+            // The head moved with the answer: address the next part where the
+            // previous one left, like the session will when it queues it.
+            readdress(&mut op, applied.version, applied.epoch);
+            op
+        });
+        if let Some(op) = &next {
+            batch.in_flight = Some(op.clone());
+        }
+        let finished = if next.is_none() { Some(if rollback { None } else { Some(batch.files) }) } else { None };
+        if finished.is_some() {
+            self.combine = None;
+        }
+        match (next, finished) {
+            (Some(op), _) => CombineAdvance::Send(op),
+            (None, Some(None)) => CombineAdvance::RolledBack,
+            (None, Some(Some(files))) => CombineAdvance::Finished(files),
+            (None, None) => CombineAdvance::Idle,
+        }
+    }
+
+    /// True when `op_id` (as a string) is the confirmation's in-flight part or
+    /// one of the parts still queued.
+    fn combine_has(&self, op_id: &str) -> bool {
+        self.combine.as_ref().is_some_and(|batch| {
+            batch.in_flight.as_ref().is_some_and(|op| op.op_id.as_str() == op_id) || batch.pending.iter().any(|op| op.op_id.as_str() == op_id)
+        })
+    }
+
+    fn combine_is_rolling_back(&self) -> bool {
+        self.combine.as_ref().is_some_and(|batch| batch.rollback)
+    }
+
+    /// True when a retry asked for a snapshot and the rollback splits wait for it.
+    fn combine_waiting_for_snapshot(&self) -> bool {
+        self.combine.as_ref().is_some_and(|batch| batch.rollback && batch.after_snapshot)
+    }
+
+    /// Turn the confirmation into a rollback: nothing else is sent, the history
+    /// group goes away, and the splits of the parts that joined are built once
+    /// the version is known (`collab_combine_rollback`).
+    fn combine_mark_rollback(&mut self, error: String, after_snapshot: bool) {
+        let Some(group_op) = self.combine.as_ref().map(|batch| batch.group_op.clone()) else { return };
+        let Some(batch) = self.combine.as_mut() else { return };
+        if batch.rollback {
+            return;
+        }
+        batch.rollback = true;
+        batch.after_snapshot = after_snapshot;
+        batch.pending.clear();
+        batch.in_flight = None;
+        self.error = Some(error);
+        self.history.retain(|group| group.originals.iter().all(|op| op.op_id != group_op));
+        self.redo.clear();
+    }
+
+    /// Advance an undo/redo sequence with an accepted operation: address the
+    /// next one at the head this answer left and return it to send. `None` when
+    /// the operation is not part of the sequence or nothing is left.
+    fn sequence_advance(&mut self, applied: &Applied) -> Option<Op> {
+        let (next, done) = {
+            let sequence = self.sequence.as_mut()?;
+            if !sequence.in_flight.as_ref().is_some_and(|op| op.op_id == applied.op_id) {
+                return None;
+            }
+            sequence.in_flight = None;
+            let next = sequence.pending.pop_front();
+            (next, sequence.pending.is_empty())
+        };
+        let Some(mut op) = next else {
+            if done {
+                self.sequence = None;
+            }
+            return None;
+        };
+        readdress(&mut op, applied.version, applied.epoch);
+        if let Some(sequence) = self.sequence.as_mut() {
+            sequence.in_flight = Some(op.clone());
+        }
+        Some(op)
+    }
+
+    /// True when `op_id` is the sequence's in-flight operation or one still
+    /// queued.
+    fn sequence_has(&self, op_id: &str) -> bool {
+        self.sequence.as_ref().is_some_and(|sequence| {
+            sequence.in_flight.as_ref().is_some_and(|op| op.op_id.as_str() == op_id) || sequence.pending.iter().any(|op| op.op_id.as_str() == op_id)
+        })
     }
 
     /// Other participants' pointers this replica may draw: fresh (ADR-0006 TTL),
@@ -536,6 +738,10 @@ impl PdfCraftApp {
         if collab.doc != doc {
             return;
         }
+        let mut taken: Option<(String, std::sync::Arc<Vec<u8>>)> = None;
+        let mut finished: Option<usize> = None;
+        let mut rollback_now = false;
+        let mut rollback_after_snapshot = false;
         match event {
             Event::Joined { welcome, .. } => {
                 collab.actor = Some(welcome.actor_id.clone());
@@ -550,7 +756,7 @@ impl PdfCraftApp {
                 collab.status = format!("Connected as {} · {}", welcome.actor_id.as_str(), role_name(welcome.role));
                 collab.error = None;
             }
-            Event::Applied { applied, .. } => {
+            Event::Applied { applied, own } => {
                 collab.version = applied.version;
                 collab.epoch = applied.epoch;
                 if let Some(inverse) = inverse_after(&applied) {
@@ -566,6 +772,35 @@ impl PdfCraftApp {
                     }
                     Err(e) => collab.error = Some(format!("A shared change could not be applied: {e}")),
                 }
+                // A split the user asked for takes a part out of the room: keep
+                // the pages by opening the part as a document of its own, in the
+                // background so the shared document keeps the focus. Splits sent
+                // as an undo or a rollback are inverses; they open nothing.
+                if own
+                    && collab.is_dialog_split(&applied.op_id)
+                    && let Some(part) = split_part(&applied)
+                    && let Some(name) = self.session.get(doc).map(|document| part_name(&document.name, &part))
+                {
+                    taken = Some((name, std::sync::Arc::new(part.bytes)));
+                }
+                match collab.combine_advance(&applied) {
+                    CombineAdvance::Send(op) => {
+                        if collab.sink.enqueue(op) {
+                            collab.status = "Joining the parts…".into();
+                        } else {
+                            collab.error = Some("The collaboration session is closed".into());
+                            collab.combine = None;
+                        }
+                    }
+                    CombineAdvance::Finished(files) => finished = Some(files),
+                    CombineAdvance::RolledBack | CombineAdvance::Idle => {}
+                }
+                if let Some(op) = collab.sequence_advance(&applied)
+                    && !collab.sink.enqueue(op)
+                {
+                    collab.error = Some("The collaboration session is closed".into());
+                    collab.sequence = None;
+                }
                 ctx.request_repaint();
             }
             Event::Rejected(rejected) => {
@@ -574,7 +809,25 @@ impl PdfCraftApp {
                 }
                 collab.history.retain(|group| !group.originals.is_empty());
                 collab.redo.retain(|group| !group.originals.is_empty());
-                if rejected.code != ErrorCode::Lease {
+                if collab.combine_has(rejected.op_id.as_str()) {
+                    if collab.combine_is_rolling_back() {
+                        // A split taking the confirmation back was refused too:
+                        // leave the room as it is and say so.
+                        collab.error = Some("The combine could not be fully taken back; check the pages".into());
+                        collab.combine = None;
+                    } else {
+                        let why = format!("{}: {} The combine was taken back; try again.", code_name(rejected.code), rejected.message);
+                        collab.combine_mark_rollback(why, false);
+                        rollback_now = true;
+                    }
+                } else if collab.sequence_has(rejected.op_id.as_str()) {
+                    // A step of an undo/redo sequence was refused: the rest
+                    // cannot follow, so the sequence stops here.
+                    collab.sequence = None;
+                    if rejected.code != ErrorCode::Lease {
+                        collab.error = Some(format!("{}: {}", code_name(rejected.code), rejected.message));
+                    }
+                } else if rejected.code != ErrorCode::Lease {
                     collab.error = Some(format!("{}: {}", code_name(rejected.code), rejected.message));
                 }
             }
@@ -598,6 +851,14 @@ impl PdfCraftApp {
                         view.document_changed(&document.info);
                     }
                 }
+                // A retry asked for this snapshot: now the rollback splits have a
+                // head to be built on.
+                if collab.combine_waiting_for_snapshot() {
+                    if let Some(batch) = collab.combine.as_mut() {
+                        batch.after_snapshot = false;
+                    }
+                    rollback_after_snapshot = true;
+                }
             }
             Event::Presence(presence) => {
                 if collab.actor.as_ref() != Some(&presence.actor_id) {
@@ -612,7 +873,29 @@ impl PdfCraftApp {
                 collab.status = "Reconnecting…".into();
                 collab.connected = false;
             }
-            Event::Gap | Event::Retry { .. } => collab.status = "Catching up…".into(),
+            Event::Gap => collab.status = "Catching up…".into(),
+            Event::Retry { op_id } => {
+                collab.status = "Catching up…".into();
+                if collab.combine_has(&op_id) {
+                    if collab.combine_is_rolling_back() {
+                        // A split taking the confirmation back went stale too:
+                        // stop here and say what is left.
+                        collab.combine = None;
+                        collab.error = Some("The combine could not be fully taken back; check the pages".into());
+                    } else {
+                        // A structural operation cannot be re-addressed blindly:
+                        // the page set may have moved. Take the parts that joined
+                        // out again, after the snapshot the retry asked for, so
+                        // the confirmation is all or nothing.
+                        collab.combine_mark_rollback("The document changed; the combine was taken back. Try again.".into(), true);
+                    }
+                } else if collab.sequence_has(&op_id) {
+                    // A structural step of an undo/redo cannot be re-addressed
+                    // blindly: stop the sequence and say so.
+                    collab.sequence = None;
+                    collab.error = Some("The document changed; the undo did not finish. Try again.".into());
+                }
+            }
             Event::Error(error) => {
                 collab.error = Some(format!("{}: {}", code_name(error.code), error.message));
                 if error.code == ErrorCode::Auth {
@@ -621,6 +904,58 @@ impl PdfCraftApp {
                 }
             }
             Event::Notice(text) => collab.error = Some(text),
+        }
+        if let Some(files) = finished {
+            self.notify_fmt("Combined {n} files into the shared document; Undo takes them out", &[("n", &files.to_string())]);
+        }
+        if rollback_now || rollback_after_snapshot {
+            self.collab_combine_rollback(doc);
+        }
+        if let Some((name, bytes)) = taken {
+            self.open_created_quiet(&name, bytes, "The pages taken out opened in a document of their own");
+        }
+    }
+
+    /// Build and send the splits that take a rolled-back Combine confirmation
+    /// out of the document, once the version they must be built on is known:
+    /// immediately for a refusal, after the snapshot for a retry. One split at a
+    /// time, like the parts themselves (RFC §3.1.5).
+    fn collab_combine_rollback(&mut self, doc: DocId) {
+        let Some(collab) = self.collab.as_ref() else { return };
+        let Some(batch) = collab.combine.as_ref() else { return };
+        if !batch.rollback || batch.after_snapshot {
+            return;
+        }
+        let joined = batch.joined.clone();
+        let Some(document) = self.session.get(doc) else { return };
+        let Some(collab) = self.collab.as_mut() else { return };
+        let mut counter = collab.counter;
+        let mut ops = Vec::with_capacity(joined.len());
+        for part in joined.iter().rev() {
+            match split_pages_op(document, part.at, part.count, collab.doc_key.clone(), &collab.client_id, collab.version, collab.epoch, &mut counter)
+            {
+                Ok(op) => ops.push(op),
+                Err(e) => collab.error = Some(format!("The combine could not be taken back: {e}")),
+            }
+        }
+        collab.counter = counter;
+        let Some(batch) = collab.combine.as_mut() else { return };
+        batch.after_snapshot = false;
+        let mut queue: std::collections::VecDeque<Op> = ops.into_iter().collect();
+        let first = queue.pop_front();
+        let sent = first.as_ref().is_some_and(|op| collab.sink.enqueue(op.clone()));
+        if sent {
+            batch.pending = queue;
+            batch.in_flight = first.clone();
+        }
+        let failed = first.is_some() && !sent;
+        if failed {
+            collab.error = Some("The collaboration session is closed".into());
+        }
+        if first.is_none() || failed {
+            collab.combine = None;
+        } else {
+            collab.status = "Taking the combine back…".into();
         }
     }
 
@@ -766,18 +1101,76 @@ impl PdfCraftApp {
     /// cut by the server, so the intent carries the range alone and the undo
     /// is patched from the accepted operation (`inverse_after`).
     pub(crate) fn collab_split_pages(&mut self, doc: DocId, from: usize, count: usize) -> Option<bool> {
-        self.collab_send_pages_op(doc, "Split pages", |document, key, client_id, version, epoch, counter| {
+        self.collab_send_pages_op(doc, SPLIT_LABEL, |document, key, client_id, version, epoch, counter| {
             split_pages_op(document, from, count, key, client_id, version, epoch, counter)
         })
     }
 
-    /// Join `part` into the shared document at the 0-based `at` (RFC §3.1.5):
-    /// Combine Files inside a room, one version for the whole part. `None`
-    /// when no session shares this document.
-    pub(crate) fn collab_combine_pages(&mut self, doc: DocId, at: usize, part: &[u8]) -> Option<bool> {
-        self.collab_send_pages_op(doc, "Combine pages", |document, key, client_id, version, epoch, counter| {
-            combine_pages_op(document, at, part, key, client_id, version, epoch, counter)
-        })
+    /// Join `parts` into the shared document at the 0-based `at` (RFC §3.1.5):
+    /// Combine Files inside a room, as one confirmation. The parts are sent one
+    /// at a time in the order given (a structural operation is accepted only at
+    /// the head of the version), and the whole confirmation is one history group,
+    /// so Undo takes it back in one step. `None` when no session shares this
+    /// document, so the caller runs its file workflow.
+    pub(crate) fn collab_combine_parts(&mut self, doc: DocId, at: usize, parts: &[std::sync::Arc<Vec<u8>>], files: usize) -> Option<bool> {
+        let collab = self.collab.as_mut()?;
+        if collab.doc != doc {
+            return None;
+        }
+        if !collab.connected {
+            collab.error = Some("Waiting for the collaboration session".into());
+            return Some(false);
+        }
+        if !collab.role.can_structural() {
+            collab.error = Some("This role cannot change pages".into());
+            return Some(false);
+        }
+        if collab.combine.is_some() {
+            collab.error = Some("The previous combine is still joining its parts".into());
+            return Some(false);
+        }
+        let document = self.session.get(doc)?;
+        let mut counter = collab.counter;
+        let ops = {
+            let refs: Vec<&[u8]> = parts.iter().map(|part| part.as_slice()).collect();
+            let client_id = collab.client_id.clone();
+            combine_parts_ops(document, at, &refs, collab.doc_key.clone(), &client_id, collab.version, collab.epoch, &mut counter)
+        };
+        collab.counter = counter;
+        let ops = match ops {
+            Ok(ops) => ops,
+            Err(e) => {
+                collab.error = Some(e.to_string());
+                return Some(false);
+            }
+        };
+        let mut inverses = Vec::with_capacity(ops.len());
+        for op in &ops {
+            let Some(id) = collab.next_op_id() else {
+                collab.error = Some("Could not allocate an operation id".into());
+                return Some(false);
+            };
+            inverses.push(self.session.get(doc).and_then(|document| inverse_for(document, op, id).ok().flatten()));
+        }
+        let mut queue: std::collections::VecDeque<Op> = ops.iter().cloned().collect();
+        let Some(first) = queue.pop_front() else { return Some(false) };
+        if !collab.sink.enqueue(first.clone()) {
+            collab.error = Some("The collaboration session is closed".into());
+            return Some(false);
+        }
+        let group_op = first.op_id.clone();
+        collab.history.push(HistoryGroup { label: COMBINE_LABEL.to_string(), originals: ops, inverses });
+        collab.redo.clear();
+        collab.combine = Some(CombineBatch {
+            pending: queue,
+            in_flight: Some(first),
+            joined: Vec::new(),
+            files,
+            group_op,
+            rollback: false,
+            after_snapshot: false,
+        });
+        Some(true)
     }
 
     /// Send one structural page operation the way [`Self::collab_apply_edit`]
@@ -838,13 +1231,23 @@ impl PdfCraftApp {
         if !collab.connected {
             return true;
         }
+        // One structural step at a time: a part of a confirmation (or of an
+        // undo) changes the head under the next one, so nothing else may take
+        // the history until it has answered.
+        if collab.combine.is_some() || collab.sequence.is_some() {
+            collab.status = "Wait for the previous change to finish".into();
+            return true;
+        }
         let group = if undo { collab.history.pop() } else { collab.redo.pop() };
         let Some(mut group) = group else {
             collab.status = if undo { "Nothing to undo".into() } else { "Nothing to redo".into() };
             return true;
         };
         let ops = if undo {
-            let available: Vec<Op> = group.inverses.iter().flatten().cloned().collect();
+            // A group's inverses run in reverse: a confirmation's parts joined
+            // in order, so the last one leaves first and the positions of the
+            // parts before it are still the ones they joined at.
+            let available: Vec<Op> = group.inverses.iter().flatten().rev().cloned().collect();
             if available.is_empty() {
                 collab.status = format!("{} cannot be undone", group.label);
                 collab.history.push(group);
@@ -854,23 +1257,36 @@ impl PdfCraftApp {
         } else {
             group.originals.clone()
         };
-        let mut sent = Vec::with_capacity(ops.len());
+        // A structural group (a Combine confirmation's splits) cannot go out in
+        // one burst: each is accepted only at the head the previous one left.
+        // The rest wait in a sequence and are addressed when their turn comes.
+        let mut queue: std::collections::VecDeque<Op> = std::collections::VecDeque::with_capacity(ops.len());
         for mut op in ops {
             let Some(id) = collab.next_op_id() else { break };
             op.op_id = id;
-            if collab.sink.enqueue(op.clone()) {
-                sent.push(op);
-            }
+            queue.push_back(op);
         }
-        if sent.is_empty() {
+        let Some(mut first) = queue.pop_front() else { return true };
+        readdress(&mut first, collab.version, collab.epoch);
+        if !collab.sink.enqueue(first.clone()) {
+            collab.error = Some("The collaboration session is closed".into());
+            if undo {
+                collab.history.push(group);
+            } else {
+                collab.redo.push(group);
+            }
             return true;
         }
-        group.originals = sent;
+        let mut all = Vec::with_capacity(queue.len().saturating_add(1));
+        all.push(first.clone());
+        all.extend(queue.iter().cloned());
+        group.originals = all;
         if undo {
             collab.redo.push(group);
         } else {
             collab.history.push(group);
         }
+        collab.sequence = Some(OpSequence { pending: queue, in_flight: Some(first) });
         true
     }
 
@@ -1142,6 +1558,8 @@ mod tests {
             error: None,
             history: Vec::new(),
             redo: Vec::new(),
+            combine: None,
+            sequence: None,
             counter: 0,
             last_presence: now,
             sent_presence: None,
@@ -1178,6 +1596,7 @@ mod tests {
         let mut accepted = sent[0].clone();
         accepted.payload["from"] = serde_json::json!(1);
         accepted.payload["to"] = serde_json::json!(4);
+        accepted.payload["count"] = serde_json::json!(3);
         accepted.payload["kept"] = serde_json::json!(1);
         accepted.payload["bytes"] = serde_json::json!(base64::engine::general_purpose::STANDARD.encode(&part));
         let ctx = egui::Context::default();
@@ -1191,6 +1610,14 @@ mod tests {
         };
         app.collab_event(Event::Applied { applied, own: true }, &ctx);
         assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 1, "the range left the replica");
+        // The part is not lost: the accepted operation carries it, and it opens
+        // as a document of its own in the background (the shared document keeps
+        // the focus, so Undo still belongs to the session).
+        let part = app.views.iter().map(|view| view.id).find(|other| *other != id).expect("the part opened in a tab");
+        let part_doc = app.session.get(part).expect("the part document");
+        assert_eq!(part_doc.info.pages.len(), 3, "the pages taken out are all in the part");
+        assert_eq!(part_doc.name, "t (pages 2-4).pdf");
+        assert_eq!(app.active_ids().map(|(_, id)| id), Some(id), "the shared document keeps the focus");
         let inverse = app.collab.as_ref().expect("a session").history[0].inverses[0].clone().expect("the accepted split carries its part");
         assert_eq!(inverse.payload["action"], "page.combine", "the undo is the operation that joins the part back");
         assert_eq!(inverse.payload["count"], 3);
@@ -1235,5 +1662,132 @@ mod tests {
         let other = app.session.open_new("other.pdf", fixture(2).into()).expect("a second document");
         assert_eq!(app.collab_split_pages(other, 0, 1), None);
         assert!(ops.lock().expect("the queue").is_empty());
+    }
+
+    /// The room's accepted form of an operation: the intent with what the
+    /// server normalised (a combine's `at`, a split's `from`/`to`/`bytes`).
+    fn accepted(op: &Op, version: u64, epoch: u64, extra: serde_json::Value) -> pdfcraft_collab_proto::Applied {
+        let mut op = op.clone();
+        if let Some(fields) = extra.as_object() {
+            for (key, value) in fields {
+                op.payload[key] = value.clone();
+            }
+        }
+        pdfcraft_collab_proto::Applied {
+            op_id: op.op_id.clone(),
+            actor_id: ActorId::new("ada").expect("an actor"),
+            version,
+            epoch,
+            op,
+            result: serde_json::json!({}),
+        }
+    }
+
+    /// Combine Files in a room sends the parts one at a time in the list's
+    /// order (a structural operation is accepted only at the head), the whole
+    /// confirmation is one history group, and Undo takes the parts out in
+    /// reverse order so every position stays the one it joined at.
+    #[test]
+    fn a_shared_combine_joins_its_parts_one_at_a_time_and_undo_takes_them_back() {
+        use std::sync::Arc;
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(4)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+        let parts = [Arc::new(fixture(2)), Arc::new(fixture(1))];
+
+        assert_eq!(app.collab_combine_parts(id, 4, &parts, 2), Some(true), "the confirmation is accepted");
+        let sent = ops.lock().expect("the queue").clone();
+        assert_eq!(sent.len(), 1, "only the first part goes out; the next waits for its answer");
+        assert_eq!(sent[0].payload["action"], "page.combine");
+        assert_eq!(sent[0].payload["count"], 2);
+        assert_eq!(sent[0].target, Target::Page(PageRef { index: 4, epoch: 0 }));
+        assert_eq!(app.collab.as_ref().expect("a session").history.len(), 1, "the confirmation is one undo step");
+
+        let ctx = egui::Context::default();
+        let applied = accepted(&sent[0], 1, 1, serde_json::json!({"at": 4, "count": 2}));
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 6, "the first part joined");
+        let sent = ops.lock().expect("the queue").clone();
+        assert_eq!(sent.len(), 2, "the second part follows on the answer");
+        assert_eq!(sent[1].target, Target::Page(PageRef { index: 6, epoch: 1 }), "where the first part ends, on the head it left");
+
+        let applied = accepted(&sent[1], 2, 2, serde_json::json!({"at": 6, "count": 1}));
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 7, "both parts joined");
+        assert!(app.collab.as_ref().expect("a session").combine.is_none(), "the confirmation is done");
+
+        // Undo sends the splits one at a time — a structural operation is
+        // accepted only at the head the previous one left — in reverse order,
+        // so every position stays the one the part joined at.
+        ops.lock().expect("the queue").clear();
+        assert!(app.collab_history_step(true), "the session owns the undo");
+        let undo = ops.lock().expect("the queue").clone();
+        assert_eq!(undo.len(), 1, "one split goes out; the next waits for its answer");
+        assert_eq!(undo[0].target, Target::Page(PageRef { index: 6, epoch: 2 }), "the last part leaves first");
+        assert_eq!(undo[0].payload["count"], 1);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 7, "nothing is applied before the room accepts it");
+
+        let applied = accepted(&undo[0], 3, 3, serde_json::json!({"from": 6, "to": 7}));
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 6, "the last part left");
+        let undo = ops.lock().expect("the queue").clone();
+        assert_eq!(undo.len(), 2, "then the split of the first part");
+        assert_eq!(undo[1].target, Target::Page(PageRef { index: 4, epoch: 3 }), "at the index it joined, on the head the last split left");
+        assert_eq!(undo[1].payload["count"], 2);
+
+        let applied = accepted(&undo[1], 4, 4, serde_json::json!({"from": 4, "to": 6}));
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 4, "the confirmation is fully undone");
+        assert!(app.collab.as_ref().expect("a session").sequence.is_none(), "the undo sequence is done");
+    }
+
+    /// A part refused `stale` (the document moved under the confirmation) takes
+    /// the parts already joined out again after the snapshot the retry asks
+    /// for, so the confirmation is all or nothing, and the list can be sent
+    /// again on the new head.
+    #[test]
+    fn a_stale_part_rolls_the_shared_combine_back() {
+        use base64::Engine as _;
+        use std::sync::Arc;
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(4)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+        let parts = [Arc::new(fixture(2)), Arc::new(fixture(1))];
+
+        assert_eq!(app.collab_combine_parts(id, 4, &parts, 2), Some(true));
+        let first = ops.lock().expect("the queue")[0].clone();
+        let ctx = egui::Context::default();
+        app.collab_event(Event::Applied { applied: accepted(&first, 1, 1, serde_json::json!({"at": 4, "count": 2})), own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 6);
+        let second = ops.lock().expect("the queue")[1].clone();
+
+        // The room answers the second part with `stale` (retryable); the client
+        // asks for a snapshot, and the confirmation waits for it.
+        app.collab_event(Event::Retry { op_id: second.op_id.as_str().to_owned() }, &ctx);
+        assert!(app.collab.as_ref().expect("a session").error.is_some(), "the refusal is reported");
+        assert!(app.collab.as_ref().expect("a session").combine_is_rolling_back());
+
+        // The snapshot moves the head on; now the split that takes the joined
+        // part out can be built on it.
+        ops.lock().expect("the queue").clear();
+        app.collab_event(Event::Snapshot { version: 2, epoch: 2, base: None, tail: Vec::new() }, &ctx);
+        let rollback = ops.lock().expect("the queue").clone();
+        assert_eq!(rollback.len(), 1, "one split for the part that joined");
+        assert_eq!(rollback[0].payload["action"], "page.split");
+        assert_eq!(rollback[0].payload["count"], 2);
+        assert_eq!(rollback[0].target, Target::Page(PageRef { index: 4, epoch: 2 }), "where the part joined, on the new head");
+
+        // The room accepts the split: the document is back at four pages and the
+        // confirmation has nothing left to do.
+        let mut full = rollback[0].clone();
+        full.payload["from"] = serde_json::json!(4);
+        full.payload["to"] = serde_json::json!(6);
+        full.payload["bytes"] = serde_json::json!(base64::engine::general_purpose::STANDARD.encode(fixture(2)));
+        app.collab_event(Event::Applied { applied: accepted(&full, 3, 3, serde_json::json!({})), own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 4, "the joined part is taken out again");
+        assert!(app.collab.as_ref().expect("a session").combine.is_none(), "the rollback is done");
+        assert!(app.collab.as_ref().expect("a session").history.is_empty(), "a rolled-back confirmation is not undoable");
     }
 }

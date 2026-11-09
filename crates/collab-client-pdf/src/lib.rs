@@ -926,6 +926,82 @@ pub fn combine_pages_op(
     ))
 }
 
+/// The operations one "Combine files" confirmation sends: one `page.combine`
+/// per part, in the order the parts are given (the combine list's order), each
+/// addressed where the parts before it end. The order is part of the result:
+/// the confirmation joins the pages as one deterministic page set, whatever
+/// else the room is doing. Every part is checked before the first operation is
+/// built — an empty or unreadable part and a part over the budget refuse the
+/// whole confirmation, so nothing is half sent (RFC §3.1.5).
+#[allow(clippy::too_many_arguments)]
+pub fn combine_parts_ops(
+    document: &Document,
+    at: usize,
+    parts: &[&[u8]],
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+) -> Result<Vec<Op>, ProjectionError> {
+    if at > document.info.pages.len() {
+        return Err(ProjectionError::Invalid("the position is past the last page".into()));
+    }
+    if parts.is_empty() {
+        return Err(ProjectionError::Invalid("a combine carries no part".into()));
+    }
+    let mut ops = Vec::with_capacity(parts.len());
+    let mut position = at;
+    for part in parts {
+        if part.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+            return Err(ProjectionError::TooLarge(part.len()));
+        }
+        let count = source_page_count(part)?;
+        if count == 0 {
+            return Err(ProjectionError::Invalid("the part has no pages".into()));
+        }
+        let index = u32::try_from(position).map_err(|_| ProjectionError::Invalid("the document is too long for a page address".into()))?;
+        ops.push(structural_op(
+            doc.clone(),
+            next_id(client_id, counter)?,
+            base_version,
+            epoch,
+            Target::Page(PageRef { index, epoch }),
+            combine_pages_payload(part, count),
+        ));
+        position = position.saturating_add(count);
+    }
+    Ok(ops)
+}
+
+/// The part an accepted `page.split` took out of the document: the 0-based
+/// start of the range, the exclusive end and the bytes the server cut. A client
+/// keeps what left without asking the room again (Save a copy, open it as
+/// another document); `None` for any other operation, or when the accepted
+/// operation carried no part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SplitPart {
+    pub from: usize,
+    pub to: usize,
+    pub bytes: Vec<u8>,
+}
+
+/// See [`SplitPart`].
+pub fn split_part(applied: &Applied) -> Option<SplitPart> {
+    let op = &applied.op;
+    if op.payload.get("action").and_then(Value::as_str)? != "page.split" {
+        return None;
+    }
+    let from = op.payload.get("from").and_then(Value::as_u64).and_then(|from| usize::try_from(from).ok())?;
+    let count = op.payload.get("count").and_then(Value::as_u64).and_then(|count| usize::try_from(count).ok())?;
+    let to = from.checked_add(count)?;
+    let bytes = decode_base64(op.payload.get("bytes").and_then(Value::as_str)?).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(SplitPart { from, to, bytes })
+}
+
 /// One `annotation.update` for a style change on the comment at `(page, index)`,
 /// addressed by its `/NM`. The comment's own properties are checked first: a
 /// property it does not have is refused on this side too, so the step fails as
@@ -2465,6 +2541,127 @@ mod tests {
         for (session, id) in [(&a, id_a), (&b, id_b)] {
             assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 2, "the split runs on both replicas again");
         }
+        Ok(())
+    }
+
+    /// A combine of several parts is a deterministic sequence of one operation
+    /// per part: each is addressed where the parts before it end, and a part the
+    /// budget or the document refuses stops the whole confirmation before the
+    /// first operation exists.
+    #[test]
+    fn a_combine_of_several_parts_is_an_ordered_sequence() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let first = fixture(2);
+        let second = fixture(1);
+        let mut counter = 0;
+        let ops = super::combine_parts_ops(document, 2, &[first.as_slice(), second.as_slice()], doc()?, "c", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 2, "one operation per part");
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 2, epoch: 0 }), "the first part appends");
+        assert_eq!(ops[0].payload["count"], 2);
+        assert_eq!(ops[1].target, Target::Page(PageRef { index: 4, epoch: 0 }), "the second starts where the first ends");
+        assert_eq!(ops[1].payload["count"], 1);
+
+        let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
+        assert!(
+            matches!(
+                super::combine_parts_ops(document, 0, &[first.as_slice(), huge.as_slice()], doc()?, "c", 0, 0, &mut counter),
+                Err(ProjectionError::TooLarge(_))
+            ),
+            "a part over the budget refuses the whole confirmation"
+        );
+        assert!(matches!(
+            super::combine_parts_ops(document, 3, &[first.as_slice()], doc()?, "c", 0, 0, &mut counter),
+            Err(ProjectionError::Invalid(_))
+        ));
+        assert!(matches!(super::combine_parts_ops(document, 0, &[], doc()?, "c", 0, 0, &mut counter), Err(ProjectionError::Invalid(_))));
+        Ok(())
+    }
+
+    /// Combine Files in a room: several parts join one after another in the
+    /// list's order, both replicas converge, and the undo takes them out in
+    /// reverse order — the last part leaves first, so the positions of the parts
+    /// before it are still the ones they joined at.
+    #[test]
+    fn two_replicas_combine_several_parts_and_take_them_back() -> Result<(), Box<dyn std::error::Error>> {
+        let bytes: Arc<Vec<u8>> = fixture(4).into();
+        let mut a = Session::new();
+        let mut b = Session::new();
+        let (id_a, id_b) = (a.open_new("fixture.pdf", bytes.clone())?, b.open_new("fixture.pdf", bytes)?);
+        let first = fixture(2);
+        let second = fixture(1);
+        let mut counter = 0;
+        let ops =
+            super::combine_parts_ops(a.get(id_a).ok_or("gone")?, 4, &[first.as_slice(), second.as_slice()], doc()?, "ada-1", 0, 0, &mut counter)?;
+
+        let mut one = ops[0].clone();
+        one.payload["at"] = serde_json::json!(4);
+        two_apply(&mut a, id_a, &mut b, id_b, &one)?;
+        let mut two = ops[1].clone();
+        two.payload["at"] = serde_json::json!(6);
+        two_apply(&mut a, id_a, &mut b, id_b, &two)?;
+        for (session, id) in [(&a, id_a), (&b, id_b)] {
+            assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 7, "the two parts joined in order");
+        }
+
+        // Undo is the splits in reverse order, in the epoch the last join left.
+        let mut split_two = super::inverse_for(a.get(id_a).ok_or("gone")?, &two, OpId::new("u2")?)?.ok_or("a combine can be undone")?;
+        split_two.base_version = 2;
+        split_two.epoch = 2;
+        if let Target::Page(page) = &mut split_two.target {
+            page.epoch = 2;
+        }
+        two_apply(&mut a, id_a, &mut b, id_b, &split_two)?;
+        let mut split_one = super::inverse_for(a.get(id_a).ok_or("gone")?, &one, OpId::new("u1")?)?.ok_or("a combine can be undone")?;
+        split_one.base_version = 3;
+        split_one.epoch = 3;
+        if let Target::Page(page) = &mut split_one.target {
+            page.epoch = 3;
+        }
+        two_apply(&mut a, id_a, &mut b, id_b, &split_one)?;
+        for (session, id) in [(&a, id_a), (&b, id_b)] {
+            assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 4, "the confirmation is fully taken back");
+        }
+        Ok(())
+    }
+
+    fn two_apply(
+        a: &mut Session,
+        id_a: pdfcraft_engine::DocId,
+        b: &mut Session,
+        id_b: pdfcraft_engine::DocId,
+        op: &pdfcraft_collab_proto::Op,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        super::apply(a, id_a, op)?;
+        super::apply(b, id_b, op)?;
+        Ok(())
+    }
+
+    /// The accepted split's part is available to the client: the range and the
+    /// bytes, which open as a document of their own (what the app puts in a tab
+    /// so the pages taken out are not lost).
+    #[test]
+    fn the_accepted_split_part_opens_as_its_own_document() -> Result<(), Box<dyn std::error::Error>> {
+        let part = fixture(2);
+        let mut accepted =
+            super::structural_op(doc()?, OpId::new("s1")?, 0, 0, Target::Page(PageRef { index: 1, epoch: 0 }), super::split_pages_payload(2));
+        accepted.payload["from"] = serde_json::json!(1);
+        accepted.payload["to"] = serde_json::json!(3);
+        accepted.payload["count"] = serde_json::json!(2);
+        accepted.payload["bytes"] = serde_json::json!(super::encode_base64(&part));
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 1,
+            epoch: 1,
+            op: accepted,
+            result: serde_json::json!({"part": {"sha256": "0", "len": part.len()}}),
+        };
+        let part = super::split_part(&applied).ok_or("the part travels with the accepted split")?;
+        assert_eq!((part.from, part.to), (1, 3));
+        let mut session = Session::new();
+        let id = session.open_new("part.pdf", part.bytes.into())?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 2, "the part is a readable document of its own");
         Ok(())
     }
 

@@ -1225,6 +1225,85 @@ fn two_clients_split_the_document_in_halves_and_join_it_back() -> Result<(), Box
     Ok(())
 }
 
+/// Combine Files in one confirmation: one operation per part, sent in the
+/// list's order (a structural operation is accepted only at the head), both
+/// replicas converge, and Undo takes the parts out in reverse order — the last
+/// part leaves first, so the parts before it keep the positions they joined at.
+/// A part that goes stale takes the parts already joined out again, so the
+/// confirmation is all or nothing.
+#[test]
+fn two_clients_combine_parts_in_order_and_roll_back_a_stale_one() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let first = fixture(2);
+    let second = fixture(1);
+
+    // The first part appends; the second starts where the first ends.
+    let one = structural_op(doc.clone(), OpId::new("op-part-1")?, ada.version, ada.epoch, page(2, ada.epoch), combine_pages_payload(&first, 2));
+    ada.send(one)?;
+    let one = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(one.result["at"], json!(2));
+    let two = structural_op(doc.clone(), OpId::new("op-part-2")?, ada.version, ada.epoch, page(4, ada.epoch), combine_pages_payload(&second, 1));
+    ada.send(two)?;
+    let two = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(two.result["at"], json!(4));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 5, "both parts joined in order");
+    }
+
+    // Undo: the last part leaves first, then the first at its own index.
+    let mut undo_two = pdfcraft_collab_client_pdf::inverse_after(&two).ok_or("the combine can be undone")?;
+    undo_two.op_id = OpId::new("op-part-2-undo")?;
+    undo_two.base_version = ada.version;
+    undo_two.epoch = ada.epoch;
+    if let Target::Page(page) = &mut undo_two.target {
+        page.epoch = ada.epoch;
+    }
+    ada.send(undo_two)?;
+    applied_on_both(&mut ada, &mut bo)?;
+    let mut undo_one = pdfcraft_collab_client_pdf::inverse_after(&one).ok_or("the combine can be undone")?;
+    undo_one.op_id = OpId::new("op-part-1-undo")?;
+    undo_one.base_version = ada.version;
+    undo_one.epoch = ada.epoch;
+    if let Target::Page(page) = &mut undo_one.target {
+        page.epoch = ada.epoch;
+    }
+    ada.send(undo_one)?;
+    applied_on_both(&mut ada, &mut bo)?;
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "the confirmation is fully taken back");
+    }
+
+    // A second confirmation: the first part joins, the second is stale (built on
+    // a passed epoch) and changes nothing — the joined part is taken out again.
+    let joined =
+        structural_op(doc.clone(), OpId::new("op-part-retry-1")?, ada.version, ada.epoch, page(2, ada.epoch), combine_pages_payload(&first, 2));
+    ada.send(joined)?;
+    let joined = applied_on_both(&mut ada, &mut bo)?;
+    let stale = structural_op(doc.clone(), OpId::new("op-part-retry-2")?, ada.version, 0, page(4, 0), combine_pages_payload(&second, 1));
+    ada.send(stale)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 4, "the stale part changed nothing; the joined one is still there");
+    }
+    let mut rollback = pdfcraft_collab_client_pdf::inverse_after(&joined).ok_or("the joined part can be taken out")?;
+    rollback.op_id = OpId::new("op-part-retry-rollback")?;
+    rollback.base_version = ada.version;
+    rollback.epoch = ada.epoch;
+    if let Target::Page(page) = &mut rollback.target {
+        page.epoch = ada.epoch;
+    }
+    ada.send(rollback)?;
+    applied_on_both(&mut ada, &mut bo)?;
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "the confirmation rolled back to the page set before it");
+    }
+    Ok(())
+}
+
 /// A structural operation is serialised by version and addressed by epoch: a
 /// split built on a passed epoch is `stale` (retryable) and changes nothing;
 /// re-addressed to the head, the same intent applies on both replicas.

@@ -255,7 +255,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         #[cfg(feature = "collab")]
         if app.collab_document().is_some_and(|doc| app.session.get(doc).is_some()) {
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!("In a shared session the files join the open document in one operation.")).color(t.text_muted));
+            ui.label(egui::RichText::new(tl!("In a shared session the files join the open document as parts of one change.")).color(t.text_muted));
         }
     });
 
