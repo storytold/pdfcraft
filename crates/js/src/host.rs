@@ -128,6 +128,12 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
     FunctionObjectBuilder::new(ctx.realm(), f).build()
 }
 
+/// Bytes `s` takes once escaped by [`JsString::to_std_string_escaped`]: a valid scalar its UTF-8
+/// length, an unpaired surrogate the six bytes of its `\uXXXX` escape.
+pub(crate) fn escaped_len(s: &JsString) -> usize {
+    s.to_std_string_with_surrogates().fold(0usize, |n, seg| n.saturating_add(seg.map_or(6, |t| t.len())))
+}
+
 pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     if let Some(o) = v.as_object()
         && o.is_array()
@@ -145,11 +151,10 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
                 String::new()
             } else {
                 let js = x.to_string(ctx)?;
-                // Checked before the copy, at the widest the escaped form can be: six bytes for a
-                // `\uXXXX` escape of one UTF-16 unit. The width cannot be measured exactly without
-                // the copy this check exists to avoid, so an entry whose worst case does not fit is
-                // refused rather than copied first and rejected afterwards.
-                if bytes.saturating_add(js.len().saturating_mul(6)) > xfa::MAX_PAYLOAD {
+                // Measured before the copy: a valid scalar takes its UTF-8 length, an unpaired
+                // surrogate the six bytes of its `\uXXXX` escape. A worst case per UTF-16 unit
+                // would refuse text that fits.
+                if bytes.saturating_add(escaped_len(&js)) > xfa::MAX_PAYLOAD {
                     return Err(error(format!("the array holds more than {} bytes of text", xfa::MAX_PAYLOAD)));
                 }
                 js.to_std_string_escaped()

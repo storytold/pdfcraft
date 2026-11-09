@@ -217,6 +217,18 @@ fn reset_form_and_field_setters_take_arrays_up_to_the_limit() {
     assert_array_error("getField('total').value = new Array((1 << 20) + 1)");
 }
 
+/// The array byte check measures the escaped width, not six bytes per UTF-16 unit: ASCII text is
+/// charged its own length, so an entry that fits is not refused.
+#[test]
+fn escaped_array_text_is_measured_by_its_width() {
+    use crate::host::escaped_len;
+    assert_eq!(escaped_len(&JsString::from("abc")), 3);
+    assert_eq!(escaped_len(&JsString::from("é")), 2);
+    assert_eq!(escaped_len(&JsString::from("界")), 3);
+    let text = "a".repeat(6 << 20);
+    assert_eq!(escaped_len(&JsString::from(text.as_str())), 6 << 20);
+}
+
 #[test]
 fn reset_form_and_field_setters_still_read_short_arrays() {
     let mut f = fields();
