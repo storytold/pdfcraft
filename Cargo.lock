@@ -1243,7 +1243,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b6a3b87f4cdf57ef43a06be41f50ce40ccced106#b6a3b87f4cdf57ef43a06be41f50ce40ccced106"
+source = "git+https://github.com/storytold/craft-libs?rev=b6b8a55b2c52bb83d0580216cbecb532af01970d#b6b8a55b2c52bb83d0580216cbecb532af01970d"
 dependencies = [
  "craft-winprint-gdi",
  "log",
