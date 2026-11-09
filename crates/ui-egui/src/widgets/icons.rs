@@ -46,9 +46,21 @@ pub fn labeled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bo
 }
 
 /// [`button`], with the glyph in `tint` rather than the theme's icon colour (an icon that shows a
-/// colour the user chose).
+/// colour the user chose). A colour that would vanish on the bar gets a backing (#6644).
 pub fn tinted_button(ui: &mut egui::Ui, name: &str, box_size: f32, tooltip: &str, tint: Color32) -> Response {
     styled_button(ui, name, box_size, false, tooltip, tooltip, Some(tint))
+}
+
+/// The contrast below which a user's colour can't be told from the surface it is drawn on.
+const MIN_TINT_CONTRAST: f32 = 2.0;
+const BACKING_DARK: Color32 = Color32::from_rgb(58, 58, 64);
+const BACKING_LIGHT: Color32 = Color32::from_rgb(238, 238, 242);
+
+/// The backing a glyph in `tint` needs on `surface`: none if it shows, else whichever neutral it
+/// stands out from.
+fn tint_backing(tint: Color32, surface: Color32) -> Option<Color32> {
+    (theme::contrast(tint, surface) < MIN_TINT_CONTRAST)
+        .then(|| if theme::contrast(tint, BACKING_DARK) >= theme::contrast(tint, BACKING_LIGHT) { BACKING_DARK } else { BACKING_LIGHT })
 }
 
 fn styled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, label: &str, tooltip: &str, chosen: Option<Color32>) -> Response {
@@ -84,6 +96,10 @@ fn styled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, l
                 egui::StrokeKind::Inside,
             ));
         }
+        if let Some(backing) = chosen.and_then(|c| tint_backing(c, t.card)) {
+            let side = (box_size * 0.5).round() + 8.0;
+            shapes.push(egui::Shape::rect_filled(Rect::from_center_size(rect.center() + press.offset(), Vec2::splat(side)), t.radius, backing));
+        }
         ui.painter().set(wash, egui::Shape::Vec(shapes));
         // The glyph shrinks a little and drops a pixel while the pointer is down.
         let size = (box_size * 0.5).round() * (1.0 - 0.08 * press.down);
@@ -96,6 +112,18 @@ fn styled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, l
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_tint_that_would_vanish_gets_a_backing_it_stands_out_from() {
+        let (white, black, red) = (Color32::WHITE, Color32::BLACK, Color32::from_rgb(227, 33, 33));
+        let (light_bar, dark_bar) = (Color32::from_rgb(255, 255, 255), Color32::from_rgb(47, 47, 52));
+        assert_eq!(tint_backing(white, light_bar), Some(BACKING_DARK), "white on a light bar");
+        assert_eq!(tint_backing(black, dark_bar), Some(BACKING_LIGHT), "black on a dark bar");
+        assert_eq!(tint_backing(black, light_bar), None);
+        assert_eq!(tint_backing(white, dark_bar), None);
+        assert_eq!(tint_backing(red, light_bar), None);
+        assert_eq!(tint_backing(red, dark_bar), None);
+    }
+
     #[test]
     fn every_catalog_icon_exists() {
         for g in pdfcraft_engine::catalog::TOOL_GROUPS {
