@@ -421,6 +421,12 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
             }
+            pdfcraft_render::RenderWarning::Type3WidthsMissing => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give"
+                );
+            }
         }
     }
     Ok(())
