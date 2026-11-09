@@ -508,8 +508,12 @@ impl Automation {
             if contents.trim().is_empty() {
                 return Err(ToolError::InvalidArgs("replace needs `contents`: the replacement text".into()));
             }
+            // `/C` is a group attribute, taken from the primary (ISO 32000-2 §12.5.6.2), so the
+            // caret carries the colour too. Only the colour: opacity and the rest are the
+            // caret's own.
+            let mut caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
+            caret.color = style.color;
             let strike = style;
-            let caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
             let mut out = self.apply(a, Edit::ReplaceText { page, quads, text: contents, author, strike, caret })?;
             out["comment"] = json!({ "page": page + 1, "type": "replace" });
             return Ok(out);
