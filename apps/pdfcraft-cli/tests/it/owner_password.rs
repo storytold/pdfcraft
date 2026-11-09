@@ -130,6 +130,12 @@ fn render_accepts_the_owner_password() {
                 .output()
                 .unwrap();
             let stderr = String::from_utf8_lossy(&out.stderr);
+            if pw == "user" {
+                // The user password opens it, but a page image is a copy the permissions forbid.
+                assert!(!out.status.success() && stderr.contains("don't allow copying"), "{alg:?} with {pw:?}: {stderr}");
+                assert!(!png.exists(), "{alg:?}: no image is written");
+                continue;
+            }
             assert!(out.status.success(), "{alg:?} with {pw:?}: {stderr}");
             assert_rendered_page(&std::fs::read(&png).unwrap(), DPI, &format!("{alg:?} with {pw:?}"));
         }

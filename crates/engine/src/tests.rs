@@ -1420,6 +1420,35 @@ fn utf16_and_code_page_text_files_convert_to_their_text() {
     assert_eq!(page_texts(&s, id), ["Crème brûlée"]);
 }
 
+/// Create ▸ PDF from a text file in Cyrillic was refused, and a comment summary quoting Cyrillic
+/// wrote each letter as `[U+XXXX]`. Both are set in the bundled Inter face now and read back as
+/// typed.
+#[test]
+fn cyrillic_text_files_and_comment_summaries_read_back_as_typed() {
+    let mut s = Session::new();
+    let text = "Договор № 12\nЖълтата дюля беше щастлива, че пухът, който цъфна, замръзна като гьон.";
+    let (_, pdf) = s.convert_to_pdf("бележки.txt", &Arc::new(text.as_bytes().to_vec())).unwrap();
+    let id = s.open_new("бележки.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), [text]);
+    // A sticky note in Russian, summarized.
+    let note = "Проверьте сумму в разделе 3";
+    let hex: String = note.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Reviewer) /Contents <FEFF{hex}> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+    );
+    let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
+    let summary = s.summarize_comments(id, SummarySort::Page).unwrap();
+    let id = s.open_new("summary.pdf", summary).unwrap();
+    let shown = page_texts(&s, id).join("\n");
+    assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
+}
+
 #[test]
 fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
     let mut s = Session::new();
@@ -1657,9 +1686,26 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert_eq!(s.compare_report(oid, id).map(|_| ()), refused());
     assert!(s.compare(oid, oid).is_ok());
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
+    // The comment summary copies comment text out like the exports do.
+    assert_eq!(s.summarize_comments(id, SummarySort::Page).map(|_| ()), refused());
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
+}
+
+/// The renderer can open an encrypted file the editing parser rejects. Its permission bits are
+/// then unknown, which is not the same as none: copying and printing stay refused.
+#[test]
+fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing() {
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, protected("", "owner", -1 ^ 0b1_0000), None).unwrap();
+    s.doc_mut(id).unwrap().editor = None;
+    let d = s.get(id).unwrap();
+    assert!(d.info.encrypted && d.permissions().is_none());
+    assert!(!d.allows_copying() && !d.allows_printing());
+    let (mut s, plain) = session_with(1);
+    s.doc_mut(plain).unwrap().editor = None;
+    assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead

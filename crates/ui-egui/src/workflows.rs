@@ -16,7 +16,6 @@ pub(super) mod ocr_verify;
 #[cfg(target_arch = "wasm32")]
 pub(super) mod ocr_web;
 pub(super) mod optimize_ui;
-pub(super) mod print_paper;
 pub(super) mod print_ui;
 pub(super) mod scan_clean_ui;
 pub(super) mod web_print;

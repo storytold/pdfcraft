@@ -5436,6 +5436,67 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
+/// A paragraph's edge and an open paragraph's frame are caught a few pixels either side of
+/// their hairline, and the cursor shows exactly where a press takes hold (#2203).
+#[test]
+fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
+    let start = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        // The drawn box: the text on screen, 2 px larger each side.
+        let bx = egui::Rect::from_min_max(
+            egui::pos2(r.left() + b.rect[0] as f32 * k, r.top() + (300.0 - b.rect[3] as f32) * k),
+            egui::pos2(r.left() + b.rect[2] as f32 * k, r.top() + (300.0 - b.rect[1] as f32) * k),
+        )
+        .expand(2.0);
+        (id, bx)
+    };
+    // A closed paragraph's right edge, 7 px inside and 7 px outside: the rewrap arrow, and a
+    // drag from there changes the width rather than moving the box.
+    for dx in [-7.0f32, 7.0] {
+        let mut h = harness(1, |_| {});
+        let (id, bx) = start(&mut h);
+        let p = egui::pos2(bx.right() + dx, bx.center().y);
+        h.hover_at(p);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "{dx} px from the edge");
+        drag(&mut h, p, p + egui::vec2(40.0, 0.0));
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"), "{dx} px from the edge rewraps");
+    }
+    // An open paragraph's frame, 7 px beyond its drawn line: the move arrow, and a press there
+    // selects the box instead of closing the paragraph.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    let p = egui::pos2(bx.center().x, bx.top() - 7.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the pointer shows the frame takes hold");
+    click_at(&mut h, p);
+    assert!(h.state().views[0].line_editor.is_none());
+    h.get_by_label("1 object selected");
+    // Once the text is changed, a press on the frame doesn't take the box (selecting it would
+    // drop the typing): it applies the typing like any click off the text, so the pointer doesn't
+    // offer the move arrow there either.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    h.state_mut().views[0].line_editor.as_mut().expect("open for typing").text = "Page one".into();
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "no move arrow where a press can't take the box");
+    click_at(&mut h, p);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});
@@ -6420,6 +6481,106 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
         })
         .expect("a caret on the last row");
     assert!(caret > row_height * 0.8 && caret < row_height + 4.0, "caret {caret} px on a {row_height} px row");
+}
+
+/// One paragraph whose every word is its own run at its own size, in a font the editor can't load
+/// (not embedded, and not a standard font), with glyphs much wider than its stand-in face's: the
+/// shape of an OCR layer, and of a Type 1 paragraph from LaTeX. Returns the PDF and its words.
+fn stand_in_words_fixture() -> (Vec<u8>, Vec<&'static str>) {
+    let words: Vec<(&str, f64)> = vec![
+        ("In", 10.0),
+        ("poker", 10.3),
+        ("a", 15.1),
+        ("full", 11.7),
+        ("house", 10.7),
+        ("is", 9.7),
+        ("a", 15.1),
+        ("set", 9.0),
+        ("of", 10.4),
+        ("cards", 10.0),
+        ("that", 9.4),
+        ("make", 9.0),
+        ("a", 12.4),
+        ("pair", 11.7),
+    ];
+    let mut content = String::new();
+    let mut x = 20.0;
+    for (word, size) in &words {
+        content.push_str(&format!("BT /F1 {size} Tf {x:.2} 200 Td ({word}) Tj ET\n"));
+        x += word.len() as f64 * 0.7 * size + 4.0;
+    }
+    let widths = vec!["700"; 95].join(" ");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 700 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /CMR10 /FirstChar 32 /LastChar 126 /Widths [{widths}] >>"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    (out, words.into_iter().map(|(w, _)| w).collect())
+}
+
+/// A drag over a word of an unchanged paragraph selects that word. The editor lays the paragraph
+/// out unseen in a stand-in face, and stretching each run to its width let every word boundary
+/// drift: over an OCR layer, dragging across "kind" selected "of a", two words before it.
+#[test]
+fn dragging_over_a_word_selects_that_word_when_the_editor_uses_a_stand_in_face() {
+    let (bytes, words) = stand_in_words_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("ocr-like.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 700.0;
+    let screen = |x: f64, y: f64| egui::pos2(page.left() + x as f32 * k, page.top() + (300.0 - y) as f32 * k);
+    let lines = h.state().session.get(h.state().views[0].id).unwrap().text_lines(0);
+    assert_eq!(lines.len(), words.len(), "one run per word: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+    let first = lines[0].rect;
+    let at = screen((first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(4);
+    let opened = h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(opened.as_deref(), Some(words.join(" ").as_str()), "the words open as one paragraph");
+    // Drag across each of the last words, just inside its box, as a reader aims at what the page shows.
+    for target in [words.len() - 1, words.len() - 4, 9] {
+        let r = lines[target].rect;
+        let middle = (r[1] + r[3]) / 2.0;
+        let (from, to) = (screen(r[0] + 0.5, middle), screen(r[2] - 0.5, middle));
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.hover_at(from + (to - from) * (step as f32 / 6.0));
+            h.run_steps(1);
+        }
+        h.drop_at(to);
+        h.run_steps(3);
+        let ed = h.state().views[0].line_editor.as_ref().expect("the paragraph stays open");
+        let selected = ed.selection.clone().and_then(|s| ed.text.get(s)).unwrap_or_default();
+        assert_eq!(selected, words[target], "dragging over word {target} ({:?})", words[target]);
+    }
 }
 
 /// Opt-in private-document regression. This never captures images or saves the source file.
