@@ -90,6 +90,46 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
+    /// Objects of the file that could not be read, lowest number first, as lines such as
+    /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
+    /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
+    /// unlike [`Self::repair_log`], nothing was repaired. Lists the objects read so far, by this
+    /// document, its clones or a scan of it, that have not since been edited; past 100, a last
+    /// line says there were more. Opening again, authenticating or rebuilding the index starts
+    /// the list afresh, as it does the object cache.
+    pub fn unreadable_objects(&self) -> Vec<String> {
+        let Ok(unreadable) = self.unreadable.lock() else { return Vec::new() };
+        unreadable.lines(|num| self.overlay.contains_key(&num))
+    }
+
+    /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
+    /// whose broken object is asked for again and again pays for it once.
+    fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
+        // A poisoned lock only means the object goes unlisted; the read itself still fails.
+        let Ok(mut unreadable) = self.unreadable.lock() else { return };
+        let hidden = |n: u32| self.overlay.contains_key(&n);
+        if unreadable.wants(num, hidden) {
+            unreadable.note(num, self.generation(num), &reason(), hidden);
+        }
+    }
+
+    /// Why an object listed at `offset` could not be read: what parsing it there, without resolving
+    /// an indirect `/Length`, found. A best account, not the only one: the reader also tried
+    /// elsewhere.
+    fn why_unreadable(&self, offset: usize) -> String {
+        match parse_indirect_shared(&self.data, offset, &|_| None, &self.endstreams) {
+            Err(e) => e.to_string(),
+            Ok(_) => "no readable copy was found at its cross-reference offset or elsewhere in the file".into(),
+        }
+    }
+
     /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
     /// know about (fidelity: never silent).
     pub fn note_repair(&mut self, line: String) {
@@ -290,7 +330,29 @@ impl Document {
     /// ([`pdfcraft_filters::MAX_CHAIN`]). Only small values are copied, so a file can't have a
     /// large object copied once for each key and filter.
     pub fn with_direct_parms<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
-        let Some(p) = s.dict.get(b"DecodeParms") else { return Cow::Borrowed(s) };
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut s = s.clone();
+        s.dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(s)
+    }
+
+    /// [`Document::with_direct_parms`] for decoding alone: where that copies `s`, this makes a
+    /// stream of `s`'s data, shared, and a dictionary of its `/Filter` and the parameters made
+    /// direct, all its filters read. A stream named again and again, as a page's `/Contents` may
+    /// list one, isn't copied whole each time.
+    pub(crate) fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut dict = Dict::new();
+        if let Some(f) = s.dict.get(b"Filter") {
+            dict.set(b"Filter".to_vec(), f.clone());
+        }
+        dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(Stream { dict, raw: s.raw.clone() })
+    }
+
+    /// The `/DecodeParms` [`Document::with_direct_parms`] gives `s`, or `None` when it keeps `s`.
+    fn direct_parms(&self, s: &Stream) -> Option<Object> {
+        let p = s.dict.get(b"DecodeParms")?;
         let crypt = |f: &Object| matches!(f.as_name(), Some(b"Crypt"));
         let filters: Vec<bool> = match s.dict.get(b"Filter") {
             Some(Object::Array(a)) => a.iter().map(crypt).collect(),
@@ -298,7 +360,7 @@ impl Document {
             None => Vec::new(),
         };
         if filters.iter().filter(|c| !**c).count() > pdfcraft_filters::MAX_CHAIN {
-            return Cow::Borrowed(s);
+            return None;
         }
         let mut changed = matches!(p, Object::Ref(_));
         // Its numbers and flags kept, resolved; anything else is no filter's parameters (null).
@@ -325,12 +387,7 @@ impl Document {
             }
             _ => one(p, &mut changed),
         };
-        if !changed {
-            return Cow::Borrowed(s);
-        }
-        let mut s = s.clone();
-        s.dict.set(b"DecodeParms".to_vec(), made);
-        Cow::Owned(s)
+        changed.then_some(made)
     }
 
     /// `o`, or the object it refers to, without copying either.
@@ -429,7 +486,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
@@ -516,6 +580,11 @@ impl Document {
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
         let loaded = self.load(num, 0).map(Arc::new);
+        if let Err(e) = &loaded
+            && !matches!(e, CosError::Poisoned)
+        {
+            self.note_unreadable(num, || e.to_string());
+        }
         // A failure is kept like an object, or every read of a damaged object loads it again. A
         // poisoned lock says nothing about the object. Clones share the cache, so a load that read
         // this document's edits (an edited object stream or `/Length`) is not kept.
@@ -663,7 +732,10 @@ impl Document {
                     .or_else(|| if self.header_offset == 0 { None } else { at(off.saturating_add(self.header_offset)) })
                     .or_else(|| self.located.get(&num).and_then(|(o, _)| usize::try_from(*o).ok()).and_then(at))
                     .or_else(|| self.scan_for(num).map(|(id, o)| self.decrypted(id, o)))
-                    .ok_or(CosError::MissingObject(num))
+                    .ok_or_else(|| {
+                        self.note_unreadable(num, || self.why_unreadable(off));
+                        CosError::MissingObject(num)
+                    })
             }
             Some(XrefEntry::InStream { stream, index }) => {
                 let stm = self.objstm(stream)?;

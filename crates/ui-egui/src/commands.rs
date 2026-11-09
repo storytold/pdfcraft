@@ -30,6 +30,9 @@ pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
+/// Go to first / last page beside Home and End (`canvas::navigation`).
+pub(crate) const FIRST_PAGE: Shortcut = Shortcut::cmd_shift("↑");
+pub(crate) const LAST_PAGE: Shortcut = Shortcut::cmd_shift("↓");
 
 /// Whether shortcuts are written the macOS way (`⇧⌘S`) rather than `Ctrl+Shift+S`. egui knows the
 /// platform from the build target, and on the web from the browser's user agent.
@@ -113,6 +116,9 @@ impl PdfCraftApp {
         match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
+                // A command stopped part way through closing or replacing a tab must not leave
+                // the next frame pointing past the last one (#3914).
+                self.keep_active_valid();
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
