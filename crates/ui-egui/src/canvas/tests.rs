@@ -769,6 +769,21 @@ fn find_for_a_selection_searches_from_the_page_the_reader_is_on() {
     assert_eq!((v.find.as_ref().unwrap().current, v.current), stepped, "the query is already the search");
 }
 
+/// #5141: ⌘F while the query field has focus only refocuses it: the query the reader edited stays.
+#[test]
+fn find_for_a_selection_keeps_a_query_being_typed() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.texts.insert(0, Arc::new(find_test_text("a word first")));
+    v.find = Some(Find { query: "typed".into(), field_focused: true, ..Default::default() });
+    v.select_text(0, 2, 5);
+    assert_eq!(v.selected_text().as_deref(), Some("word"));
+    v.open_find_for_selection();
+    assert_eq!(v.find.as_ref().unwrap().query, "typed");
+    v.find.as_mut().unwrap().field_focused = false;
+    v.open_find_for_selection();
+    assert_eq!(v.find.as_ref().unwrap().query, "word", "with focus elsewhere the selection is the search");
+}
+
 /// #5141: with the selection on the second page and the first the view's current one (two pages
 /// on screen), the search starts from the selection's page and finds the word there, not the
 /// same word on the first page.
