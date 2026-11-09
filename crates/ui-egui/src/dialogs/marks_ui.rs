@@ -218,6 +218,150 @@ pub struct MarksDraft {
     /// The page (0-based) the preview was stepped to; `None` previews the current page. Reset
     /// each time the dialog opens.
     pub preview: Option<usize>,
+    /// Header and footer templates kept by name in app settings.
+    pub saved_hf: Vec<SavedHeaderFooter>,
+    pub saved_hf_name: String,
+    pub saved_hf_pick: Option<usize>,
+}
+
+const MAX_SAVED_HF: usize = 64;
+const MAX_HF_NAME_CHARS: usize = 100;
+const MAX_HF_TEXT_CHARS: usize = 4000;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedHeaderFooter {
+    pub name: String,
+    pub settings: HeaderFooter,
+}
+
+fn clean_hf_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_HF_NAME_CHARS).collect();
+    let name = name.trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+fn same_hf_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
+impl SavedHeaderFooter {
+    fn to_json(&self) -> serde_json::Value {
+        let h = &self.settings;
+        serde_json::json!({"header_left": h.text[0], "header_center": h.text[1], "header_right": h.text[2],
+            "footer_left": h.text[3], "footer_center": h.text[4], "footer_right": h.text[5], "font": h.font.label(),
+            "font_size": h.font_size, "color": h.color, "underline": h.underline, "margins": h.margins,
+            "start_number": h.start_number, "shrink": h.shrink})
+    }
+
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let name = clean_hf_name(v.get("name")?.as_str()?)?;
+        let v = v.get("settings")?;
+        let mut settings = HeaderFooter::default();
+        for (slot, key) in
+            settings.text.iter_mut().zip(["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"])
+        {
+            *slot = v.get(key)?.as_str()?.chars().take(MAX_HF_TEXT_CHARS).collect();
+        }
+        settings.font = match v.get("font").and_then(serde_json::Value::as_str) {
+            Some("Times") => pdfcraft_engine::FontFamily::Times,
+            Some("Courier") => pdfcraft_engine::FontFamily::Courier,
+            _ => pdfcraft_engine::FontFamily::Helvetica,
+        };
+        if let Some(n) = v.get("font_size").and_then(serde_json::Value::as_f64).filter(|n| n.is_finite()) {
+            settings.font_size = n.clamp(4.0, 72.0);
+        }
+        if let Some(values) = v.get("color").and_then(serde_json::Value::as_array).filter(|a| a.len() == 3) {
+            let mut color = [0.0; 3];
+            for (slot, value) in color.iter_mut().zip(values) {
+                *slot = value.as_f64().filter(|n| n.is_finite())?.clamp(0.0, 1.0);
+            }
+            settings.color = color;
+        }
+        if let Some(values) = v.get("margins").and_then(serde_json::Value::as_array).filter(|a| a.len() == 4) {
+            let mut margins = [0.0; 4];
+            for (slot, value) in margins.iter_mut().zip(values) {
+                *slot = value.as_f64().filter(|n| n.is_finite())?.clamp(0.0, 720.0);
+            }
+            settings.margins = margins;
+        }
+        settings.underline = v.get("underline").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        settings.start_number = v.get("start_number").and_then(serde_json::Value::as_u64).unwrap_or(1).clamp(1, 999_999) as u32;
+        settings.shrink = v.get("shrink").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        Some(Self { name, settings })
+    }
+}
+
+pub(crate) fn saved_hf_to_json(saved: &[SavedHeaderFooter]) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "items": saved.iter().map(|s| serde_json::json!({"name": s.name, "settings": s.to_json()})).collect::<Vec<_>>()
+    })
+}
+
+pub(crate) fn saved_hf_from_json(v: &serde_json::Value) -> Vec<SavedHeaderFooter> {
+    // Accept the pre-versioned array as version 0 so existing preferences migrate on save.
+    let items = if let Some(items) = v.as_array() {
+        items
+    } else if v.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+        let Some(items) = v.get("items").and_then(serde_json::Value::as_array) else { return Vec::new() };
+        items
+    } else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for saved in items.iter().filter_map(SavedHeaderFooter::from_json) {
+        if out.len() >= MAX_SAVED_HF {
+            break;
+        }
+        if !out.iter().any(|s: &SavedHeaderFooter| same_hf_name(&s.name, &saved.name)) {
+            out.push(saved);
+        }
+    }
+    out
+}
+
+impl MarksDraft {
+    fn hf_saved_index(&self) -> Option<usize> {
+        self.saved_hf_pick.filter(|&i| self.saved_hf.get(i).is_some_and(|s| s.settings == self.hf))
+    }
+
+    fn save_hf(&mut self) {
+        let Some(name) = clean_hf_name(&self.saved_hf_name) else { return };
+        let Some(index) = self
+            .saved_hf
+            .iter()
+            .position(|s| same_hf_name(&s.name, &name))
+            .or_else(|| (self.saved_hf.len() < MAX_SAVED_HF).then_some(self.saved_hf.len()))
+        else {
+            return;
+        };
+        let saved = SavedHeaderFooter { name, settings: self.hf.clone() };
+        if index == self.saved_hf.len() {
+            self.saved_hf.push(saved);
+        } else if let Some(slot) = self.saved_hf.get_mut(index) {
+            *slot = saved;
+        }
+        self.saved_hf_pick = Some(index);
+        if let Some(saved) = self.saved_hf.get(index) {
+            self.saved_hf_name.clone_from(&saved.name);
+        }
+    }
+
+    fn choose_hf(&mut self, index: usize) {
+        if let Some(saved) = self.saved_hf.get(index) {
+            self.hf = saved.settings.clone();
+            self.saved_hf_name.clone_from(&saved.name);
+            self.saved_hf_pick = Some(index);
+        }
+    }
+
+    fn delete_hf(&mut self) {
+        if let Some(index) = self.hf_saved_index() {
+            self.saved_hf.remove(index);
+            self.saved_hf_pick = None;
+            self.saved_hf_name.clear();
+        }
+    }
 }
 
 impl Default for MarksDraft {
@@ -237,6 +381,9 @@ impl Default for MarksDraft {
             file_page: 1,
             backdrops: BackdropCheck::default(),
             preview: None,
+            saved_hf: Vec::new(),
+            saved_hf_name: String::new(),
+            saved_hf_pick: None,
         }
     }
 }
@@ -549,6 +696,38 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999));
             });
             ui.add(widgets::checkbox(&mut d.hf.shrink, tl!("Shrink the page content to make room for the header and footer")));
+            ui.horizontal(|ui| {
+                let selected = d.hf_saved_index();
+                let label = selected.and_then(|i| d.saved_hf.get(i)).map_or_else(|| tl!("[Custom]").to_owned(), |s| s.name.clone());
+                craft_ui::ComboBox::from_id_salt("hf-saved-settings").selected_text(label).show_ui(ui, |ui| {
+                    let mut picked = selected;
+                    ui.selectable_value(&mut picked, None, tl!("[Custom]"));
+                    for (i, saved) in d.saved_hf.iter().enumerate() {
+                        ui.selectable_value(&mut picked, Some(i), &saved.name);
+                    }
+                    if picked != selected {
+                        if let Some(i) = picked {
+                            d.choose_hf(i);
+                        } else {
+                            d.saved_hf_pick = None;
+                        }
+                    }
+                });
+                ui.add(egui::TextEdit::singleline(&mut d.saved_hf_name).desired_width(120.0).hint_text(tl!("Name")));
+                if ui
+                    .add_enabled(
+                        clean_hf_name(&d.saved_hf_name).is_some()
+                            && (d.saved_hf.len() < MAX_SAVED_HF || d.saved_hf.iter().any(|s| s.name == d.saved_hf_name.trim())),
+                        egui::Button::new(tl!("Save Settings")),
+                    )
+                    .clicked()
+                {
+                    d.save_hf();
+                }
+                if ui.add_enabled(selected.is_some(), egui::Button::new(tl!("Delete Settings"))).clicked() {
+                    d.delete_hf();
+                }
+            });
         }
         MarkKind::Watermark => {
             ui.horizontal(|ui| {
@@ -911,6 +1090,57 @@ mod tests {
         assert!(!fills.contains(&grey), "swatch painted as if the colour were linear: {fills:?}");
         assert!(fills.contains(&rgb32(c)), "swatch {:?} not among {fills:?}", rgb32(c));
         assert_eq!(c, [0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn saved_header_footers_round_trip_and_damaged_entries_are_read_leniently() {
+        let mut d = MarksDraft::default();
+        d.hf.text[0] = "Résumé <<1>>".into();
+        d.hf.font = pdfcraft_engine::FontFamily::Times;
+        d.hf.font_size = 15.0;
+        d.hf.color = [0.1, 0.4, 0.9];
+        d.hf.margins = [12.0, 24.0, 36.0, 48.0];
+        d.hf.underline = true;
+        d.hf.shrink = true;
+        d.saved_hf_name = "  En-tête 日本  ".into();
+        d.save_hf();
+        let json = saved_hf_to_json(&d.saved_hf);
+        let restored = saved_hf_from_json(&json);
+        assert_eq!(restored, d.saved_hf);
+        assert_eq!(restored[0].name, "En-tête 日本");
+        assert_eq!(json["version"], 1);
+        let config = &json["items"][0]["settings"];
+        assert_eq!(config["header_left"], "Résumé <<1>>");
+        assert!(config.get("name").is_none() && config.get("pages").is_none(), "the headless tool receives reusable settings without name or range");
+
+        let malformed = serde_json::json!([
+            {"name":"bad", "settings":{"header_left":"only"}},
+            {"name":"", "settings":{"header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""}},
+            {"name":"kept", "settings":{"header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":"", "font_size":null}},
+            {"name":"KEPT", "settings":{"header_left":"duplicate", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""}}
+        ]);
+        let restored = saved_hf_from_json(&malformed);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].name, "kept");
+        assert_eq!(restored[0].settings.font_size, HeaderFooter::default().font_size);
+
+        let legacy = serde_json::json!([{"name":"Old preference", "settings": {
+            "header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""
+        }}]);
+        assert_eq!(saved_hf_from_json(&legacy)[0].name, "Old preference");
+    }
+
+    #[test]
+    fn saved_header_footer_names_replace_without_case_duplicates() {
+        let mut d = MarksDraft { saved_hf_name: "Invoice".into(), ..MarksDraft::default() };
+        d.hf.text[0] = "First".into();
+        d.save_hf();
+        d.saved_hf_name = "invoice".into();
+        d.hf.text[0] = "Second".into();
+        d.save_hf();
+        assert_eq!(d.saved_hf.len(), 1);
+        assert_eq!(d.saved_hf[0].name, "invoice");
+        assert_eq!(d.saved_hf[0].settings.text[0], "Second");
     }
 
     #[test]
