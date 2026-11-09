@@ -134,7 +134,9 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     // spacing behind, as the first one does inside the replacement, and a dropped copy its advance
     // where text after it is placed by that (the line's own runs give way to the replacement's).
     let mut advances = dropped_advances(doc, &ops, &res, &drops);
-    advances.retain(|i, _| !target.ops.contains(i));
+    for i in &target.ops {
+        advances.remove(i);
+    }
     let new_data = splice(&pieces, &ops, |i| {
         if i == first {
             return (std::mem::take(&mut replacement), false);

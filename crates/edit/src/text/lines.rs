@@ -215,6 +215,23 @@ pub(crate) fn dropped_advances_within(
 /// between them doesn't count for the text after the `Q`. Leaving an advance in is harmless where
 /// nothing turns out to use it. One pass from the end, so a page of many dropped runs stays linear.
 fn kept_run_follows(ops: &[Op], drop: &std::collections::HashSet<usize>) -> Vec<bool> {
+    // The `q` and `Q` that pair up: [`interpret`] ignores a `Q` with nothing saved, so only a
+    // `Q` that restores something is a boundary here.
+    let mut paired = vec![false; ops.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("q") {
+            open.push(i);
+        } else if op.is("Q")
+            && let Some(q) = open.pop()
+        {
+            for at in [q, i] {
+                if let Some(slot) = paired.get_mut(at) {
+                    *slot = true;
+                }
+            }
+        }
+    }
     let mut out = vec![false; ops.len()];
     let mut follows = false;
     // What followed each `Q` still open (read backwards), restored at its `q`.
@@ -223,12 +240,13 @@ fn kept_run_follows(ops: &[Op], drop: &std::collections::HashSet<usize>) -> Vec<
         if let Some(slot) = out.get_mut(i) {
             *slot = follows;
         }
+        let pairs = paired.get(i).copied().unwrap_or(false);
         match op.op.as_slice() {
-            b"Q" => {
+            b"Q" if pairs => {
                 after_restore.push(follows);
                 follows = false;
             }
-            b"q" => follows = follows || after_restore.pop().unwrap_or(false),
+            b"q" if pairs => follows = follows || after_restore.pop().unwrap_or(false),
             b"ET" | b"BT" | b"Td" | b"TD" | b"Tm" | b"T*" | b"'" | b"\"" => follows = false,
             b"Tj" | b"TJ" if !drop.contains(&i) => follows = true,
             _ => {}

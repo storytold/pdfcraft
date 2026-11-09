@@ -13727,6 +13727,8 @@ fn rewriting_a_paragraph_keeps_later_runs_on_its_baseline_in_place() {
         ("BT /F1 12 Tf 80 Tz 14 TL 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj T* (Next) Tj ET", "Next"),
         // A `Q` puts back the text matrix its `q` saved: the `Tm` between them doesn't place `Far`.
         ("BT /F1 12 Tf 72 700 Td (Target words) Tj q 1 0 0 1 300 300 Tm Q [-20000] TJ (Far) Tj ET", "Far"),
+        // A `Q` with nothing saved restores nothing: the advance is still kept.
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj Q [-20000] TJ (Far) Tj ET", "Far"),
     ];
     for (content, run) in cases {
         let original = text_page(content);
@@ -13746,7 +13748,16 @@ fn rewriting_a_paragraph_keeps_later_runs_on_its_baseline_in_place() {
 /// that advance, so a run later in the same text object stays where it was.
 #[test]
 fn rewriting_vertical_runs_keeps_a_later_run_in_its_column_in_place() {
-    let content = "BT /V1 20 Tf 500 720 Td <0041> Tj <0042> Tj [-8000] TJ <0043> Tj ET";
+    // The second with a horizontal scaling (`Tz`), which a vertical advance doesn't take.
+    for content in [
+        "BT /V1 20 Tf 500 720 Td <0041> Tj <0042> Tj [-8000] TJ <0043> Tj ET",
+        "BT /V1 20 Tf 80 Tz 500 720 Td <0041> Tj <0042> Tj [-8000] TJ <0043> Tj ET",
+    ] {
+        vertical_runs_keep_a_later_run_in_place(content);
+    }
+}
+
+fn vertical_runs_keep_a_later_run_in_place(content: &str) {
     let original = vertical_page(content);
     let place = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "C").map(|l| l.rect);
     let before = place(&original).unwrap_or_else(|| panic!("C is a line of its own: {:?}", text::text_lines(&original, 0)));
@@ -13758,7 +13769,7 @@ E",
         let mut doc = original.clone();
         text::replace_block(&mut doc, 0, target, draft).unwrap();
         let after = place(&reopen(&doc)).unwrap_or_else(|| panic!("C is gone with {draft:?}"));
-        assert!(after.iter().zip(before).all(|(a, b)| (a - b).abs() < 1e-6), "{draft:?}: {before:?} -> {after:?}");
+        assert!(after.iter().zip(before).all(|(a, b)| (a - b).abs() < 1e-6), "{content} with {draft:?}: {before:?} -> {after:?}");
     }
 }
 
