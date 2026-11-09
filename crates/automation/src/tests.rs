@@ -219,6 +219,7 @@ fn names_from_documents_become_one_plain_file_name() {
 #[cfg(windows)]
 #[test]
 fn other_shares_and_device_paths_are_refused_by_name() {
+    use crate::file_access::foreign_share;
     let local = Path::new(r"\\?\C:\work\root");
     for p in [
         r"\\host\share\x.pdf",
@@ -240,6 +241,28 @@ fn other_shares_and_device_paths_are_refused_by_name() {
     assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
     assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
     assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+}
+
+/// Windows drops a trailing dot from a folder name when it opens a path (`root.` is `root`), so
+/// with a root, a path that names the root or a folder above it that way still reaches the file
+/// inside. A dotted name outside stays outside.
+#[cfg(windows)]
+#[test]
+fn a_trailing_dot_on_the_root_or_above_it_names_the_folder_windows_opens() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-dot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside")).unwrap();
+    std::fs::write(base.join("root").join("a.pdf"), b"x").unwrap();
+    std::fs::write(base.join("outside").join("b.pdf"), b"x").unwrap();
+    let a = Automation::new().with_root(base.join("root")).unwrap();
+    let shown = base.to_string_lossy().into_owned();
+    for p in [format!(r"{shown}\root.\a.pdf"), format!(r"{shown}.\root\a.pdf")] {
+        let resolved = a.resolve(&p, false);
+        assert!(resolved.is_ok(), "{p}: {resolved:?}");
+    }
+    assert!(a.resolve(&format!(r"{shown}\outside.\b.pdf"), false).is_err());
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A fresh, empty folder for one staging test.
@@ -549,4 +572,36 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
         assert!(err.contains("input exceeds 512 MiB"), "{tool}: {err}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn text_extract_html_has_one_budget_across_pages() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let args = json!({ "doc": id.0, "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    assert_eq!(full["html_truncated"], false);
+    let sizes: Vec<usize> = full["pages"].as_array().unwrap().iter().map(|p| p["html"].as_str().unwrap().len()).collect();
+    assert!(sizes.iter().all(|n| *n > 0), "{full}");
+    // Room for two pages: the third gets no HTML, and the call says so.
+    let capped = a.text_extract_within(&Args(&args), sizes[0] + sizes[1] + sizes[2] - 1).unwrap();
+    let pages = capped["pages"].as_array().unwrap();
+    assert_eq!(capped["html_truncated"], true);
+    assert_eq!(pages[1]["html"], full["pages"][1]["html"]);
+    assert_eq!(pages[2]["html"], "");
+    assert_eq!(pages[2]["styles_incomplete"], true);
+    assert_eq!(pages[2]["text"], "Page 3", "the plain text is not capped by the HTML budget");
+    // Plain text alone says nothing about HTML.
+    assert!(a.text_extract(&Args(&json!({ "doc": id.0 }))).unwrap().get("html_truncated").is_none());
+    // A smaller page after the one that overflowed still gets none: "Page 1" fits what "Page 10"
+    // did not.
+    let id = search_document(&mut a, 10);
+    let args = json!({ "doc": id.0, "pages": [10, 1], "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    let (ten, one) = (full["pages"][0]["html"].as_str().unwrap().len(), full["pages"][1]["html"].as_str().unwrap().len());
+    assert!(one < ten, "{full}");
+    let capped = a.text_extract_within(&Args(&args), ten - 1).unwrap();
+    assert_eq!(capped["pages"][0]["html"], "");
+    assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
+    assert_eq!(capped["pages"][1]["styles_incomplete"], true);
 }

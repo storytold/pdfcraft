@@ -283,7 +283,7 @@ impl<'a> Walker<'a> {
             return Err(AuditError::TooManyForms);
         }
         // A form stream that cannot be decoded fails the audit: it might hide a cover.
-        let data = self.budget.decode_strict(stream)?;
+        let data = self.budget.decode_strict(self.doc, stream)?;
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
         sub_gs.ctm = matrix.then(&gs.ctm);
@@ -326,7 +326,7 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
     let mut streams = Vec::with_capacity(contents.len());
     for c in &contents {
         if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(budget.decode_strict(s)?);
+            streams.push(budget.decode_strict(doc, s)?);
         }
     }
     let pieces = Pieces::join(&streams);
