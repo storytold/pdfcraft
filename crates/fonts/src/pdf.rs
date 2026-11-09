@@ -415,9 +415,11 @@ impl<'a> Reads<'a> {
     /// the stages together to `max` for each of them ([`DecodeBudget::decode_stages_within`]): a
     /// map of 65,536 CIDs behind ASCIIHex and Flate, its Flate data smaller than the map, makes
     /// all of `MAX_CID_TO_GID` in its last stage, with the hex stage's output on top. So a stream
-    /// reads here when it reads without an allowance and what is left pays for it. A stream past
-    /// `max` is unread, not refused, when what is left can pay for its stages; when it can't, the
-    /// stream spends it and counts as refused.
+    /// reads here when it reads without an allowance and what is left pays for it. A stream with a
+    /// stage past `max` is unread. When what is left is more than what the stages before that one
+    /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
+    /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
+    /// with no more left than that total, it spends all of it and counts as refused.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
         // Once the allowance is spent the decode refuses the stream; refused here, before the
         // parameters are resolved, which is work the allowance doesn't count.

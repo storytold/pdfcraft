@@ -117,9 +117,10 @@ struct LegacyFace {
 }
 
 /// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
-/// 16 MiB), which it keeps, and the CMaps and glyph maps read to adapt their programs' cmaps. A
-/// page may name many of them. The metrics read to find and measure the subsets
-/// (`Metrics::from_dict`) aren't charged to it.
+/// 16 MiB), which it keeps, and what is read to adapt their programs' cmaps: their CMaps and glyph
+/// maps, and a subset's program again, for which of its glyphs have outlines. A page may name many
+/// of them. The metrics read to find and measure the subsets (`Metrics::from_dict`) aren't charged
+/// to it.
 const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
