@@ -22,6 +22,11 @@ struct VerifiedSignature<'a> {
     unverified_time: Option<Time>,
 }
 
+/// Most signature fields whose locks are compared for a signature that is not listed under any of
+/// the fields ending its signed revision; past it the locks are left undecided. Each costs a walk of
+/// the form, and a real revision ends with one signature.
+const MAX_UNBOUND_CANDIDATES: usize = 4;
+
 /// Validate one signature dictionary.
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
     list(doc, bytes, trust).into_iter().find(|s| s.field == field)
@@ -300,9 +305,11 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
                 // The fields this signature locks, as the signed revision has them, against the
                 // document now (#6757). Its locks are its own field's: when that field is not
                 // among those ending the revision, any of them could be it, so a lock on any of
-                // them leaves the check undecided rather than borrowing another field's.
+                // them leaves the check undecided rather than borrowing another field's. Each
+                // candidate costs a walk of the form, so past a few the check is undecided too.
                 locks = match bound {
                     Some(_) => locked_fields(doc, &old, field, v),
+                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => Locked::Unchecked,
                     None if candidates.iter().any(|(f, v)| locked_fields(doc, &old, f, v) != Locked::Kept) => Locked::Unchecked,
                     None => Locked::Kept,
                 };
