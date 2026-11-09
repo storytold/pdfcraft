@@ -549,7 +549,7 @@ fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
-fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
+fn flattening_draws_cloudy_squares_and_keeps_one_it_cannot_draw() {
     let page = stream("", " ");
     let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
     let case = |extra: &str, drawn: usize, left: bool| {
@@ -571,10 +571,13 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
             assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
         }
     };
-    case("/BE << /S /C /I 2 >>", 0, true);
+    // A cloudy square is drawn (ISO 32000-2 Table 169); one whose /RD leaves no square inside
+    // its /Rect (Table 180: the sums "shall be less than" the width and height) cannot be, and stays.
+    case("/BE << /S /C /I 2 >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30]", 0, true);
     case("/BE << /S /S >>", 1, false);
-    case("/BE << /S /C /I 2 >> /F 2", 0, true);
-    case("/BE << /S /C /I 2 >> /AP << /N 6 0 R >>", 1, false);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /F 2", 0, true);
+    case("/BE << /S /C /I 2 >> /RD [60 30 60 30] /AP << /N 6 0 R >>", 1, false);
 }
 
 /// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
@@ -815,7 +818,7 @@ fn flattening_takes_an_undrawable_reply_with_its_comment() {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
         &page,
         "<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /Contents (Synthetic comment) /AP << /N 8 0 R >> /Popup 7 0 R >>",
-        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /IRT 5 0 R >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 500 200 550] /C [1 0 0] /Contents (Synthetic reply) /BE << /S /C /I 2 >> /RD [60 30 60 30] /IRT 5 0 R >>",
         "<< /Type /Annot /Subtype /Popup /Rect [300 600 400 700] /Parent 5 0 R >>",
         "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream",
     ]);
@@ -1901,6 +1904,30 @@ fn tracked_text_preserves_larger_word_gaps() {
         let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
         assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "TEST WORD", "{show}");
     }
+}
+
+/// LibreOffice stretches a justified line on both sides of each space glyph, so a gap that reads
+/// as a space comes right before the space glyph it widens: one space, not two. A gap after the
+/// space glyph, a space glyph with no gap before it, and two space glyphs after a gap read as
+/// before.
+#[test]
+fn a_gap_before_a_space_glyph_reads_as_one_space() {
+    for show in ["[(Word) -250 ( next) -250 ( last)] TJ", "[(Word ) -250 (next ) -250 (last)] TJ", "[(Word) -250 (next) 0 ( last)] TJ"] {
+        let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last", "{show}");
+    }
+    // Only the first space glyph after the gap is the gap's: two real spaces stay two.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // The same line split over operators: the gap ends one run, its space glyph starts the next.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250] TJ [( next) -250] TJ ( last) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last");
+    // Space glyphs on both sides of a break between runs, with no gap, are two spaces.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (Word ) Tj ( next) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // Down a vertical column the same.
+    let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");
 }
 
 #[test]
@@ -3211,6 +3238,175 @@ fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
     assert!(r.substituted.as_deref().is_none_or(|s| !s.contains("Type3")), "{:?}", r.substituted);
     let lines = text::text_lines(&reopen(&doc), 0).unwrap();
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
+}
+
+/// #2378: a word the line's subset can't show goes to Helvetica, and only that word. The words
+/// it can show keep the source font (here `F2`, a subset of `a` and `b` without a space glyph),
+/// one font per word, and the line reads back whole and in place: one line, in its own font, so
+/// editing it again replaces all of it (review on #2955), also when it starts with a substitute
+/// word.
+#[test]
+fn only_the_words_a_subset_cannot_show_are_substituted() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_line(&mut doc, 0, 0, "ab ba cab ba").unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
+    let mut doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/F2") && content.contains("/PCEdHelvetica"), "both fonts are used: {content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+    assert_eq!(read, [("ab ba cab ba", "F2")]);
+    // Each word where its font puts it, the substituted `cab` included: no gap or overlap opens
+    // where the font changes (review on #2955).
+    let starts: Vec<f64> = lines[0].ink.iter().map(|b| b[0]).collect();
+    assert_eq!(starts.len(), 4, "{:?}", lines[0].ink);
+    for (got, want) in starts.iter().zip([72.0, 85.5, 98.48, 117.9]) {
+        assert!((got - want).abs() < 0.01, "word starts {starts:?}, want {want} among them");
+    }
+    assert!(lines[0].ink.windows(2).all(|w| w[0][2] < w[1][0]), "no word box overlaps the next: {:?}", lines[0].ink);
+    for (text, first) in [("cab ab", "PCEdHelvetica"), ("ba cab", "F2")] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+        assert_eq!(read, [(text, "F2")], "after replacing with {text:?} (starting with {first})");
+    }
+}
+
+/// Review on #2955: replacing a line written in two fonts again replaces its `/PCEdLine`
+/// sequence too. Kept, each edit nested one more, and its `EMC`s outnumbered what the reader
+/// counts once 256 deep, closing the sequence around the line (here a `/Span`). The content
+/// doesn't grow from one edit to the next.
+#[test]
+fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
+    let mut doc = text_page("/Span BMC BT /F2 10 Tf 72 600 Td (ab) Tj ET EMC BT /F2 10 Tf 72 500 Td (ba) Tj ET");
+    let count = |content: &str, op: &str| content.split_whitespace().filter(|w| *w == op).count();
+    let mut sizes = Vec::new();
+    for text in ["ab ba cab ba", "cab ab", "ab cab", "ab cab", "ab ba", "ba ab"] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        let mixed = text.contains('c');
+        assert_eq!(content.matches("/PCEdLine").count(), usize::from(mixed), "after {text:?}: {content}");
+        assert_eq!((count(&content, "BMC"), count(&content, "EMC")), (1 + usize::from(mixed), 1 + usize::from(mixed)), "after {text:?}: {content}");
+        assert_eq!(count(&content, "Tf"), 2 + if mixed { 4 } else { 1 }, "after {text:?}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<&str> = lines.iter().map(|l| l.text.trim()).collect();
+        assert_eq!(read, [text, "ba"], "after {text:?}");
+        assert_eq!(lines[0].baseline(), [72.0, 600.0], "after {text:?}: in place");
+        sizes.push(content.split_whitespace().count());
+    }
+    assert_eq!(sizes[2], sizes[3], "the same text again, the same content");
+    // A sequence holding marked content of its own goes whole, and what follows it keeps its
+    // font and size unless the replacement sets the same again.
+    for (after, font, size) in [("/F1 12 Tf", "F1", 12.0), ("/F2 12 Tf", "F2", 12.0), ("/F1 10 Tf", "F1", 10.0)] {
+        let mut doc = text_page(&format!(
+            "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf /Span <<>> BDC (ab) Tj EMC /F1 10 Tf ( cab) Tj EMC {after} 0 -20 Td (ba) Tj ET"
+        ));
+        text::replace_line(&mut doc, 0, 0, "ab ab").unwrap();
+        let doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 0, 0), "{after}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str, f64)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str(), l.size)).collect();
+        assert_eq!(read, [("ab ab", "F2", 10.0), ("ba", font, size)], "{after}: {content}");
+    }
+}
+
+/// Review on #2955: a leading space is not a word the line's font shows. " cab" (no word the
+/// subset can show) was split into an empty source-font run and a substitute run, so it was
+/// written as a two-font `/PCEdLine` with an empty `Tj` in the line's font; read back, the line
+/// was the substitute's alone, and the next edit took Helvetica for the line's own font. It is
+/// substituted as a whole instead, as a line with no word in the source font always was.
+#[test]
+fn a_leading_space_does_not_make_a_source_font_run() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    // With a word in the source font after it, the line is still written in both.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " ab cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab cab", "F2")]);
+    // The spaces the subset has no glyph for are moves, each one kept: the leading one before
+    // the first word, two between words as two.
+    let flat = |doc: &Document| String::from_utf8_lossy(&page_content_bytes(doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat(&doc).contains("/F2 10 Tf [-330] TJ (ab) Tj"), "{}", flat(&doc));
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "ab  ba cab").unwrap();
+    let doc = reopen(&doc);
+    assert!(flat(&doc).contains("(ab) Tj [-330] TJ [-330] TJ (ba) Tj"), "{}", flat(&doc));
+    // Before a substitute word, the leading spaces are the substitute's to show, all of them.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("(  cab) Tj"), "{content}");
+}
+
+/// Review on #2955: a paragraph rewrite keeps the `/PCEdLine` delimiters of a line an earlier
+/// replacement wrote in two fonts, so a rewritten paragraph's rows can end up inside one. A
+/// later replacement of one of those rows must not take the sequence's other rows with it.
+#[test]
+fn replacing_one_row_of_a_sequence_keeps_the_other_rows() {
+    let content = "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj 0 -20 Td /F2 10 Tf (ba) Tj EMC ET";
+    let rows = text::text_lines(&text_page(content), 0).unwrap();
+    assert_eq!(rows.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab", "ba"]);
+    for (row, text, other) in [(0, "ab ab", "ba"), (1, "ab", "ab cab")] {
+        let mut doc = text_page(content);
+        text::replace_line(&mut doc, 0, row, text).unwrap();
+        let doc = reopen(&doc);
+        let after: Vec<String> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.trim().to_string()).collect();
+        assert!(after.iter().any(|t| t == text) && after.iter().any(|t| t == other), "replacing row {row}: {after:?}");
+    }
+}
+
+/// Review on #2955: a row inside a shared `/PCEdLine` sequence that starts with a substitute run
+/// has the substitute's font in effect at its first operator. Replaced by text the row's own font
+/// shows, it must set that font again, or the new text is drawn in the substitute.
+#[test]
+fn a_row_replaced_inside_a_shared_sequence_starts_in_its_own_font() {
+    // A real two-font line, starting with the substitute run, then a second row put inside its
+    // sequence, as a paragraph rewrite that keeps the delimiters can leave it.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && content.contains("(  cab) Tj"), "{content}");
+    let mut doc = doc;
+    let shared = content.replacen("EMC", "0 -20 Td (ba) Tj EMC", 1);
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), shared.into_bytes()))));
+    set_page_contents(&mut doc, stream, None);
+    let rows = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(rows.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("cab ab", "F2"), ("ba", "F2")]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab", "F2"), ("ba", "F2")]);
+}
+
+/// Review on #2955: a sequence holding one row can also hold that row's positioning and text
+/// state, as a paragraph rewrite writes it inside kept delimiters. Replacing the row drops the
+/// delimiters, fonts and text, not the `Tm` that places it.
+#[test]
+fn replacing_the_only_row_of_a_sequence_keeps_its_position() {
+    let content = "BT /F2 10 Tf /PCEdLine BMC 1 0 0 1 72 600 Tm /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj EMC ET";
+    let mut doc = text_page(content);
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab"]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("PCEdLine") && !content.contains("cab"), "{content}");
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "{content}");
+    let (was, now) = (before[0].rect, after[0].rect);
+    assert!((was[0] - now[0]).abs() < 0.01 && (was[1] - now[1]).abs() < 0.01, "moved from {was:?} to {now:?}: {content}");
 }
 
 #[test]
@@ -5758,6 +5954,20 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
         }
         assert_eq!(listed(&duplicate), ["ALPHA"]);
     }
+}
+
+#[test]
+fn text_blocks_split_at_headings_and_blank_lines() {
+    let page = |size: u32, gap: u32, words: &[&str], top: u32| -> String {
+        words.iter().enumerate().map(|(i, w)| format!("BT /F1 {size} Tf 40 {} Td ({w}) Tj ET\n", top - i as u32 * gap)).collect()
+    };
+    let count = |content: String| text::text_blocks(&text_page(&content), 0).unwrap().len();
+    let heading = page(12, 14, &["First line of text", "second line here", "third line ends"], 340)
+        + &page(12, 14, &["HEADING"], 340 - 28 - 24)
+        + &page(12, 14, &["Next paragraph one", "next two", "next three"], 340 - 28 - 24 - 24);
+    assert_eq!(count(heading), 3);
+    assert_eq!(count(page(12, 14, &["Para one a", "para one b"], 340) + &page(12, 14, &["Para two a", "para two b"], 340 - 42)), 2);
+    assert_eq!(count(page(24, 29, &["VISIBLE", "HIDDEN"], 340)), 1);
 }
 
 #[test]
@@ -9559,7 +9769,7 @@ fn vertical_page(content: &str) -> Document {
     ]);
     let unicode = doc.add(Object::Stream(Stream::flate(
         Dict::new(),
-        b"1 begincodespacerange <0000> <ffff> endcodespacerange 6 beginbfchar <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 7 beginbfchar <0020> <0020> <0041> <0041> <0042> <0042> <0043> <0043> <0044> <0044> <0045> <0045> <0046> <0046> endbfchar",
     )));
     font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
     font.set(
