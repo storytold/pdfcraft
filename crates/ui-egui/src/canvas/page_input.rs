@@ -219,7 +219,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let adding = (tool == QuickTool::AddText).then_some(added.as_slice());
         let pcx = crate::edit_text_ui::ParagraphCx { press, gate, hover: hovered.as_ref(), adding };
         let text_used = crate::edit_text_ui::page_input(cx, &lines, pcx, view);
-        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, info, press, gate };
+        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, doc, info, press, gate };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         text_used || image_used
     };
@@ -834,8 +834,13 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     // it is over first sees, whichever page it began on.
     let pick_sees =
         matches!(input.press, PagePress::Free | PagePress::Mine(Owner::Link { .. })) || input.press == PagePress::Elsewhere && ptr.drag_started;
-    if tool == QuickTool::Select && pick_sees && !input.consumed {
+    if tool != QuickTool::Select {
+        view.pending_pick = None;
+    } else if pick_sees && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, input.press == PagePress::Free, view);
+    } else if resp.clicked() || ptr.drag_started {
+        // Another owner took the press: an earlier click's picture, still being found, isn't picked.
+        view.pending_pick = None;
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);

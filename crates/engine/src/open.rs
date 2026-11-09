@@ -8,7 +8,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
     AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
+    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
+    xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -137,11 +138,17 @@ impl Session {
         // pages and fields so the rest of the engine works on it. The original bytes stay: the
         // laid-out form is one appended revision.
         let opts = SaveOptions { mod_date: context.now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        // Write `work` as one more revision and reopen it: what the document then is.
+        // Write `work` as one more revision and reopen it: what the document then is. The notes
+        // about damage repaired while reading the file stay with it (Document Properties), once.
         let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
             let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
             let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
-            let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            let mut new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            for line in work.repair_log() {
+                if !new_cos.repair_log().contains(line) {
+                    new_cos.note_repair(line.clone());
+                }
+            }
             Ok((new_bytes, new_info, new_cos))
         };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
@@ -267,9 +274,6 @@ impl Session {
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
-                        for line in cos.repair_log() {
-                            c.note_repair(line.clone());
-                        }
                         c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
                         (b, i, Ok(Ok(c)))
                     }
@@ -296,7 +300,7 @@ impl Session {
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
         let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
-        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
+        let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
@@ -331,6 +335,8 @@ impl Session {
                 }
             }
         }
+        // The print preview draws the layers as they print.
+        config.print_layers = print_preview_layers(editor.as_ref().map(|e| &e.cos), &info.layers);
         let display = display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions);
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor
