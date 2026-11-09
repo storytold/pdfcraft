@@ -90,6 +90,28 @@ fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other. One the cap drops changes nothing, so the script
+        // goes on reading the setting the viewer has.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        if h.request(Request::Highlight(on)) {
+            h.doc.highlight = on;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
 /// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
 /// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -222,7 +244,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
@@ -276,12 +301,29 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
+/// The `event` object for `e`, and the store behind its `value`: `value` holds what the script
+/// reads and writes, and `set` turns true once the script assigns `event.value`, even the value it
+/// already had. The store is out of the script's reach.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, JsObject)> {
+    fn get(_: &JsValue, _: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.get(js_string!("value"), c)
+    }
+    fn set(_: &JsValue, args: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.set(js_string!("value"), arg(args, 0), false, c)?;
+        store.set(js_string!("set"), true, false, c)?;
+        Ok(JsValue::undefined())
+    }
+    let store = ObjectInitializer::new(ctx)
+        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .property(js_string!("set"), false, Attribute::all())
+        .build();
+    let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
+    let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
     let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
-    ObjectInitializer::new(ctx)
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
-        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .accessor(js_string!("value"), Some(value_get), Some(value_set), Attribute::CONFIGURABLE | Attribute::ENUMERABLE)
         .property(js_string!("change"), s(&e.change), Attribute::all())
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
@@ -293,5 +335,6 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    Ok((event, store))
 }

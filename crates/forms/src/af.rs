@@ -20,7 +20,10 @@ mod script;
 #[cfg(test)]
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
 pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
-pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
+pub use format::{
+    DATE_PRESETS, DateNames, DateTime, ENGLISH_DATE_NAMES, TIME_PRESETS, date_names, format_date, format_date_in, format_value, format_value_in,
+    js_number, keystroke, make_number, parse_date, set_date_names, validate,
+};
 use script::{Arg, call};
 pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
 
@@ -72,6 +75,7 @@ impl CalcOp {
         }
     }
 
+    /// How the operation is named in a list of them (`sum (+)`, `average`).
     pub fn label(self) -> &'static str {
         match self {
             CalcOp::Sum => "sum (+)",
@@ -106,6 +110,9 @@ pub struct Actions {
     pub unsupported: Vec<&'static str>,
     /// Those scripts' JavaScript, run through [`crate::Scripts`].
     pub scripts: Scripts,
+    /// A date field PdfCraft laid out for an XFA form (`/PCXfaDate true`): text its format doesn't
+    /// read is kept and shown as typed rather than refused, as an XFA form keeps it.
+    pub xfa_date: bool,
 }
 
 /// Field scripts that aren't AF calls, by event.
@@ -118,9 +125,52 @@ pub struct Scripts {
 }
 
 impl Actions {
+    /// Whether the field has no format, validation or calculation PdfCraft recognises.
     pub fn is_empty(&self) -> bool {
         self.format == Format::None && self.validate == Validate::None && self.calculate == Calculate::None
     }
+
+    /// The Keystroke event on commit ([`keystroke`]); an XFA date field keeps text its format
+    /// doesn't read, as typed.
+    pub fn keystroke(&self, field: &str, value: &str) -> Result<String, String> {
+        match keystroke(&self.format, field, value) {
+            Err(_) if self.xfa_date => Ok(value.to_string()),
+            checked => checked,
+        }
+    }
+
+    /// What the Format event shows for `value` ([`format_value`]). An XFA date field shows a date
+    /// only for a value that is one, in its format already or as an ISO date (`2026-10-18` or
+    /// `20261018`); anything else, which its format would read loosely, shows as typed.
+    pub fn format_value(&self, value: &str) -> String {
+        self.format_value_in(value, &date_names())
+    }
+
+    /// [`Self::format_value`] with month and weekday names from `names`.
+    pub fn format_value_in(&self, value: &str, names: &DateNames) -> String {
+        match &self.format {
+            Format::Date(fmt) if self.xfa_date => {
+                let t = value.trim();
+                let in_format = parse_date(t, fmt).is_some_and(|dt| format_date(dt, fmt).eq_ignore_ascii_case(t));
+                match iso_date(t) {
+                    Some(dt) if !in_format => format_date_in(dt, fmt, names),
+                    _ => value.to_string(),
+                }
+            }
+            f => format_value_in(f, value, names),
+        }
+    }
+}
+
+/// `text` as an ISO 8601 calendar date, `yyyy-mm-dd` or `yyyymmdd` (digits only, a real day).
+fn iso_date(text: &str) -> Option<DateTime> {
+    let b = text.as_bytes();
+    let fmt = match b.len() {
+        10 if b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() }) => "yyyy-mm-dd",
+        8 if b.iter().all(u8::is_ascii_digit) => "yyyymmdd",
+        _ => return None,
+    };
+    parse_date(text, fmt).filter(|dt| format_date(*dt, fmt) == text)
 }
 
 #[cfg(test)]
