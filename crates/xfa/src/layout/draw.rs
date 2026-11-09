@@ -222,7 +222,8 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para) -> Result<(), XfaError> {
+    /// Draw `v` in `rect`; `scope` is the SOM of what holds it, for the fields it embeds.
+    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para, scope: &str) -> Result<(), XfaError> {
         let rich = match v {
             Value::Text(t) => text::plain(t),
             Value::Rich(r) => r.clone(),
@@ -232,9 +233,10 @@ impl Layouter<'_> {
         // Text that doesn't fit the height it was given (the template's face is narrower than
         // the standard one drawn in its place, so it wraps to more lines) is drawn smaller,
         // down to 70%, rather than over what lies below.
-        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &|id, max| self.embed(id, max)) <= rect.h / k + 1.0;
+        let embed = |id: &str, max: usize| self.embed_in(id, max, scope);
+        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &embed) <= rect.h / k + 1.0;
         let scale = if rect.h < 4.0 || fits(1.0) { 1.0 } else { [0.95, 0.9, 0.85, 0.8, 0.75].into_iter().find(|k| fits(*k)).unwrap_or(0.7) };
-        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &|id, max| self.embed(id, max));
+        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &embed);
         if scale < 1.0 {
             for s in &mut block.spans {
                 s.x = rect.x + (s.x - rect.x) * scale;
@@ -252,7 +254,7 @@ impl Layouter<'_> {
         let ctx = ctx.child(&d.common);
         let inner = rect.inset(&d.common.margin);
         match &d.value {
-            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
+            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para, &ctx.som),
             Value::Image { content_type, data, .. } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {

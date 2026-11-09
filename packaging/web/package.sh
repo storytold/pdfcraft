@@ -3,9 +3,10 @@
 #
 # Usage: packaging/web/package.sh [--skip-build]
 #
-# Needs: trunk (brew install trunk / cargo install trunk --locked) and the wasm32-unknown-unknown
-# target. The zip holds a self-contained static site in pdfcraft-web-<version>/ that works
-# from any URL path and inside an <iframe>. Hosting notes: packaging/web/README.md.
+# Needs: trunk (brew install trunk / cargo install trunk --locked), the wasm32-unknown-unknown
+# target and network access for the OCR models (cargo xtask models). The zip holds a
+# self-contained static site in pdfcraft-web-<version>/ that works from any URL path and inside
+# an <iframe>. Hosting notes: packaging/web/README.md.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -29,6 +30,8 @@ WORK="$CARGO_TARGET_DIR/web-package"
 rm -rf "$WORK"
 mkdir -p "$WORK/$NAME"
 cp -R "$SITE/." "$WORK/$NAME/"
+# Scan & OCR downloads its models from models/ beside index.html the first time it's used.
+stage_models "$WORK/$NAME/models"
 # Sample server configs (MIME type, caching, compression); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"
 cp "$HERE/README.md" "$WORK/$NAME/HOSTING.md"

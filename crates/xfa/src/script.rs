@@ -667,6 +667,30 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
     crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
 }
 
+/// Is the field at `som` embedded in rich text (a floating field, XFA 3.3 p. 1222)? Its value
+/// is shown in that text, so a new one needs the form laid out again. A page area's fields count
+/// too, and so does any field bound to the same data as an embedded one.
+pub fn field_is_embedded(tpl: &Template, som: &str) -> bool {
+    !tpl.embedded_paths.is_empty() && path_is_embedded(tpl, &data_path(tpl, som))
+}
+
+/// The fields rich text embeds, by the SOM path the layout gives them (a repeating subform's
+/// first instance), with their template defaults: what a reset gives a floating field that has
+/// no widget of its own.
+pub fn embedded_fields(tpl: &Template) -> Vec<(String, String)> {
+    crate::data::fields_with_ids(tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, f)| (som, f.value.plain().unwrap_or_default()))
+        .collect()
+}
+
+/// Does `path` hold the data of a field embedded in rich text, in any instance of a repeating
+/// subform? See [`field_is_embedded`].
+pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {
+    !tpl.embedded_paths.is_empty() && tpl.embedded_paths.contains(&path.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
+}
+
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a
 /// field inside an area shares its node with one outside, since areas are left out of data
 /// paths), the value [`form_tree`] would give it from `data` now, so a value change needs no
