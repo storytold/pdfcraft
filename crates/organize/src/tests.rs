@@ -1732,6 +1732,15 @@ fn count_of(doc: &Document, r: ObjRef) -> Option<i64> {
 }
 
 #[test]
+fn move_bookmark_to_missing_parent_keeps_outline() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Intro", 0).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Results", 2).unwrap();
+    assert!(crate::move_bookmark(&mut d, &[0], &[7], 0).is_err());
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results"]);
+}
+
+#[test]
 fn bookmarks_add_rename_move_delete() {
     let mut d = doc_a();
     assert!(crate::bookmarks(&d).is_empty());
@@ -1954,6 +1963,32 @@ fn bookmarks_name_their_pages_through_every_kind_of_destination() {
     let d = open(build(&objs, "/Root 1 0 R"));
     let listed: Vec<String> = crate::bookmarks(&d).iter().map(|b| format!("{}@{:?}", b.title, b.page)).collect();
     assert_eq!(listed, ["Named@Some(0)", "GoTo@Some(1)", "Appendix@Some(1)", "Hi@Some(1)", "Padded@None"]);
+}
+
+/// Only a go-to's `/D` is a page of this document. A remote go-to's names a page or destination of
+/// the other file (ISO 32000-2 §12.6.4.3), so `[1 /Fit]` there is not this file's page 2, and a
+/// destination name is not looked up here; neither is any other action's `/D`. An action without
+/// a type is still read as the go-to its `/D` suggests.
+#[test]
+fn only_a_go_to_action_names_a_page_here() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R /Names << /Dests 12 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Outlines /First 6 0 R /Last 11 0 R /Count 6 >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Title (GoTo) /Parent 3 0 R /Next 7 0 R /A << /S /GoTo /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (Other file) /Parent 3 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoToR /F (other.pdf) /D [1 /Fit] >> >>".into(),
+        "<< /Title (Other file, named) /Parent 3 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoToR /F (other.pdf) /D (intro) >> >>".into(),
+        "<< /Title (Web) /Parent 3 0 R /Prev 8 0 R /Next 10 0 R /A << /S /URI /URI (https://example.org/) /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (Indirect type) /Parent 3 0 R /Prev 9 0 R /Next 11 0 R /A << /S 13 0 R /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (No type) /Parent 3 0 R /Prev 10 0 R /A << /D [5 0 R /Fit] >> >>".into(),
+        "<< /Names [(intro) [4 0 R /Fit]] >>".into(),
+        "/GoTo".into(),
+    ];
+    let d = open(build(&objs, "/Root 1 0 R"));
+    let listed: Vec<String> = crate::bookmarks(&d).iter().map(|b| format!("{}@{:?}", b.title, b.page)).collect();
+    assert_eq!(listed, ["GoTo@Some(1)", "Other file@None", "Other file, named@None", "Web@None", "Indirect type@Some(1)", "No type@Some(1)"]);
 }
 
 // ---- page labels (M4.4) ------------------------------------------------------------------------
@@ -2335,6 +2370,62 @@ fn page_boxes_default_inherit_and_set() {
 }
 
 #[test]
+fn page_boxes_remove_uninherited_crop_clip_disjoint_boxes_and_reject_overflow() {
+    let mut doc = open(fixture());
+    set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Margins([10.0, 20.0, 30.0, 40.0])).unwrap();
+    set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    assert!(!page_dict(&doc, 0).contains(b"CropBox"), "removing an uninherited CropBox deletes the key instead of pinning the old MediaBox");
+    set_page_box(&mut doc, &[0], PageBox::Media, BoxSpec::Rect([0.0, 0.0, 400.0, 500.0])).unwrap();
+    assert_eq!(page_boxes(&doc).unwrap()[0][1], [0.0, 0.0, 400.0, 500.0], "CropBox tracks the resized MediaBox after removal");
+
+    // When /Pages itself carries an inherited /CropBox, removing a page's CropBox pins the page's MediaBox
+    // even when the page also had its own /CropBox and omitted /Parent.
+    let mut d = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] /CropBox [20 20 280 380] >>".into(),
+            "<< /Type /Page /CropBox [40 40 260 360] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    assert_eq!(page_boxes(&d).unwrap()[0][1], [40.0, 40.0, 260.0, 360.0]);
+    set_page_box(&mut d, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    assert_eq!(page_boxes(&d).unwrap()[0][1], [0.0, 0.0, 300.0, 400.0]);
+
+    // An inherited /CropBox that is currently disjoint from the page's /MediaBox still causes removal to pin the MediaBox.
+    let mut d_disjoint_inh = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] /CropBox [350 350 450 450] >>".into(),
+            "<< /Type /Page /CropBox [40 40 260 360] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    set_page_box(&mut d_disjoint_inh, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    set_page_box(&mut d_disjoint_inh, &[0], PageBox::Media, BoxSpec::Rect([0.0, 0.0, 500.0, 500.0])).unwrap();
+    assert_eq!(page_boxes(&d_disjoint_inh).unwrap()[0][1], [0.0, 0.0, 300.0, 400.0]);
+
+    // Disjoint or zero-area boxes in a file fall back to MediaBox/CropBox instead of producing inverted rectangles.
+    let disjoint = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /CropBox [500 500 600 600] /TrimBox [700 700 800 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /CropBox [10 20 290 380] /TrimBox [500 500 600 600] /ArtBox [50 50 50 100] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let boxes = page_boxes(&disjoint).unwrap();
+    assert_eq!(boxes[0][1], [0.0, 0.0, 300.0, 400.0], "disjoint CropBox falls back to MediaBox");
+    assert_eq!(boxes[0][3], [0.0, 0.0, 300.0, 400.0], "disjoint TrimBox falls back to CropBox");
+    assert_eq!(boxes[1][3], [10.0, 20.0, 290.0, 380.0], "disjoint TrimBox falls back to page's CropBox");
+    assert_eq!(boxes[1][4], [10.0, 20.0, 290.0, 380.0], "zero-width ArtBox falls back to page's CropBox");
+
+    // Finite coordinates whose span overflows f64 are rejected.
+    assert!(matches!(set_page_box(&mut doc, &[0], PageBox::Media, BoxSpec::Rect([-1e308, 0.0, 1e308, 100.0])), Err(OrganizeError::InvalidBox(_))));
+}
+
+#[test]
 fn duplicate_pages_inserts_copies_after_the_last() {
     let mut doc = open(fixture());
     duplicate_pages(&mut doc, &[0, 1], None).unwrap();
@@ -2465,6 +2556,56 @@ fn an_unchanged_opening_destination_keeps_its_position_and_name() {
         assert_ne!(catalog.get(b"OpenAction"), Some(&action));
         assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitWidth);
     }
+}
+
+/// A percentage is written as the `/XYZ` zoom factor (ISO 32000-2 Table 149), not the percentage:
+/// 25% as 0.25 and 100% as 1, and each survives a save.
+#[test]
+fn initial_view_percentages_are_written_as_zoom_factors() {
+    use crate::view::Magnification;
+    for (percent, factor) in [(25.0, 0.25), (100.0, 1.0), (150.0, 1.5)] {
+        let mut doc = open(fixture());
+        let v = crate::initial_view(&doc);
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(percent), ..v }).unwrap();
+        let doc = save_and_reopen(&doc);
+        let root = doc.root().unwrap();
+        let open_action = doc.get(root).as_dict().and_then(|c| c.get(b"OpenAction").cloned()).map(|o| doc.resolve(&o).as_ref().clone());
+        let zoom = open_action.as_ref().and_then(Object::as_array).and_then(|a| a.get(4)).and_then(Object::as_f64);
+        assert_eq!(zoom, Some(factor), "{percent}%: {open_action:?}");
+    }
+}
+
+#[test]
+fn choosing_100_percent_keeps_an_actual_size_opening_destination() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    let xyz = Object::Array(vec![page2.clone(), Object::name("XYZ"), Object::Int(100), Object::Int(500), Object::Int(1)]);
+    let mut named = pdfcraft_cos::Dict::new();
+    named.set(b"S".to_vec(), Object::name("GoTo"));
+    named.set(b"D".to_vec(), Object::name("there"));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page2, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(1)]));
+    for action in [xyz, Object::Dict(named)] {
+        let mut doc = open(fixture());
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), action.clone());
+            c.set(b"Dests".to_vec(), Object::Dict(dests.clone()));
+        })
+        .unwrap();
+        let v = crate::initial_view(&doc);
+        assert_eq!(v.magnification, Magnification::ActualSize);
+        // 100% is the same zoom: the action keeps its position or name.
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(100.0), ..v }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_eq!(catalog.get(b"OpenAction"), Some(&action));
+    }
+    // Without one, 100% writes zoom 1, which reads back as Actual Size.
+    let mut doc = open(fixture());
+    let v = crate::initial_view(&doc);
+    crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(100.0), ..v }).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(crate::initial_view(&doc).magnification, Magnification::ActualSize);
 }
 
 /// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
@@ -4240,4 +4381,75 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     let mut target = doc_a();
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
+}
+
+/// Does any object in `doc` hold the string value `/V (value)`?
+fn holds_value(doc: &Document, value: &str) -> bool {
+    doc.scan_objects()
+        .into_iter()
+        .any(|(_, o)| o.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string()).is_some_and(|v| v.to_text() == value))
+}
+
+/// A field with a widget on each of two pages: extracting one page brings that widget and the field
+/// above it, not the other kid with its value.
+#[test]
+fn extracting_a_page_leaves_the_rest_of_its_form_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [8 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [9 0 R] >>".into(),   // 4
+        raw("0 0 m"),                                                               // 5
+        raw("0 0 m"),                                                               // 6
+        "<< /T (applicant) /Kids [8 0 R 9 0 R] >>".into(),                          // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Parent 7 0 R /P 3 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /Parent 7 0 R /P 4 0 R /Rect [0 0 50 20] >>".into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(holds_value(&part, "Ada"));
+    assert!(!holds_value(&part, "90000"), "the widget on the page left behind came along with its value");
+    let form = part.resolve(catalog(&part).get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let fields = part.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let applicant = part.resolve(&fields[0]).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(applicant.get(b"Kids").unwrap()).as_array().map(Vec::len), Some(1));
+    // With every page, the whole form comes along, as before.
+    let both = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    assert!(holds_value(&both, "Ada") && holds_value(&both, "90000"));
+}
+
+/// A form action lists fields by reference: extracting the page with the button doesn't bring
+/// the fields it submits, resets or hides from a page left behind, with their values. A reset of
+/// only those would list none, which reads as every field: it goes.
+#[test]
+fn a_form_action_brings_no_field_from_a_page_left_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [7 0 R 9 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [8 0 R] >>".into(),         // 4
+        raw("0 0 m"),                                                                     // 5
+        raw("0 0 m"),                                                                     // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (send) /P 3 0 R /Rect [0 0 50 20] \
+         /A << /S /SubmitForm /F (https://example.invalid/) /Fields [8 0 R (other)] \
+         /Next << /S /ResetForm /Fields [8 0 R] /Next << /S /Hide /T 8 0 R >> >> >> >>"
+            .into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /P 4 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (clear) /P 3 0 R /Rect [0 30 50 50] \
+         /A << /S /ResetForm /Fields [8 0 R] >> /AA << /U << /S /ResetForm /Flags 1 /Fields [8 0 R] >> >> >>"
+            .into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(!holds_value(&part, "90000"), "a field the action lists came along from the page left behind");
+    let submit = part.resolve(annots(&part, 0)[0].get(b"A").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(submit.get(b"Fields").unwrap()).as_array().map(Vec::len), Some(1), "the field named by text stays");
+    assert!(submit.get(b"Next").is_none_or(|n| part.resolve(n).as_dict().is_none()), "the reset after the submit would clear every field");
+    let clear = annots(&part, 0).remove(1);
+    assert!(clear.get(b"A").is_none(), "the clear button would clear every field");
+    // A reset of every field but the one left behind still resets them all.
+    let aa = part.resolve(clear.get(b"AA").unwrap()).as_dict().cloned().unwrap();
+    assert!(aa.get(b"U").is_some_and(|u| part.resolve(u).as_dict().is_some()));
+    // With every page, the actions still list it.
+    assert!(holds_value(&full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap()), "90000"));
 }

@@ -7,3 +7,4 @@ pub mod attachment;
 pub mod desktop_theme;
 pub mod mail;
 pub mod staging;
+pub mod zone;
