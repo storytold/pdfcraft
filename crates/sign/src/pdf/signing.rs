@@ -232,6 +232,11 @@ fn sign_inner(
         None => {
             let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
             let fname = match opts.new_field_name.clone() {
+                // A field already carries this name: a second one would make a later lookup find
+                // the new, signed field and report the existing one as already signed.
+                Some(n) if taken.contains(&n) => {
+                    return Err(SignError::Pdf(format!("a field named {n:?} already exists")));
+                }
                 Some(n) => n,
                 // A field the cut walk could not reach may already hold `SignatureN`.
                 None if cut => {
