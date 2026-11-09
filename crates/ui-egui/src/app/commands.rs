@@ -173,10 +173,15 @@ impl PdfCraftApp {
             }
             self.put_tool_down_for_reading();
         } else if mode != Mode::Read && was_read {
-            let before = self.right_before_read.take();
-            if self.right.is_none() {
-                self.right = before;
-            }
+            self.bring_back_right_panel();
+        }
+    }
+
+    /// Leaving Read mode: the right panel it put away comes back, unless one is open now.
+    pub(crate) fn bring_back_right_panel(&mut self) {
+        let before = self.right_before_read.take();
+        if self.right.is_none() {
+            self.right = before;
         }
     }
 

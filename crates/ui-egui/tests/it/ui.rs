@@ -1520,17 +1520,20 @@ fn the_default_tool_is_saved_and_starts_the_app() {
     }
 }
 
+/// Preferences ▸ Default tool sets the default tool and leaves the tool in use as it is (#6235).
 #[test]
 fn preferences_sets_the_default_tool() {
     use egui::accesskit::Role;
-    use pdfcraft_ui_egui::DefaultTool;
+    use pdfcraft_ui_egui::{DefaultTool, QuickTool};
     let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
     h.get_by_label("Default tool");
     h.get_by_role_and_label(Role::RadioButton, "Hand").scroll_to_me();
     h.run_steps(4);
     h.get_by_role_and_label(Role::RadioButton, "Hand").click();
     h.run_steps(2);
     assert_eq!(h.state().default_tool, DefaultTool::Hand);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "the tool in use stays");
 }
 
 /// GNOME on Wayland: the tab strip carries the window buttons until Preferences ▸ Use system title

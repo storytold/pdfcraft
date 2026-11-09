@@ -186,12 +186,19 @@ impl Host for crate::PdfCraftApp {
     }
 
     fn set(&mut self, key: &str, value: &str) -> Reply {
-        let was_read = self.mode == crate::Mode::Read;
+        let before = self.mode;
         self.set_option(key, value)?;
-        // Entering Read mode from here puts the tool down to the default tool, as the Read mode
-        // command does (#6235). Only here: the `--mode` option at launch keeps an explicit `--tool`.
-        if key == "mode" && self.mode == crate::Mode::Read && !was_read {
-            self.enter_mode(crate::Mode::Read);
+        // Read mode entered from here puts the tool down to the default tool, as the Read mode
+        // command does (#6235); the right panel stays as it is, as it always has from here.
+        // Leaving Read from here brings back a panel the Read mode command put away. Other
+        // workspace changes stay as they were (`ui.set mode=edit` picks no editing tool). Only
+        // here: at launch, `--mode` leaves the tool to `--quick`.
+        if key == "mode" && (before == crate::Mode::Read) != (self.mode == crate::Mode::Read) {
+            if self.mode == crate::Mode::Read {
+                self.enter_mode(crate::Mode::Read);
+            } else {
+                self.bring_back_right_panel();
+            }
         }
         Ok(json!({ "set": key, "value": value }))
     }

@@ -60,6 +60,11 @@ impl PdfCraftApp {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }
             ("panel", _) => {
+                // As `choose_right_panel`: a pane chosen in Read mode replaces the one saved on
+                // the way in, so leaving Read mode doesn't bring back one closed here.
+                if self.mode == Mode::Read {
+                    self.right_before_read = None;
+                }
                 self.right = match value {
                     "comments" => Some(RightPanel::Comments),
                     "bookmarks" => Some(RightPanel::Bookmarks),
