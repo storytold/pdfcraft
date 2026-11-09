@@ -538,6 +538,9 @@ mod own_clipboard_tests {
         let docs = app.views.len();
         app.create_from_clipboard();
         assert_eq!(app.views.len(), docs + 1, "a new document from the copied text");
+        let id = app.active_ids().unwrap().1;
+        let text: String = app.session.get(id).unwrap().text_lines(0).iter().map(|line| line.text.as_str()).collect();
+        assert!(text.contains("copied words"), "the new document reads {text:?}");
         assert_eq!(crate::os_clipboard::opens(), opened, "the system clipboard was opened");
     }
 
