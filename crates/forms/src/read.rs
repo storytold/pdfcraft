@@ -20,17 +20,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
     let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
     Some(match a.name(b"S")? {
         b"ResetForm" => {
-            let fields = a
-                .get(b"Fields")
-                .map(|f| doc.resolve(f))
-                .and_then(|f| f.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|o| match o {
-                    Object::Ref(r) => doc.get(*r).as_dict().and_then(|fd| fd.get(b"T").and_then(|t| text_of(&doc.resolve(t)))),
-                    other => text_of(&doc.resolve(other)),
-                })
-                .collect();
+            let fields = a.get(b"Fields").map(|f| action_fields(doc, f)).unwrap_or_default();
             let exclude = a.get(b"Flags").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 1 != 0;
             af::ButtonAction::Reset { fields, exclude }
         }
@@ -48,18 +38,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
         b"Hide" => {
-            // /T: a field name, an annotation (or field) reference, or an array of them.
-            let target = |o: &Object| match o {
-                Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(o))),
-                other => text_of(other),
-            };
-            let fields = match a.get(b"T") {
-                Some(t) => match &*doc.resolve(t) {
-                    Object::Array(items) => items.iter().filter_map(target).collect(),
-                    _ => target(t).into_iter().collect(),
-                },
-                None => Vec::new(),
-            };
+            let fields = a.get(b"T").map(|t| action_fields(doc, t)).unwrap_or_default();
             let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));
             af::ButtonAction::ShowHide { fields, hide }
         }
@@ -91,6 +70,19 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
     })
 }
 
+/// The field names targeted by a `ResetForm` (`/Fields`) or `Hide` (`/T`) action entry: a field
+/// name string, an indirect field or widget dictionary reference, or an array of them.
+pub(crate) fn action_fields(doc: &Document, o: &Object) -> Vec<String> {
+    let target = |item: &Object| match item {
+        Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(item))),
+        other => text_of(other),
+    };
+    match &*doc.resolve(o) {
+        Object::Array(items) => items.iter().filter_map(target).collect(),
+        _ => target(o).into_iter().collect(),
+    }
+}
+
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain.
 fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
@@ -106,10 +98,17 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
             parts.push(t);
         }
-        cur = d.get(b"Parent").and_then(|p| p.as_ref());
+        cur = parent_of(doc, d);
     }
     parts.reverse();
     (!parts.is_empty()).then(|| parts.join("."))
+}
+
+/// The field `d` names as its `/Parent`, when that is a dictionary. A reference to an object the
+/// file doesn't hold reads as `null`, and a `null` entry is the same as an absent one (ISO
+/// 32000-2 §7.3.9): the field is then a root, as if it named no parent.
+fn parent_of(doc: &Document, d: &Dict) -> Option<ObjRef> {
+    d.reference(b"Parent").filter(|p| doc.get(*p).as_dict().is_some())
 }
 
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
@@ -331,13 +330,19 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
+    let mut by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
     let pages = page_refs(doc);
     for (i, p) in pages.iter().enumerate() {
         if let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) {
             for (k, e) in doc.resolve(&a).as_array().into_iter().flatten().enumerate() {
-                if let Some(r) = e.as_ref() {
-                    page_of.entry(r).or_insert(i);
-                    annot_index.entry(r).or_insert(k);
+                if let Some(r) = e.as_ref()
+                    && let std::collections::hash_map::Entry::Vacant(slot) = page_of.entry(r)
+                {
+                    slot.insert(i);
+                    annot_index.insert(r, k);
+                    if let Some(parent) = widget_parent(doc, r) {
+                        by_parent.entry(parent).or_default().push(r);
+                    }
                 }
             }
         }
@@ -351,18 +356,24 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         None => Inherited::default(),
     };
     let mut out = Vec::new();
+    let listed_roots: Vec<ObjRef> = af
+        .as_ref()
+        .and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Object::as_ref)
+        .collect();
     let mut seen = Seen {
         fields: std::collections::HashSet::new(),
         widgets: std::collections::HashSet::new(),
+        roots: listed_roots.iter().copied().collect(),
+        path: Vec::new(),
+        by_parent,
         scripts: script_budget(),
         values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
     };
-    if let Some(af) = &af {
-        for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
-            if let Some(r) = f.as_ref() {
-                walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
-            }
-        }
+    for r in listed_roots {
+        walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
     }
     let listed = out.len();
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
@@ -413,7 +424,7 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
     let mut top = r;
     let mut visited = std::collections::HashSet::from([r]);
     loop {
-        let parent = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent"));
+        let parent = doc.get(top).as_dict().and_then(|d| parent_of(doc, d));
         let Some(p) = parent else {
             return if seen.contains(&top) { None } else { Some(top) };
         };
@@ -433,8 +444,34 @@ struct Seen {
     fields: std::collections::HashSet<ObjRef>,
     /// A widget belongs to the first field that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
+    /// The fields `/Fields` lists: root fields, with no ancestors (ISO 32000-2 §12.7.3, Table 224).
+    roots: std::collections::HashSet<ObjRef>,
+    /// The fields being walked, outermost first, whose `/Kids` are being read.
+    path: Vec<ObjRef>,
+    /// The page widgets (no `/T`) that name each field as their `/Parent`, in page-annotation order.
+    by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>>,
     scripts: DecodeBudget,
     values: DecodeBudget,
+}
+
+/// The field a page widget `r` names as its `/Parent`, when `r` is a widget and not a field of its
+/// own (no `/T`).
+fn widget_parent(doc: &Document, r: ObjRef) -> Option<ObjRef> {
+    let obj = doc.get(r);
+    let d = obj.as_dict()?;
+    if d.name(b"Subtype") != Some(b"Widget") || d.contains(b"T") {
+        return None;
+    }
+    d.reference(b"Parent")
+}
+
+/// Whether `k`, listed in the `/Kids` of field `r`, is not a child of `r` after all: `r` itself or
+/// a field `r` descends from (a loop), or a root field (one `/Fields` lists) that doesn't name `r`
+/// as its `/Parent`. Root fields have no ancestors (ISO 32000-2 §12.7.3, Table 224), and a
+/// child names its parent (§12.7.4.1, Table 226): only the `/Kids` entry says otherwise, so the
+/// field is read as the root it is, and `r` keeps its other kids.
+fn not_a_child(doc: &Document, seen: &Seen, r: ObjRef, k: ObjRef) -> bool {
+    k == r || seen.path.contains(&k) || (seen.roots.contains(&k) && doc.get(k).as_dict().and_then(|d| d.reference(b"Parent")) != Some(r))
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -483,11 +520,14 @@ fn walk(
     let kids: Vec<ObjRef> =
         d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
     // Kids with /T are fields; kids without are this field's widgets.
-    let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
+    let (field_kids, kids): (Vec<ObjRef>, Vec<ObjRef>) = kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
+    let field_kids: Vec<ObjRef> = field_kids.into_iter().filter(|k| !not_a_child(doc, seen, r, *k)).collect();
     if !field_kids.is_empty() {
+        seen.path.push(r);
         for k in field_kids {
             walk(doc, k, &inh, page_of, seen, out, depth + 1);
         }
+        seen.path.pop();
         return;
     }
     // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
@@ -503,7 +543,10 @@ fn walk(
         Some(b"Sig") => FieldKind::Signature,
         _ => return,
     };
-    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
+    // A child names its parent (ISO 32000-2 §12.7.4.1, Table 226): a page widget naming this field
+    // is one of its widgets even when its `/Kids` leave it out, as MuPDF and PDFium read it.
+    let widget_refs: Vec<ObjRef> =
+        if d.contains(b"Rect") { vec![r] } else { kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect() };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
