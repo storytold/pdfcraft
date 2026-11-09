@@ -67,8 +67,15 @@ impl Host for crate::PdfCraftApp {
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
-        let pending_opens: Vec<Value> =
-            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
+        let pending_opens: Vec<Value> = self
+            .pending_opens
+            .iter()
+            .map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path }))
+            .chain(self.deferred_opens.iter().map(|deferred| {
+                let name = std::path::Path::new(&deferred.path).file_name().map(|n| n.to_string_lossy().into_owned());
+                json!({ "token": null, "name": name, "path": deferred.path })
+            }))
+            .collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({
@@ -93,6 +100,8 @@ impl Host for crate::PdfCraftApp {
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
+                // Pages cut at the renderer's limits (#623), 1-based.
+                "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),

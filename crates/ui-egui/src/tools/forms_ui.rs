@@ -129,24 +129,29 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
     }
 }
 
-/// Select a radio button, if it isn't selected already.
-fn select_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
-    (w.on_state.as_ref() != f.value.first()).then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(w.on_state.clone()) })
+/// Select radio button `wi`, if it isn't selected already. The button itself, not its on state:
+/// buttons sharing a state are exclusive unless the group has RadiosInUnison (ISO 32000-2
+/// Table 229).
+fn select_edit(f: &FormField, wi: usize) -> Option<Edit> {
+    // A button read-only on its own (its widget's `/Ff`, Table 227) keeps its focus stop, but
+    // the form would refuse turning it on.
+    let selectable = f.widgets.get(wi).is_some_and(|w| w.on_state.is_some() && !w.read_only) && !f.widget_on(wi);
+    selectable.then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Widget(wi) })
 }
 
-/// What clicking a check box or radio button does.
-fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
+/// What clicking widget `wi` of a check box or radio button does.
+fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     let value = match f.kind {
         FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
-        FormFieldKind::Radio => {
-            let on = w.on_state.clone();
-            // Clicking the selected button again turns it off unless the group forbids it.
-            let value = if f.value.first() == on.as_ref() && !f.has(field_flags::NO_TOGGLE_TO_OFF) { None } else { on };
-            if value.as_ref() == f.value.first() {
+        // Clicking the selected button again turns it off unless the group forbids it
+        // (NoToggleToOff, Table 229).
+        FormFieldKind::Radio if f.widget_on(wi) => {
+            if f.has(field_flags::NO_TOGGLE_TO_OFF) {
                 return None;
             }
-            FieldValue::Radio(value)
+            FieldValue::Radio(None)
         }
+        FormFieldKind::Radio => return select_edit(f, wi),
         _ => return None,
     };
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
@@ -340,7 +345,8 @@ struct ComboEditor<'a> {
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>) {
     let ComboEditor { form, field: f, widget: w, rect, zoom, index: widget } = editor;
     let mut enter = false;
-    egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
+    let view_key = view.view_key();
+    egui::Area::new(egui::Id::unique(("form-editor", view_key)))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -358,7 +364,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+                .id(egui::Id::unique(("form-field", view_key, &f.name, widget)));
             // The form field's own logical name; not a visual/preordered label.
             let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
@@ -400,7 +406,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
         fx.calendar_text = Some(fx.text.clone());
     }
     let mut picked = None;
-    let area = egui::Area::new(egui::Id::unique(("date-picker", view.id.0)))
+    let area = egui::Area::new(egui::Id::unique(("date-picker", view.view_key())))
         .order(egui::Order::Foreground)
         .fixed_pos(field.left_bottom() + vec2(0.0, 2.0))
         .show(ctx, |ui| {
@@ -436,7 +442,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                     (Some(a), Some(b)) => (b - a).num_days() as usize,
                     _ => 31,
                 };
-                let grid = egui::Grid::new(("date-grid", view.id.0)).spacing([4.0, 2.0]).show(ui, |ui| {
+                let grid = egui::Grid::new(("date-grid", view.view_key())).spacing([4.0, 2.0]).show(ui, |ui| {
                     for d in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] {
                         ui.label(egui::RichText::new(tl_ctx!("calendar weekday", d)).small());
                     }
@@ -522,7 +528,7 @@ pub(crate) fn paint_page(
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                paint_unbaked_widget(painter, xf, f, w, r);
+                paint_unbaked_widget(painter, xf, f, wi, w, r);
             } else if fillable(f) && hovered == Some((fi, wi)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -581,7 +587,7 @@ pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget,
     if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
-fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, wi: usize, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");
@@ -649,7 +655,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
         FormFieldKind::Radio => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
+            let selected = f.widget_on(wi);
             if selected {
                 let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
                 painter.circle_filled(r.center(), radius, Color32::BLACK);
@@ -752,7 +758,7 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
         let k = if forward { (pos + 1) % stops.len() } else { (pos + stops.len() - 1) % stops.len() };
         if let Some((wi, target)) = stops.get(k).and_then(|&wi| Some((wi, f.widgets.get(wi)?))) {
             view.forms.focus = Some(open_focus(f, wi));
-            edit = select_edit(f, target);
+            edit = select_edit(f, wi);
             if let Some(p) = target.page
                 && view.page_screen_rect(p).is_none()
             {
@@ -814,7 +820,7 @@ pub(crate) fn overlay(
             // Over the page, so only where the document shows: a field scrolled under the mode bar
             // or a side panel must leave them their pointer (#2755). It stays on its field, cut off
             // as the page is, rather than pushed back into the window.
-            egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
+            egui::Area::new(egui::Id::unique(("form-editor", view.view_key())))
                 .fade_in(false)
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.min)
@@ -839,7 +845,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
+                        .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -894,7 +900,7 @@ pub(crate) fn overlay(
             if editable_combo(f) {
                 combo_editor(ctx, view, ComboEditor { form, field: f, widget: w, rect, zoom, index: focus.widget });
             }
-            let resp = egui::Area::new(egui::Id::unique(("form-choices", view.id.0)))
+            let resp = egui::Area::new(egui::Id::unique(("form-choices", view.view_key())))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ctx, |ui| {
@@ -953,10 +959,10 @@ pub(crate) fn overlay(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
+            let id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
-            let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
+            let area = egui::Area::new(egui::Id::unique(("form-toggle", view.view_key()))).order(egui::Order::Foreground).interactable(false);
             area.fixed_pos(rect.min).show(ctx, |ui| {
                 let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
                 if let Some(fx) = view.forms.focus.as_mut()
@@ -990,11 +996,11 @@ pub(crate) fn overlay(
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
-                edit = toggle_edit(f, w);
+                edit = toggle_edit(f, focus.widget);
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.
-                edit = if f.kind == FormFieldKind::Radio { select_edit(f, w) } else { toggle_edit(f, w) };
+                edit = if f.kind == FormFieldKind::Radio { select_edit(f, focus.widget) } else { toggle_edit(f, focus.widget) };
             } else if let Some(forward) = step {
                 edit = step_radio(view, f, focus.widget, forward);
             }

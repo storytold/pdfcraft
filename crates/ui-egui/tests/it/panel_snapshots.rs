@@ -204,6 +204,10 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.run_steps(2);
             h.state_mut().views[0].find.as_mut().expect("Advanced Search opens a search").query = "sample".into();
             support::wait_until(&mut h, "both pages searched", |app| app.views[0].find.as_ref().is_some_and(|f| f.matches.len() == 2));
+            // Each page is searched as its text arrives, and the match made current is the first
+            // one found: page 2's when its text comes first. Searched again with both pages read,
+            // as a new query is, the current match is the first from the page in view.
+            h.state_mut().views[0].rerun_find();
             h.run_steps(2);
             return (h, "search");
         }

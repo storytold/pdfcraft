@@ -30,6 +30,67 @@ fn what_a_scan_of_the_file_did_not_find_is_remembered() {
     assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "a clone has the same file");
 }
 
+/// An object found by a scan of the file, because its cross-reference offset is wrong, has its
+/// indirect `/Length` resolved as at the right offset. Unresolved, a stream ending in a misspelt
+/// `endstream` (`endstrea`) was searched on into a later object's `endstream`, and took that
+/// object's header and data as its own.
+#[test]
+fn a_scanned_stream_resolves_its_indirect_length() {
+    let mut out = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Length 4 0 R >>\nstream\nHELLO\nendstrea",
+            "5",
+            "<< /Length 5 >>\nstream\nWORLD\nendstream",
+        ],
+        "/Root 1 0 R",
+    );
+    // Point object 3's entry at the catalog, so only the scan finds it.
+    let at = |needle: &[u8], out: &[u8]| out.windows(needle.len()).position(|w| w == needle).unwrap();
+    let catalog = format!("{:010} 00000 n ", at(b"1 0 obj", &out));
+    let entry = at(format!("{:010} 00000 n ", at(b"3 0 obj", &out)).as_bytes(), &out);
+    out.splice(entry..entry + catalog.len(), catalog.bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let stream = doc.try_get(3).unwrap();
+    let Object::Stream(s) = &*stream else { panic!("stream expected: {stream:?}") };
+    assert_eq!(&s.raw[..], b"HELLO");
+}
+
+/// A scan of the file resolves only so many indirect `/Length` values. Each header that starts
+/// with the sought number is parsed, and a `/Length` naming an object the table cannot place scans
+/// the file for that one: with a hundred such headers, each naming another misplaced object, one
+/// lookup read the whole file a hundred and one times.
+#[test]
+fn a_scan_of_the_file_resolves_a_bounded_number_of_lengths() {
+    const HEADERS: u32 = 100;
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let catalog = out.len();
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let pages = out.len();
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n");
+    // Object 3 is defined only by headers inside this string, each with its own misplaced /Length.
+    out.extend_from_slice(b"4 0 obj (\n");
+    for k in 0..HEADERS {
+        out.extend_from_slice(format!("3 0 obj << /Length {} 0 R >> stream\nX\nendstream endobj\n", 10 + k).as_bytes());
+    }
+    out.extend_from_slice(b") endobj\n");
+    let size = 10 + HEADERS;
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for num in 1..size {
+        let at = if num == 2 { pages } else { catalog };
+        out.extend_from_slice(format!("{at:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    let three = doc.try_get(3).unwrap();
+    assert!(matches!(&*three, Object::Stream(_)), "{three:?}");
+    let scans = FILE_SCANS.with(std::cell::Cell::get);
+    assert!(scans <= 1 + super::state::ScanLengths::MAX as usize, "{scans} scans of the file");
+}
+
 /// An object can be nothing but a reference to another. A chain of them is followed, and one that
 /// goes round ends in what isn't a dictionary or a name, without hanging.
 #[test]
@@ -276,6 +337,10 @@ fn fax_images_decode_with_their_parameters() {
     let mut understated = parms.clone();
     understated.set(b"Rows".to_vec(), Object::Int(1));
     assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+    // More /Rows than /Height (PDFBOX-771: 1,084,975,104), as the renderer reads it too.
+    let mut overstated = parms.clone();
+    overstated.set(b"Rows".to_vec(), Object::Int(1_000_000_000));
+    assert_eq!(image(&doc, Some(Object::Dict(overstated)), 10, 3).unwrap(), bits, "/Height rows, not /Rows past it");
     // The parameters as the file gives them, /Rows included, and Table 11's defaults.
     let mut d = Dict::new();
     d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
@@ -749,6 +814,9 @@ fn an_unreadable_object_is_searched_for_once() {
     let mut edited = doc.clone();
     assert_eq!(edited.try_get(3), first);
     assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "searches for an object that isn't there");
+    let report = doc.unreadable_objects();
+    assert_eq!(report.len(), 1, "cached failures must stay listed exactly once: {report:?}");
+    assert_eq!(edited.unreadable_objects(), report, "clones retain the cached failure diagnostic");
     edited.set(ObjRef::new(3, 0), Object::Int(7));
     assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Int(7)));
     assert_eq!(doc.try_get(3), first, "the edit is the clone's alone");
@@ -2015,6 +2083,105 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
 }
 
+/// A file whose object 3 (its `/Info`) can't be parsed: the rest reads.
+fn with_unreadable_info() -> Vec<u8> {
+    build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Author ) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    )
+}
+
+/// An object that can't be parsed reads as null and is listed once, by number and generation,
+/// with why. Clones and scans share the list, an edit takes the object off it (in that document
+/// only), and a sound file lists nothing.
+#[test]
+fn unreadable_objects_are_listed_with_the_reason() {
+    let doc = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    assert!(doc.unreadable_objects().is_empty(), "nothing has read object 3 yet");
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert!(doc.try_get(3).is_err());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "read twice, listed once: {lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+    let scanned = doc.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(doc.unreadable_objects(), lines, "the scan found the same object");
+    let unread = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    let scanned = unread.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(unread.unreadable_objects(), lines, "a clone's scan reaches the original");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(3, 0), Object::Dict(Dict::new()));
+    assert!(edited.unreadable_objects().is_empty(), "the edit replaced it");
+    assert_eq!(doc.unreadable_objects(), lines);
+    let sound =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) >>"], "/Root 1 0 R /Info 3 0 R");
+    let sound = Document::open(Arc::new(sound)).unwrap();
+    assert_eq!(sound.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 0);
+    assert!(sound.unreadable_objects().is_empty());
+}
+
+/// A file rebuilt from its object headers still lists an object the scan could not read.
+#[test]
+fn a_rebuilt_file_lists_the_objects_its_scan_could_not_read() {
+    let text = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /A ) >>\nendobj\n%%EOF\n";
+    let doc = Document::open(Arc::new(text.as_bytes().to_vec())).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{:?}", doc.repair_log());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+}
+
+/// The list keeps at most 100 objects and then says there were more; an object whose
+/// cross-reference offset holds no object is listed with that as its reason.
+#[test]
+fn the_unreadable_object_list_is_bounded() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 120));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 120);
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 101, "{:?}", lines.last());
+    assert!(lines[0].starts_with("object 3 0 could not be read"), "{}", lines[0]);
+    assert_eq!(lines[100], "more objects could not be read; only the first 100 are listed");
+
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let text = String::from_utf8_lossy(&base).into_owned();
+    let gone = text.replacen("3 0 obj\n(three)", "9 0 obj\n(three)", 1);
+    let doc = Document::open(Arc::new(gone.into_bytes())).unwrap();
+    assert!(doc.try_get(3).is_err());
+    assert_eq!(
+        doc.unreadable_objects(),
+        ["object 3 0 could not be read: no readable copy was found at its cross-reference offset or elsewhere in the file"]
+    );
+}
+
+/// The unreadable list is shared by clones, and each hides what it has edited. A clone that edited
+/// every listed object still lists its own failures: hidden entries don't use up its allowance.
+#[test]
+fn objects_a_clone_edited_do_not_use_up_its_unreadable_allowance() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 110));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    for num in 3..103 {
+        assert!(doc.try_get(num).is_err());
+    }
+    assert_eq!(doc.unreadable_objects().len(), 100);
+    let mut edited = doc.clone();
+    for num in 3..103 {
+        edited.set(ObjRef::new(num, 0), Object::Null);
+    }
+    for num in 103..113 {
+        assert!(edited.try_get(num).is_err());
+    }
+    let lines = edited.unreadable_objects();
+    assert_eq!(lines.len(), 10, "{lines:?}");
+    assert!(lines[0].starts_with("object 103 0 could not be read"), "{}", lines[0]);
+    let original = doc.unreadable_objects();
+    assert_eq!(original.len(), 101, "the original still shows at most 100, then says there were more");
+    assert_eq!(original[100], "more objects could not be read; only the first 100 are listed");
+}
+
 #[test]
 fn a_restored_revision_keeps_what_the_saved_file_held_in_object_streams() {
     // The earlier revision: an empty document read back from a file whose catalog and pages
@@ -2086,4 +2253,93 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
     let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
+}
+
+/// The width (`/MediaBox` x1) of each of `pages`, in order.
+fn page_widths(pages: &[Dict]) -> Vec<Option<i64>> {
+    pages.iter().map(|p| p.get(b"MediaBox").and_then(Object::as_array).and_then(|b| b.get(2)).and_then(Object::as_int)).collect()
+}
+
+/// The pages of `doc` in page-tree order, as the dictionaries the document holds.
+fn page_tree_pages(doc: &Document) -> Vec<Dict> {
+    let catalog = doc.get(doc.root().expect("root"));
+    let pages = doc.resolve(catalog.as_dict().and_then(|c| c.get(b"Pages")).expect("/Pages"));
+    let kids = pages.as_dict().and_then(|p| p.get(b"Kids")).and_then(Object::as_array).cloned().unwrap_or_default();
+    kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).collect()
+}
+
+/// ISO 32000-2 §7.5.6 and §7.5.8.2: an update reaches the revisions before it through `/Prev`.
+/// One without it cuts them off, page tree and all. The file is rebuilt from its object headers
+/// as a damaged one is, so its page tree is found, the newest definition of each object wins, and
+/// the repair log says why; a save rewrites it in full, with every page.
+#[test]
+fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.reconstructed() && doc.rebuilt_unlinked_update());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+
+    let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
+    let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
+    let pages = page_tree_pages(&reopened);
+    assert_eq!(page_widths(&pages), [Some(200), Some(300), Some(400)], "every page is saved, in order");
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page is saved: {pages:?}");
+    let catalog = reopened.get(reopened.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog is saved");
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+
+    // The same file with `/Prev` reads through its chain, as before.
+    let linked = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.reconstructed() && !linked.rebuilt_unlinked_update());
+    assert_eq!(linked.revisions().len(), 2);
+    assert!(linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+}
+
+/// A hybrid update (ISO 32000-2 §7.5.8.4) without `/Prev`: its `/XRefStm` stream belongs to the
+/// update, so the earlier revision is cut off just the same, and the file is rebuilt.
+#[test]
+fn a_hybrid_update_without_prev_is_rebuilt_too() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.rebuilt_unlinked_update(), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+    let linked = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.rebuilt_unlinked_update() && linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+    assert_eq!(linked.revisions().len(), 2);
+}
+
+#[test]
+fn find_agrees_with_a_plain_window_search() {
+    let naive = |hay: &[u8], needle: &[u8], from: usize, to: usize| {
+        if from >= to || needle.is_empty() || to - from < needle.len() {
+            return None;
+        }
+        hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    };
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let alphabet = b"/XRef t\n<>0";
+    for _ in 0..20_000 {
+        let hay: Vec<u8> = (0..next() % 200).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect();
+        let needles: [&[u8]; 5] = [b"/XRef", b"trailer", b"R", b"ff", b"<<"];
+        let needle = needles[(next() % 5) as usize];
+        let from = (next() % (hay.len() as u64 + 1)) as usize;
+        let to = from + (next() % (hay.len() as u64 + 1 - from as u64)) as usize;
+        assert_eq!(find(&hay, needle, from, to), naive(&hay, needle, from, to), "{hay:?} {needle:?} {from} {to}");
+    }
 }

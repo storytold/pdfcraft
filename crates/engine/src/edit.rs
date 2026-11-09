@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use crate::{
-    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit,
-    InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox,
-    PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file,
-    embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa,
-    unrestricted, xfa, xfa_after_data_change,
+    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
+    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
+    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
+    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -357,6 +357,12 @@ pub enum Edit {
         settings: PrinterMarks,
         replace: bool,
     },
+    /// Print production ▸ Fix hairlines: strokes narrower than `settings.narrower_than` points on
+    /// the page (after every transformation; zero-width lines always) get `settings.width`.
+    FixHairlines {
+        pages: Vec<usize>,
+        settings: Hairlines,
+    },
     /// Edit ▸ Attach a file: a document-level attachment (`/Names /EmbeddedFiles`) under
     /// `name`, made unique; `mime` is the embedded file's `/Subtype` when known.
     AddAttachment {
@@ -465,6 +471,12 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Delete mixed existing and added objects together (references from one inventory of
+    /// `page`), as one step: what Delete and Cut do to objects selected together.
+    DeleteObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {
@@ -473,6 +485,10 @@ pub enum Edit {
         text: String,
         /// Formatting changes (font, size, colour, alignment); default keeps the paragraph's.
         style: pdfcraft_edit::BlockStyle,
+    },
+    /// Expose supported grouped source text on one page for direct editing.
+    PrepareText {
+        page: usize,
     },
     /// An explicit open-licensed full font program, completing subsets or selected by a user.
     RegisterTextFont {
@@ -552,6 +568,13 @@ pub enum Edit {
         page: usize,
         content: AddedContent,
         file: Option<(String, Arc<Vec<u8>>)>,
+    },
+    /// Edit ▸ Paste of objects copied together in Edit a PDF ([`Document::copy_objects`](crate::Document::copy_objects)), in this
+    /// document or another: drawn on top of `page` as they were, moved by `offset` (user space).
+    PasteObjects {
+        page: usize,
+        clip: Arc<crate::ObjectClip>,
+        offset: [f64; 2],
     },
     /// Apply redaction marks (all, or those on `pages`): remove what they cover for good.
     ApplyRedactions {
