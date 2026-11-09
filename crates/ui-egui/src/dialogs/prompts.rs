@@ -76,15 +76,12 @@ pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
     let index = match req {
         CloseRequest::Tab(id) => {
-            let Some(idx) = app.views.iter().position(|v| v.id == id) else {
-                app.resolve_close(ctx, Some(false));
-                return;
-            };
+            let idx = app.asking_tab(id);
             // Detached windows render their own save prompt inside their child viewport pass.
-            if app.views.get(idx).is_some_and(|v| v.detached) {
+            if idx.is_some_and(|i| app.views.get(i).is_some_and(|v| v.detached)) {
                 return;
             }
-            Some(idx)
+            idx
         }
         CloseRequest::Quit | CloseRequest::All => app.first_dirty(),
     };
