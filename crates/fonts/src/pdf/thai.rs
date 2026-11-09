@@ -24,7 +24,9 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
         return None;
     }
     let desc = dict(doc, font.get(b"DescendantFonts").and_then(|a| doc.resolve(a).as_array().and_then(|a| a.first()).cloned()).as_ref())?;
-    if desc.name(b"CIDToGIDMap") != Some(b"Identity") {
+    // A map given by reference is the name it refers to, and a missing one is Identity, the
+    // default (ISO 32000-2 Table 115), as `composite_glyph_maps` reads them.
+    if desc.get(b"CIDToGIDMap").is_some_and(|m| doc.resolve(m).as_name() != Some(b"Identity".as_slice())) {
         return None;
     }
     let map = unicode_map(doc, font, true, &mut Reads::new(doc, &mut DecodeBudget::new(usize::MAX, 0)));
@@ -552,6 +554,24 @@ mod tests {
         let mut indirect = font.clone();
         indirect.set(b"Encoding".to_vec(), Object::Ref(doc.add(Object::name("Identity-H"))));
         assert_eq!(recovered_thai_map(&doc, &indirect), recovered_thai_map(&doc, &font));
+        // `/CIDToGIDMap` given through a reference is the name it refers to, and a missing one is
+        // Identity, the default (ISO 32000-2 Table 115).
+        let with_map = |map: Option<Object>| {
+            let mut f = font.clone();
+            let Some(Object::Array(desc)) = f.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(mut desc)) = desc.first().cloned() else { panic!("fixture") };
+            match map {
+                Some(map) => desc.set(b"CIDToGIDMap".to_vec(), map),
+                None => {
+                    desc.remove(b"CIDToGIDMap");
+                }
+            }
+            f.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(desc)]));
+            f
+        };
+        let by_reference = with_map(Some(Object::Ref(doc.add(Object::name("Identity")))));
+        assert_eq!(recovered_thai_map(&doc, &by_reference), recovered_thai_map(&doc, &font), "a map by reference");
+        assert_eq!(recovered_thai_map(&doc, &with_map(None)), recovered_thai_map(&doc, &font), "a missing map");
         // 259–261 are ฮ, ฯ and ะ, between the last anchor (อ, 258) and the first mark: a font that
         // put Mai Han-akat one glyph earlier passes every anchor and only this check sees it.
         let mut shifted = thai_ordered_program();
