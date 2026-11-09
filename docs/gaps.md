@@ -1,24 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (gap 6: #2662 redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (gap 3: #2517 a partial rewrite inside one text object keeps the next paragraph; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (gap 3: #2517 a partial rewrite keeps a kept row inside the paragraph and leaves the next marked region closed; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 12: reading order is scored, not just word F1) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M1: raw-deflate fallback preserves decoding-limit errors; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (gap 6: #1910 Organize Pages opens on the current page; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1398 stamps read upright on rotated pages; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1317, #1327, #1302, #1315 and #1340; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (#1316: replacing a line keeps a neighbouring line whose glyph box overlaps; gap 3 remains) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** gap 4 closed: the web build prints through the browser's print dialog; exclusive image-crop resize follow-up; minor (Word invoice regression coverage, #773; Office fidelity still partial; gap 2: hayro patch counts after the native-gradient backport) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (gap 13: large-file memory measured, edits keep two copies instead of three, file-backed input blocked on gap 2) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (gap 1 closed by #836; fixed issues removed from gaps 3, 6 and 16) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (document-font subset completion and curved/shared image clips in the contributor fork; gap 2: hayro patch counts after the native-gradient backport) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (gaps 2, 6, 7, 8, 10, 11, 14, 16, 19 and 24 brought up to date on main `25025fa2`; earlier header notes moved into the revision history; hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -42,15 +24,15 @@ update the numbers.
 | 2 | Rendering is borrowed and its fidelity unmeasured | feature, spec | 110–190 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 3 | Editing existing text is fragile on real files | feature | 100–180 | [target-app-parity.md](target-app-parity.md) |
 | 5 | Chinese UI lacks a web glyph face | localization | 6–12 | [localization-parity.md](localization-parity.md) |
-| 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
-| 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
+| 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 (2026-10-10 count; re-estimate due) | this file |
+| 7 | OCR: the built-in engine reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
+| 11 | Accessibility: only text-only automatic structure creation | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
-| 14 | Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean | localization | 25–45 | [localization-parity.md](localization-parity.md) |
+| 14 | Arabic RTL and Devanagari unqualified end to end; no Hangul UI face | localization | 25–45 | [localization-parity.md](localization-parity.md) |
 | 15 | Forms: JavaScript object model, actions, submit, XFA depth | feature | 40–75 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 16 | UI precision gaps (multi-select move, rulers, accelerators, windows) | UI/UX | 30–60 | [ui-parity.md](ui-parity.md) |
 | 17 | Certificate security and other protect gaps | feature, spec | 15–30 | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -68,8 +50,9 @@ update the numbers.
 
 - **Missing:** our own renderer (M2: `model` crate, font engine, DisplayList devices, ADR-0004), or
   an owner decision to adopt another engine; and any measurement of rendering against Acrobat.
-- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 26 local patches to `hayro-interpret`,
-  15 to `hayro`, 3 to `hayro-jbig2` and 17 to `hayro-syntax` (`vendor/README.md`); `lopdf` still
+- **Evidence:** pages are drawn by vendored `hayro` 0.7 with local patches numbered up to about 100 in
+  `hayro-interpret`, 31 in `hayro`, 17 in `hayro-jbig2` and 45 in `hayro-syntax` on 2026-11-09
+  (`vendor/README.md`; 26, 15, 3 and 17 on 2026-10-12), so the borrowed renderer is diverging further; `lopdf` still
   backs document inspection. All 7 rendering P0 features are `partial`. User reports: TikZ pattern
   fills drawn wrong ([#794](https://github.com/storytold/pdfcraft/issues/794)), blurry text at
   1080p/1440p ([#730](https://github.com/storytold/pdfcraft/issues/730)), fixed zoom sizes differ
@@ -80,7 +63,8 @@ update the numbers.
   any missing feature.
 - **Fix:** first a fidelity harness (gap 12), then the renderer: own devices (150–250 h in the old
   plan) or an adopted engine plus our own font and text layers.
-- **Estimate:** 110–190 h (includes the harness). **Owner decision needed** on #841 vs M2.
+- **Estimate:** 110–190 h (includes the harness). **Owner decision needed** on #841 vs M2, still
+  open on 2026-11-09.
   **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 3. Editing existing text is fragile on real files
@@ -139,15 +123,19 @@ update the numbers.
   craft-fonts has Noto Sans CJK SC, but at 16.4 MB it is too large to embed whole; a web face needs
   a cut of it (storytold/craft-libs#213).
 - **Impact:** the second-largest language group sees a broken interface in the web build although
-  the catalog is 97% translated.
+  88.4% of the i18n report's strings are translated (2026-11-03).
 - **Estimate:** 6–12 h (cut CJK faces through craft-fonts-build plus the fallback chain). **Doc:**
   [localization-parity.md](localization-parity.md).
 
 ### 6. Open-issue backlog of wrong results in shipped features
 
 - **Missing:** fixes for the ≈ 13 of ≈ 25 filed reports of features marked `shipped` that give wrong results still open,
-  plus triage of ≈ 220 other open issues.
-- **Evidence:** 245 open issues on 2026-10-10. The first batch of `fix(...)` reports was fixed by
+  plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
+- **Evidence (2026-11-09):** 1,774 open and 1,202 closed issues; 462 open issues carry `bug`, 74
+  `priority: critical` and 306 `priority: high`. The critical ones cluster on Windows printing
+  (#5661, #5751, #5779, #5870, #6060, #6201, #6372), on launching (#5239, #5553, #6500) and on two
+  possible data-loss reports (#6119, #6062).
+- **Evidence (2026-10-10):** 245 open issues. The first batch of `fix(...)` reports was fixed by
   2026-10-10 (#799, #800, #807, #809, #810, #811, #815, #816, #817, #818, #819, #821). A later
   batch keeps a cloudy comment flatten cannot draw (#1317), leaves a refused text-box restyle or
   resize unchanged (#1327), keeps arrow defaults off plain lines (#1302), stops a custom text
@@ -169,19 +157,23 @@ update the numbers.
   separate embedded-font extraction gap remain open. No readiness or backlog re-count.
 - **Impact:** every one is a user who lost trust. Crash reports outrank feature work
   (`AGENTS.md` §4).
-- **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
+- **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue) on the 2026-10-10 count. At that rate the
+  2026-11-09 backlog is ≈ 350–700 h before triage, so the estimate needs redoing once the critical
+  and high issues are triaged. **Doc:** this file.
 
-### 7. OCR reads only unaccented Latin
+### 7. OCR: the built-in engine reads only unaccented Latin
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
+- **Missing:** every other script and accented Latin in the built-in engine (an installed Tesseract
+  joins it since #977 and reads 12 allow-listed languages as far as its language packs go; quality
+  beyond English is unproven); a cited end-to-end test of the opt-in deskew and rotation (both
+  partial); despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
   the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
   reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
-  and leaves them as they are); MRC compression;
-  pluggable engines; OCR in the
-  browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
+  and leaves them as they are); MRC compression; scanner input. Editable-text output is partial
+  (the OCR Verify screen and editing recognised text); OCR in the browser has shipped (`ocr.ocr-web`).
+- **Evidence:** `ocr.ocr-languages` partial (ocrs reads only unaccented Latin; Tesseract as far as
+  its installed packs go); 9 of 26 Scan and OCR features planned and 11 partial on 2026-11-09 (19
+  planned on 2026-10-10); [#744](https://github.com/storytold/pdfcraft/issues/744)
   (Dutch). Acrobat ships on-device recognition for dozens of languages.
 - **Impact:** scanned documents are a core Pro workflow outside English.
 - **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
@@ -189,13 +181,15 @@ update the numbers.
 
 ### 8. Office export weak, Office import absent
 
-- **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from Office,
+- **Missing:** Word export that keeps layout; Excel export; PowerPoint export beyond text, images and
+  detected tables; creating PDFs from Office,
   HTML, web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
   broader layout fidelity remain incomplete;
-  `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
+  `create.export-xlsx`, `create.from-office`, `create.from-html` planned; `create.export-pptx`
+  partial (each page a slide with title, body text, images and tables).
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).
   First beta items: Create PDF from Office (LibreOffice sidecar, 10–20 h) and a Word export that
@@ -215,7 +209,8 @@ update the numbers.
 
 ### 10. Signatures: no PKCS #11, timestamp servers or online revocation
 
-- **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
+- **Missing:** PKCS #11 tokens, and smart cards on Linux (CAC/PIV cards sign through the macOS
+  Keychain since #968, and through the Windows store); timestamp-server preferences;
   fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
   Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
   browser.
@@ -320,19 +315,22 @@ update the numbers.
   to edit.
 - **Estimate:** 25–45 h. **Doc:** this file.
 
-### 14. Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean
+### 14. Arabic RTL and Devanagari unqualified end to end; no Hangul UI face
 
 - **Missing:** end-to-end qualification of right-to-left interface workflows on native platforms
   and in the browser (typed RTL text, IME composition, clipboard/selection and complex multi-line
-  bidirectional text); catalogs for Hindi, Indonesian and Korean (Acrobat ships Korean; it ships
-  Arabic in its Middle East edition; it ships none of Hindi or Indonesian). The logical catalog,
+  bidirectional text); a Hangul UI face for Korean; qualified Devanagari rendering for Hindi. The
+  Hindi, Indonesian and Korean catalogs have shipped (97.5% of the i18n report's strings on
+  2026-11-03; Acrobat ships Korean, Arabic only in its Middle East edition, and neither Hindi nor
+  Indonesian). The logical catalog,
   explicit right-to-left label direction and mirrored stock chrome are implemented and
   unit-tested; complex RTL workflows are not yet accepted.
-  Vietnamese ships as a catalog (`vi`, 100% of the current localizable union) but stays `partial`
+  Vietnamese ships as a catalog (`vi`, 98.4% of the i18n report's strings on 2026-11-03) but stays `partial`
   like other non-English languages (no translated help; engine/OS details stay English).
 - **Evidence:** [localization.md](localization.md) §Arabic; `misc.rtl-ui` planned (end-to-end
   qualification pending).
-- **Estimate:** 25–45 h (Arabic RTL 20–35, three catalogs 8–12 plus review). **Doc:**
+- **Estimate:** 25–45 h (Arabic RTL 20–35, three catalogs 8–12 plus review; the catalogs have
+  shipped since, hours not re-judged). **Doc:**
   [localization-parity.md](localization-parity.md).
 
 ### 15. Forms: JavaScript object model, actions, submit, XFA depth
@@ -349,7 +347,8 @@ update the numbers.
 
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
   rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
-  pop-ups that can be moved, connector lines, customisable quick tools; shortcut display and tool-mode bugs (#746, #721), macOS window controls
+  pop-ups that can be moved, connector lines, fully customisable quick tools (pinning tools on Home
+  and the hotbar are partial, `view.customize-quick-tools`); shortcut display and tool-mode bugs (#746, #721), macOS window controls
   (#789).
 - **Estimate:** 30–60 h. **Doc:** [ui-parity.md](ui-parity.md).
 
@@ -372,7 +371,8 @@ update the numbers.
 
 - **Missing:** most of Acrobat's twenty or so preference pages (General, Documents, Commenting, Forms, Identity,
   Signatures, Security, Measuring, Units and guides, Convert, …). Today: Interface language,
-  Documents and view, Identity, Fill & Sign, JavaScript.
+  Documents and view (including how many recent files to keep), Identity, Fill & Sign, JavaScript,
+  Animation effects and the update check at start.
 - **Estimate:** 15–25 h. **Doc:** [ui-parity.md](ui-parity.md).
 
 ### 20. Scanners, GPU page rendering, pen pressure, Read Out Loud
@@ -417,26 +417,34 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Brought up to date on `main` at 25025fa2: gap 2 (renderer patch counts; #841 still open), 5 (catalog share), 6 (1,774 open issues, 74 critical; estimate due), 7 (Tesseract, web OCR shipped, deskew and rotation partial), 8 (PowerPoint export partial), 10 (smart cards through the macOS Keychain), 11 (summary title matches the section), 14 (Hindi, Indonesian and Korean catalogs ship), 16 (quick tools partial), 19 (Preferences). Hours not re-judged. Earlier header notes moved into this table. |
+| 2026-10-28 | minor | M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
-| 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
-| 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
-| 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
-| 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
+| 2026-10-22 | minor | gap 3: #2517 a partial rewrite inside one text object keeps the next paragraph; estimates unchanged. |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
+| 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
+| 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
+| 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
-| 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |
+| 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-13 | minor | Gap 6: Organize Pages selects and reveals the current page on open, including after an earlier grid selection elsewhere (#1910). Estimates unchanged. |
+| 2026-10-13 | minor | gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain. |
 | 2026-10-12 | minor | Gap 6: rubber stamps, explicit image rectangles and PDF-page stamps read upright on rotated pages (#1398). Estimates unchanged. |
 | 2026-10-12 | minor | #1316: replacing a line or paragraph keeps a neighbouring line whose glyph box overlaps. Gap 3 remains. Estimates unchanged. |
 | 2026-10-12 | minor | Exclusive image crops resize with their pixels across nested states, intervening operators and content streams; shared clips remain fixed. Synthetic engine/tool regressions and private image save/reopen checks; estimates unchanged. |
 | 2026-10-12 | minor | Gap 13: measured large-file memory; edits no longer keep the previous working file while writing the next (peak 3 → 2 copies); file-backed input recorded as blocked on gap 2 |
+| 2026-10-12 | minor | gap 6: #1317, #1327, #1302, #1315 and #1340; estimates unchanged. |
+| 2026-10-12 | minor | gap 4 closed: the web build prints through the browser's print dialog; exclusive image-crop resize follow-up; minor (Word invoice regression coverage, #773; Office fidelity still partial; gap 2: hayro patch counts after the native-gradient backport) |
 | 2026-10-11 | minor | Closed gap 4: the web build prints through the browser's print dialog (sheets drawn by PdfCraft at 150–300 dpi, one per printed page); number kept |
 | 2026-10-11 | minor | Word invoice failure #773 has synthetic regression coverage; broader Office conversion remains gap 8. |
 | 2026-10-11 | minor | Contributor fork: mixed-style visual regions, source-font space reuse and a read-only textless background. Embedded sfnt source faces and Mac subset Unicode mappings keep edit baselines stable; live frames follow Apply/Save geometry as text grows or shrinks. Engine/tool/UI regressions and private all-page checks cover the changes; full matching font import, CFF, range styles, shaping and private Chinese typing checks added; legacy programs and general fidelity remain open; estimates unchanged |
 | 2026-10-11 | patch | Gap 2: 23 hayro-interpret and 10 hayro patches after axial and radial shadings became native gradients (backport of hayro 0.8) |
 | 2026-10-11 | minor | Closed gap 1 (#774, fixed by #836; numbers kept, its interop suite moved to gap 12); gap 6 lists the fixed #799–#821 batch; gap 3 and 16 updated for #844 (same-page move), #740 (column select) and #759 (1:1 touchpad scrolling) |
+| 2026-10-11 | minor | gap 1 closed by #836; fixed issues removed from gaps 3, 6 and 16. |
+| 2026-10-11 | minor | document-font subset completion and curved/shared image clips in the contributor fork; gap 2: hayro patch counts after the native-gradient backport. |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |
