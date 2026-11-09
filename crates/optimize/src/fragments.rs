@@ -243,14 +243,22 @@ fn merge_page(
     images: &mut ImageBudget,
 ) -> Result<usize, OptimizeError> {
     let Some(contents) = doc.get(page).as_dict().and_then(|d| d.get(b"Contents").cloned()) else { return Ok(0) };
+    let resources = page_resources(doc, page).unwrap_or_default();
+    let mut xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+    // Reading a heavy page takes seconds, so not one that has no picture that could be a fragment.
+    if !xobjects.iter().any(|(name, _)| fragment_image(doc, &xobjects, name).is_some()) {
+        return Ok(0);
+    }
     // A page whose content isn't all known is left alone: rewriting it would drop the rest.
     let Some(data) = content_bytes(doc, &contents, &mut DecodeBudget::page()) else { return Ok(0) };
+    // Nor one that doesn't draw enough things for a run, each fragment being a `Do`.
+    if data.windows(2).filter(|w| *w == b"Do").count() < MIN_FRAGMENTS {
+        return Ok(0);
+    }
     let parsed = parse(&data);
     if parsed.skipped > 0 {
         return Ok(0);
     }
-    let resources = page_resources(doc, page).unwrap_or_default();
-    let mut xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let ops = parsed.ops;
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
@@ -339,6 +347,9 @@ pub(crate) fn run(
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
     for p in pages {
+        if !progress(Stage::Reading { done: 0, total: pages.len() }) {
+            return Err(OptimizeError::Cancelled);
+        }
         report.fragments_merged += merge_page(doc, *p, report, progress, budget)?;
     }
     Ok(())
@@ -394,8 +405,8 @@ mod tests {
         let mut budget = ImageBudget::with_work(0);
         assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
         assert_eq!(budget.refused(), 1);
-        // Reading each strip, and building the picture of 8 rows of 8 they make.
-        let cost = raw + 8 * (8 + 8) + 8 * 8;
+        // Reading each strip, inflating it, and building the picture of 8 rows of 8 they make.
+        let cost = (1 + pdfcraft_filters::FLATE_READ_WORK) * raw + 8 * (8 + 8) + 8 * 8;
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 8);
         assert_eq!(u64::MAX - budget.work_left(), cost);
@@ -403,6 +414,35 @@ mod tests {
         let mut budget = ImageBudget::with_work(cost - 1);
         assert_eq!(merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
         assert_eq!(budget.refused(), 1);
+    }
+
+    /// A page drawing too few things for a run isn't parsed for one, even with a picture that could
+    /// be a fragment.
+    #[test]
+    fn too_few_draws_for_a_run_read_no_groups() {
+        let mut doc = Document::new_empty();
+        let mut image = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(1)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            image.set(k.as_bytes().to_vec(), v);
+        }
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0])));
+        let drawn = "q 10 0 0 10 0 0 cm /Im Do Q\n".repeat(MIN_FRAGMENTS - 1);
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), drawn.as_bytes())));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        let page = doc.add(Object::Dict(page));
+        GROUP_READS.with(|c| c.set(0));
+        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(merged.ok(), Some(0));
+        assert_eq!(GROUP_READS.with(|c| c.get()), 0);
     }
 
     /// Many images drawn on top of each other are not one picture; looking for runs among them reads
