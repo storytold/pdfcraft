@@ -93,17 +93,7 @@ pub(crate) fn grid_page_rect(cell: Rect, page: Vec2) -> Rect {
 }
 
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
-#[allow(clippy::too_many_arguments)]
-fn organize_toolbar(
-    view: &mut DocView,
-    info: &DocInfo,
-    editable: bool,
-    dirty: bool,
-    unobstructed: bool,
-    keys: PageKeys,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-) {
+fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, keys: PageKeys, ui: &mut egui::Ui, t: &Tokens) {
     let targets = view.target_pages();
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
@@ -164,7 +154,7 @@ fn organize_toolbar(
     });
     // Keys act on the selection unless a text field or a dialog has them (Delete under
     // Preferences deleted the selected pages).
-    if editable && unobstructed && !ui.ctx().egui_wants_keyboard_input() {
+    if editable && !ui.ctx().egui_wants_keyboard_input() {
         use egui::Key;
         let ctx = ui.ctx();
         let (del, esc) = (keys.take(ctx, Key::Delete) || keys.take(ctx, Key::Backspace), keys.take(ctx, Key::Escape));
@@ -291,7 +281,7 @@ pub(super) fn organize_grid(
     let anchor = view.grid_anchor.take();
     let reveal = view.grid_reveal.take();
     let mut open_page = None;
-    organize_toolbar(view, info, editable, dirty, unobstructed, keys, ui, t);
+    organize_toolbar(view, info, editable, dirty, keys, ui, t);
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {

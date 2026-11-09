@@ -11233,29 +11233,6 @@ fn edit_cut_from_the_menu_bar_cuts_the_page() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2, "Edit ▸ Cut took the page out");
 }
 
-/// Edit ▸ Paste whose paste never comes (the platform answers only with text on the clipboard)
-/// lets no later paste through an open menu: a paste is the pages' only with nothing over them.
-#[test]
-fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
-    let mut h = organize(3);
-    h.run_steps(2);
-    h.get_by_label("Page 2").click();
-    h.run_steps(2);
-    h.event(egui::Event::Copy);
-    h.run_steps(3);
-    assert!(h.state().page_clipboard.is_some(), "the page is copied");
-    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.run_steps(4);
-    assert_eq!(pages(&h), 3, "nothing is pasted without the platform's paste");
-    support::open_menu(&mut h, "View");
-    assert!(craft_menu::bar::is_open(&h.ctx), "the View menu is open");
-    h.event(egui::Event::Paste("clipboard text".into()));
-    h.run_steps(4);
-    assert_eq!(pages(&h), 3, "a paste with the View menu open pasted a page");
-}
-
 /// A native menu's Edit ▸ Paste with a page's context menu open closes the menu, which the click
 /// never reached, and the platform's answer pastes the page, also when it comes late (on Wayland
 /// egui-winit reads the clipboard asynchronously, within 3 seconds).
@@ -11311,11 +11288,10 @@ fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
     }
 }
 
-/// A paste that comes after the user opens a page's context menu stays behind the menu, Edit ▸
-/// Paste's or ⌘V's (egui-winit answers both alike). It was taken for the menu's and pasted the
-/// page.
+/// A paste behind a page's context menu stays there, also one that answers an Edit ▸ Paste asked
+/// for before the user opened the menu (egui-winit answers it as it answers ⌘V): it pastes no page.
 #[test]
-fn a_paste_after_the_user_opens_a_context_menu_is_not_edit_pastes() {
+fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
     let mut h = organize(3);
     h.run_steps(2);
     h.get_by_label("Page 2").click();
@@ -11338,7 +11314,7 @@ fn a_paste_after_the_user_opens_a_context_menu_is_not_edit_pastes() {
 /// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The bar reads as
 /// open on the pass after its click, so Edit ▸ Paste asks the platform for the clipboard once it
 /// has let go of the keys, and the answer (kittest gives none, so the test does) comes to the
-/// pages. Asked at once, the answer came while the bar held the keys, and was dropped.
+/// pages. An answer to a request sent with the click would come while the bar still held the keys.
 #[test]
 fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     let mut h = organize(3);

@@ -374,7 +374,8 @@ impl PdfCraftApp {
     /// the pass its click closes it). A native menu's click leaves egui's popups and the Hotbar
     /// tools window open, which hold the pages' keys; a click anywhere else closes them, and so
     /// does this. Edit ▸ Paste asks the platform for the clipboard only then, so its answer, on a
-    /// later pass, is an ordinary paste.
+    /// later pass, is an ordinary paste. With a text field focused, a native click on Copy, Cut,
+    /// Paste or Select all doesn't come here: craft-menu taps the shortcut for the field instead.
     fn release_menu_input(&mut self, ctx: &egui::Context) {
         if self.menu_input.is_empty() && self.menu_pastes == 0 {
             return;

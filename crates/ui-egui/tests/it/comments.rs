@@ -4517,11 +4517,13 @@ fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_commen
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
-/// Edit ▸ Paste goes to a text field that has the keyboard, as the user's ⌘V does: with the Hotbar
-/// tools window's search field focused, a native Edit ▸ Paste leaves the window open and pastes
-/// into the field. Closed, the window took the field with it, and the paste went nowhere.
+/// Edit ▸ Delete goes to a text field that has the keyboard, as the user's Delete does: with the
+/// Hotbar tools window's search field focused, a native Edit ▸ Delete leaves the window open and
+/// deletes in the field. Closed, the window took the field with it, and the Delete removed the
+/// selected comment. (A native click on Edit ▸ Copy, Cut, Paste or Select all reaches a focused
+/// field as craft-menu's tap of the shortcut, not as a menu command.)
 #[test]
-fn edit_paste_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
+fn edit_delete_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
     let mut h = selected_square();
     h.get_by_label("Hotbar settings").click();
     h.run_steps(3);
@@ -4532,16 +4534,15 @@ fn edit_paste_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window(
     h.run_steps(2);
     h.event(egui::Event::Text("pen".into()));
     h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
     assert!(search(&h, "pen"), "typed into the search field");
     let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.step();
-    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
-    h.event(egui::Event::Paste("cil".into()));
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
     h.run_steps(3);
-    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Paste closed the Hotbar tools window");
-    assert!(search(&h, "pencil"), "Edit ▸ Paste pasted into the search field");
-    assert_eq!(comments(&h).len(), 1, "the comment is still there");
+    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(search(&h, "pe"), "Edit ▸ Delete deleted in the search field");
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete removed the comment");
 }
 
 /// Full screen hides the hotbar and closes its tools window, which doesn't come back with the

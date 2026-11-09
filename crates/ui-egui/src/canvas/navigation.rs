@@ -363,7 +363,8 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
 }
 
 /// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
-/// keyboard, so chords may run (they wait for one, as the registered commands' do).
+/// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
+/// registered commands' do).
 pub(crate) fn shortcuts(
     view: &mut DocView,
     ctx: &egui::Context,
@@ -377,7 +378,7 @@ pub(crate) fn shortcuts(
 }
 
 /// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
-/// menu bar has the keyboard (`chords`). `None` while a text field has the keyboard, and then it
+/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field has the keyboard, and then it
 /// has the plain keys too; else whether the arrows are the view's (a focused radio button keeps
 /// them).
 fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<bool> {

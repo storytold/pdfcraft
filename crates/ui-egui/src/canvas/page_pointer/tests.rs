@@ -809,7 +809,7 @@ const RAW_KEY_READS: [&str; 17] = [
 /// Functions in the files the key guard scans ([`key_files`]) that read egui's keys themselves:
 /// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
 /// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
-/// hold, any key stopping a glide): (file, function, why).
+/// hold, any key stopping a glide, the clipboard's hand-off to text fields): (file, function, why).
 const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     (
         "app/clipboard.rs",
