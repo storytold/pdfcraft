@@ -548,6 +548,9 @@ mod tests {
         let me = current_user_sid().unwrap();
         let file = dir.join("ctl.json");
         std::fs::write(&file, b"{}").unwrap();
+        // An elevated process can create a file owned by Administrators. OWNER RIGHTS must
+        // restrict this user, so give the fixture an explicit owner before replacing its list.
+        icacls(&file, &["/setowner".into(), format!("*{me}")]).unwrap();
         // The whole list is written, as `restrict_to_owner` does: `icacls /inheritance:r` leaves
         // the Administrators entry the windows-latest runner gives a new file, and with it an
         // elevated administrator could replace the list after all.
@@ -565,6 +568,7 @@ mod tests {
         assert!(rights.status.success(), "{}", String::from_utf8_lossy(&rights.stderr));
         // Nothing but the two entries: no Administrators entry for the elevated runner to use.
         let sddl = sddl_of(&file).unwrap();
+        assert_eq!(section(&sddl, "O:"), Some(me.as_str()), "{sddl}");
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
         assert!(restrict_to_owner(&file, &user()).is_err(), "the access list could not be replaced");
         let _ = std::fs::remove_dir_all(&dir);
