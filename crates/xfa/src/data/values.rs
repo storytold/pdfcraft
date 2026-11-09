@@ -90,6 +90,8 @@ pub(super) struct Want {
     pub(super) text: String,
     /// Create the node even for an empty value (an instance of a repeating subform).
     pub(super) ensure: bool,
+    /// Only field-derived values may bind to a unique nested leaf in schema-wrapped datasets.
+    pub(super) bind_descendant: bool,
 }
 
 /// `tpl`, or the document's own template when none is given (parsed once).
@@ -137,7 +139,7 @@ pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Templat
             FieldData::Radio(sel) => radio_dataset_value(doc, f, sel),
             FieldData::None => continue,
         };
-        out.push(Want { som, path, text, ensure: false });
+        out.push(Want { som, path, text, ensure: false, bind_descendant: true });
     }
     out
 }
@@ -163,7 +165,7 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
     for f in fields {
         let som = som_of(doc, f);
         let path = path_of(tpl, &som);
-        let Some(text) = data.value_at(&path) else { continue };
+        let Some(text) = data.field_value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {
             FieldData::Text(_) => FieldData::Text(match date_pattern_of(doc, f) {
