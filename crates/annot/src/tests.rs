@@ -1081,6 +1081,21 @@ fn urls_are_found_in_text() {
     assert_eq!(found, ["https://example.org/a?b=1", "http://www.rust-lang.org"]);
 }
 
+/// A run of "http://" prefixes with no dot holds no address. It is passed over once, not scanned
+/// again from each prefix in it (quadratic: minutes for this text), and what follows is found.
+#[test]
+fn a_long_run_without_an_address_is_scanned_once() {
+    let text = format!("{} www.example.org", "http://".repeat(200_000));
+    let chars: Vec<char> = text.chars().collect();
+    let start = std::time::Instant::now();
+    let found: Vec<String> = crate::links::find_urls(&chars).into_iter().map(|(_, u)| u).collect();
+    assert_eq!(found, ["http://www.example.org"]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let t: Vec<char> = "http://x.. or http://nodot, then a@b.cd".chars().collect();
+    let found: Vec<String> = crate::links::find_urls(&t).into_iter().map(|(_, u)| u).collect();
+    assert_eq!(found, ["mailto:a@b.cd"]);
+}
+
 #[test]
 fn common_email_addresses_become_mailto_links_with_source_character_ranges() {
     let source = "İ Contact ada.lovelace+forms@example.co.uk, browse HTTPS://EXAMPLE.ORG; or ask admin@example.org.";
@@ -2153,6 +2168,44 @@ fn link_listing_skips_repeated_refs_and_caps_web_address_text() {
     let kept: usize = all.iter().map(|l| if let links::LinkAction::Uri(u) = &l.action { u.len() } else { 0 }).sum();
     assert!(kept <= links::MAX_URI_BYTES, "{kept} bytes of web addresses kept");
     assert!(matches!(&all[0].action, links::LinkAction::Uri(u) if u.len() == 64 << 10));
+}
+
+/// Links to one page among many find it through one index, and an unsupported action's long name
+/// is described by its first 64 bytes, not copied whole into every link.
+#[test]
+fn link_listing_indexes_pages_and_cuts_long_action_names() {
+    let name = "N".repeat(1000);
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Subtype /Link /Rect [0 0 1 1] /Dest [4 0 R /Fit] >>".into(),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{name} >> >>"),
+    ]);
+    let all = links::list(&doc);
+    assert_eq!(all[0].action, links::LinkAction::Page(1));
+    assert!(matches!(&all[1].action, links::LinkAction::Other(n) if n.len() == 64), "{:?}", all[1].action);
+}
+
+/// A short unsupported action name is described rather than indexed past its end, and a
+/// description widened by lossy conversion still stays within the 64-byte cap.
+#[test]
+fn link_listing_describes_short_and_wide_action_names() {
+    let invalid = "#FF".repeat(64);
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".into(),
+        "<< /Subtype /Link /Rect [0 0 1 1] /A << /S /Launch >> >>".into(),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{} >> >>", "N".repeat(64)),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{invalid} >> >>"),
+    ]);
+    let all = links::list(&doc);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].action, links::LinkAction::Other("Launch".into()));
+    assert!(matches!(&all[1].action, links::LinkAction::Other(n) if n == &"N".repeat(64)), "{:?}", all[1].action);
+    assert!(matches!(&all[2].action, links::LinkAction::Other(n) if n.len() <= 64), "{:?}", all[2].action);
 }
 
 #[test]

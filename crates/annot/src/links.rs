@@ -1,6 +1,8 @@
 //! Links (ISO 32000-2 §12.5.6.5): create, edit and remove link annotations with Acrobat's Link
 //! Properties (appearance and a go-to-page or open-a-web-page action).
 
+use std::collections::HashMap;
+
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 use crate::{AnnotError, annots, page_ref, page_refs, set_annots};
@@ -78,20 +80,25 @@ pub struct LinkItem {
     pub style: LinkStyle,
 }
 
-/// Bytes of web-address text one listing keeps, counted after conversion to UTF-8; past it a link
-/// lists as [`LinkAction::Other`].
+/// Bytes of web-address text one listing keeps or examines, counted after conversion to UTF-8;
+/// past it a link lists as [`LinkAction::Other`]. A rejected address still charges the raw bytes
+/// it read, so an address shared by many links cannot be converted again for free.
 pub(crate) const MAX_URI_BYTES: usize = 16 << 20;
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())).unwrap_or_default()
 }
 
-fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize) -> LinkAction {
+/// Longest unsupported action name a listing describes; a longer one is cut there.
+const MAX_ACTION_NAME: usize = 64;
+
+/// `pages` maps each page object to its index (the first, for a page listed twice).
+fn action_of(doc: &Document, d: &Dict, pages: &HashMap<ObjRef, usize>, uri_budget: &mut usize) -> LinkAction {
     let dest_page = |dest: &Object| -> Option<usize> {
         let a = doc.resolve(dest);
         let first = a.as_array()?.first()?.clone();
         match first {
-            Object::Ref(r) => pages.iter().position(|p| *p == r),
+            Object::Ref(r) => pages.get(&r).copied(),
             Object::Int(i) => usize::try_from(i).ok(),
             _ => None,
         }
@@ -99,7 +106,9 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
     if let Some(dest) = d.get(b"Dest") {
         return dest_page(dest).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page);
     }
-    let Some(a) = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) else { return LinkAction::Other("no action".into()) };
+    // Borrowed: an action shared by many links is read in place, not copied for each.
+    let action = d.get(b"A").map(|a| doc.resolve(a));
+    let Some(a) = action.as_deref().and_then(Object::as_dict) else { return LinkAction::Other("no action".into()) };
     match a.name(b"S") {
         Some(b"URI") => {
             let uri = a.get(b"URI").map(|u| doc.resolve(u));
@@ -112,11 +121,33 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
                     *uri_budget = left;
                     LinkAction::Uri(text.into_owned())
                 }
-                None => LinkAction::Other("web address too long".into()),
+                None => {
+                    // A conversion that didn't fit still pays for the bytes it read, so an
+                    // address shared by many links can't be converted again and again for free.
+                    *uri_budget = uri_budget.saturating_sub(bytes.len());
+                    LinkAction::Other("web address too long".into())
+                }
             }
         }
         Some(b"GoTo") => a.get(b"D").and_then(dest_page).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page),
-        Some(s) => LinkAction::Other(String::from_utf8_lossy(s).into_owned()),
+        Some(s) => {
+            // Cut on a character boundary: cutting inside a sequence makes the lossy conversion
+            // add a replacement character, which would put the result past `MAX_ACTION_NAME`.
+            // Only a cut inside a sequence needs backing up: at the whole length there is no
+            // byte past the end to look at.
+            let mut end = MAX_ACTION_NAME.min(s.len());
+            while end > 0 && end < s.len() && (s[end] & 0xC0) == 0x80 {
+                end -= 1;
+            }
+            // Lossy conversion widens each invalid byte to a three-byte replacement character, so
+            // the converted name is cut on a character boundary as well.
+            let text = String::from_utf8_lossy(&s[..end]);
+            let mut cut = text.len().min(MAX_ACTION_NAME);
+            while cut > 0 && !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            LinkAction::Other(text[..cut].to_owned())
+        }
         None => LinkAction::Other("no action".into()),
     }
 }
@@ -147,6 +178,10 @@ fn style_of(doc: &Document, d: &Dict) -> LinkStyle {
 /// Every link in the document.
 pub fn list(doc: &Document) -> Vec<LinkItem> {
     let Ok(pages) = page_refs(doc) else { return Vec::new() };
+    let mut index = HashMap::with_capacity(pages.len());
+    for (i, p) in pages.iter().enumerate() {
+        index.entry(*p).or_insert(i);
+    }
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut uri_budget = MAX_URI_BYTES;
@@ -171,7 +206,7 @@ pub fn list(doc: &Document) -> Vec<LinkItem> {
                 index: k,
                 obj: a.as_ref(),
                 rect: [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])],
-                action: action_of(doc, &d, &pages, &mut uri_budget),
+                action: action_of(doc, &d, &index, &mut uri_budget),
                 style: style_of(doc, &d),
             });
         }
@@ -412,6 +447,9 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let mut i = 0;
     while i < chars.len() {
         let boundary = i == 0 || chars.get(i - 1).is_some_and(|c| !c.is_alphanumeric());
+        // Where to go on when no address starts at `i`: past a run with no dot in it, which holds
+        // neither a web address nor an e-mail domain, so that "http://http://…" is scanned once.
+        let mut next = i + 1;
         if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || starts_with(i, "www.")) {
             let mut j = i;
             while chars.get(j).is_some_and(|c| url_char(*c)) {
@@ -428,13 +466,16 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 i = j;
                 continue;
             }
+            if !s.contains('.') {
+                next = next.max(j);
+            }
         }
         if boundary && let Some((end, uri)) = email_at(chars, i) {
             out.push((i..end, uri));
             i = end;
             continue;
         }
-        i += 1;
+        i = next;
     }
     out
 }
