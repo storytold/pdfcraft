@@ -1166,6 +1166,86 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     assert_eq!(names, ["two.pdf", "one.pdf"], "subfolders included, in path order");
 }
 
+/// The Combine files tab, showing, with one file in its list already.
+fn combine_tab_with_one_file() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().set_option("combine-view", "list").unwrap();
+    h.state_mut().execute("page.combine");
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("first.pdf".into(), FIXTURE.to_vec())]);
+    h.run_steps(2);
+    h
+}
+
+fn combine_names(h: &Harness<'_, PdfCraftApp>) -> Vec<String> {
+    h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
+}
+
+#[test]
+fn files_dropped_on_the_combine_tab_join_the_end_of_its_list_in_the_order_dropped() {
+    let mut h = combine_tab_with_one_file();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Files on disk come with their path (and no bytes); browsers hand over only a name and bytes.
+    let on_disk = |name: &str| -> egui::DroppedFileHandle {
+        std::fs::write(dir.join(name), FIXTURE).unwrap();
+        std::sync::Arc::new(Dropped { path: dir.join(name), bytes: Vec::new() })
+    };
+    let in_memory =
+        |name: &str, bytes: &[u8]| -> egui::DroppedFileHandle { std::sync::Arc::new(Dropped { path: name.into(), bytes: bytes.to_vec() }) };
+    let dropped = [on_disk("c.pdf"), in_memory("a.pdf", FIXTURE), in_memory("notes.txt", b"Some notes"), on_disk("b.pdf")];
+    h.input_mut().dropped_files.extend(dropped);
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(h.state().views.is_empty(), "nothing opens");
+    assert_eq!(combine_names(&h), ["first.pdf", "c.pdf", "a.pdf", "notes.txt", "b.pdf"]);
+    let draft = &h.state().combine_draft;
+    assert!(draft.iter().all(|f| f.problem.is_none()), "every file can be combined");
+    assert!(draft[3].pages == 1, "the text file became a page");
+    assert!(draft[1].modified.is_some() && draft[2].modified.is_none());
+    // One drop, one step to undo.
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["first.pdf"]);
+}
+
+#[test]
+fn a_file_combine_does_not_take_is_left_out_of_a_drop_and_named() {
+    let mut h = combine_tab_with_one_file();
+    let path = std::env::temp_dir().join(format!("pdfcraft-combine-drop-{}.zip", std::process::id()));
+    std::fs::write(&path, b"PK\x03\x04").unwrap();
+    let dropped: [egui::DroppedFileHandle; 4] = [
+        std::sync::Arc::new(Dropped { path: "report.docx".into(), bytes: b"PK\x03\x04".to_vec() }),
+        std::sync::Arc::new(Dropped { path: "one.pdf".into(), bytes: FIXTURE.to_vec() }),
+        std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() }),
+        // A PDF without the name of one is still a PDF.
+        std::sync::Arc::new(Dropped { path: "scan".into(), bytes: FIXTURE.to_vec() }),
+    ];
+    h.input_mut().dropped_files.extend(dropped);
+    h.run_steps(3);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(combine_names(&h), ["first.pdf", "one.pdf", "scan"]);
+    let zip = path.file_name().unwrap().to_string_lossy().into_owned();
+    h.get_by_label(&format!("Not added: report.docx, {zip}. Combine takes PDFs, images and text files."));
+}
+
+#[test]
+fn a_pdf_dropped_on_a_document_opens_while_the_combine_tab_waits_behind_it() {
+    let mut h = combine_tab_with_one_file();
+    h.state_mut().open_bytes("open.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().combine_showing() && h.state().combine_tab.open);
+    let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
+    h.input_mut().dropped_files.push(file);
+    support::wait_until(&mut h, "dropped document", |app| app.views.len() == 2);
+    assert_eq!(combine_names(&h), ["first.pdf"], "the Combine files list is left as it was");
+}
+
 #[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.

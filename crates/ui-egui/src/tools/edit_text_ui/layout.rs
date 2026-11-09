@@ -68,7 +68,9 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
 
 /// One TextEdit lays out all source runs; its caret and selection span the whole region.
 pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, String> {
-    let programs = doc.text_editor_fonts(page);
+    // Bundled replacement selectors are menu choices, never source resource names. Installing
+    // an unused choice would make even a standard-font editor wait a frame for its font atlas.
+    let programs: Vec<_> = doc.text_editor_fonts(page).into_iter().filter(|font| !font.choice_only).collect();
     let mut definitions = ctx.fonts(|f| f.definitions().clone());
     // Only the current editor's document fonts live in the atlas. Never accumulate the
     // programs of previously opened files or add them to the interface's default families.
@@ -126,10 +128,14 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
         if centered {
             job.halign = egui::Align::Center;
         }
+        // An OCR phrase is set in one size, as the engine redraws it: each word's own is a guess
+        // from its box. Its words still keep their widths.
+        let phrase = block.phrase_size();
         for (range, index) in block.edited_spans(text) {
             let Some(line) = lines.get(index) else { continue };
-            let mut look = source_look(&line.base_font, line.size, line.color, line.bold, line.italic);
-            look.size = line.size;
+            let base = phrase.unwrap_or(line.size);
+            let mut look = source_look(&line.base_font, base, line.color, line.bold, line.italic);
+            look.size = base;
             if ed.look.family != ed.look0.family || ed.family_chosen {
                 look.family = ed.look.family;
             }
@@ -153,7 +159,7 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
                 font.family = FontFamily::Name(name.clone().into());
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
-            let target_width = ((line.rect[2] - line.rect[0]) * look.size / line.size.max(0.01)) as f32 * scale;
+            let target_width = ((line.rect[2] - line.rect[0]) * look.size / base.max(0.01)) as f32 * scale;
             let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
             job.append(
                 text.get(range).unwrap_or_default(),
