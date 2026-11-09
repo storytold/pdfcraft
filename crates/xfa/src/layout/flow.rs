@@ -1,8 +1,6 @@
 use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
 use super::items::Item;
-use super::{
-    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count, subform_instances,
-};
+use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Node, Rect, SomIndices, Subform, XfaError, data_path, subform_instances};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
