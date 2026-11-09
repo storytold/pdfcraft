@@ -1,4 +1,5 @@
-//! Pages to Print: all, a range ("1-3, 6, 9-", page labels allowed), odd or even pages, reverse.
+//! Pages to Print: all, a range ("1-3, 6, 9-", page labels allowed, "(n)" for the page at
+//! position n), odd or even pages, reverse.
 
 use std::collections::HashMap;
 
@@ -44,18 +45,37 @@ pub enum Subset {
     Even,
 }
 
-/// Resolve one range token: a page label, or a number (1-based).
+/// Resolve one range token: a page label, a number in parentheses for the page at that position,
+/// or a number (1-based).
 fn page_of(tok: &str, count: usize, labels: &Labels) -> Result<usize, PrintError> {
     let t = tok.trim();
     // Page labels win over numbers (Acrobat's "use logical page numbers").
     if let Some(i) = labels.get(t) {
         return Ok(i);
     }
-    match t.parse::<usize>() {
+    let number = parenthesized(t).unwrap_or(t);
+    // `usize::from_str` accepts a leading '+', which is not part of a page number.
+    if !number.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(PrintError::NotAPage(t.to_string()));
+    }
+    match number.parse::<usize>() {
         Ok(n) if n >= 1 && n <= count => Ok(n - 1),
         Ok(n) => Err(PrintError::OutOfRange(n, count)),
         Err(_) => Err(PrintError::NotAPage(t.to_string())),
     }
+}
+
+/// What a token holds between one pair of parentheses, trimmed: "( 3 )" holds "3".
+fn parenthesized(t: &str) -> Option<&str> {
+    t.trim().strip_prefix('(')?.strip_suffix(')').map(str::trim)
+}
+
+/// The page position (1-based) a token names in parentheses. A page's label and its position
+/// need not coincide (ISO 32000-2 §12.4.2): "(n)" always names the nth page, so a page can be
+/// named by position where a label such as "1" belongs to another page. `None` for anything
+/// else. Callers look labels up first, so a label spelled "(1)" keeps naming its own page.
+pub fn position(token: &str) -> Option<usize> {
+    parenthesized(token).filter(|n| n.bytes().all(|b| b.is_ascii_digit()))?.parse().ok()
 }
 
 /// Split a range whose endpoint is a logical page label containing a hyphen, such
@@ -79,8 +99,8 @@ fn hyphenated_label_range(part: &str, count: usize, labels: &Labels) -> Option<(
 }
 
 /// The pages to print (0-based, in print order). `range` is `None` for all pages; it may list
-/// numbers and labels with `-` ranges (open-ended allowed: `5-`, `-3`). The subset keeps the odd or
-/// even pages of those chosen, by page number (see [`narrow`]).
+/// numbers, labels and `(n)` positions with `-` ranges (open-ended allowed: `5-`, `-3`). The subset
+/// keeps the odd or even pages of those chosen, by page number (see [`narrow`]).
 pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     let mut pages = Vec::new();
     match range.map(str::trim).filter(|r| !r.is_empty()) {
@@ -174,6 +194,13 @@ mod tests {
     #[test]
     fn open_ended_range_of_empty_document_is_an_error() {
         assert!(select_pages(0, Some("-"), &[], Subset::All, false).is_err());
+    }
+
+    #[test]
+    fn plus_sign_is_not_a_page() {
+        for r in ["+3", "+2-4", "2-+4"] {
+            assert!(matches!(select_pages(5, Some(r), &[], Subset::All, false), Err(PrintError::NotAPage(_))), "accepted {r}");
+        }
     }
 
     #[test]

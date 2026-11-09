@@ -769,6 +769,103 @@ trailer << /Root 1 0 R >>
     assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
 }
 
+/// ISO 32000-2 Table 99 `/Order`: the Layers panel presents the groups it lists, as a tree,
+/// with nested arrays one level deeper and a leading text string as a label. Groups it
+/// doesn't list are not presented (they stay in `layers` and keep their state), and without
+/// `/Order` none are. Malformed entries are skipped; cycles and depth are bounded.
+#[test]
+fn the_layers_panel_presents_the_order_tree() {
+    let rows = |order: &str, extra: &str| {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /OFF [8 0 R] {order} >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (A) >> endobj
+6 0 obj << /Type /OCG /Name (B) >> endobj
+7 0 obj << /Type /OCG /Name (C) >> endobj
+8 0 obj << /Type /OCG /Name (D) >> endobj
+9 0 obj << /Type /OCG /Name (Unlisted) >> endobj
+{extra}
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        assert_eq!(info.layers.len(), 4, "every group in /OCGs keeps its state: {order}");
+        info.layer_order
+            .iter()
+            .map(|r| match &r.item {
+                LayerItem::Layer(i) => format!("{}{}", " ".repeat(r.depth), info.layers.get(*i).map_or("?", |l| l.name.as_str())),
+                LayerItem::Label(s) => format!("{}[{s}]", " ".repeat(r.depth)),
+            })
+            .collect::<Vec<_>>()
+    };
+    // A layer with sublayers, and a group not listed (D) that isn't presented.
+    assert_eq!(rows("/Order [5 0 R 6 0 R [7 0 R]]", ""), ["A", "B", " C"]);
+    // A labelled collection heads its own level, with a nested array under B.
+    assert_eq!(rows("/Order [5 0 R [(Set) 6 0 R [7 0 R]] 8 0 R]", ""), ["A", "[Set]", " B", "  C", "D"]);
+    // Without /Order, or with an empty one, nothing is presented.
+    assert!(rows("", "").is_empty());
+    assert!(rows("/Order []", "").is_empty());
+    // An indirect /Order and nested array; a group outside /OCGs, a missing object and junk
+    // are skipped.
+    assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 11 0 R 9 0 R 12 0 R 1 (x) /N] endobj\n11 0 obj [6 0 R] endobj"), ["A", " B"]);
+    // Cycles: an array holding itself, and an /Order holding itself.
+    assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 10 0 R 11 0 R] endobj\n11 0 obj [6 0 R 11 0 R 10 0 R] endobj"), ["A", " B"]);
+    // Nesting past the limit is cut off; a long label is cut short.
+    let deep = format!("/Order [5 0 R {}6 0 R{}]", "[".repeat(40), "]".repeat(40));
+    assert_eq!(rows(&deep, ""), ["A"]);
+    let long = format!("/Order [[({}) 5 0 R]]", "x".repeat(1000));
+    let got = rows(&long, "");
+    assert_eq!(got.first().map(|s| s.len()), Some(MAX_LAYER_LABEL_CHARS + 2));
+    // Many rows stop at the cap.
+    let many = format!("/Order [{}]", "5 0 R ".repeat(MAX_LAYER_ORDER_ROWS + 10));
+    assert_eq!(rows(&many, "").len(), MAX_LAYER_ORDER_ROWS);
+    // One long indirect label heading many direct arrays is decoded once, and cut short in
+    // every row.
+    let shared = format!("/Order [{}]", "[13 0 R 5 0 R] ".repeat(100));
+    let label = format!("13 0 obj ({}) endobj", "y".repeat(10_000));
+    let before = LABEL_DECODES.with(std::cell::Cell::get);
+    let got = rows(&shared, &label);
+    assert_eq!(LABEL_DECODES.with(std::cell::Cell::get) - before, 1);
+    assert_eq!(got.len(), 200);
+    assert!(got.iter().step_by(2).all(|s| s.len() == MAX_LAYER_LABEL_CHARS + 2), "{:?}", got.first());
+}
+
+/// ISO 32000-2 §8.11.4.4: the View auto state (`/AS`) decides the initial state of the groups
+/// it manages, over `/ON` and `/OFF`; the others keep the configuration's. Malformed entries
+/// are ignored.
+#[test]
+fn initial_layer_visibility_applies_the_view_auto_state() {
+    let initial = |config: &str| {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (ViewOff) /Usage << /View << /ViewState /OFF >> >> >> endobj
+6 0 obj << /Type /OCG /Name (ViewOn) /Usage 8 0 R >> endobj
+7 0 obj << /Type /OCG /Name (Plain) >> endobj
+8 0 obj << /View << /ViewState /ON >> >> endobj
+9 0 obj 9 0 R endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        // Opened, so each is shown as it starts.
+        info.layers.iter().inspect(|l| assert_eq!(l.initial, l.visible, "{}", l.name)).map(|l| l.initial).collect::<Vec<_>>()
+    };
+    let managed = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R 6 0 R 7 0 R] >>]";
+    assert_eq!(initial(&format!("<< /OFF [6 0 R 7 0 R] {managed} >>")), [false, true, false]);
+    assert_eq!(initial("<< /OFF [6 0 R 7 0 R] >>"), [true, false, false], "without /AS");
+    assert_eq!(initial("<< /OFF [6 0 R] /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R 6 0 R] >>] >>"), [true, false, true], "Print event");
+    assert_eq!(initial("<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), [true, true, true], "Zoom only");
+    for bad in ["/AS 9 0 R", "/AS [9 0 R 1 null]", "/AS [<< /Event /View /OCGs [5 0 R] >>]", "/AS [<< /Event /View /Category [/View] /OCGs 9 0 R >>]"]
+    {
+        assert_eq!(initial(&format!("<< {bad} >>")), [true, true, true], "{bad}");
+    }
+}
+
 const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
@@ -1042,6 +1139,152 @@ fn a_named_attachment_leaves_its_contents_unspent() {
     assert!(info.attachments.iter().all(|a| a.name == "a.txt"));
     assert_eq!(info.links.len(), 1);
     assert!(matches!(&info.links[0].target, LinkTarget::Uri(u) if *u == uri));
+}
+
+#[test]
+fn link_hit_test_rejects_points_outside_the_rect_before_scanning_quads() {
+    // A quadrilateral reaching past `/Rect` (hand-built: `link_quads` keeps none beyond the
+    // slack) shows whether the bounds gate runs before the quadrilateral scan.
+    let link = Link {
+        page: 0,
+        index: 0,
+        rect: [0.0, 0.0, 10.0, 10.0],
+        quads: vec![[0.0, 0.0, 50.0, 0.0, 50.0, 10.0, 0.0, 10.0]],
+        target: LinkTarget::Other("URI".into()),
+    };
+    assert!(link.contains(5.0, 5.0), "inside the rect and the quadrilateral");
+    assert!(link.contains(10.005, 5.0), "within the slack `link_quads` accepts");
+    assert!(!link.contains(30.0, 5.0), "outside the rect: no quadrilateral is scanned");
+    assert!(!link.contains(f32::NAN, 5.0));
+}
+
+#[test]
+fn a_link_whose_quads_have_no_area_is_active_over_its_rect() {
+    let rect = [10.0, 10.0, 200.0, 30.0];
+    let link = |values: &[f32]| Link {
+        page: 0,
+        index: 0,
+        rect,
+        quads: crate::link_quads(&values.iter().map(|v| Some(*v)).collect::<Vec<_>>(), rect),
+        target: LinkTarget::Other("URI".into()),
+    };
+    let flat = [10.0, 20.0, 60.0, 20.0, 60.0, 20.0, 10.0, 20.0];
+    assert!(link(&flat).contains(100.0, 25.0), "no usable quad: the whole /Rect");
+    let good = [10.0, 10.0, 60.0, 10.0, 60.0, 30.0, 10.0, 30.0];
+    let mixed: Vec<f32> = flat.iter().chain(good.iter()).copied().collect();
+    assert!(link(&mixed).contains(30.0, 25.0), "inside the usable quad");
+    assert!(!link(&mixed).contains(100.0, 25.0), "the usable quad still gates the /Rect");
+}
+
+fn links_of(catalog_extra: &str, annots: &str) -> DocInfo {
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [{annots}] >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF"
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 300.0, height: 300.0, crop: [0.0, 0.0, 300.0, 300.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    info
+}
+
+fn uris(info: &DocInfo) -> Vec<String> {
+    info.links.iter().map(|l| if let LinkTarget::Uri(u) = &l.target { u.clone() } else { format!("{:?}", l.target) }).collect()
+}
+
+/// ISO 32000-2 §12.6.4.8, Table 211: a relative URI action is resolved against the catalog's
+/// `/URI /Base`; absolute addresses, and a base that isn't a web address, change nothing.
+#[test]
+fn relative_uri_actions_resolve_against_the_catalog_base() {
+    let annots = "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (page.html) >> >> \
+                  << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (javascript:alert(1)) >> >> \
+                  << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.org/abs) >> >>";
+    let info = links_of("/URI << /Base (https://example.com/base/) >>", annots);
+    assert_eq!(info.uri_base.as_deref(), Some("https://example.com/base/"));
+    assert_eq!(uris(&info), ["https://example.com/base/page.html", "javascript:alert(1)", "https://example.org/abs"]);
+    // An indirect URI dictionary is followed too.
+    let pdf_indirect = links_of("/URI 4 0 R >> endobj\n4 0 obj << /Base (https://example.com/b/) >> endobj\n5 0 obj <<", annots);
+    assert_eq!(uris(&pdf_indirect).first().map(String::as_str), Some("https://example.com/b/page.html"));
+    // Without a base, or with one that isn't a web address, the address stays as written.
+    assert_eq!(uris(&links_of("", annots)).first().map(String::as_str), Some("page.html"));
+    for base in ["/URI << /Base (file:///C:/docs/) >>", "/URI << /Base /NotAString >>", "/URI 7", "/URI << /Base (javascript:x//) >>"] {
+        assert_eq!(uris(&links_of(base, annots)).first().map(String::as_str), Some("page.html"), "{base}");
+    }
+}
+
+/// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its
+/// `/Rect` when they are missing, malformed or reach outside it.
+#[test]
+fn links_are_active_in_their_quad_points() {
+    let link = |quads: &str| format!("<< /Subtype /Link /Rect [10 10 200 30] {quads} /A << /S /URI /URI (https://example.org/) >> >>");
+    let info = links_of("", &link("/QuadPoints [10 10 60 10 60 30 10 30]"));
+    let l = &info.links[0];
+    assert_eq!(l.quads, vec![[10.0, 10.0, 60.0, 10.0, 60.0, 30.0, 10.0, 30.0]]);
+    assert!(l.contains(30.0, 20.0), "the first word");
+    assert!(!l.contains(150.0, 20.0), "inside /Rect but outside the quad");
+    for fallback in [
+        "",
+        "/QuadPoints [10 10 60 10 60 30 10]",
+        "/QuadPoints [10 10 60 10 60 30 10 (x)]",
+        "/QuadPoints [10 10 260 10 260 30 10 30]",
+        "/QuadPoints 5",
+    ] {
+        let info = links_of("", &link(fallback));
+        let l = &info.links[0];
+        assert!(l.quads.is_empty(), "{fallback}");
+        assert!(l.contains(150.0, 20.0) && !l.contains(250.0, 20.0), "{fallback}: active over /Rect");
+    }
+    let many = "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS + 1);
+    assert!(links_of("", &link(&format!("/QuadPoints [{many}]"))).links[0].quads.is_empty(), "too many quads");
+}
+
+/// Links sharing one long `/QuadPoints` array, or a relative address resolved against a long
+/// `/URI /Base`, keep their copies only within `MAX_LINK_ATTACHMENT_TEXT_BYTES`, and every
+/// link is still listed.
+#[test]
+fn links_sharing_quad_points_or_a_long_base_keep_them_within_a_budget() {
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let fill = |catalog_extra: &str, links: &str, object5: &str| {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{links}] >> endobj\n\
+             5 0 obj {object5} endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut info = DocInfo { pages: vec![page.clone()], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        info
+    };
+
+    let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / (crate::MAX_LINK_QUADS * std::mem::size_of::<[f32; 8]>()) + 20;
+    let quads = format!("[{}]", "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS));
+    let links = "<< /Subtype /Link /Rect [0 0 100 100] /QuadPoints 5 0 R /A << /S /URI /URI (https://example.org/) >> >> ".repeat(count);
+    super::annotations::QUAD_ARRAYS_READ.with(|n| n.set(0));
+    let info = fill("", &links, &quads);
+    assert_eq!(info.links.len(), count);
+    let kept: usize = info.links.iter().map(|l| std::mem::size_of_val(l.quads.as_slice())).sum();
+    assert!(kept > 0 && kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} quad bytes kept");
+    assert!(info.links.iter().any(|l| l.quads.is_empty()), "past the budget a link is active over its /Rect");
+    // Review on #4474: the shared array is read once for each link it fits, and once more to find
+    // that it no longer does; not again for every link after that.
+    let fitted = info.links.iter().filter(|l| !l.quads.is_empty()).count();
+    let read = super::annotations::QUAD_ARRAYS_READ.with(std::cell::Cell::get);
+    assert_eq!(read, fitted + 1, "{read} reads for {fitted} links within the budget, of {count}");
+
+    let base = format!("https://example.com/{}/", "b".repeat(crate::MAX_URI_BASE_BYTES - 32));
+    let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / base.len() + 20;
+    let links = "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >> ".repeat(count);
+    let info = fill(&format!("/URI << /Base ({base}) >>"), &links, "<< /S /URI /URI (p.html) >>");
+    assert_eq!(info.links.len(), count);
+    let addresses = uris(&info);
+    let kept: usize = addresses.iter().map(String::len).sum();
+    assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} address bytes kept");
+    assert_eq!(addresses.first(), Some(&format!("{base}p.html")));
+    assert!(addresses.iter().any(|u| u == "p.html"), "past the budget a link keeps its raw address");
 }
 
 /// Embedded files whose name-tree keys share one long string keep it, as key and as name, only
@@ -1715,6 +1958,57 @@ fn outline_items_carry_their_colour_and_style() {
     );
 }
 
+/// A bookmark's action (`/A`, ISO 32000-2 §12.3.3 Table 151) is read as a link's is. Only a
+/// go-to's `/D` is a page of this document: a remote go-to's names a page or destination of the
+/// other file (§12.6.4.3), so `[0 /FitH 200]` there is not this file's first page. A web address,
+/// another PDF and actions PdfCraft doesn't run are kept for the bookmark to run or report. An
+/// action without a type is still read as the go-to its `/D` suggests.
+#[test]
+fn bookmark_actions_are_read_as_links_read_them() {
+    use DestView::*;
+    let actions = [
+        ("Go to", "/A << /S /GoTo /D [3 0 R /FitH 300] >>"),
+        ("Web", "/A << /S /URI /URI (https://example.org/manual) >>"),
+        ("Other file", "/A << /S /GoToR /F (other.pdf) /D [0 /FitH 200] /NewWindow true >>"),
+        ("Other file, named", "/A << /S /GoToR /F (other.pdf) /D (sec) >>"),
+        ("Launch", "/A << /S /Launch /F (other.pdf) >>"),
+        ("Menu item", "/A << /S /Named /N /NextPage >>"),
+        ("Script", "/A << /S /JavaScript /JS (app.alert\\(1\\)) >>"),
+        ("No type", "/A << /D [3 0 R /Fit] >>"),
+    ];
+    let n = actions.len();
+    let items: Vec<String> = actions
+        .iter()
+        .enumerate()
+        .map(|(k, (title, action))| {
+            let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+            let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+            format!("<< /Title ({title}) /Parent 4 0 R{prev}{next} {action} >>")
+        })
+        .collect();
+    let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+    let got: Vec<_> = info.outline.iter().map(|o| (o.title.as_str(), o.page, o.view, o.action.clone())).collect();
+    let remote = |destination, new_window| Some(LinkTarget::RemoteGoTo { launch: false, file: "other.pdf".into(), destination, new_window });
+    assert_eq!(
+        got,
+        [
+            ("Go to", Some(0), FitH { top: Some(300.0) }, None),
+            ("Web", None, Top, Some(LinkTarget::Uri("https://example.org/manual".into()))),
+            ("Other file", None, Top, remote(RemoteDestination::Page { page: 0, view: FitH { top: Some(200.0) } }, Some(true))),
+            ("Other file, named", None, Top, remote(RemoteDestination::Named("sec".into()), None)),
+            (
+                "Launch",
+                None,
+                Top,
+                Some(LinkTarget::RemoteGoTo { launch: true, file: "other.pdf".into(), destination: RemoteDestination::Default, new_window: None })
+            ),
+            ("Menu item", None, Top, Some(LinkTarget::Other("Named".into()))),
+            ("Script", None, Top, Some(LinkTarget::Other("JavaScript".into()))),
+            ("No type", Some(0), Fit, None),
+        ]
+    );
+}
+
 #[test]
 fn outline_window_keeps_the_first_bookmarks_and_says_when_more_follow() {
     const COUNT: usize = OUTLINE_WINDOW + 5;
@@ -2070,4 +2364,179 @@ trailer << /Root 1 0 R >>
     let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
     let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.page, f.rect.map(|r| r[1]))).collect();
     assert_eq!(listed, [("radio", Some(0), Some(120.0)), ("pair", Some(0), Some(90.0)), ("other", Some(0), Some(60.0))], "{:?}", info.fields);
+}
+
+/// A kid with `/T` that a field's `/Kids` lists but whose `/Parent` doesn't name that field is
+/// named up its own `/Parent` chain (ISO 32000-2 §12.7.4.2), as the form reader names it.
+#[test]
+fn a_named_kid_without_a_parent_keeps_its_own_name() {
+    let pdf = |parent: &str| {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 49152 /T (Group1) /Kids [6 0 R 5 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [10 100 30 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [40 100 60 120] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let names = |bytes: Vec<u8>| inspect(Arc::new(bytes), None).expect("opens").fields.iter().map(|f| (f.name.clone(), f.kind)).collect::<Vec<_>>();
+    assert_eq!(names(pdf("")), [("Group1".into(), FieldKind::Radio), ("Group1".into(), FieldKind::Radio)]);
+    assert_eq!(names(pdf(" /Parent 4 0 R")), [("Group1.Group1".into(), FieldKind::Radio), ("Group1.Group1".into(), FieldKind::Radio)]);
+}
+
+/// A kid named from its own `/Parent` chain (ISO 32000-2 §12.7.4.2) when that `/Parent` is a field
+/// other than the one listing it: an indirect one, and one listed as a direct dictionary in
+/// `/Fields` (which no `/Parent` can name).
+#[test]
+fn a_named_kid_whose_parent_is_another_field_is_named_under_it() {
+    let pdf = |listing: &str, fields: &str| {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >> endobj
+4 0 obj {listing} endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [10 100 30 120] >> endobj
+6 0 obj << /T (Other) /Kids [5 0 R] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let names = |bytes: Vec<u8>| inspect(Arc::new(bytes), None).expect("opens").fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    let listing = "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>";
+    assert_eq!(names(pdf(listing, "4 0 R")), ["Other.k"]);
+    assert_eq!(names(pdf("null", listing)), ["Other.k"], "listed as a direct dictionary");
+}
+
+/// "A field's children in the hierarchy may also include widget annotations" (ISO 32000-2
+/// §12.7.4): a nameless widget beside a named kid is listed as a field of the parent's name, at
+/// the widget's place, as the form reader lists it.
+#[test]
+fn a_widget_beside_a_named_kid_is_a_field_of_the_parents_name() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 49152 /T (2) /Kids [5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (2) /Rect [10 100 30 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [40 100 60 120] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let info = inspect(Arc::new(pdf), None).expect("opens");
+    let got: Vec<_> = info.fields.iter().map(|f| (f.name.clone(), f.kind, f.rect)).collect();
+    assert_eq!(
+        got,
+        [("2".into(), FieldKind::Radio, Some([10.0, 100.0, 30.0, 120.0])), ("2".into(), FieldKind::Radio, Some([40.0, 100.0, 60.0, 120.0]))]
+    );
+}
+
+/// The password values (`/O`, `/U`, `/OE`, `/UE`, `/Perms`) of an AES-256 (R6) protection with a
+/// user password, as a save writes them.
+fn r6_password_values() -> String {
+    let plain = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "user pw",
+        owner_password: "owner pw",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let saved = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let saved = pdfcraft_cos::Document::open_with_password(Arc::new(saved), Some("user pw")).unwrap();
+    let encrypt = saved.resolve(saved.trailer().get(b"Encrypt").unwrap());
+    let encrypt = encrypt.as_dict().unwrap();
+    ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = saved.resolve(encrypt.get(k.as_bytes()).unwrap());
+            let hex: String = value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect();
+            format!("/{k} <{hex}>")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A page with text in the clear and an attachment, `note.txt`, encrypted with `/StdCF` (through
+/// `/EFF`, or a `/Crypt` filter of its own when `named`). `/StdCF` is authorised by `auth_event`,
+/// under the handler `version`.
+fn efopen_pdf_with(auth_event: &str, named: bool, version: &str) -> Vec<u8> {
+    let (eff, crypt) = if named { ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]") } else { (" /EFF /StdCF", "") };
+    let encrypt = format!(
+        "<< /Filter /Standard {version} {} /P -4 /CF << /StdCF << /AuthEvent /{auth_event} /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity{eff} >>",
+        r6_password_values()
+    );
+    let page = "BT /F1 12 Tf 20 100 Td (Visible page) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        format!("<< /Type /EmbeddedFile{crypt} /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream"),
+        format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        encrypt,
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt {} 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1, objs.len())
+            .as_bytes(),
+    );
+    out
+}
+
+fn efopen_pdf(auth_event: &str) -> Vec<u8> {
+    efopen_pdf_with(auth_event, false, "/V 5 /R 6")
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: a crypt filter whose `/AuthEvent` is `/EFOpen` needs its password
+/// only when an embedded file is opened. Such a document opens without one, its page reads, and
+/// its attachment is listed; asking for the attachment's bytes is an error, not its encrypted data.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_without_a_password() {
+    let bytes = Arc::new(efopen_pdf("EFOpen"));
+    assert!(check_pages(bytes.clone(), None, 1).is_ok());
+    let info = inspect(bytes.clone(), None).expect("opens without a password");
+    assert_eq!(info.pages.len(), 1);
+    let mut renderer = crate::PageRenderer::new(bytes.clone(), crate::RenderConfig::default());
+    let text = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Text, ..Default::default() });
+    assert!(text.text.is_some_and(|page| page.plain_text().contains("Visible page")), "{:?}", text.error);
+    let listed = |name: &str| info.attachments.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name} is listed")).clone();
+    let refused = attachment_data(&bytes, None, &listed("note.txt")).expect_err("encrypted bytes aren't the file");
+    assert!(refused.contains("password"), "{refused}");
+    // Authorised when the document opens, the same filter still needs the password.
+    let doc_open = Arc::new(efopen_pdf("DocOpen"));
+    assert!(matches!(inspect(doc_open.clone(), None), Err(OpenError::NeedsPassword)));
+    assert!(matches!(check_pages(doc_open, None, 1), Err(OpenError::NeedsPassword)));
+}
+
+/// From the review of the EFOpen change: an attachment naming its own EFOpen crypt filter, with no
+/// `/EFF`, opens the same way; a handler older than crypt filters (V2) still needs the password.
+#[test]
+fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
+    let named = Arc::new(efopen_pdf_with("EFOpen", true, "/V 5 /R 6"));
+    let info = inspect(named.clone(), None).expect("opens without a password");
+    let note = info.attachments.iter().find(|a| a.name == "note.txt").expect("listed").clone();
+    assert!(attachment_data(&named, None, &note).is_err());
+    let legacy = Arc::new(efopen_pdf_with("EFOpen", false, "/V 2 /R 3 /Length 128"));
+    assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }

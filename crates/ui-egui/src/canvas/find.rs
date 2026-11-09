@@ -180,16 +180,40 @@ impl DocView {
         self.flash_match(p);
     }
 
+    /// The centre of the current match as a fraction of its displayed page `[x, y]` (0..1 from
+    /// the top-left corner, after the view rotation, as `goto_point` takes it).
+    fn match_centre(&self) -> Option<[f32; 2]> {
+        let f = self.find.as_ref()?;
+        let (p, r) = f.matches.get(f.current?)?;
+        let glyphs = self.texts.get(p)?.glyphs.get(r.clone())?;
+        let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
+        let &(w, h) = self.page_sizes.get(*p).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+        let (u, v) = ((((x0 + x1) / 2.0) / w).clamp(0.0, 1.0), (((y0 + y1) / 2.0) / h).clamp(0.0, 1.0));
+        // Turned clockwise by the view rotation, as `PageInfo::dest_fraction` does.
+        Some(match self.rotation % 360 {
+            90 => [1.0 - v, u],
+            180 => [1.0 - u, 1.0 - v],
+            270 => [v, 1.0 - u],
+            _ => [u, v],
+        })
+    }
+
     fn flash_match(&mut self, page: usize) {
         let frac = self
             .find
             .as_ref()
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
+            .zip(self.page_sizes.get(page).map(|&(_, h)| h))
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
+        // /FitR destination's rectangle is: a page wider or taller than the window no longer
+        // leaves it off to one side or near an edge.
+        if let Some([fx, fy]) = self.match_centre() {
+            self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+        }
         self.current = page;
         self.reset_coarse_state();
     }
@@ -204,6 +228,19 @@ impl DocView {
     }
 }
 
+/// The id of a pane's find field: one per view, so two find bars open at once do not share an id
+/// (and so the focus).
+fn find_input_id(key: u64) -> egui::Id {
+    egui::Id::unique(("find-input", key))
+}
+
+impl DocView {
+    /// The id of this view's find field, for what needs to give it the focus or take it away.
+    pub fn find_input_id(&self) -> egui::Id {
+        find_input_id(self.pane.key)
+    }
+}
+
 /// Acrobat-style floating find bar at the top-right of the document area.
 pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
@@ -214,7 +251,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
     let mut close = false;
     let mut step: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
-    egui::Area::new(egui::Id::unique("find-bar"))
+    egui::Area::new(egui::Id::unique(("find-bar", view.pane.key)))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -229,7 +266,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::unique("find-input"))
+                            .id(find_input_id(view.pane.key))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);

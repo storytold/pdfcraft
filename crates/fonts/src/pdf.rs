@@ -1402,8 +1402,9 @@ fn glyph_component(part: &str) -> Option<String> {
     if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
         return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
     }
-    // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
-    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    // `from_str_radix` accepts a leading `+` and lowercase digits, and the glyph list
+    // specification's digits are uppercase only (`uni20ac` names nothing), so they are checked.
+    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
     if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && hexish(h)) {
         let mut s = String::new();
         for i in (0..hex.len()).step_by(4) {
@@ -1420,6 +1421,115 @@ fn glyph_component(part: &str) -> Option<String> {
 pub fn glyph_unicode(name: &str) -> Option<char> {
     let mut chars = glyph_text(name)?.chars().collect::<Vec<_>>().into_iter();
     chars.next().filter(|_| chars.len() == 0)
+}
+
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic and names no base
+/// encoding shows, by the `post` table name of the glyph its `cmap` selects (the way the renderer
+/// selects it: the code, then at 0xF000, 0xF100 and 0xF200). Such a font's codes need not be
+/// Standard or WinAnsi: FrameMaker files distilled with Distiller 3 number them in the Macintosh
+/// glyph order, 29 below ASCII, so `Solid` read as `6ROLG` and typing set the wrong glyphs (#3962).
+/// Codes without a glyph, and fonts whose `post` table names no glyphs, are left out (the latter
+/// to [`symbolic_mac_roman_texts`]). A code whose glyph has no name with a Unicode value reads
+/// as WinAnsi, as the renderer reads it (vendored hayro-interpret patch (79)), so the editor and
+/// extraction agree: `€` for code 0x80, which Standard leaves without a character.
+fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{FontData, FontRead as _, TableProvider as _, tables::cmap::PlatformId, tables::post::Post, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    if descriptor_flags(doc, &descriptor) & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(MAX_SFNT) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    // A `post` version written with its 16-bit halves swapped (`00 00 00 02` for 2.0, as ScanSoft
+    // PDF Create! writes it) is read as the version it means, as the renderer reads it (#2946,
+    // vendored hayro-interpret patch (49)); otherwise its names would be lost here alone.
+    let repaired = face.table_data(Tag::new(b"post")).and_then(|data| match data.as_bytes() {
+        [0, 0, 0, n @ 1..=3, rest @ ..] => Some([&[0, *n, 0, 0], rest].concat()),
+        _ => None,
+    });
+    let post = match &repaired {
+        Some(bytes) => Post::read(FontData::new(bytes)),
+        None => face.post(),
+    };
+    let Ok(post) = post else { return Vec::new() };
+    // A font that names no glyphs (no `post` table of version 1.0, or one of version 2.0 with an
+    // empty name index) is left to `symbolic_mac_roman_texts` and the encoding's reading.
+    let names_glyphs = match post.version() {
+        skrifa::raw::types::Version16Dot16::VERSION_1_0 => true,
+        skrifa::raw::types::Version16Dot16::VERSION_2_0 => post.glyph_name_index().is_some_and(|index| !index.is_empty()),
+        _ => false,
+    };
+    if !names_glyphs {
+        return Vec::new();
+    }
+    let custom = post_custom_names(&post);
+    (0..=255u32)
+        .filter_map(|code| {
+            // The records in order, as the renderer's `map_code` reads a symbolic font: a Windows
+            // symbol or Unicode cmap with the code and the code at 0xF000, 0xF100 and 0xF200, a
+            // Macintosh or Unicode-platform one with the code alone; the first glyph found wins.
+            let glyph = cmap.encoding_records().iter().find_map(|record| {
+                let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                    (PlatformId::Windows, 0 | 1) => &[0, 0xF000, 0xF100, 0xF200],
+                    (PlatformId::Macintosh | PlatformId::Unicode, 0) => &[0],
+                    _ => return None,
+                };
+                let subtable = record.subtable(cmap.offset_data()).ok()?;
+                offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+            })?;
+            let glyph = u16::try_from(glyph.to_u32()).ok()?;
+            let winansi = || {
+                let u = crate::encodings::WIN_ANSI.get(usize::try_from(code).ok()?).copied().filter(|u| *u != 0)?;
+                char::from_u32(u).map(String::from)
+            };
+            let text = post_name(&post, &custom, glyph).filter(|n| uppercase_hex_forms(n)).and_then(glyph_text);
+            Some((code, text.or_else(winansi)?))
+        })
+        .collect()
+}
+
+/// Whether the `uni` and `u` components of a glyph name spell their hex digits in uppercase, as
+/// the glyph list specification's forms do (ISO 32000-2 §9.10.2): `uni1eae` names nothing, so
+/// its glyph's code reads as WinAnsi, as the renderer reads it (vendored hayro-interpret patch
+/// (79)). A component that is a list name (`a`, `ecircumflex`) is read as such whatever its case.
+fn uppercase_hex_forms(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default();
+    stem.split('_').all(|part| {
+        // Outside the list, a component `glyph_text` reads is `u` or `uni` and hex digits, so a
+        // lowercase `a` to `f` in it is a lowercase digit.
+        crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)).is_ok() || !part.bytes().any(|b| matches!(b, b'a'..=b'f'))
+    })
+}
+
+/// The names a version 2.0 `post` table spells out, in order, read once. `Post::glyph_name` walks
+/// this data from its start for each glyph it is asked about, which over a font program of up to
+/// 16 MiB, asked about 256 codes, is work an untrusted file can make large. Reading stops at the
+/// first name that can't be read, as each lookup would.
+fn post_custom_names<'a>(post: &skrifa::raw::tables::post::Post<'a>) -> Vec<&'a str> {
+    post.string_data().map(|names| names.iter().map_while(|name| name.ok().map(|n| n.as_str())).collect()).unwrap_or_default()
+}
+
+/// `glyph`'s name in `post`, as `Post::glyph_name` gives it, with the table's own names from
+/// [`post_custom_names`].
+fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str], glyph: u16) -> Option<&'a str> {
+    use skrifa::raw::{tables::post::DEFAULT_GLYPH_NAMES, types::Version16Dot16};
+    match post.version() {
+        Version16Dot16::VERSION_1_0 => DEFAULT_GLYPH_NAMES.get(usize::from(glyph)).copied(),
+        Version16Dot16::VERSION_2_0 => {
+            let index = usize::from(post.glyph_name_index()?.get(usize::from(glyph))?.get());
+            match index.checked_sub(DEFAULT_GLYPH_NAMES.len()) {
+                None => DEFAULT_GLYPH_NAMES.get(index).copied(),
+                Some(i) => custom.get(i).copied(),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
@@ -1463,6 +1573,14 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
             if let Some(c) = char::from_u32(*u).filter(|_| *u != 0) {
                 out.encoding.insert(code as u32, c.to_string());
             }
+        }
+        // A font named as Symbol or ZapfDingbats keeps reporting nothing: its names may be as
+        // un-Latin as its codes (WordPerfect's WPTypographicSymbols calls its apostrophe `equal`).
+        // A font whose `post` table names its glyphs reads by those names; one that names none
+        // and keeps the Macintosh order reads as Mac OS Roman, over the WinAnsi fallback.
+        if base_name.is_none() && !symbolic_builtin {
+            out.encoding.extend(symbolic_glyph_texts(doc, font));
+            out.encoding.extend(symbolic_mac_roman_texts(doc, font));
         }
         if let Some(Object::Dict(d)) = enc.as_deref()
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
@@ -1527,6 +1645,74 @@ fn identity_to_unicode() -> Vec<u8> {
     cmap.into_bytes()
 }
 
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic, names no base
+/// encoding and doesn't name its glyphs shows when two things say the code is Mac OS Roman: its
+/// Macintosh Roman (1, 0) `cmap` subtable selects the glyph the code draws (ISO 32000-2 §9.6.5.4:
+/// single bytes "look up the associated glyph descriptions" there, and a (3, 0) subtable maps "the
+/// single-byte codes in the (1, 0) subtable" prepended with 0xF0), and the glyph sits where the
+/// standard Macintosh glyph order (the 258 names of a version 1.0 `post` table) puts that Mac OS
+/// Roman character. So code 0x88 drawn with glyph 106, `agrave`, is `à`, where Standard has
+/// nothing and WinAnsi `ˆ`, while a Windows subset in the same order whose codes are WinAnsi (0x92
+/// drawn with glyph 183, `quoteright`) keeps its reading. The glyph drawn is found the way the
+/// renderer finds it: the Windows (3, 0) and (3, 1) subtables first, with the code and the code at
+/// 0xF000, 0xF100 and 0xF200, then the Macintosh and Unicode-platform ones. The renderer's text
+/// layer reads the same codes the same way (vendored hayro-interpret patch (101)).
+fn symbolic_mac_roman_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{TableProvider as _, tables::cmap::PlatformId, tables::post::DEFAULT_GLYPH_NAMES, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    if descriptor_flags(doc, &descriptor) & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(MAX_SFNT) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    // A CFF program in `/FontFile2` selects its glyphs by name, not through the `cmap`. A `post`
+    // table of version 1.0 or 2.0 (also with its 16-bit halves swapped, as the renderer reads it)
+    // names the glyphs, and a font that names them needn't keep the order: a Wingdings subset
+    // draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`.
+    let named = face
+        .table_data(Tag::new(b"post"))
+        .is_some_and(|data| matches!(data.as_bytes().get(..4), Some([0, 1, 0, 0] | [0, 2, 0, 0] | [0, 0, 0, 1] | [0, 0, 0, 2])));
+    if face.cff().is_ok() || named {
+        return Vec::new();
+    }
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    let records = cmap.encoding_records();
+    let lookup = |code: u32, windows: bool| {
+        records.iter().find_map(|record| {
+            let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                (PlatformId::Windows, 0 | 1) if windows => &[0, 0xF000, 0xF100, 0xF200],
+                (PlatformId::Macintosh | PlatformId::Unicode, 0) if !windows => &[0],
+                _ => return None,
+            };
+            let subtable = record.subtable(cmap.offset_data()).ok()?;
+            offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+        })
+    };
+    (0..=255u32)
+        .filter_map(|code| {
+            let drawn = lookup(code, true).or_else(|| lookup(code, false))?;
+            let mac = records.iter().find_map(|record| {
+                (record.platform_id() == PlatformId::Macintosh && record.encoding_id() == 0)
+                    .then(|| record.subtable(cmap.offset_data()).ok()?.map_codepoint(code))
+                    .flatten()
+            })?;
+            if mac != drawn {
+                return None;
+            }
+            let c = char::from_u32(*crate::encodings::MAC_ROMAN.get(usize::try_from(code).ok()?)?).filter(|c| *c != '\0')?;
+            let standard = *DEFAULT_GLYPH_NAMES.get(usize::try_from(drawn.to_u32()).ok()?)?;
+            // Mac OS Roman 0xCA reads as a space, for the reason WinAnsi 0xA0 does (`MAC_ROMAN`).
+            let at_its_place = glyph_unicode(standard) == Some(c) || (code == 0xCA && standard == "nonbreakingspace");
+            at_its_place.then(|| (code, c.to_string()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -1558,6 +1744,21 @@ mod encoding_tests {
         let mut enc = Dict::new();
         enc.set(b"Differences".to_vec(), Object::Array(items));
         Object::Dict(enc)
+    }
+
+    /// The glyph list specification's hex forms: `uni` and groups of exactly four uppercase
+    /// digits, `u` and four to six.
+    #[test]
+    fn glyph_names_take_uppercase_hex_in_whole_groups() {
+        assert_eq!(glyph_text("uni20ac"), None, "the specification's hex digits are uppercase");
+        assert_eq!(glyph_text("u1f600"), None);
+        assert_eq!(glyph_text("uni65"), None, "`uni` takes groups of exactly four digits");
+        assert_eq!(glyph_text("u65"), None, "`u` takes four to six digits");
+        assert_eq!(glyph_text("u0010FFFF"), None);
+        assert_eq!(glyph_text("uni0065").as_deref(), Some("e"));
+        assert_eq!(glyph_text("u0065").as_deref(), Some("e"), "`u` and four digits");
+        assert_eq!(glyph_text("u1F600").as_deref(), Some("\u{1f600}"), "`u` and five");
+        assert_eq!(glyph_text("u10FFFF").as_deref(), Some("\u{10ffff}"), "`u` and six, the last code point");
     }
 
     #[test]

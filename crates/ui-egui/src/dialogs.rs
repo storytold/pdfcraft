@@ -11,6 +11,7 @@ pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
+pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
@@ -43,6 +44,7 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -127,7 +129,18 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.custom_draft = Some((id, crate::CustomDraft { props: doc.custom_info(), ..Default::default() }));
     }
     let mut req = Pending::default();
-    let modal = widgets::show_modal(ctx, "dialog", |ui| {
+    // Every dialog shares this modal. A different dialog than the one shown before starts from
+    // its own size, not from the last one's: rows that fill the height they are offered would
+    // otherwise keep, say, Print as tall as Preferences (#5118). Tabs of one dialog keep its size;
+    // the kinds of Marks and Export are different dialogs.
+    let shown = egui::Id::unique("dialog").with("shown");
+    let kind = match dialog {
+        Dialog::Properties(_) => Dialog::Properties(PropsTab::Description),
+        _ => dialog,
+    };
+    let remeasure = ctx.data(|d| d.get_temp::<Dialog>(shown)) != Some(kind);
+    ctx.data_mut(|d| d.insert_temp(shown, kind));
+    let modal = widgets::show_modal_sized(ctx, "dialog", remeasure, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
@@ -435,6 +448,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = req.apply || cancel;
             return false;
         }
+        Dialog::FixHairlines => {
+            let (go, cancel) = crate::hairlines_ui::body(ui, app, &t);
+            req.fix_hairlines_now = go;
+            req.close = go || cancel;
+            return false;
+        }
         Dialog::BookmarksFromTextStyles => {
             req.close = crate::bookmark_styles_ui::body(ui, app, &t);
             return false;
@@ -624,7 +643,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 for (m, n) in names {
                                     ui.selectable_value(&mut v.magnification, m, n);
                                 }
-                                for p in [50.0, 75.0, 125.0, 150.0, 200.0] {
+                                // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size.
+                                for p in [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0] {
                                     ui.selectable_value(&mut v.magnification, M::Percent(p), format!("{p:.0}%"));
                                 }
                             })
@@ -1865,6 +1885,15 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+                    view.redactions_applied = view.redactions_applied.saturating_add(1);
+                    // A new step clears the redo history, so the undone saved steps can't come back.
+                    if view.redactions_undone_after_save > 0 || delivered_undone {
+                        view.redactions_undone_after_save = 0;
+                        view.saved_redactions_cut_off = true;
+                    }
+                }
                 if let Some((_, id)) = app.active_ids() {
                     app.renew_recovery(id);
                 }
@@ -1964,6 +1993,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if req.fix_hairlines_now {
+        app.fix_hairlines();
     }
     if req.apply_number
         && let Some(edit) = req.number_now.take()

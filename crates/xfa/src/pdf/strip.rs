@@ -1,4 +1,4 @@
-use super::{CLICK_KEY, Dict, Document, IMAGE_FIELD_KEY, LAYOUT_KEY, NO_TAB_KEY, NODE_KEY, ObjRef, Object, SOM_KEY, XfaError};
+use super::{CLICK_KEY, DATE_KEY, Dict, Document, IMAGE_FIELD_KEY, LAYOUT_KEY, NO_TAB_KEY, NODE_KEY, ObjRef, Object, SOM_KEY, XfaError};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =
@@ -151,6 +151,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
     let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     let mut todo: Vec<ObjRef> = Vec::new();
+    let mut kids_seen = std::collections::HashSet::new();
     for r in fields.iter().filter_map(Object::as_ref) {
         if seen.insert(r) && seen.len() <= MAX_STRIP_FIELDS {
             todo.push(r);
@@ -164,7 +165,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         if d.contains(IMAGE_FIELD_KEY) {
             out.image_fields += 1;
         }
-        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, NO_TAB_KEY, NODE_KEY, b"PCItems".as_slice()]
+        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, DATE_KEY, NO_TAB_KEY, NODE_KEY, b"PCItems".as_slice()]
             .iter()
             .filter(|k| d.contains(k))
             .map(|k| k.to_vec())
@@ -177,7 +178,9 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
                 }
             })?;
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+        // An indirect /Kids array several fields share is read once: its entries are already queued.
+        let shared_seen = d.get(b"Kids").and_then(Object::as_ref).is_some_and(|k| !kids_seen.insert(k));
+        if !shared_seen && let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
             for k in kids.iter().filter_map(Object::as_ref) {
                 if seen.insert(k) && seen.len() <= MAX_STRIP_FIELDS {
                     todo.push(k);
@@ -282,4 +285,35 @@ pub fn existing_layout(doc: &Document) -> Option<crate::Report> {
         template_bytes: 0,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fields_sharing_a_kids_array_still_lose_their_private_keys_once() {
+        let mut doc = Document::new_empty();
+        let mut kid = Dict::new();
+        kid.set(CLICK_KEY.to_vec(), Object::Int(1));
+        let kid = doc.add(Object::Dict(kid));
+        let kids = doc.add(Object::Array(vec![Object::Ref(kid)]));
+        let parents: Vec<Object> = (0..3)
+            .map(|_| {
+                let mut p = Dict::new();
+                p.set(b"Kids".to_vec(), Object::Ref(kids));
+                Object::Ref(doc.add(Object::Dict(p)))
+            })
+            .collect();
+        let mut acro = Dict::new();
+        acro.set(b"XFA".to_vec(), Object::Array(Vec::new()));
+        acro.set(b"Fields".to_vec(), Object::Array(parents));
+        let root = doc.root().unwrap();
+        let mut catalog = doc.get(root).as_dict().cloned().unwrap();
+        catalog.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        doc.set(root, Object::Dict(catalog));
+        let out = strip(&mut doc).unwrap();
+        assert_eq!(out.script_buttons, 1);
+        assert!(!doc.get(kid).as_dict().unwrap().contains(CLICK_KEY));
+    }
 }
