@@ -12,11 +12,11 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
     reset_names, resolve_som, run_within,
 };
+use crate::{Limits, Message, MessageButtons, MessageIcon};
 
 mod access;
 mod ast;
@@ -109,7 +109,7 @@ type R<T> = Result<T, String>;
 /// Run a FormCalc `script` for `event` on the form `root`, as [`crate::xfa::run_xfa`] runs a
 /// JavaScript one.
 pub fn run_formcalc(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
-    run_formcalc_at(script, event, doc, root.clone(), limits, None)
+    run_formcalc_at(script, event, doc, std::sync::Arc::new(root.clone()), false, limits, None)
 }
 
 /// [`run_formcalc`] on an owned form, giving up at `deadline` (the clock is read every
@@ -118,7 +118,8 @@ pub(crate) fn run_formcalc_at(
     script: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: XfaNode,
+    root: std::sync::Arc<XfaNode>,
+    reuse: bool,
     limits: Limits,
     deadline: Option<std::time::Duration>,
 ) -> XfaOutcome {
@@ -133,7 +134,7 @@ pub(crate) fn run_formcalc_at(
         Ok(b) => b,
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
-    let mut host = XHost::new(root, &event.target, doc);
+    let mut host = XHost::new(root, reuse, &event.target, doc);
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -177,7 +178,7 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
     // FormCalc has no engine to start: its time (and its own deadline) begins at once.
     run_within("pdfcraft-formcalc", timeout, move |started| {
         started();
-        run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout))
+        run_formcalc_at(&script, &event, &doc, std::sync::Arc::new(root), false, limits, Some(timeout))
     })
 }
 
@@ -226,5 +227,61 @@ mod tests {
         assert_eq!(num_text(0.1 + 0.2), "0.3");
         assert_eq!(parse_num("12abc"), Some(12.0));
         assert_eq!(parse_num("abc"), None);
+    }
+
+    /// A number prints to at most fifteen significant digits, so the binary noise of a value
+    /// with six digits before the point (279893.88 is 279893.880000000004656… as a double) stays
+    /// hidden, while small values keep their twelve decimals.
+    #[test]
+    fn num_text_prints_at_most_fifteen_significant_digits() {
+        assert_eq!(num_text(279_893.88), "279893.88");
+        assert_eq!(num_text(-279_893.88), "-279893.88");
+        assert_eq!(num_text(279_893.88 + 291_774.12 + 304_171.06 + 317_107.44 + 273_970.85), "1466917.35");
+        assert_eq!(num_text(1_000_000.0 / 3.0), "333333.333333333");
+        assert_eq!(num_text(1.0 / 3.0), "0.333333333333");
+        assert_eq!(num_text(0.3 - 0.1 - 0.2), "0", "noise below twelve decimals is zero");
+        // Past fifteen digits before the point no decimals are left, and the integer keeps its zeros.
+        assert_eq!(num_text(1e15 + 0.5), "1000000000000000");
+        assert_eq!(num_text(1e20), "100000000000000000000");
+        assert_eq!(num_text(-1e20), "-100000000000000000000");
+        assert_eq!(num_text(f64::MAX).len(), 309);
+    }
+
+    #[test]
+    fn decode_xml_and_html_entities() {
+        let eval = |script: &str| {
+            let root = XfaNode::default();
+            let out = run_formcalc(script, &XfaEvent::default(), &XfaDoc::default(), &root, Limits::default());
+            assert!(out.error.is_none(), "{:?}", out.error);
+            out.result.unwrap_or_default()
+        };
+
+        // `&apos;` in both xml and html
+        assert_eq!(eval(r#"Decode("It&apos;s &lt;ok&gt; &amp; &quot;fine&quot;", "xml")"#), "It's <ok> & \"fine\"");
+        assert_eq!(eval(r#"Decode("It&apos;s", "html")"#), "It's");
+
+        // Decimal and hex numeric character references (case-insensitive #x/#X and hex digits, leading zeros)
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#00068;&#x00065;&#x20AC;&#x1F600;", "xml")"#), "ABCDe€😀");
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#x00E9;", "html")"#), "ABCé");
+
+        // Invalid / surrogate / out-of-range / zero / malformed numeric references stay literal without panicking
+        assert_eq!(
+            eval(r#"Decode("&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;", "xml")"#),
+            "&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;"
+        );
+
+        // Single-pass decoding: `&amp;lt;` and `&#38;lt;` must decode to `&lt;`, never `<`
+        assert_eq!(eval(r#"Decode("&amp;lt; &amp;#65; &#38;lt; &#x26;apos;", "xml")"#), "&lt; &#65; &lt; &apos;");
+        assert_eq!(eval(r#"Decode("&amp;nbsp; &#38;eacute;", "html")"#), "&nbsp; &eacute;");
+
+        // HTML named entities decode in "html" mode but remain literal in "xml" mode
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;&mdash;&alpha;&Omega;&hearts;", "html")"#), "café\u{00A0}©€—αΩ♥");
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;", "xml")"#), "caf&eacute;&nbsp;&copy;&euro;");
+        // Case sensitivity of HTML named entities (`&Eacute;` vs `&eacute;`, `&Prime;` vs `&prime;`, `&Dagger;` vs `&dagger;`)
+        assert_eq!(eval(r#"Decode("&Eacute;&eacute;&Prime;&prime;&Dagger;&dagger;&bogus;", "html")"#), "Éé″′‡†&bogus;");
+        // Non-ASCII characters after `&` or `&#` and long runs of `&` without `;`
+        assert_eq!(eval(r#"Decode("&é; &#é; &#xé; &amp;é", "html")"#), "&é; &#é; &#xé; &é");
+        let amps = "&".repeat(5_000);
+        assert_eq!(eval(&format!(r#"Decode("{amps}&apos;", "xml")"#)), format!("{amps}'"));
     }
 }

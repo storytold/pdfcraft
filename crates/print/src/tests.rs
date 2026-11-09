@@ -84,7 +84,7 @@ fn page_selection() {
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
 fn wordings_are_said() {
-    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into())];
+    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into()), PrintError::TooManySelected(1_000)];
     for e in &mistakes {
         assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
     }
@@ -126,6 +126,54 @@ fn page_selection_handles_ranges_between_hyphenated_labels() {
     assert_eq!(select_pages(3, Some("A-1-B-C"), &ambiguous, Subset::All, false).unwrap(), [1, 2]);
 }
 
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). With front matter
+/// labelled i–iii and the body 1–7, "1" is the page labelled 1 (the fourth), while "(1)" is the
+/// first page, whatever it is labelled; positions combine with labels and open ends in ranges.
+#[test]
+fn a_number_in_parentheses_names_the_page_at_that_position() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pages = |range| select_pages(10, Some(range), &labels, Subset::All, false);
+    assert_eq!(pages("1").unwrap(), [3], "a bare number is the label");
+    assert_eq!(pages("(1)").unwrap(), [0], "in parentheses it is the position");
+    assert_eq!(pages("( 2 )").unwrap(), [1]);
+    assert_eq!(pages("(1)-(3)").unwrap(), [0, 1, 2]);
+    assert_eq!(pages("(9)-").unwrap(), [8, 9]);
+    assert_eq!(pages("-(2)").unwrap(), [0, 1]);
+    assert_eq!(pages("(2)-1").unwrap(), [1, 2, 3], "a position and a label");
+    assert_eq!(pages("ii-(5)").unwrap(), [1, 2, 3, 4]);
+    assert_eq!(pages("(4)-(2), 7").unwrap(), [3, 2, 1, 9]);
+    assert_eq!(select_pages(10, Some("(1)-(4)"), &labels, Subset::Even, false).unwrap(), [1, 3], "odd and even stay page numbers");
+    assert_eq!(pages("(0)"), Err(PrintError::OutOfRange(0, 10)));
+    assert_eq!(pages("(11)"), Err(PrintError::OutOfRange(11, 10)));
+    for bad in ["(x)", "()", "(1", "1)", "((1))", "(+3)"] {
+        assert_eq!(pages(bad), Err(PrintError::NotAPage(bad.into())), "{bad}");
+    }
+    // The page box takes positions through `position`, with the same digits-only rule.
+    assert_eq!(crate::position("( 3 )"), Some(3));
+    assert_eq!(crate::position("(+3)"), None, "a sign is not part of a page number");
+    assert!(pages("(-1)").is_err(), "a dash inside parentheses is still a range, of nothing");
+    // A label that is itself "(1)" still names its own page, as every label does.
+    let odd: Vec<String> = ["a", "b", "(1)"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(select_pages(3, Some("(1)"), &odd, Subset::All, false).unwrap(), [2]);
+    // Without labels a position is the same page as its number.
+    assert_eq!(select_pages(5, Some("(2)-4"), &[], Subset::All, false).unwrap(), [1, 2, 3]);
+}
+
+/// Odd and even count page positions, never the numbers inside labels: page indices are fixed
+/// and consecutive, while labels can restart, repeat, use letters or carry no number (ISO 32000-2
+/// §12.4.2). With front matter labelled i–iii the page labelled 1 is the fourth, so it is even, and
+/// a range typed in labels keeps the same pages as the same range typed as positions.
+#[test]
+fn odd_and_even_count_positions_on_a_labelled_document() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pick = |range: Option<&str>, subset| select_pages(10, range, &labels, subset, false).unwrap();
+    assert_eq!(pick(Some("1-4"), Subset::Even), [3, 5], "labels 1 and 3, the fourth and sixth pages");
+    assert_eq!(pick(Some("1-4"), Subset::Odd), [4, 6], "labels 2 and 4, the fifth and seventh pages");
+    assert_eq!(pick(Some("1-4"), Subset::Even), pick(Some("(4)-(7)"), Subset::Even), "labels or positions, the same pages");
+    assert_eq!(pick(None, Subset::Odd), [0, 2, 4, 6, 8], "i, iii, 2, 4, 6");
+    assert_eq!(pick(None, Subset::Even), [1, 3, 5, 7, 9]);
+}
+
 #[test]
 fn size_modes() {
     let sizes = [(200.0, 300.0), (1000.0, 1500.0)];
@@ -159,7 +207,10 @@ fn multiple_pages_per_sheet() {
     // Vertical order and borders.
     let v = layout(
         &sizes,
-        &settings(vec![0, 1, 2], Layout::Multiple { cols: 2, rows: 2, per_sheet: 4, order: PageOrder::Vertical, border: true, auto_rotate: false }),
+        &settings(
+            vec![0, 1, 2],
+            Layout::Multiple { cols: 2, rows: 2, per_sheet: 4, order: PageOrder::Vertical, border: true, auto_rotate: false, custom: false },
+        ),
     )
     .unwrap();
     assert!(close(v[0].placed[1].matrix.0[4], v[0].placed[0].matrix.0[4]) && v[0].placed[1].matrix.0[5] < v[0].placed[0].matrix.0[5]);
@@ -183,15 +234,44 @@ fn custom_pages_per_sheet_never_overfill_the_grid() {
     assert_eq!(pages(4), [vec![0, 1, 2, 3], vec![4, 5, 6]]);
     assert_eq!(pages(2), [vec![0, 1], vec![2, 3], vec![4, 5], vec![6]]);
     // Cut-stack piles take the requested count too.
-    let stacked = Layout::Multiple { cols: 2, rows: 2, per_sheet: 3, order: PageOrder::CutStack, border: false, auto_rotate: false };
+    let stacked = Layout::Multiple { cols: 2, rows: 2, per_sheet: 3, order: PageOrder::CutStack, border: false, auto_rotate: false, custom: false };
     assert_eq!(sheet_pages(&layout(&sizes, &settings((0..7).collect(), stacked)).unwrap()), [vec![0, 3, 6], vec![1, 4], vec![2, 5]]);
     // A count larger than the grid is capped by the grid; no pages per sheet is refused.
-    let grid = |per_sheet| Layout::Multiple { cols: 2, rows: 1, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: false };
+    let grid =
+        |per_sheet| Layout::Multiple { cols: 2, rows: 1, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: false };
     assert_eq!(sheet_pages(&layout(&sizes[..3], &settings(vec![0, 1, 2], grid(9))).unwrap()), [vec![0, 1], vec![2]]);
     assert!(matches!(layout(&sizes, &settings(vec![0], grid(0))), Err(PrintError::Invalid(_))));
     // The imposed PDF has one page per sheet.
     let out = impose(&fixture(7), &settings((0..7).collect(), Layout::multiple(3))).unwrap();
     assert_eq!(pdfcraft_model::pages(&Document::open(Arc::new(out)).unwrap()).len(), 3);
+}
+
+#[test]
+fn a_custom_grid_is_laid_out_as_given_on_the_chosen_sheet() {
+    // Columns across and rows down whatever the sheet, which isn't turned for the grid (#6551).
+    let sizes = vec![(200.0, 300.0); 4];
+    let at = |sheet: &Sheet, k: usize| (sheet.placed[k].matrix.0[4], sheet.placed[k].matrix.0[5]);
+    let grid = |cols, rows| Layout::grid(cols, rows).unwrap();
+    for (orientation, size) in
+        [(Orientation::Auto, (612.0, 792.0)), (Orientation::Portrait, (612.0, 792.0)), (Orientation::Landscape, (792.0, 612.0))]
+    {
+        let s = |layout| Settings { orientation, ..settings((0..4).collect(), layout) };
+        let across = layout(&sizes, &s(grid(2, 1))).unwrap();
+        assert_eq!((across.len(), across[0].size), (2, size), "{orientation:?}");
+        assert!(at(&across[0], 1).0 > at(&across[0], 0).0 && close(at(&across[0], 1).1, at(&across[0], 0).1), "side by side, {orientation:?}");
+        let down = layout(&sizes, &s(grid(1, 2))).unwrap();
+        assert_eq!(down[0].size, size, "{orientation:?}");
+        assert!(close(at(&down[0], 1).0, at(&down[0], 0).0) && at(&down[0], 1).1 < at(&down[0], 0).1, "stacked, {orientation:?}");
+        let three = layout(&sizes, &s(grid(3, 1))).unwrap();
+        assert_eq!(sheet_pages(&three), [vec![0, 1, 2], vec![3]]);
+    }
+    // 1 to 99 each way, and a grid too fine for the paper is refused, not drawn.
+    assert!(Layout::grid(0, 1).is_none() && Layout::grid(1, 0).is_none() && Layout::grid(100, 1).is_none() && Layout::grid(1, usize::MAX).is_none());
+    assert_eq!(layout(&sizes, &settings(vec![0], grid(17, 17))).unwrap()[0].placed.len(), 1);
+    assert!(matches!(layout(&sizes, &settings(vec![0], grid(99, 99))), Err(PrintError::Invalid(_))));
+    let hostile =
+        Layout::Multiple { cols: 100, rows: 1, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: true };
+    assert!(matches!(layout(&sizes, &settings(vec![0], hostile)), Err(PrintError::Invalid(_))));
 }
 
 #[test]
@@ -305,6 +385,107 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
 
+/// The job name and owner, read from the `lp` arguments, since `lp_args` drops a value it can't
+/// pass on: the job must reach the spooler named, whatever its title holds (#5743).
+#[test]
+fn a_job_names_its_title_and_owner_to_the_spooler() {
+    let args_for = |title: &str, owner: Option<&str>| {
+        let job = Job { title: title.into(), ..Job::default() };
+        lp_args(&spool::with_job_info(&job, owner))
+    };
+    let option = |args: &[String], key: &str| {
+        let prefix = format!("com.apple.print.JobInfo.{key}=");
+        args.iter().find_map(|a| a.strip_prefix(prefix.as_str()).map(str::to_string))
+    };
+    let args = args_for("memo.pdf", Some("sam"));
+    assert_eq!(option(&args, "PMJobName").as_deref(), Some("memo.pdf"), "{args:?}");
+    assert_eq!(option(&args, "PMJobOwner").as_deref(), Some("sam"), "{args:?}");
+    // The title keeps its place as `-t`, in full.
+    assert!(args_for("Q3 report: a/b=\"c\".pdf", None).windows(2).any(|w| w[0] == "-t" && w[1] == "Q3 report: a/b=\"c\".pdf"));
+
+    let named = args_for("Q3 report: a/b=\"c\".pdf", None);
+    assert_eq!(option(&named, "PMJobName").as_deref(), Some("Q3_report__a_b__c_.pdf"), "what lp can't be given becomes _");
+    assert_eq!(option(&named, "PMJobOwner").as_deref(), Some("PdfCraft"), "no owner known: the filter still gets one");
+
+    for nothing_left in ["", "   ", "見積書", "/:=\""] {
+        assert_eq!(option(&args_for(nothing_left, Some("")), "PMJobName").as_deref(), Some("PdfCraft"), "{nothing_left:?}");
+    }
+    assert_eq!(option(&args_for("見積書2.pdf", None), "PMJobName").as_deref(), Some("___2.pdf"), "a part of it is kept");
+    let long = option(&args_for(&format!("a{}", "é".repeat(200)), None), "PMJobName").unwrap_or_default();
+    assert_eq!(long.len(), 64, "cut to what lp_args takes, on a multi-byte title too: {long}");
+
+    // What CUPS would quote away or send as another type, as this Mac's libcups does.
+    for (title, name) in [("it's.pdf", "it_s.pdf"), (r"a\b.pdf", "a_b.pdf"), ("{draft}.pdf", "_draft}.pdf"), ("a{b", "a_b")] {
+        assert_eq!(option(&args_for(title, None), "PMJobName").as_deref(), Some(name), "{title:?}");
+    }
+    for boolean in ["true", "TRUE", "false", "False"] {
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobName").as_deref(), Some("PdfCraft"), "{boolean:?}");
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobOwner").as_deref(), Some("PdfCraft"), "{boolean:?}");
+    }
+    assert_eq!(option(&args_for("true.pdf", None), "PMJobName").as_deref(), Some("true.pdf"), "only the bare word is a boolean");
+}
+
+/// A job's own values stand: CUPS keeps the last of a repeated option, ignoring the case of its
+/// name, so a default after them would replace what a `doc_print` caller set (#5743).
+#[test]
+fn a_job_keeps_the_title_and_owner_it_already_sets() {
+    let values = |job: &Job, key: &str| -> Vec<String> {
+        let found = spool::with_job_info(job, Some("sam")).options;
+        found.into_iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v).collect()
+    };
+    let (name, owner) = ("com.apple.print.JobInfo.PMJobName", "com.apple.print.JobInfo.PMJobOwner");
+    let job = Job { title: "memo.pdf".into(), options: vec![(name.to_string(), "Mine".to_string())], ..Job::default() };
+    assert_eq!(values(&job, name), ["Mine"]);
+    assert_eq!(values(&job, owner), ["sam"], "the one it left out still gets its default");
+
+    let job = Job { title: "memo.pdf".into(), options: vec![(owner.to_ascii_uppercase(), "Theirs".to_string())], ..Job::default() };
+    assert_eq!(values(&job, owner), ["Theirs"]);
+    assert_eq!(values(&job, name), ["memo.pdf"]);
+}
+
+/// Both ways to submit reach `lp` with the job named. `lp` comes from `PATH`, which only a child
+/// process can change here, so the test runs itself again with a stand-in that records its
+/// arguments; no job reaches a real spooler (#5743).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_submitted_job_reaches_lp_named() {
+    const TEST: &str = "tests::a_submitted_job_reaches_lp_named";
+    if let Ok(way) = std::env::var("PDFCRAFT_SUBMIT_TO_STAND_IN") {
+        let job = Job { title: "memo.pdf".into(), ..Job::default() };
+        let sent = match way.as_str() {
+            "submit" => spool::submit(b"%PDF-1.7", &job),
+            _ => spool::submit_with_progress(b"%PDF-1.7", &job, &mut |_, _| {}),
+        };
+        assert!(sent.is_ok(), "{sent:?}");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-lp-stand-in-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let lp = dir.join("lp");
+    let recorded = dir.join("args");
+    let script =
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n/bin/cat > /dev/null\necho 'request id is stand-in-1 (1 file(s))'\n", recorded.display());
+    std::fs::write(&lp, script).expect("stand-in");
+    std::fs::set_permissions(&lp, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    for way in ["submit", "submit_with_progress"] {
+        let _ = std::fs::remove_file(&recorded);
+        let this = std::env::current_exe().expect("this test binary");
+        let child = std::process::Command::new(this)
+            .args(["--exact", TEST, "--nocapture"])
+            .env("PDFCRAFT_SUBMIT_TO_STAND_IN", way)
+            .env("PATH", &dir)
+            .env("USER", "sam")
+            .output()
+            .expect("run the test again");
+        assert!(child.status.success(), "{way}: {}", String::from_utf8_lossy(&child.stdout));
+        let args = std::fs::read_to_string(&recorded).expect("lp was run");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobName=memo.pdf"), "{way}: {args}");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobOwner=sam"), "{way}: {args}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn lpstat_output_is_untranslated() {
     // A localized lpstat (here Polish) is unreadable to parse_lpstat...
@@ -349,7 +530,15 @@ fn driverless_printers_join_the_list_without_a_queue() {
 }
 
 fn cut_stack(cols: usize, rows: usize) -> Layout {
-    Layout::Multiple { cols, rows, per_sheet: cols.saturating_mul(rows), order: PageOrder::CutStack, border: false, auto_rotate: false }
+    Layout::Multiple {
+        cols,
+        rows,
+        per_sheet: cols.saturating_mul(rows),
+        order: PageOrder::CutStack,
+        border: false,
+        auto_rotate: false,
+        custom: false,
+    }
 }
 
 #[test]
@@ -402,7 +591,7 @@ fn cutting_and_stacking_recovers_every_selected_page() {
 fn multiple_rejects_hostile_grids_without_panicking() {
     let sizes = [(200.0, 300.0)];
     for (cols, rows) in [(usize::MAX, 2), (2, usize::MAX), (0, 2), (1, 0), (257, 1)] {
-        let mode = Layout::Multiple { cols, rows, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false };
+        let mode = Layout::Multiple { cols, rows, per_sheet: 1, order: PageOrder::Horizontal, border: false, auto_rotate: false, custom: false };
         assert!(matches!(layout(&sizes, &settings(vec![0], mode)), Err(PrintError::Invalid(_))));
     }
     let tiny = Settings { paper: (72.0, 72.0), ..settings(vec![0], cut_stack(16, 16)) };
@@ -489,6 +678,8 @@ fn printer_options_come_from_the_ppd() {
     assert!(spool::parse_ppd("*OpenUI *Broken\n*Broken A/B\n").is_empty(), "unclosed or malformed blocks are skipped");
 }
 
+/// A driver option's current choice is read from `lpoptions`, and a job passes `lp` only the
+/// driver options that are well-formed PPD keywords, never the ones PdfCraft sets itself.
 #[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
@@ -507,6 +698,53 @@ fn printer_option_defaults_and_job_arguments() {
     let args = lp_args(&job).join(" ");
     assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
+}
+
+/// CUPS is asked to turn the sheets (`orientation-requested` 4) when every one is landscape, a
+/// booklet's included; portrait, mixed, square and empty jobs say nothing (#2713).
+#[test]
+fn landscape_sheets_ask_cups_to_turn_the_page() {
+    let landscape = |size: (f64, f64)| Sheet { size, ..Sheet::default() };
+    let ask = Some(("orientation-requested".to_string(), "4".to_string()));
+    // A landscape Size sheet, and a booklet (always landscape sheets), are both turned.
+    let page = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&page), ask);
+    let booklet =
+        layout(&[(200.0, 300.0); 4], &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }))
+            .unwrap();
+    assert_eq!(cups_orientation(&booklet), ask);
+    // Portrait sheets, mixed jobs and nothing at all say nothing.
+    let portrait = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&portrait), None);
+    assert_eq!(cups_orientation(&[landscape((792.0, 612.0)), landscape((612.0, 792.0))]), None, "a mixed job is not turned as a whole");
+    assert_eq!(cups_orientation(&[landscape((612.0, 612.0))]), None, "a square sheet has no orientation");
+    assert_eq!(cups_orientation(&[]), None);
+    // `lp` is given it, among the job's other options.
+    let job = Job { options: ask.into_iter().collect(), ..Job::default() };
+    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+}
+
+/// Both submission paths add the orientation through `add_cups_orientation`: after the job's
+/// other options, never over an orientation the job already names (a driver choice), so `lp` is
+/// never given it twice, and not on Windows, whose print ticket sets it.
+#[test]
+fn a_job_that_names_its_orientation_keeps_it() {
+    let landscape = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    let media = ("media".to_string(), "Letter".to_string());
+    let mut options = vec![media.clone()];
+    add_cups_orientation(&mut options, &landscape);
+    let turned = if cfg!(windows) { vec![media] } else { vec![media, ("orientation-requested".to_string(), "4".to_string())] };
+    assert_eq!(options, turned);
+    // Added again, it isn't doubled.
+    add_cups_orientation(&mut options, &landscape);
+    assert_eq!(options, turned);
+    // A choice already made stands, however its name is cased: CUPS reads option names without
+    // regard to case, so a second one would replace it.
+    for key in ["orientation-requested", "Orientation-Requested", "ORIENTATION-REQUESTED"] {
+        let mut chosen = vec![(key.to_string(), "5".to_string())];
+        add_cups_orientation(&mut chosen, &landscape);
+        assert_eq!(chosen, [(key.to_string(), "5".to_string())], "{key}");
+    }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -1061,4 +1299,158 @@ fn a_booklet_prints_both_sides_on_the_short_edge() {
     assert_eq!(booklet_duplex(BookletSubset::BothSides), spool::Duplex::ShortEdge);
     assert_eq!(booklet_duplex(BookletSubset::FrontOnly), spool::Duplex::Off);
     assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
+}
+
+/// #3502: `/Contents` array pieces are joined with a space, matching the renderer, so a `%`
+/// comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both `impose` and `text_reads_up`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &[u8]| {
+        let mut doc = Document::new_empty();
+        let font = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Font")),
+                (b"Subtype".to_vec(), Object::name("Type1")),
+                (b"BaseFont".to_vec(), Object::name("Helvetica")),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        let s1 = doc.add(Stream::from_raw(Dict::new(), first_piece.to_vec()));
+        // Line 1 of s2 draws sideways ("HIDDEN") and 4 characters reading up; line 2 draws upright ("SHOWN").
+        let s2 = doc.add(Stream::from_raw(
+            Dict::new(),
+            b"BT /F1 18 Tf 0 1 -1 0 50 50 Tm (HIDDEN) Tj ET\nBT /F1 18 Tf 1 0 0 1 20 100 Tm (SHOWN) Tj ET".to_vec(),
+        ));
+        let fonts: Dict = [(b"F1".to_vec(), Object::Ref(font))].into_iter().collect();
+        let res: Dict = [(b"Font".to_vec(), Object::Dict(fonts))].into_iter().collect();
+        let pages_root = doc.add(Object::Null);
+        let page = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Page")),
+                (b"Parent".to_vec(), Object::Ref(pages_root)),
+                (b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 200.0, 300.0].into_iter().map(Object::Real).collect())),
+                (b"Resources".to_vec(), Object::Dict(res)),
+                (b"Contents".to_vec(), Object::Array(vec![Object::Ref(s1), Object::Ref(s2)])),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        doc.set(
+            pages_root,
+            Object::Dict(
+                [
+                    (b"Type".to_vec(), Object::name("Pages")),
+                    (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+                    (b"Count".to_vec(), Object::Int(1)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let cat = doc.add([(b"Type".to_vec(), Object::name("Catalog")), (b"Pages".to_vec(), Object::Ref(pages_root))].into_iter().collect::<Dict>());
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(cat));
+        doc
+    };
+
+    let form_strings = |imposed: Vec<u8>| -> Vec<Vec<u8>> {
+        let out = Document::open(Arc::new(imposed)).unwrap();
+        let page = &pdfcraft_model::pages(&out)[0];
+        let res = out.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let form_obj = out.resolve(xo.get(b"P0").unwrap());
+        let Object::Stream(form) = &*form_obj else { panic!("form stream") };
+        let body = form.decoded().unwrap();
+        pdfcraft_content::parse(&body)
+            .ops
+            .into_iter()
+            .filter(|op| op.op == b"Tj")
+            .filter_map(|op| op.operands.first().and_then(Object::as_string).map(|s| s.bytes.to_vec()))
+            .collect()
+    };
+
+    // Without a newline at the end of s1, `% comment` swallows line 1 of s2 (`(HIDDEN) Tj`).
+    let commented = build_doc(b"q Q % trailing comment");
+    assert!(!text_reads_up(&commented, 0), "commented-out vertical text on piece 2's first line is not counted");
+    let printed = impose(&commented, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed), [b"SHOWN".to_vec()], "impose does not un-comment piece 2's first line");
+
+    // Control: when s1 terminates the comment with a newline, line 1 of s2 is drawn and counted.
+    let with_newline = build_doc(b"q Q % trailing comment\n");
+    assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
+    let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
+}
+
+/// #2630: a Windows installation without the print DLLs is told so, before anything calls into
+/// a delay-loaded DLL that is not there.
+#[cfg(windows)]
+#[test]
+fn missing_print_dlls_are_named() {
+    use crate::spool::{PRINT_DLLS, missing_print_dll_in};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[0]));
+    std::fs::write(dir.join(PRINT_DLLS[0]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[1]));
+    std::fs::write(dir.join(PRINT_DLLS[1]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2630: on a Windows without the print DLLs, the public entry points answer before any call
+/// into the delay-loaded DLLs: no printers, and printing refused naming the DLL. The job names a
+/// printer that doesn't exist and the bytes aren't a PDF, so a missing guard fails here with
+/// another error rather than reaching a real printer.
+#[cfg(windows)]
+#[test]
+fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printers, submit, submit_with_progress};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+    let job = crate::spool::Job { printer: Some("PdfCraft test: no such printer".into()), ..Default::default() };
+    let named = |r: Result<String, crate::PrintError>| match r {
+        Err(crate::PrintError::Spool(m)) => m.contains(PRINT_DLLS[0]),
+        _ => false,
+    };
+    assert!(named(submit(b"not a PDF", &job)), "submit names the missing DLL");
+    let mut called = false;
+    assert!(named(submit_with_progress(b"not a PDF", &job, &mut |_, _| called = true)), "submit_with_progress names it");
+    assert!(!called, "no sheet reached a spooler");
+    // Not only an empty list, which a machine without printers gives anyway: the backend wasn't asked.
+    PRINTER_BACKEND_CALLS.with(|c| c.set(0));
+    assert!(printers().is_empty(), "no printers are listed");
+    assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
+    let mut doc = fixture(2);
+    let pages = pdfcraft_model::pages(&doc);
+    let res = doc.add(Object::Dict([(b"Font".to_vec(), Object::Dict(Dict::new()))].into_iter().collect()));
+    doc.update_dict(pages[1].obj, |d| d.set(b"Resources".to_vec(), Object::Ref(res))).unwrap();
+    let pages = pdfcraft_model::pages(&doc);
+    let form = imposition::page_form(&mut doc, &pages, 1, Content::default(), &mut Default::default()).unwrap();
+    let Object::Stream(s) = &*doc.get(form) else { panic!("form stream") };
+    assert_eq!(s.dict.get(b"Resources"), Some(&Object::Ref(res)));
+}
+
+/// Many pages asked about at once are answered from one walk of the page tree, each as
+/// [`text_reads_up`] answers it alone; a page past the end is `false`.
+#[test]
+fn texts_read_up_answers_many_pages_from_one_walk() {
+    let doc = fixture(3_000);
+    let all: Vec<usize> = (0..3_001).collect();
+    let started = std::time::Instant::now();
+    let up = texts_read_up(&doc, &all);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    assert_eq!(up.len(), all.len());
+    assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
+    assert_eq!(up[1], text_reads_up(&doc, 1));
 }

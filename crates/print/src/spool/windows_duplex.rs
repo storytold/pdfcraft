@@ -39,6 +39,17 @@ fn driver_default(result: Result<Option<Duplex>, PrintError>) -> Option<Duplex> 
     }
 }
 
+/// Preserve manual two-sided defaults when PrintCapabilities say the driver cannot take
+/// explicit two-sided settings (#5772). Unknown capabilities also keep the driver's default:
+/// turning a best-effort preference into a strict request could otherwise refuse a working job.
+fn supported_default(value: Option<Duplex>, support: impl FnOnce() -> Option<bool>) -> Option<Duplex> {
+    if matches!(value, Some(Duplex::LongEdge | Duplex::ShortEdge)) && support() != Some(true) {
+        None
+    } else {
+        value
+    }
+}
+
 /// DEVMODEW's public dmFields (offset 72) marks dmDuplex (offset 94) as valid with
 /// DM_DUPLEX. Values are DMDUP_SIMPLEX, DMDUP_VERTICAL and DMDUP_HORIZONTAL, respectively.
 /// Return `None` when DM_DUPLEX is absent, or a spool error for a malformed field or an
@@ -73,7 +84,8 @@ pub(super) fn job(job: &Job) -> Cow<'_, Job> {
                 .ok_or_else(|| PrintError::Spool("there is no default printer; choose a printer".into()))?,
         };
         let value = craft_print::rgb::default_settings(&printer).map_err(failed).and_then(|settings| duplex(&settings));
-        Ok((printer, driver_default(value)))
+        let value = supported_default(driver_default(value), || super::printers().into_iter().find(|p| p.name == printer).and_then(|p| p.two_sided));
+        Ok((printer, value))
     })
 }
 
@@ -170,6 +182,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manual_duplex_defaults_remain_unspecified_without_automatic_support() {
+        for binding in [2, 3] {
+            for support in [Some(false), None, Some(true)] {
+                let original = Job { printer: Some("Manual duplex".into()), ..Job::default() };
+                let value = duplex(&settings(0x1000, binding)).unwrap();
+                let resolved = resolve(&original, |_| Ok(("Manual duplex".into(), supported_default(value, || support))));
+                assert_eq!(resolved.duplex, if support == Some(true) { value } else { None });
+                assert_eq!(resolved.printer.as_deref(), Some("Manual duplex"));
+                assert_eq!(original.duplex, None);
+            }
+        }
+        assert_eq!(supported_default(Some(Duplex::Off), || panic!("simplex needs no capability query")), Some(Duplex::Off));
+        assert_eq!(supported_default(None, || panic!("unspecified needs no capability query")), None);
+    }
+
     /// Reads settings only: never submits a job or changes the printer's preferences.
     #[cfg(windows)]
     #[test]
@@ -177,7 +205,9 @@ mod tests {
     fn installed_windows_printer_default_is_carried_explicitly() {
         let printer = std::env::var("PDFCRAFT_PRINT_TEST_PRINTER").unwrap();
         let original = Job { printer: Some(printer.clone()), ..Job::default() };
-        let expected = duplex(&craft_print::rgb::default_settings(&printer).unwrap()).unwrap();
+        let expected = supported_default(duplex(&craft_print::rgb::default_settings(&printer).unwrap()).unwrap(), || {
+            super::super::printers().into_iter().find(|p| p.name == printer).and_then(|p| p.two_sided)
+        });
         let resolved = job(&original);
         assert_eq!(resolved.printer.as_deref(), Some(printer.as_str()));
         assert_eq!(resolved.duplex, expected);

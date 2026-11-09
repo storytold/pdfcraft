@@ -8,6 +8,41 @@ pub(crate) fn allowed(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
 }
 
+/// The longest language tag the exports write. BCP 47 sets no maximum (35 characters is only
+/// the least a protocol must hold), so this bounds only what a PDF's `/Lang` can put in a file.
+const LONGEST_TAG: usize = 255;
+
+/// `lang` when it is a well formed language tag (BCP 47, as a PDF's `/Lang` holds one): a primary
+/// language of two or three letters, then subtags of one to eight letters or digits, joined by
+/// hyphens, [`LONGEST_TAG`] characters at most. A singleton (one letter or digit) starts an
+/// extension, or with `x` private use, and needs a subtag after it. Anything else names no
+/// language.
+pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
+    let tag = lang?.trim();
+    let mut subtags = tag.split('-');
+    let primary = subtags.next()?;
+    if tag.len() > LONGEST_TAG || !(2..=3).contains(&primary.len()) || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    // In private use every subtag is data, one character long or not.
+    let (mut private, mut singleton) = (false, false);
+    for s in subtags {
+        if !(1..=8).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        if s.len() == 1 && !private {
+            if singleton {
+                return None;
+            }
+            private = s.eq_ignore_ascii_case("x");
+            singleton = true;
+        } else {
+            singleton = false;
+        }
+    }
+    (!singleton).then_some(tag)
+}
+
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars().filter(|c| allowed(*c)) {
@@ -38,11 +73,37 @@ pub(crate) fn base64(data: &[u8]) -> String {
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
 pub fn html(pages: &[Page], title: &str) -> String {
+    html_with_language(pages, title, None)
+}
+
+/// A simple HTML export with no CSS; page layout and colours are omitted.
+pub fn html_simple(pages: &[Page], title: &str) -> String {
+    html_simple_with_language(pages, title, None)
+}
+
+/// [`html`] for a document in `language` (a BCP 47 tag such as `bg-BG`, as a PDF's `/Lang` gives
+/// it), which the page names (`<html lang>`) for spell checking, speech and hyphenation. A
+/// language that is not a well formed tag is left out.
+pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
+    html_with_mode(pages, title, false, language)
+}
+
+/// [`html_simple`] for a document in `language`, named as [`html_with_language`] names it: a
+/// language is not styling, so the simple export keeps it.
+pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
+    html_with_mode(pages, title, true, language)
+}
+
+fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&str>) -> String {
+    let lang = language_tag(language).map(|tag| format!(" lang=\"{}\"", esc(tag))).unwrap_or_default();
     let mut s = format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
-img{{max-width:100%}}hr{{border:0;border-top:1px solid #ccc;margin:2em 0}}\
-table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;padding:2px 6px;vertical-align:top}}</style>\n</head>\n<body>\n",
-        esc(title)
+        "<!DOCTYPE html>\n<html{lang}>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n{}\n</head>\n<body>\n",
+        esc(title),
+        if simple {
+            ""
+        } else {
+            "<style>body{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}img{max-width:100%}hr{border:0;border-top:1px solid #ccc;margin:2em 0}table{border-collapse:collapse;margin:1em 0}td,th{border:1px solid #999;padding:2px 6px;vertical-align:top}</style>"
+        }
     );
     for it in items(pages) {
         match it {
@@ -59,13 +120,13 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     }
                     // The paragraph has its first run's colour; a run in another colour says so.
                     let colour = rgb8(r.block.color);
-                    if colour != rgb8(first.color) {
+                    if !simple && colour != rgb8(first.color) {
                         let [red, green, blue] = colour;
                         run = format!("<span style=\"color:#{red:02X}{green:02X}{blue:02X}\">{run}</span>");
                     }
                     t.push_str(&run);
                 }
-                let style = hex(first.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                let style = if simple { String::new() } else { hex(first.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\"")) };
                 match lvl {
                     0 => s.push_str(&format!("<p{style}>{t}</p>\n")),
                     l => s.push_str(&format!("<h{l}{style}>{t}</h{l}>\n")),
@@ -84,7 +145,7 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                        let style = if simple { String::new() } else { hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\"")) };
                         s.push_str(&format!("<td{span}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");

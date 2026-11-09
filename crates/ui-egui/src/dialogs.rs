@@ -8,15 +8,23 @@ use pdfcraft_engine::Edit;
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 pub(super) mod appearance;
+pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
+pub(super) mod convert_colours_ui;
 pub(super) mod credits;
+pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
+pub(super) mod preferences;
+pub(super) mod printer_marks_ui;
 mod prompts;
 pub(super) mod protect;
 pub(super) mod standards_ui;
 pub(super) mod word_count_ui;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) use prompts::{PromptButton, save_prompt_key};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
@@ -38,6 +46,9 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    printer_marks_now: bool,
+    colours_now: bool,
+    fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -49,13 +60,17 @@ struct Pending {
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
+    lock_answer: Option<bool>,
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
+    page_props_now: Option<(pdfcraft_engine::DocId, u64, Edit)>,
+    attachment_description_now: Option<(pdfcraft_engine::DocId, Edit)>,
     replace_now: bool,
     open_revision: Option<usize>,
     a11y_now: bool,
     ocr_now: bool,
+    scan_clean_now: bool,
     compare_now: bool,
     images_now: bool,
     stamp_now: bool,
@@ -120,12 +135,25 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.custom_draft = Some((id, crate::CustomDraft { props: doc.custom_info(), ..Default::default() }));
     }
     let mut req = Pending::default();
-    let modal = widgets::show_modal(ctx, "dialog", |ui| {
+    // Every dialog shares this modal. A different dialog than the one shown before starts from
+    // its own size, not from the last one's: rows that fill the height they are offered would
+    // otherwise keep, say, Print as tall as Preferences (#5118). Tabs of one dialog keep its size;
+    // the kinds of Marks and Export are different dialogs.
+    let shown = egui::Id::unique("dialog").with("shown");
+    let kind = match dialog {
+        Dialog::Properties(_) => Dialog::Properties(PropsTab::Description),
+        _ => dialog,
+    };
+    let remeasure = ctx.data(|d| d.get_temp::<Dialog>(shown)) != Some(kind);
+    ctx.data_mut(|d| d.insert_temp(shown, kind));
+    let modal = widgets::show_modal_sized(ctx, "dialog", remeasure, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
-            Dialog::About => 780.0,
+            Dialog::Preferences => 610.0,
+            Dialog::About => 820.0,
+            Dialog::PinTool => 540.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -218,6 +246,19 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::PageProps => {
+            let Some(d) = app.page_props_draft.as_mut() else {
+                req.close = true;
+                return false;
+            };
+            let (ok, cancel) = crate::organize_panel::page_props_body(ui, d);
+            // An order every page already has adds no undo step.
+            if ok && let Some(order) = d.tab_order.filter(|o| d.before != Some(*o)) {
+                req.page_props_now = Some((d.doc, d.generation, Edit::SetTabOrder { pages: d.pages.clone(), order }));
+            }
+            req.close = ok || cancel;
+            return false;
+        }
         Dialog::DuplicateField => {
             if !dialog_duplicate_field(ui, app, req) {
                 return false;
@@ -256,6 +297,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::SummarizeComments => {
             if !dialog_summarize_comments(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::LockSignatures => {
+            if !dialog_lock_signatures(ui, app, req) {
                 return false;
             }
         }
@@ -319,6 +365,27 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = req.apply || cancel;
             return false;
         }
+        Dialog::AttachmentDescription => {
+            let Some((doc, generation, _, _, _, _)) = app.attachment_description_draft.as_ref() else {
+                req.close = true;
+                return false;
+            };
+            if app.active_ids().is_none_or(|(_, active)| active != *doc)
+                || app.session.get(*doc).is_none_or(|current| current.edit_generation() != *generation)
+            {
+                app.attachment_description_draft = None;
+                req.close = true;
+                return false;
+            }
+            let Some((_, _, _, display_name, description, _)) = app.attachment_description_draft.as_mut() else {
+                req.close = true;
+                return false;
+            };
+            ui.heading(tl!("Edit attachment description"));
+            ui.label(display_name.as_str());
+            let label = ui.label(tl!("Description"));
+            ui.add(widgets::line(description)).labelled_by(label.id);
+        }
         Dialog::Signature => {
             if !dialog_signature(ui, app, req) {
                 return false;
@@ -372,6 +439,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = go || cancel;
             return false;
         }
+        Dialog::EnhanceScan => {
+            let (go, cancel) = crate::scan_clean_ui::body(ui, app, &t);
+            req.scan_clean_now = go;
+            req.close = go || cancel;
+            return false;
+        }
         Dialog::AccessibilityOptions => {
             let (start, cancel) = crate::a11y_ui::options_body(ui, app, &t);
             req.a11y_now = start;
@@ -407,6 +480,28 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = req.apply || cancel;
             return false;
         }
+        Dialog::PrinterMarks => {
+            let (go, cancel) = crate::printer_marks_ui::body(ui, app, &t);
+            req.printer_marks_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::ConvertColours => {
+            let (go, cancel) = crate::convert_colours_ui::body(ui, app, &t);
+            req.colours_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::FixHairlines => {
+            let (go, cancel) = crate::hairlines_ui::body(ui, app, &t);
+            req.fix_hairlines_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::BookmarksFromTextStyles => {
+            req.close = crate::bookmark_styles_ui::body(ui, app, &t);
+            return false;
+        }
         Dialog::NumberPages => {
             if !dialog_number_pages(ui, app, req) {
                 return false;
@@ -424,6 +519,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::About => {
             if !dialog_about(ui, req) {
+                return false;
+            }
+        }
+        Dialog::PinTool => {
+            if !dialog_pin_tool(ui, app, req) {
                 return false;
             }
         }
@@ -587,7 +687,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 for (m, n) in names {
                                     ui.selectable_value(&mut v.magnification, m, n);
                                 }
-                                for p in [50.0, 75.0, 125.0, 150.0, 200.0] {
+                                // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size.
+                                for p in [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0] {
                                     ui.selectable_value(&mut v.magnification, M::Percent(p), format!("{p:.0}%"));
                                 }
                             })
@@ -1061,6 +1162,7 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     use pdfcraft_engine::{PageOrientation as O, PageParity as P};
     let n = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len());
     let d = &mut app.rotate_draft;
+    let mut typing_to = false;
     ui.label(egui::RichText::new(tl!("Rotate Pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     egui::Grid::new("rotate-pages").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -1082,10 +1184,11 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
             widgets::radio_value(ui, &mut d.which, 0, tl!("All"));
             widgets::radio_value(ui, &mut d.which, 1, tl!("Selection"));
             ui.horizontal(|ui| {
-                widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
-                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n));
-                ui.label(tl!("to"));
-                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n));
+                let from_label = widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
+                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n)).labelled_by(from_label.id);
+                let to_label = ui.label(tl!("to"));
+                typing_to =
+                    widgets::typing_into(&ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n)).labelled_by(to_label.id));
                 ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
             });
         });
@@ -1117,10 +1220,12 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
             });
         ui.end_row();
     });
-    d.to = d.to.max(d.from);
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            // OK while the end is still being typed (a screen reader can press it).
+            widgets::keep_range_ordered(d.from, &mut d.to, false);
             req.rotate_now = true;
             req.close = true;
         }
@@ -1142,17 +1247,21 @@ fn dialog_duplicate_field(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pe
     ui.add_space(8.0);
     ui.label(crate::i18n::fmt(tl!("Duplicate \"{name}\" onto:"), &[("name", &d.name)]));
     widgets::radio_value(ui, &mut d.all, true, tl!("All pages"));
-    ui.horizontal(|ui| {
-        widgets::radio_value(ui, &mut d.all, false, tl!("From"));
-        ui.add_enabled(!d.all, egui::DragValue::new(&mut d.from).range(1..=n));
-        ui.label(tl!("to"));
-        ui.add_enabled(!d.all, egui::DragValue::new(&mut d.to).range(1..=n));
-        ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
-    });
-    d.to = d.to.max(d.from);
+    let typing_to = ui
+        .horizontal(|ui| {
+            widgets::radio_value(ui, &mut d.all, false, tl!("From"));
+            ui.add_enabled(!d.all, egui::DragValue::new(&mut d.from).range(1..=n));
+            ui.label(tl!("to"));
+            let typing_to = widgets::typing_into(&ui.add_enabled(!d.all, egui::DragValue::new(&mut d.to).range(1..=n)));
+            ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
+            typing_to
+        })
+        .inner;
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            widgets::keep_range_ordered(d.from, &mut d.to, false);
             let pages: Vec<usize> = if d.all { (0..n).collect() } else { (d.from - 1..d.to.min(n)).collect() };
             req.duplicate_now = Some(Edit::DuplicateField { name: d.name.clone(), pages });
             req.close = true;
@@ -1204,6 +1313,31 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("Create PDF Comment Summary"), true).clicked() {
             req.summarize_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
+/// `Dialog::LockSignatures` content (#2149). Returns `false` when it has its own buttons and no
+/// footer is wanted.
+fn dialog_lock_signatures(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    ui.label(egui::RichText::new(tl!("Lock your signature into the page?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page."));
+    ui.add_space(8.0);
+    ui.add(widgets::checkbox(&mut app.lock_remember, tl!("Don't ask again")));
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Lock and save"), true).clicked() {
+            req.lock_answer = Some(true);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Keep editable"), false).clicked() {
+            req.lock_answer = Some(false);
             req.close = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -1314,6 +1448,7 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
             app.signature = d.saved();
             crate::fill_sign::FillTool::Signature
         };
+        app.fill_tool = tool;
         app.quick_tool = crate::QuickTool::Fill(tool);
         app.toast = None;
     }
@@ -1323,22 +1458,39 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
 
 /// `Dialog::Preferences` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    ui.set_width(610.0);
     let t = Tokens::get(ui.ctx());
+    preferences::preferences_header(ui, &t);
+    ui.add_space(10.0);
     // The settings outgrow a short window: scroll them rather than run off the screen.
     // The OK row stays below the scroll, in reach however far the settings are scrolled.
-    let max = (ui.ctx().content_rect().height() - 120.0 - crate::js_ui::PREFERENCES_BUTTON_ROW).max(crate::js_ui::PREFERENCES_MIN_SCROLL);
+    let max = (ui.ctx().content_rect().height() - 120.0 - preferences::PREFERENCES_BUTTON_ROW - 40.0).max(preferences::PREFERENCES_MIN_SCROLL);
     // A scroll area starts from the room the dialog offers it, and a modal offers more
     // each frame for the first few, so with OK outside the scroll the dialog would grow
     // over those frames. Asking for the full height as the least it may scroll in
     // (which only applies when the settings overflow it) opens the dialog at full size.
     // A scrollbar of its own: the floating one lies over the right edge of the theme
     // cards and other full-width rows (#3557).
+    preferences_scroll(ui, max, |ui| preferences::preferences_body(ui, app, &t));
+    req.close = preferences::preferences_buttons(ui);
+    false
+}
+
+fn preferences_scroll(ui: &mut egui::Ui, max: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.scope(|ui| {
         ui.spacing_mut().scroll.floating = false;
-        egui::ScrollArea::vertical().max_height(max).min_scrolled_height(max).show(ui, |ui| crate::js_ui::preferences_body(ui, app, &t));
+        ui.spacing_mut().scroll.bar_inner_margin = 14.0;
+        ui.spacing_mut().scroll.bar_outer_margin = 2.0;
+        if ui.style().scroll_animation != egui::style::ScrollAnimation::none() {
+            ui.style_mut().scroll_animation = egui::style::ScrollAnimation::duration(0.25);
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("preferences-dialog-scroll")
+            .max_height(max)
+            .min_scrolled_height(max)
+            .animated(true)
+            .show(ui, add_contents);
     });
-    req.close = crate::js_ui::preferences_buttons(ui);
-    false
 }
 
 /// `Dialog::NumberPages` content. Returns `false` when it has its own buttons and no footer is wanted.
@@ -1351,13 +1503,14 @@ fn dialog_number_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     let n = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
     let d = &mut app.number_draft;
     d.to = d.to.clamp(1, n);
-    d.from = d.from.clamp(1, d.to);
+    d.from = d.from.clamp(1, n);
+    let mut typing_to = false;
     egui::Grid::new("number_pages").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Pages"));
         ui.horizontal(|ui| {
             ui.add(egui::DragValue::new(&mut d.from).range(1..=n));
             ui.label(tl!("to"));
-            ui.add(egui::DragValue::new(&mut d.to).range(1..=n));
+            typing_to = widgets::typing_into(&ui.add(egui::DragValue::new(&mut d.to).range(1..=n)));
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())])).color(t.text_muted));
         });
         ui.end_row();
@@ -1384,18 +1537,20 @@ fn dialog_number_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
         ui.add(egui::DragValue::new(&mut d.start).range(1..=99_999));
         ui.end_row();
     });
-    d.to = d.to.max(d.from);
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     let label = |k: u32| format!("{}{}", d.prefix, d.style.format(k));
     ui.add_space(8.0);
-    let preview = if d.from == d.to {
+    // `to` can be below `from` while it is being typed.
+    let preview = if d.to <= d.from {
         label(d.start)
     } else {
-        format!("{}, {} … {}", label(d.start), label(d.start + 1), label(d.start + (d.to - d.from) as u32))
+        format!("{}, {} … {}", label(d.start), label(d.start + 1), label(d.start.saturating_add(u32::try_from(d.to - d.from).unwrap_or(u32::MAX))))
     };
     ui.label(
         egui::RichText::new(crate::i18n::fmt(tl!("Labels: {preview}. Later pages keep their labels."), &[("preview", &preview)])).color(t.text_muted),
     );
-    req.number_now = Some(Edit::NumberPages { from: d.from - 1, to: d.to - 1, style: d.style, prefix: d.prefix.clone(), first: d.start });
+    // Ordered here too: the footer's OK can be pressed while the end is still being typed.
+    req.number_now = Some(Edit::NumberPages { from: d.from - 1, to: d.to.max(d.from) - 1, style: d.style, prefix: d.prefix.clone(), first: d.start });
     true
 }
 
@@ -1432,7 +1587,8 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     use crate::commands::{
-        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN, ZOOM_OUT,
+        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIRST_PAGE, FIT_WIDTH, LAST_PAGE, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW,
+        SELECT_ALL, ZOOM_IN, ZOOM_OUT,
     };
     // Registered commands first (always in sync with the real bindings), then the
     // keys the document view handles itself.
@@ -1444,6 +1600,13 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
+    // Alt+← / Alt+→ (`canvas::shortcuts`): not a registered command, which has no Alt.
+    let alt_arrows = if crate::commands::mac_shortcuts(ui.ctx()) {
+        "⌥← / ⌥→".to_owned()
+    } else {
+        let alt = crate::i18n::key_name("Alt");
+        format!("{alt}+← / {alt}+→")
+    };
     let scroll = crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", crate::commands::command_modifier_label(ui.ctx()))]);
     for (k, v) in [
         (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
@@ -1455,8 +1618,12 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (key(FIT_WIDTH), tl!("Fit to width").to_string()),
         (pair(ZOOM_IN, ZOOM_OUT), scroll),
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
-        (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
+        (
+            format!("{} / {}, {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End"), pair(FIRST_PAGE, LAST_PAGE)),
+            tl!("First / last page").to_string(),
+        ),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
+        (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
         (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
         (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),
@@ -1479,7 +1646,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
 /// `Dialog::About` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
-    // Tabs About · Contributors · Models (craftrules standards/contributors.md).
+    // Tabs About · Contributors · Models.
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal_wrapped(|ui| {
@@ -1526,6 +1693,92 @@ fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     true
 }
 
+fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Pin tools to Home")).font(theme::semibold(18.0)));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::ghost_button(ui, "x", tl!("Close")).clicked() {
+                req.close = true;
+            }
+        });
+    });
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Select tools to display on your Home page for quick access.")).color(t.text_muted));
+    ui.add_space(10.0);
+
+    ui.horizontal(|ui| {
+        let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+        crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
+        let search_resp =
+            ui.add(egui::TextEdit::singleline(&mut app.pin_tool_search).hint_text(tl!("Search tools…")).desired_width(ui.available_width() - 32.0));
+        search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Search tools…")));
+        if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
+            app.pin_tool_search.clear();
+        }
+    });
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(6.0);
+
+    let query = app.pin_tool_search.trim().to_lowercase();
+    egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+        let mut toggle = None;
+        for g in pdfcraft_engine::catalog::TOOL_GROUPS {
+            let label = tl!(g.label);
+            let blurb = g.sections.first().map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • ")).unwrap_or_default();
+            if !query.is_empty()
+                && !label.to_lowercase().contains(&query)
+                && !blurb.to_lowercase().contains(&query)
+                && !g.id.to_lowercase().contains(&query)
+            {
+                continue;
+            }
+
+            let pinned = app.is_tool_pinned(g.id);
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            let press = theme::Press::track(ui, &resp);
+            press.wash(ui, rect, 6, false);
+            let body = rect.translate(press.offset());
+
+            let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
+            crate::icons::paint(ui, egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)), g.icon, 20.0, color);
+
+            let btn_w = 78.0;
+            let btn_rect = egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
+            let btn_resp = ui.interact(btn_rect, ui.scope_id().with(("pin_modal_btn", g.id)), egui::Sense::click());
+            let btn_hovered = btn_resp.hovered();
+
+            let (btn_fill, btn_stroke, text_color, btn_label) = if pinned {
+                (t.accent, egui::Stroke::NONE, egui::Color32::WHITE, tl!("Pinned"))
+            } else if btn_hovered {
+                (t.hover, egui::Stroke::new(1.0, t.border), t.text, tl!("Pin"))
+            } else {
+                (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, tl!("Pin"))
+            };
+            let tip = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+            btn_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pinned, format!("{tip}: {label}")));
+
+            ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
+            ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);
+
+            let max_w = (btn_rect.left() - body.left() - 44.0).max(10.0);
+            widgets::row_text(ui, body.min + egui::vec2(38.0, 6.0), label, theme::semibold(13.5), t.text, max_w);
+            widgets::row_text(ui, body.min + egui::vec2(38.0, 24.0), &blurb, theme::regular(11.0), t.text_muted, max_w);
+
+            if btn_resp.clicked() || resp.clicked() {
+                toggle = Some(g.id);
+            }
+        }
+        if let Some(id) = toggle {
+            app.toggle_pin_tool(id);
+        }
+    });
+    true
+}
+
+/// Draw the active dialog's footer and record any requested action in `req`.
 fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     ui.add_space(16.0);
     let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
@@ -1542,6 +1795,10 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
                     req.recover = Some(false);
                     req.close = true;
                 }
+            } else if dialog == Dialog::PinTool {
+                if widgets::pill_button(ui, tl!("Done"), true).clicked() {
+                    req.close = true;
+                }
             } else if dialog == Dialog::NumberPages {
                 if widgets::pill_button(ui, tl!("OK"), true).clicked() {
                     req.apply_number = true;
@@ -1553,6 +1810,30 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
             } else if dialog == Dialog::Split {
                 if ui.add_enabled_ui(req.split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
                     req.split_now = req.split_ready.clone();
+                    req.close = true;
+                }
+                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                    req.close = true;
+                }
+            } else if dialog == Dialog::AttachmentDescription {
+                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                    if let Some((doc, generation, key, _, description, _)) = app.attachment_description_draft.as_ref() {
+                        let current = app.session.get(*doc).and_then(|doc| {
+                            doc.info
+                                .attachments
+                                .iter()
+                                .find(|attachment| matches!(&attachment.source, pdfcraft_render::AttachmentSource::Document { key: attachment_key } if attachment_key == key))
+                                .map(|attachment| (attachment.description.as_deref().unwrap_or_default().trim().to_owned(), attachment.has_description))
+                        });
+                        let normalized = description.trim();
+                        let still_current = app.session.get(*doc).is_some_and(|doc| doc.edit_generation() == *generation);
+                        if still_current && current.as_ref().is_some_and(|(current, has_description)| current != normalized || (normalized.is_empty() && *has_description)) {
+                            req.attachment_description_now = Some((
+                                *doc,
+                                Edit::EditAttachmentDescription { key: key.clone(), description: Some(normalized.to_owned()) },
+                            ));
+                        }
+                    }
                     req.close = true;
                 }
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -1629,10 +1910,26 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
         app.pending_overwrite = None;
     }
+    if let Some(lock) = req.lock_answer {
+        let remember = std::mem::take(&mut app.lock_remember);
+        app.answer_lock_signatures(lock, remember);
+    } else if dialog == Dialog::LockSignatures && (modal_closed || req.close) {
+        // Cancelled or dismissed: nothing is saved.
+        app.pending_lock = None;
+        app.lock_remember = false;
+    }
 }
 
 /// Runs the document actions the dialog asked for.
 fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
+    if let Some((doc, edit)) = req.attachment_description_now.take() {
+        app.attachment_description_draft = None;
+        if app.active_ids().is_some_and(|(_, active)| active == doc) {
+            app.apply_edit(edit);
+        } else {
+            app.notify_tr("The document changed while the dialog was open, so nothing was changed. Open the description editor again.");
+        }
+    }
     if req.summarize_now {
         app.summarize_comments();
     }
@@ -1642,6 +1939,15 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
     if let Some(e) = req.duplicate_now.take() {
         app.duplicate_draft = None;
         app.apply_edit(e);
+    }
+    // Another document became active, or the document changed, while the dialog was open: the
+    // pages at those indices may not be the ones chosen.
+    if let Some((doc, generation, e)) = req.page_props_now.take() {
+        if app.active_ids().is_some_and(|(_, id)| id == doc) && app.session.get(doc).is_some_and(|d| d.edit_generation() == generation) {
+            app.apply_edit(e);
+        } else {
+            app.notify_tr("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.");
+        }
     }
     if req.extract_now {
         app.extract_selection();
@@ -1670,6 +1976,9 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();
             let n: usize = app.hidden_draft.found.iter().filter(|f| f.2).map(|f| f.1).sum();
             if app.apply_edit(Edit::RemoveHidden { which }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if n == 1 {
                     app.notify_tr("Removed 1 hidden item. Save to remove them from the file.");
                 } else {
@@ -1678,16 +1987,39 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             }
         }
         Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            if let Some((_, id)) = app.active_ids() {
+                app.renew_recovery(id);
+            }
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
-                if marks == 1 {
-                    app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
-                } else {
-                    app.notify_fmt("Applied {n} redaction marks. Save to remove the content from the file.", &[("n", &marks.to_string())]);
+                if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+                    view.redactions_applied = view.redactions_applied.saturating_add(1);
+                    // A new step clears the redo history, so the undone saved steps can't come back.
+                    if view.redactions_undone_after_save > 0 || delivered_undone {
+                        view.redactions_undone_after_save = 0;
+                        view.saved_redactions_cut_off = true;
+                    }
                 }
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
+                let applied = if marks == 1 {
+                    tl!("Applied 1 redaction mark. Save to remove the content from the file.").to_string()
+                } else {
+                    crate::i18n::fmt(tl!("Applied {n} redaction marks. Save to remove the content from the file."), &[("n", &marks.to_string())])
+                };
+                // Where the removed text is still held that applying leaves as it is, and what
+                // became of a PDF/A or PDF/UA claim in the document XMP it removed: said in the
+                // same notification, so neither can replace the first sentence.
+                let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
+                let left = doc.and_then(|d| d.redaction_elsewhere()).and_then(|e| still_holding_note(&e));
+                let id = doc.and_then(|d| d.redaction_identification()).and_then(|id| identification_note(&id));
+                let message = [Some(applied), left, id].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                app.notify(message);
             }
         }
         _ => {}
@@ -1702,15 +2034,25 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         let form = |app: &PdfCraftApp| app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| doc.form.clone());
         // A rename also renames the field in the formulas that read it.
         let before = props.name.as_ref().and_then(|_| form(app));
-        if app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) })
-            && let Some(i) = app.active
-        {
+        // The widget being edited, by object: a radio button that joins a group by its new name
+        // is appended after the group's own buttons, so its index changes.
+        let widget = before.as_ref().and_then(|all| all.iter().find(|f| f.name == d.field)?.widgets.get(d.widget).map(|w| w.obj));
+        let applied = app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) });
+        if !applied && app.active_ids().is_some() {
+            // A refused edit (its reason is in the notice) leaves the dialog open with what was
+            // typed into it, as the several-fields dialog does, so nothing is lost meanwhile.
+            app.field_props = Some(d);
+            req.close = false;
+        } else if applied && let Some(i) = app.active {
             // Keep the (possibly renamed) field selected.
             // A dotted name is the full name; a plain one renames the field within its parent.
             let typed = d.name.trim();
             let prefix = d.field.rsplit_once('.').filter(|_| !typed.contains('.')).map(|(p, _)| format!("{p}.")).unwrap_or_default();
             let name = format!("{prefix}{typed}");
-            if let (Some(before), Some(after)) = (before, form(app)) {
+            let after = form(app);
+            let index =
+                widget.and_then(|obj| after.as_ref()?.iter().find(|f| f.name == name)?.widgets.iter().position(|w| w.obj == obj)).unwrap_or(d.widget);
+            if let (Some(before), Some(after)) = (before, after) {
                 let n = pdfcraft_engine::form_calculations_changed(&before, &after).iter().filter(|f| **f != name).count();
                 if n > 0 {
                     app.notify(crate::i18n::trn(
@@ -1721,9 +2063,64 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
                     ));
                 }
             }
-            app.views[i].prepare.selected = Some((name, d.widget));
+            app.views[i].prepare.selected = Some((name, index));
         }
     }
+}
+
+/// The sentence telling the user where the removed text is still held that applying redactions
+/// leaves as it is, or `None` when it is nowhere else. When the text couldn't be searched for,
+/// the places are those holding any text, and the sentence says they may hold it.
+pub(crate) fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(tl!(one).to_string()),
+        n => Some(crate::i18n::fmt(tl!(many), &[("n", &n.to_string())])),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "1 bookmark title", "{n} bookmark titles"),
+        count(e.attachments, "1 attachment", "{n} attachments"),
+        count(e.comments, "1 comment", "{n} comments"),
+        count(e.xmp, "1 other metadata stream", "{n} other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let (last, rest) = places.split_last()?;
+    let list = if rest.is_empty() { last.clone() } else { crate::i18n::fmt(tl!("{list} and {last}"), &[("list", &rest.join(", ")), ("last", last)]) };
+    let template = if e.unsearched {
+        "The redacted text couldn't be searched for, so {places} may still hold it. Remove hidden information removes them."
+    } else {
+        "The redacted text also appears in {places}, which redaction doesn't change. Remove hidden information removes them."
+    };
+    Some(crate::i18n::fmt(tl!(template), &[("places", &list)]))
+}
+
+/// The sentence telling the user what became of the document's PDF/A or PDF/UA identification
+/// when applying redactions removed the XMP packet that held it (and the redacted text), or
+/// `None` when no such packet was removed.
+pub(crate) fn identification_note(id: &pdfcraft_engine::RedactionIdentification) -> Option<String> {
+    use pdfcraft_engine::RedactionClaim as Claim;
+    let named = |claim: Claim| -> Option<String> {
+        match (id.pdfa == claim, id.pdfua == claim) {
+            (true, true) => Some(tl!("PDF/A and PDF/UA").to_string()),
+            (true, false) => Some("PDF/A".to_string()),
+            (false, true) => Some("PDF/UA".to_string()),
+            (false, false) => None,
+        }
+    };
+    let kept = named(Claim::Kept).map(|s| crate::i18n::fmt(tl!("Its {standard} identification was written back on its own."), &[("standard", &s)]));
+    let lost = named(Claim::Lost).map(|s| {
+        crate::i18n::fmt(
+            tl!("Its {standard} identification couldn't be kept, so the file no longer says it conforms to {standard}."),
+            &[("standard", &s)],
+        )
+    });
+    if kept.is_none() && lost.is_none() {
+        return None;
+    }
+    let head = tl!("The document's XMP metadata held the redacted text and was removed.").to_string();
+    Some([Some(head), kept, lost].into_iter().flatten().collect::<Vec<_>>().join(" "))
 }
 
 /// Edits built from the dialog's drafts.
@@ -1770,6 +2167,15 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
     }
+    if req.printer_marks_now {
+        app.add_printer_marks();
+    }
+    if req.colours_now {
+        app.convert_colours();
+    }
+    if req.fix_hairlines_now {
+        app.fix_hairlines();
+    }
     if req.apply_number
         && let Some(edit) = req.number_now.take()
     {
@@ -1790,11 +2196,21 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
-        app.dialog = None;
+        // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
+        app.recent.truncate(app.recent_limit);
+        // An answer may have opened another dialog this frame (saving a file that changed on
+        // disk asks about that): it stays.
+        if app.dialog == Some(dialog) {
+            app.dialog = None;
+        }
+        if dialog == Dialog::AttachmentDescription {
+            app.attachment_description_draft = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.custom_draft = None;
         app.bulk_field_props = None;
+        app.unmarked_page = Default::default();
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
     }
@@ -1817,6 +2233,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     }
     if req.ocr_now {
         app.start_ocr();
+    }
+    if req.scan_clean_now {
+        app.start_scan_clean();
     }
     if req.compare_now {
         app.run_compare();

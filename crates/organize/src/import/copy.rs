@@ -1,4 +1,6 @@
-use super::{Dict, Document, HashMap, ObjRef, Object, OrganizeError, named_dest};
+use std::rc::Rc;
+
+use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, named_dest};
 
 /// Keys that must not be followed when copying: they point back up or across the source
 /// document, and following them would drag in unrelated objects.
@@ -10,7 +12,7 @@ const SKIP_ON_ANNOT: &[&[u8]] = &[b"StructParent", b"P"];
 /// Real documents stay well under this (a page's resources, fonts and descriptors, nested
 /// form XObjects and field trees are a few levels each); a chain of thousands of indirect
 /// objects, each shallow enough for the parser, would otherwise exhaust the stack (#1800).
-const MAX_COPY_DEPTH: usize = 256;
+pub(super) const MAX_COPY_DEPTH: usize = 256;
 
 /// Keys that stay on the widget when a combined field/widget is split (#1810): the annotation's
 /// appearance, placement and page. Field state (name, value, flags, default appearance) moves to
@@ -43,11 +45,11 @@ pub(super) const WIDGET_KEYS: &[&[u8]] = &[
     b"AF",
 ];
 
-pub(super) struct Copier<'a> {
+pub(crate) struct Copier<'a> {
     pub(super) src: &'a Document,
     /// Current recursion depth, bounded by [`MAX_COPY_DEPTH`].
     depth: usize,
-    pub(super) map: HashMap<ObjRef, ObjRef>,
+    pub(crate) map: HashMap<ObjRef, ObjRef>,
     /// Source page → destination page, for rewriting `/P` and destinations.
     pub(super) pages: HashMap<ObjRef, ObjRef>,
     /// Destination objects that are annotation dictionaries (fixed up after copying).
@@ -55,12 +57,16 @@ pub(super) struct Copier<'a> {
     /// Top-level form fields reached through widgets.
     pub(super) fields: Vec<ObjRef>,
     /// Optional content groups copied: (source, destination).
-    pub(super) ocgs: Vec<(ObjRef, ObjRef)>,
+    pub(crate) ocgs: Vec<(ObjRef, ObjRef)>,
+    /// When only some pages are copied: the annotations on them and the fields above each, the
+    /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
+    /// copiers made for a repeated page or an action don't each copy it.
+    pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
 }
 
 impl<'a> Copier<'a> {
-    pub(super) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
-        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() }
+    pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None }
     }
 
     /// Copy an indirect object (once), returning its destination reference.
@@ -89,15 +95,23 @@ impl<'a> Copier<'a> {
         Ok(())
     }
 
-    pub(super) fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
+    pub(crate) fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
         if !matches!(o, Object::Ref(_) | Object::Array(_) | Object::Dict(_) | Object::Stream(_)) {
             return Ok(o.clone());
+        }
+        if self.acts_on_none(o) {
+            return Ok(Object::Null);
         }
         self.descend()?;
         let copied = match o {
             Object::Ref(r) => self.copy_ref(dst, *r).map(Object::Ref),
             Object::Array(a) => a.iter().map(|x| self.copy_value(dst, x, None)).collect::<Result<Vec<_>, _>>().map(Object::Array),
             Object::Dict(d) => self.copy_dict(dst, d, this).map(Object::Dict),
+            // Opened without the password its embedded files need, the source holds their data
+            // encrypted: copied into another document, it would read as the file.
+            Object::Stream(s) if self.src.reads_as_stored(s) => Err(OrganizeError::Invalid(
+                "an attached file is encrypted and the document was opened without its password: open it with the password to copy it".into(),
+            )),
             Object::Stream(s) => self.copy_dict(dst, &s.dict, None).map(|dict| {
                 let mut s = s.clone();
                 s.dict = dict;
@@ -112,6 +126,8 @@ impl<'a> Copier<'a> {
     fn copy_dict(&mut self, dst: &mut Document, d: &Dict, this: Option<ObjRef>) -> Result<Dict, OrganizeError> {
         let is_annot = d.name(b"Type") == Some(b"Annot") || (d.contains(b"Subtype") && d.contains(b"Rect") && !d.contains(b"Type"));
         let is_field = d.contains(b"FT") || (d.contains(b"T") && d.contains(b"Kids"));
+        // A form action lists the fields it submits, resets or hides.
+        let lists_fields = matches!(d.name(b"S"), Some(b"SubmitForm" | b"ResetForm" | b"Hide"));
         let mut out = Dict::new();
         for (k, v) in d.iter() {
             if is_annot && SKIP_ON_ANNOT.contains(&k.as_slice()) {
@@ -120,6 +136,34 @@ impl<'a> Copier<'a> {
             // Destinations are rewritten afterwards (they may target pages copied later).
             if is_annot && (k.as_slice() == b"Dest" || k.as_slice() == b"A") {
                 out.set(k.clone(), v.clone());
+                continue;
+            }
+            if is_field
+                && k.as_slice() == b"Kids"
+                && let Some(kept) = &self.kept
+            {
+                let kids: Vec<Object> = self
+                    .src
+                    .resolve(v)
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|kid| kid.as_ref().is_none_or(|r| kept.contains(&r)))
+                    .cloned()
+                    .collect();
+                out.set(k.clone(), self.copy_value(dst, &Object::Array(kids), None)?);
+                continue;
+            }
+            // Of some of the pages, an action lists only the fields on them: one left behind would
+            // come along with its value. Fields named by text stay.
+            if lists_fields
+                && matches!(k.as_slice(), b"Fields" | b"T")
+                && let Some(kept) = &self.kept
+            {
+                let listed = self.src.resolve(v);
+                let entries = listed.as_array().cloned().unwrap_or_else(|| vec![v.clone()]);
+                let entries: Vec<Object> = entries.into_iter().filter(|e| e.as_ref().is_none_or(|r| kept.contains(&r))).collect();
+                out.set(k.clone(), self.copy_value(dst, &Object::Array(entries), None)?);
                 continue;
             }
             out.set(k.clone(), self.copy_value(dst, v, None)?);
@@ -134,6 +178,34 @@ impl<'a> Copier<'a> {
             }
         }
         Ok(out)
+    }
+
+    /// Whether `o` is a reset or submit action that names only fields left behind (see `kept`).
+    /// Its copy would list none, and readers (ours too) may take an empty list for every field,
+    /// which is what an omitted one means (ISO 32000-2 §12.7.6). So it is not copied, nor are the
+    /// actions after it, as with a link to a page left behind. A list of fields to leave out
+    /// (Include/Exclude flag set) loses nothing.
+    fn acts_on_none(&self, o: &Object) -> bool {
+        let Some(kept) = &self.kept else { return false };
+        let held;
+        let action = match o {
+            // One copied already is not such an action, and needn't be fetched again.
+            Object::Ref(r) if !self.map.contains_key(r) => {
+                held = self.src.resolve(o);
+                held.as_dict()
+            }
+            Object::Dict(d) => Some(d),
+            _ => None,
+        };
+        let Some(a) = action.filter(|a| matches!(a.name(b"S"), Some(b"ResetForm" | b"SubmitForm"))) else { return false };
+        if a.get(b"Flags").and_then(|f| self.src.resolve(f).as_int()).is_some_and(|f| f & 1 != 0) {
+            return false;
+        }
+        let Some(v) = a.get(b"Fields") else { return false };
+        let listed = self.src.resolve(v);
+        // As `copy_dict` reads the list: a lone entry stands for a list of one.
+        let entries = listed.as_array().map_or(std::slice::from_ref(v), Vec::as_slice);
+        !entries.is_empty() && entries.iter().all(|e| e.as_ref().is_some_and(|r| !kept.contains(&r)))
     }
 
     /// Map a source destination (explicit array or reference to one) to the destination
@@ -163,7 +235,7 @@ impl<'a> Copier<'a> {
     }
 
     /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
-    pub(super) fn fix_annotations(&mut self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    pub(crate) fn fix_annotations(&mut self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
         for &a in &std::mem::take(&mut self.annots) {
             let src_dict = dst.get(a).as_dict().cloned();
             let Some(d) = src_dict else { continue };
@@ -196,11 +268,13 @@ impl<'a> Copier<'a> {
                                 d.remove(b"A");
                             }
                         }
+                    } else if self.acts_on_none(&action) {
+                        d.remove(b"A");
                     } else {
                         // Other actions (URI, Launch, JavaScript…) carry no page references. The
                         // copier lends its map out and takes it back with the new copies in it,
                         // so actions sharing an object share its one copy.
-                        let mut c = Copier::new(self.src, std::mem::take(&mut self.map), HashMap::new());
+                        let mut c = Copier { kept: self.kept.clone(), ..Copier::new(self.src, std::mem::take(&mut self.map), HashMap::new()) };
                         let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None);
                         self.map = c.map;
                         d.set(b"A".to_vec(), copied?);

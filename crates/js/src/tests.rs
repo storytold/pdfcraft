@@ -1,5 +1,7 @@
 use super::*;
 
+/// The AcroForm fields these tests' scripts read and write: prices, a quantity, a total, a ZIP
+/// code, a check box and a drop-down with shown and saved items.
 fn fields() -> Vec<FieldState> {
     let mut agree = FieldState::new("agree", FieldType::CheckBox, vec![]);
     agree.options = vec![("Yes".into(), "Yes".into())];
@@ -15,10 +17,12 @@ fn fields() -> Vec<FieldState> {
     ]
 }
 
+/// The document these tests' scripts run in.
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], highlight: false, xfa: false }
 }
 
+/// Run AcroForm JavaScript `script` for `event` on these tests' document and fields.
 fn go(script: &str, event: &Event) -> Outcome {
     run(script, event, &doc(), &fields(), &[], Limits::default())
 }
@@ -31,17 +35,33 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
+/// the script assigned it, even to the value it already had.
+#[test]
+fn the_outcome_says_whether_the_script_assigned_event_value() {
+    let ev = Event::field("Calculate", "total", "7");
+    let o = go("event.value = event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", true));
+    let o = go("event.value = 2; event.value += 3; typeof event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set, o.result.as_deref()), ("5", true, Some("number")));
+    let o = go("var v = event.value; this.getField('price').value = 3;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", false));
+    let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
+    assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
 #[test]
 fn numbers_with_leading_zeros_stay_text() {
     let o = go("event.value = typeof getField('zip').value + ':' + typeof getField('qty').value;", &Event::field("Calculate", "total", ""));
     assert_eq!(o.value, "string:number");
 }
 
+/// A validate script refuses a value with `event.rc = false` and says why in a message.
 #[test]
 fn validate_scripts_reject_with_rc_and_alert() {
     let o = go("if (event.value > 10) { app.alert('Too many'); event.rc = false; }", &Event::field("Validate", "qty", "11"));
     assert!(!o.rc);
-    assert_eq!(o.alerts, ["Too many"]);
+    assert_eq!(o.alerts, [Message::plain("Too many")]);
     let o = go("if (event.value > 10) { event.rc = false; }", &Event::field("Validate", "qty", "3"));
     assert!(o.rc);
 }
@@ -70,6 +90,22 @@ fn scripts_change_other_fields_and_their_properties() {
     assert_eq!(total.text_color.as_deref(), Some(&["RGB".to_string(), "1".into(), "0".into(), "0".into()][..]));
     assert_eq!(o.changed.iter().find(|f| f.name == "agree").unwrap().value, ["Yes"]);
     assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().value, ["l"]);
+}
+
+#[test]
+fn widget_rect_reads_and_writes_a_four_number_array() {
+    let o = go(
+        "var t = getField('total'); t.rect = [10, 20, 110, 50]; event.value = getField('total').rect.join(',');",
+        &Event::field("Mouse Up", "agree", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "10,20,110,50");
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
+    let o = go("getField('total').rect = [110, 50, 10, 20];", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
+    let o = go("getField('total').rect = [0, 0, Infinity, 10];", &Event::field("Mouse Up", "agree", ""));
+    assert!(o.error.is_some());
+    assert!(o.changed.iter().all(|f| f.name != "total"));
 }
 
 #[test]
@@ -251,9 +287,11 @@ fn kept_bytes(o: &Outcome) -> usize {
         Request::Submit(u) | Request::LaunchUrl(u) | Request::Focus(u) => u.len(),
         _ => 0,
     };
-    o.console.iter().chain(&o.alerts).map(String::len).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
+    o.console.iter().map(String::len).sum::<usize>() + o.alerts.iter().map(Message::bytes).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
 }
 
+/// Console lines, messages and requests are capped in number and in bytes, and what is left out is
+/// noted.
 #[test]
 fn exec_menu_item_requests_are_capped_like_other_requests() {
     let o = go("for (var i = 0; i < 12000; i++) app.execMenuItem('Print');", &Event::field("Mouse Up", "agree", ""));
@@ -275,9 +313,97 @@ fn console_alerts_and_requests_are_capped_in_count_and_bytes() {
     assert!(o.console.len() <= crate::xfa::MAX_CONSOLE + 1, "{} console lines", o.console.len());
     assert!(o.alerts.len() <= crate::xfa::MAX_ALERTS, "{} alerts", o.alerts.len());
     assert!(o.requests.len() <= crate::xfa::MAX_EFFECTS, "{} requests", o.requests.len());
-    assert!(o.console.iter().chain(&o.alerts).all(|m| m.chars().count() <= 4_097));
+    assert!(o.console.iter().chain(o.alerts.iter().map(|m| &m.text)).all(|m| m.chars().count() <= 4_097));
     assert!(kept_bytes(&o) <= crate::xfa::MAX_PAYLOAD, "{} bytes kept", kept_bytes(&o));
     assert!(o.console.last().is_some_and(|l| l.contains("left out")), "{:?}", o.console.last());
+}
+
+/// The message `app.alert(args)` shows, from a button's Mouse Up script.
+fn alerted(args: &str) -> Message {
+    let o = go(&format!("app.alert({args});"), &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.error, None, "{args}");
+    assert_eq!(o.alerts.len(), 1, "{args}");
+    o.alerts.into_iter().next().unwrap_or_default()
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)` keeps every icon and button set the JavaScript for
+/// Acrobat API Reference numbers, and the title.
+#[test]
+fn app_alert_keeps_its_title_icon_and_buttons() {
+    let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+    let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+    for (i, icon) in icons.iter().enumerate() {
+        for (b, kind) in buttons.iter().enumerate() {
+            let m = alerted(&format!("'Sure?', {i}, {b}, 'Order form'"));
+            assert_eq!(m, Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind }, "{i} {b}");
+        }
+    }
+    // Only the message: no title, the Error icon and the OK button, the defaults.
+    assert_eq!(alerted("'Saved'"), Message::plain("Saved"));
+    assert_eq!(alerted("'Saved', 3"), Message { icon: MessageIcon::Status, ..Message::plain("Saved") });
+}
+
+/// The single-object form names the same parameters, in any order, and reads nothing else.
+#[test]
+fn app_alert_reads_the_object_form() {
+    let m = alerted("{ cTitle: 'Order form', nType: 2, cMsg: 'Clear the rows?', nIcon: 2, bBeep: true }");
+    assert_eq!(
+        m,
+        Message { text: "Clear the rows?".into(), title: Some("Order form".into()), icon: MessageIcon::Question, buttons: MessageButtons::YesNo }
+    );
+    assert_eq!(alerted("{ cMsg: 'Done' }"), Message::plain("Done"));
+}
+
+/// An object without `cMsg` isn't the object form: it is the message itself, as text, so a
+/// String object or a caught error shows what it says; the same for `app.launchURL` and `cURL`.
+#[test]
+fn objects_that_name_no_parameter_are_the_message_itself() {
+    assert_eq!(alerted("new String('Saved')"), Message::plain("Saved"));
+    let o = go("try { throw new Error('No such field'); } catch (e) { app.alert(e); }", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.alerts.first().map(|m| m.text.as_str()), Some("Error: No such field"), "{o:?}");
+    let o = go("app.launchURL(new String('https://example.com/form'));", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.requests, vec![Request::LaunchUrl("https://example.com/form".into())], "{o:?}");
+}
+
+/// An icon or button number that isn't one of the four (fractional, negative, too large, not a
+/// number, or a value that can't be converted) is the default, and the message still shows;
+/// a number given as text counts.
+#[test]
+fn app_alert_falls_back_on_bad_icon_and_button_numbers() {
+    for bad in ["4", "-1", "1.5", "NaN", "Infinity", "'x'", "{}", "Symbol('s')", "null", "undefined"] {
+        let m = alerted(&format!("'Hi', {bad}, {bad}, ''"));
+        assert_eq!(m, Message::plain("Hi"), "{bad}");
+    }
+    assert_eq!(alerted("'Hi', '2', '3'"), Message { icon: MessageIcon::Question, buttons: MessageButtons::YesNoCancel, ..Message::plain("Hi") });
+    // Every call still answers OK (1) until answers are asked for (#4291).
+    let o = go("event.value = String(app.alert('Delete?', 2, 2));", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.value, "1");
+}
+
+/// A title is cut to a message's length like the text, and both are charged to the run's byte
+/// budget: titles can't carry more text out than messages can.
+#[test]
+fn app_alert_titles_are_clipped_and_charged() {
+    use crate::host::Host;
+    let m = alerted("'Hi', 0, 0, new Array(100000).join('t')");
+    assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097), "{:?}", m.title.as_ref().map(String::len));
+    // The title's bytes count against the budget with the text's, and a message the budget
+    // has no room for is left out and counted.
+    let mut h = Host {
+        fields: Arc::new(Vec::new()),
+        changed: BTreeSet::new(),
+        alerts: Vec::new(),
+        console: Vec::new(),
+        requests: Vec::new(),
+        doc: doc(),
+        kept: 0,
+        dropped: 0,
+    };
+    h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
+    assert_eq!(h.kept, "Saved".len() + "Order form".len());
+    h.kept = crate::xfa::MAX_PAYLOAD - "Saved".len();
+    h.alert(Message { title: Some("T".into()), ..Message::plain("Saved") });
+    assert_eq!((h.alerts.len(), h.dropped), (1, 1), "a title past the budget leaves its message out");
 }
 
 #[test]
@@ -435,8 +561,8 @@ fn scripts_cannot_compile_code_from_strings() {
 }
 
 mod xfa_model {
-    use crate::Limits;
     use crate::xfa::*;
+    use crate::{Limits, Message, MessageButtons, MessageIcon};
 
     pub(super) fn field(name: &str, som: &str, value: &str, numeric: bool) -> XfaNode {
         XfaNode {
@@ -504,7 +630,7 @@ mod xfa_model {
     /// Run the JavaScript `script` for `activity` on the test form, from the node at `target`.
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_xfa(script, &ev, &doc, &form(), Limits::default())
     }
 
@@ -670,6 +796,8 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("4/1"));
     }
 
+    /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
+    /// their details.
     #[test]
     fn host_layout_event_and_app_calls_become_effects() {
         let o = go(
@@ -681,7 +809,12 @@ mod xfa_model {
         assert_eq!(
             o.effects,
             vec![
-                XfaEffect::MessageBox("Hi".into()),
+                XfaEffect::MessageBox(Message {
+                    text: "Hi".into(),
+                    title: Some("T".into()),
+                    icon: MessageIcon::Status,
+                    buttons: MessageButtons::OkCancel
+                }),
                 XfaEffect::ResetData(vec!["qty".into(), "price".into()]),
                 XfaEffect::Print,
                 XfaEffect::SaveAs,
@@ -692,6 +825,19 @@ mod xfa_model {
         );
         assert_eq!(o.console, vec!["p2/3/1/click".to_string()]);
         assert_eq!(o.result.as_deref(), Some("7"));
+    }
+
+    /// On screen every page is a sheet of its own: `xfa.layout.sheet` counts it from 0, as
+    /// `absPage` does (forms show `sheet(this) + 1`), and `sheetCount` is the page count.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        let o = go(
+            "[xfa.layout.sheet(this) + 1, xfa.layout.sheetCount(), xfa.layout.absPage(this)].join(',')",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2,3,1"));
     }
 
     #[test]
@@ -726,6 +872,7 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("1002"));
     }
 
+    /// A value set again replaces the earlier one, and hostile loops end at the caps.
     #[test]
     fn values_set_again_merge_and_hostile_loops_are_capped() {
         // A calculate that sets its own value in a loop leaves one effect: the last value.
@@ -747,7 +894,56 @@ mod xfa_model {
         assert!(o.notes.iter().any(|n| n.contains("changes")), "{:?}", o.notes);
         // Long messages are cut.
         let o = go("xfa.host.messageBox(new Array(100000).join('x'));", "form1[0].page1[0]", "click");
-        assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
+        assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.text.chars().count() <= 4_097));
+    }
+
+    /// The message box `script` showed from a button's click script.
+    fn boxed(script: &str) -> Message {
+        let o = go(script, "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{script}");
+        match o.effects.as_slice() {
+            [XfaEffect::MessageBox(m)] => m.clone(),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+
+    /// `xfa.host.messageBox(message, title, icon, buttons)` keeps every icon and button set the
+    /// XFA specification numbers, and the title.
+    #[test]
+    fn message_box_keeps_its_title_icon_and_buttons() {
+        let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+        let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+        for (i, icon) in icons.iter().enumerate() {
+            for (b, kind) in buttons.iter().enumerate() {
+                let m = boxed(&format!("xfa.host.messageBox('Sure?', 'Order form', {i}, {b})"));
+                assert_eq!(m, Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind }, "{i} {b}");
+            }
+        }
+        assert_eq!(boxed("xfa.host.messageBox('Saved')"), Message::plain("Saved"));
+        // A bad number is the default; the message still shows.
+        assert_eq!(boxed("xfa.host.messageBox('Hi', '', 7, -2)"), Message::plain("Hi"));
+        assert_eq!(boxed("xfa.host.messageBox('Hi', null, 2.5, 'x')"), Message::plain("Hi"));
+        let m = boxed("xfa.host.messageBox('Hi', new Array(100000).join('t'))");
+        assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097));
+        // Answers are always OK for now (#4291).
+        let o = go("this.rawValue = xfa.host.messageBox('Delete?', 'T', 2, 2)", "form1[0].page1[0].qty[0]", "click");
+        assert!(o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { value, .. } if value == "1")), "{:?}", o.effects);
+    }
+
+    /// `app.alert` in an XFA form's script reads its own order (`cMsg, nIcon, nType, cTitle`)
+    /// and its object form, not `messageBox`'s.
+    #[test]
+    fn app_alert_in_an_xfa_script_reads_app_alerts_arguments() {
+        let m = boxed("app.alert('Sure?', 1, 3, 'Order form')");
+        assert_eq!(
+            m,
+            Message { text: "Sure?".into(), title: Some("Order form".into()), icon: MessageIcon::Warning, buttons: MessageButtons::YesNoCancel }
+        );
+        let m = boxed("app.alert({ cMsg: 'Sure?', cTitle: 'Order form', nIcon: 2, nType: 1 })");
+        assert_eq!(
+            m,
+            Message { text: "Sure?".into(), title: Some("Order form".into()), icon: MessageIcon::Question, buttons: MessageButtons::OkCancel }
+        );
     }
 
     /// Past the byte budget, adding or removing a row is left out of the snapshot as well as the
@@ -818,6 +1014,7 @@ mod xfa_model {
         assert_eq!(names, 1);
     }
 
+    /// Time the engine takes to start is not taken from the script's own time.
     #[test]
     fn a_slow_engine_start_does_not_count_against_the_script() {
         let ms = std::time::Duration::from_millis;
@@ -852,14 +1049,32 @@ mod xfa_model {
 
 mod formcalc {
     use super::xfa_model::form;
-    use crate::Limits;
     use crate::formcalc::run_formcalc;
     use crate::xfa::*;
+    use crate::{Limits, Message, MessageButtons, MessageIcon};
 
+    /// Run FormCalc `script` as `target`'s `activity` script on [`form`].
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_formcalc(script, &ev, &doc, &form(), Limits::default())
+    }
+
+    /// `xfa.layout.sheet` and `sheetCount` give what the JavaScript ones give.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        assert_eq!(calc("xfa.layout.sheet($) + 1"), "2");
+        assert_eq!(calc("xfa.layout.sheetCount()"), "3");
+    }
+
+    /// A layout method's arguments are evaluated, once each, for what they do: a message box
+    /// in one still shows.
+    #[test]
+    fn layout_method_arguments_are_evaluated_once() {
+        let o = go("xfa.layout.sheet($host.messageBox(\"Hi\"), $host.messageBox(\"Yo\")) + 1", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count(), 2, "each argument once: {:?}", o.effects);
     }
 
     /// The value of a script run as a calculate on `total`.
@@ -875,6 +1090,20 @@ mod formcalc {
         assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
         assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
         assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
+    }
+
+    /// A calculated amount shows the number it is, not the binary noise past a double's 15
+    /// significant digits: 279893.88 is stored as 279893.880000000004656…, which twelve fixed
+    /// decimals printed as `279893.880000000005`. Small values keep their twelve decimals.
+    #[test]
+    fn calculated_numbers_print_at_most_fifteen_significant_digits() {
+        assert_eq!(calc("1 * 279893.88"), "279893.88");
+        assert_eq!(calc("1 * 291774.12"), "291774.12");
+        assert_eq!(calc("279893.88 + 291774.12 + 304171.06 + 317107.44 + 273970.85"), "1466917.35");
+        assert_eq!(calc("1000000 / 3"), "333333.333333333");
+        assert_eq!(calc("1000 / 3"), "333.333333333333");
+        assert_eq!(calc("1 / 3"), "0.333333333333");
+        assert_eq!(calc("0.1 + 0.2"), "0.3");
     }
 
     /// Assigning one long value to many fields at once stops at the run's byte budget and is
@@ -1122,6 +1351,16 @@ mod formcalc {
         assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
     }
 
+    /// A `YY` year in a date picture splits its century at 30, the XFA picture clause default:
+    /// `00` to `29` are 2000 to 2029 and `30` to `99` are 1930 to 1999.
+    #[test]
+    fn a_two_digit_year_splits_its_century_at_30() {
+        for (text, iso) in [("12/31/29", "2029-12-31"), ("01/01/30", "1930-01-01"), ("12/31/49", "1949-12-31"), ("01/01/50", "1950-01-01")] {
+            assert_eq!(calc(&format!(r#"Num2Date(Date2Num("{text}", "MM/DD/YY"), "YYYY-MM-DD")"#)), iso, "{text}");
+            assert_eq!(calc(&format!(r#"Parse("MM/DD/YY", "{text}")"#)), iso, "{text}");
+        }
+    }
+
     #[test]
     fn control_flow_variables_and_functions_work() {
         assert_eq!(calc("var x = 3\nif (x > 2) then 10 elseif (x > 1) then 20 else 30 endif"), "10");
@@ -1165,6 +1404,7 @@ s"#
         assert!(o.error.unwrap().contains("endif"));
     }
 
+    /// FormCalc resolves form objects, assigns to them and records the effects.
     #[test]
     fn form_objects_resolve_assign_and_record_effects() {
         assert_formcalc_reads_fields_and_rows();
@@ -1242,7 +1482,7 @@ table._row.count"#,
                 XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() },
                 XfaEffect::SetPresence { som: "form1[0].page1[0].details[0]".into(), presence: "visible".into() },
                 XfaEffect::SetAccess { som: "form1[0].page1[0].price[0]".into(), access: "readOnly".into() },
-                XfaEffect::MessageBox("Total 17.5".into()),
+                XfaEffect::MessageBox(Message::plain("Total 17.5")),
                 XfaEffect::SetFocus("form1[0].page1[0].qty[0]".into()),
                 XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() },
             ]
@@ -1311,6 +1551,7 @@ $host.gotoURL("https://example.org")"#,
         assert_eq!(run(&script).result.as_deref(), Some("2"));
     }
 
+    /// Hostile FormCalc scripts end with an error and bounded output.
     #[test]
     fn hostile_formcalc_scripts_end_with_an_error_and_bounded_output() {
         assert_hostile_control_flow_is_bounded();
@@ -1361,7 +1602,7 @@ $host.gotoURL("https://example.org")"#,
         );
         assert!(run_hostile_formcalc("Upper(Concat(Space(600000), Space(600000)))").error.unwrap().contains("too long"));
         let o = run_hostile_formcalc("$host.messageBox(Space(100000))");
-        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.chars().count() <= 4100), "{:?}", o.effects.len());
+        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.text.chars().count() <= 4100), "{:?}", o.effects.len());
         let o = run_hostile_formcalc("qty = Space(100000)");
         assert!(matches!(o.effects.as_slice(), [XfaEffect::SetValue { value, .. }] if value.chars().count() == 65_536), "{:?}", o.effects.len());
         assert!(o.notes.iter().any(|n| n.contains("cut")), "{:?}", o.notes);
@@ -1391,7 +1632,8 @@ $host.gotoURL("https://example.org")"#,
             "for i = 1 upto 100000 do Eval(\"1\") endfor",
             &ev,
             &doc,
-            form(),
+            std::sync::Arc::new(form()),
+            false,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
         );
@@ -1467,6 +1709,27 @@ $host.gotoURL("https://example.org")"#,
         assert!(o.abandoned || o.error.is_some(), "{o:?}");
     }
 
+    /// FormCalc's `$host.messageBox(message, title, icon, buttons)` keeps every icon and button
+    /// set and the title, as the JavaScript one does.
+    #[test]
+    fn formcalc_message_box_keeps_its_title_icon_and_buttons() {
+        let fc = |s: &str| go(s, "form1[0].page1[0].go[0]", "click");
+        let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+        let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+        for (i, icon) in icons.iter().enumerate() {
+            for (b, kind) in buttons.iter().enumerate() {
+                let o = fc(&format!("$host.messageBox(\"Sure?\", \"Order form\", {i}, {b})"));
+                let want = Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind };
+                assert_eq!(o.effects, vec![XfaEffect::MessageBox(want)], "{i} {b}");
+            }
+        }
+        // Missing or bad numbers are the defaults; a long title is cut like the message.
+        assert_eq!(fc("$host.messageBox(\"Hi\")").effects, vec![XfaEffect::MessageBox(Message::plain("Hi"))]);
+        assert_eq!(fc("$host.messageBox(\"Hi\", \"\", 9, 1.5)").effects, vec![XfaEffect::MessageBox(Message::plain("Hi"))]);
+        let o = fc("$host.messageBox(\"Hi\", Space(100000))");
+        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097)));
+    }
+
     fn run_hostile_formcalc(script: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
         let doc = XfaDoc::default();
@@ -1488,10 +1751,51 @@ mod session {
             source: source.into(),
             formcalc,
             event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
-            root: form(),
+            root: std::sync::Arc::new(form()),
             limits: Limits::default(),
             timeout: std::time::Duration::from_secs(3),
         }
+    }
+
+    /// The scripts of an event given the same form start from one flattened copy of it: the
+    /// second host shares the first one's text, and each host changes only its own copy.
+    #[test]
+    fn hosts_given_the_same_form_reuse_its_flattened_copy_and_change_only_their_own() {
+        let root = std::sync::Arc::new(form());
+        let doc = XfaDoc::default();
+        let mut first = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let second = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let shared = std::sync::Arc::clone(&first.nodes.get(1).expect("form1").som);
+        assert!(std::sync::Arc::ptr_eq(&shared, &second.nodes.get(1).expect("form1").som), "the second host starts from the first one's copy");
+        let qty = first.current;
+        let before = second.nodes.get(qty).map(|n| n.value.clone());
+        first.set_state(qty, XfaEffect::SetPresence { som: "form1[0].page1[0].qty[0]".into(), presence: "hidden".into() });
+        if let Some(n) = first.nodes.get_mut(qty) {
+            n.value = "99".into();
+        }
+        let third = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        for h in [&second, &third] {
+            assert_eq!(h.nodes.get(qty).map(|n| n.value.clone()), before);
+            assert_eq!(h.nodes.get(qty).map(|n| n.presence.to_string()).as_deref(), Some("visible"));
+        }
+        // Another form (a new `Arc`, even with the same content) is flattened again.
+        let other = crate::xfa::XHost::new(std::sync::Arc::new(form()), true, "form1[0].page1[0].qty[0]", &doc);
+        assert!(!std::sync::Arc::ptr_eq(&other.nodes.get(1).expect("form1").som, &shared));
+    }
+
+    /// One session given the same form for two scripts: what the first changed on its copy is
+    /// not in the second's.
+    #[test]
+    fn a_form_sent_again_does_not_carry_the_last_scripts_changes() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        let root = std::sync::Arc::new(form());
+        let mut a = script("qty.rawValue = 10; details.presence = 'visible'; qty.rawValue", false, "form1[0].page1[0].total[0]", "calculate");
+        a.root = std::sync::Arc::clone(&root);
+        assert_eq!(s.run(a).result.as_deref(), Some("10"));
+        let mut b = script("qty.rawValue + ':' + details.presence", false, "form1[0].page1[0].total[0]", "calculate");
+        b.root = std::sync::Arc::clone(&root);
+        let o = s.run(b);
+        assert_eq!(o.result.as_deref(), Some("4:hidden"), "{o:?}");
     }
 
     /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller
@@ -1511,7 +1815,7 @@ mod session {
         let o = s.run(script("qty * price", true, "form1[0].page1[0].total[0]", "calculate"));
         assert_eq!(o.result.as_deref(), Some("10"), "{o:?}");
         let mut with = script("qty * price", true, "form1[0].page1[0].total[0]", "calculate");
-        with.root.children[0].children[0].value = "10".into();
+        std::sync::Arc::make_mut(&mut with.root).children[0].children[0].value = "10".into();
         assert_eq!(s.run(with).result.as_deref(), Some("25"));
         // Nor do variables, globals, prototype changes or kept objects.
         s.run(script("leak = 5; String.prototype.trim = function () { return 'P' }; kept = qty; 1", false, "form1[0].page1[0].qty[0]", "calculate"));
@@ -1584,6 +1888,8 @@ mod session {
     }
 }
 
+/// Scripts run on a shared field snapshot without changing it: a script's writes and a failed
+/// script's partial writes stay in its own result, and its globals don't reach the next script.
 #[test]
 fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     let initial = Arc::new(fields());
@@ -1616,6 +1922,64 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+mod runtime_highlight {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaNode, run_xfa};
+
+    /// `app.runtimeHighlight` in AcroForm scripts reads the viewer's setting, and setting it asks
+    /// for the change once and reads back the new value.
+    #[test]
+    fn app_runtime_highlight_reads_the_viewers_setting_and_asks_to_change_it() {
+        let ev = Event::field("Calculate", "total", "");
+        let on = DocInfo { highlight: true, ..doc() };
+        let o = run("event.value = String(app.runtimeHighlight);", &ev, &on, &fields(), &[], Limits::default());
+        assert_eq!((o.value.as_str(), o.requests.len()), ("true", 0));
+        let o = go("var was = app.runtimeHighlight; app.runtimeHighlight = true; event.value = was + ',' + app.runtimeHighlight;", &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "false,true", "the script reads back what it set");
+        assert_eq!(o.requests, vec![Request::Highlight(true)]);
+        // A script that toggles it over and over asks once, for where it ended.
+        let o = go("for (var i = 0; i < 5001; i++) { app.runtimeHighlight = !app.runtimeHighlight; }", &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.requests, vec![Request::Highlight(true)], "one request, the last setting");
+        // Past the request cap the request is dropped, and the script goes on reading the
+        // setting the viewer has.
+        let full = format!(
+            "for (var i = 0; i < {}; i++) app.execMenuItem('Print'); app.runtimeHighlight = true; event.value = String(app.runtimeHighlight);",
+            crate::xfa::MAX_EFFECTS
+        );
+        let o = go(&full, &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "false", "the dropped request changed nothing");
+        assert!(!o.requests.iter().any(|r| matches!(r, Request::Highlight(_))));
+    }
+
+    /// The same in XFA scripts, where the change is an effect; nothing is asked for when the
+    /// setting is already what the script wants.
+    #[test]
+    fn xfa_app_runtime_highlight_reads_the_setting_and_records_a_change() {
+        let ev = XfaEvent { activity: "layoutReady".into(), target: "form1[0]".into(), ..Default::default() };
+        let root = XfaNode { name: "form1".into(), som: "form1[0]".into(), ..Default::default() };
+        let script = "var was = app.runtimeHighlight; if (!app.runtimeHighlight) { app.runtimeHighlight = true; } was + ',' + app.runtimeHighlight";
+        let o = run_xfa(script, &ev, &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("false,true"));
+        assert_eq!(o.effects, vec![XfaEffect::Highlight(true)]);
+        let o = run_xfa(script, &ev, &XfaDoc { highlight: true, ..Default::default() }, &root, Limits::default());
+        assert_eq!((o.result.as_deref(), o.effects.len()), (Some("true,true"), 0), "already on: nothing to ask for");
+        // Past the effect cap the request is dropped, and the script still reads the setting the
+        // viewer has.
+        let full = format!(
+            "for (var i = 0; i < {}; i++) {{ xfa.host.beep(); }} app.runtimeHighlight = true; String(app.runtimeHighlight)",
+            crate::xfa::MAX_EFFECTS
+        );
+        let o = run_xfa(&full, &ev, &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("false"));
+        assert!(!o.effects.contains(&XfaEffect::Highlight(true)));
+    }
 }
 
 mod scand {
@@ -1884,5 +2248,5 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     let o = go(XFA_CHECK, &Event::doc("Open"));
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
-    assert_eq!(o.alerts, ["old viewer"]);
+    assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }

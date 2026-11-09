@@ -1,4 +1,27 @@
+use super::geometry::reshaped;
 use super::*;
+
+/// [`reshaped`] without Shift, as `changing_points` takes it.
+fn straight(points: &[[f64; 2]], i: usize, to: [f64; 2]) -> Vec<[f64; 2]> {
+    reshaped(points, i, to, false)
+}
+
+#[test]
+fn freehand_highlight_and_draw_accept_widths_up_to_100() {
+    assert_eq!(CommentTool::FreehandHighlight.group(), CommentTool::Highlight.group());
+    assert_eq!(GROUPS.len(), 3);
+    let mut prefs = CommentPrefs::default();
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).width, 14.0);
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).opacity, 0.35);
+    for tool in [CommentTool::Ink, CommentTool::FreehandHighlight] {
+        prefs.set_width(tool, 75.0);
+        assert_eq!(prefs.style(tool).width, 75.0);
+        prefs.set_width(tool, 200.0);
+        assert_eq!(prefs.style(tool).width, 100.0);
+        prefs.set_width(tool, f64::NAN);
+        assert_eq!(prefs.style(tool).width, 100.0);
+    }
+}
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
@@ -8,14 +31,35 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
+    // Released with the rest of the selection: its own move in the batch.
+    let together = Edit::Batch {
+        label: "Move comments".into(),
+        edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
+    };
+    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, straight), None, "not in the batch");
+}
+
+/// Review on #4094: a callout's text box being resized, and the resize just released, draw its
+/// leader line too (to the box where it is going): its points are changing, though they stay.
+#[test]
+fn a_callout_being_resized_draws_its_leader_line() {
+    let lead = [[10.0, 10.0], [40.0, 30.0]];
+    let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
+    let resizing = Gesture::Resize { page: 0, index: 3, handle: (1, 1), from: pos2(80.0, 60.0), aspect_ratio: None };
+    let at = Some(pos2(95.0, 70.0));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, to_user, at, straight), Some(lead.to_vec()));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, to_user, at, straight), None, "another comment's resize");
+    let released = Edit::ResizeAnnotation { page: 0, index: 3, rect: [50.0, 20.0, 110.0, 70.0] };
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, to_user, None, straight), Some(lead.to_vec()));
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -42,6 +86,8 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -63,6 +109,68 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
+}
+
+/// A listed comment or reply at `index` on `page`, replying to `parent`.
+fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)>) -> Annotation {
+    Annotation {
+        page,
+        subtype: "Text".into(),
+        author: None,
+        contents: Some(contents.into()),
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: false,
+        rect: [0.0, 0.0, 20.0, 20.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    }
+}
+
+/// What stays selected or open in the editor after a delete is found where it moved to: the
+/// reply's own replies go with it (pop-ups, unlisted, are gone too), and a page that lost
+/// something else, or whose annotation in that place reads differently, keeps nothing.
+#[test]
+fn a_kept_comment_is_found_where_a_delete_moved_it() {
+    // Page 0's `/Annots`: reply A, its pop-up (unlisted), the comment, reply B, a reply to A.
+    let before = vec![
+        listed(0, 0, "A", Some((0, 2))),
+        listed(0, 2, "comment", None),
+        listed(0, 3, "B", Some((0, 2))),
+        listed(0, 4, "to A", Some((0, 0))),
+        listed(1, 0, "other page", None),
+    ];
+    // Deleting A takes its pop-up and the reply to it: the comment and B move up two places.
+    let after = vec![listed(0, 0, "comment", None), listed(0, 1, "B", Some((0, 0))), listed(1, 0, "other page", None)];
+    let gone = (0, 0);
+    assert_eq!(after_delete(&before, &after, gone, (0, 2)), Some((0, 0)), "the comment");
+    assert_eq!(after_delete(&before, &after, gone, (0, 3)), Some((0, 1)), "the other reply");
+    assert_eq!(after_delete(&before, &after, gone, (0, 4)), None, "the reply to A went with it");
+    assert_eq!(after_delete(&before, &after, gone, gone), None, "the deleted one");
+    assert_eq!(after_delete(&before, &after, gone, (1, 0)), Some((1, 0)), "another page keeps its places");
+    // The page lost more than A and its replies: nothing is guessed.
+    assert_eq!(after_delete(&before, &after[..1], gone, (0, 2)), None);
+    // Another annotation in the comment's place.
+    let changed = vec![listed(0, 0, "something else", None), listed(0, 1, "B", Some((0, 0)))];
+    assert_eq!(after_delete(&before, &changed, gone, (0, 2)), None);
+
+    let mut view = CommentView { selected: Some((0, 2)), editing: Some((0, 3, "typed".into())), ..Default::default() };
+    view.annotation_deleted(&before, &after, gone);
+    assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
+    let mut view = CommentView { editing: Some((0, 4, "typed".into())), editor_focus: Some(EditorFocus::Take), ..Default::default() };
+    view.annotation_deleted(&before, &after, gone);
+    assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
 }
 
 use pdfcraft_render::TextGlyph;
@@ -92,7 +200,47 @@ fn line(chars: &str, x: f32, y: f32, w: f32, em: f32, direction: [f32; 2]) -> Pa
         })
         .collect::<Vec<_>>();
     let n = glyphs.len();
-    PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] }
+    PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n], truncated: false }
+}
+
+fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotation {
+    Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: contents.map(str::to_string),
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [0.0; 4],
+        color: None,
+        index: 0,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    }
+}
+
+#[test]
+fn the_hover_tip_skips_fill_and_sign_marks_replies_and_bare_highlights_when_asked() {
+    let prefs = CommentPrefs::default();
+    assert_eq!(hover_tip(&annotation("FreeText", Some("Hello"), false), &prefs).as_deref(), Some("FreeText\nHello"));
+    assert_eq!(hover_tip(&annotation("FreeText", Some("Hello"), true), &prefs), None);
+    let reply = Annotation { in_reply_to: Some("1 0 R".into()), parent: Some((0, 1)), ..annotation("Text", Some("Agreed"), false) };
+    assert_eq!(hover_tip(&reply, &prefs), None);
+    let bare = Annotation { author: Some("Ana".into()), ..annotation("Highlight", None, false) };
+    assert_eq!(hover_tip(&bare, &prefs).as_deref(), Some("Ana"));
+    let hide = CommentPrefs { hide_empty_highlight_hover: true, ..CommentPrefs::default() };
+    assert_eq!(hover_tip(&bare, &hide), None);
+    assert_eq!(hover_tip(&annotation("Highlight", Some("Check this"), false), &hide).as_deref(), Some("Highlight\nCheck this"));
 }
 
 fn near(a: Option<([f32; 2], f32)>, b: ([f32; 2], f32)) -> bool {
@@ -282,6 +430,8 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             intent: None,
             fill_sign: false,
             points: Vec::new(),
+            text_box: None,
+            popup: None,
             no_rotate: false,
         }],
         ..Default::default()
@@ -292,7 +442,8 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
             ui.button("Page").context_menu(|ui| {
-                if let Some(a) = context_menu(ui, view, &info, &prefs, true, true) {
+                let rights = MenuRights { allowed: true, can_paste: false, can_modify: true };
+                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, rights) {
                     actions.push(a);
                 }
             });
@@ -376,6 +527,24 @@ fn drawn_shapes_ignore_slips() {
 }
 
 #[test]
+fn shift_click_selects_the_range_from_the_comment_with_the_handles() {
+    let order = [(0, 3), (0, 1), (0, 0), (1, 2), (1, 0)];
+    let mut cv = CommentView::default();
+    cv.select_only((0, 1));
+    cv.select_range(&order, (1, 2));
+    assert_eq!(cv.selection(), vec![(0, 1), (0, 0), (1, 2)], "from the anchor down, the anchor keeps the handles");
+    // Another ⇧-click from the same anchor changes the range, upwards too.
+    cv.select_range(&order, (0, 3));
+    assert_eq!(cv.selection(), vec![(0, 1), (0, 3)]);
+    // Nothing to start from, or a card not in the list: added as by ⌘/Ctrl-click.
+    let mut none = CommentView::default();
+    none.select_range(&order, (0, 0));
+    assert_eq!(none.selection(), vec![(0, 0)]);
+    cv.select_range(&order, (9, 9));
+    assert_eq!(cv.selected, Some((9, 9)));
+}
+
+#[test]
 fn text_boxes_fit_their_text() {
     let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
     assert_eq!((r[0], r[3]), (100.0, 500.0));
@@ -383,4 +552,74 @@ fn text_boxes_fit_their_text() {
     let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
+}
+
+/// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
+/// 32000-2 §12.5.6.2), and Make Current Properties Default on it updates the Replace Text tool. A
+/// caret of its own (Insert Text) still updates the Insert Text tool.
+#[test]
+fn a_replace_text_group_makes_replace_text_defaults() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect: [10.0, 10.0, 20.0, 20.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let all =
+        vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];
+    assert_eq!(tool_for_default(&all, &all[0], None), Some(CommentTool::ReplaceText));
+    assert_eq!(tool_for_default(&all, &all[2], None), Some(CommentTool::Caret));
+}
+
+/// The hover outline goes round the comment a press under the pointer would take (the top hit
+/// there): not a highlight under a form field, which takes the press.
+#[test]
+fn the_hover_outline_goes_round_what_a_press_would_take() {
+    use super::paint::hover_outline;
+    use crate::page_cursor::Layer;
+    use crate::page_router::{CommentPart, Hit, Owner};
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let highlight = Annotation { rect: [50.0, 50.0, 150.0, 150.0], ..annotation("Highlight", None, false) };
+    let info = DocInfo { pages: vec![page], annotations: vec![highlight], ..Default::default() };
+    let prefs = CommentPrefs::default();
+    // The pointer is over the highlight.
+    let ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &ptr,
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+    };
+    let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
+    let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
+    let field = on(Owner::Field { field: 0, widget: 0 }, Layer::Field);
+    let cv = CommentView::default();
+    assert!(hover_outline(&cx, &cv, Some(&comment)).is_some(), "the highlight a press there selects");
+    assert!(hover_outline(&cx, &cv, Some(&field)).is_none(), "not under a field that takes the press");
+    assert!(hover_outline(&cx, &cv, None).is_none(), "nor where nothing would take it");
+    let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
+    assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }

@@ -209,6 +209,16 @@ fn filtered_unknown_and_damaged_inline_images_end_where_the_renderer_ends_them()
     }
 }
 
+/// The renderer reads an image whose parameters this parser can't (a stray operand before `ID`):
+/// the page draws an image `ops` doesn't hold, so it is counted as ambiguous rather than dropped
+/// silently.
+#[test]
+fn an_inline_image_read_by_the_renderer_but_not_here_is_ambiguous() {
+    let parsed = parse(b"q BI /W 1 /H 1 /BPC 8 /CS /G 7 ID \x80 EI Q");
+    assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"Q"]);
+    assert_eq!(parsed.ambiguous_images, 1);
+}
+
 /// A zlib stream (one stored block) for 64 DeviceGray samples whose bytes hold " EI\n" at offset 41,
 /// the way a stored deflate block copies incompressible samples verbatim (#3579).
 const FLATE_WITH_EI: &str = "789c014000bfffed746159d50788f7ea604984cd08e00b4c8983207f56fe82c77ef8dfb8b9a3a586382045490a3120\
@@ -551,4 +561,18 @@ fn inline_images_end_where_the_renderer_ends_them() {
         assert_eq!(ours, renderer_operators(data), "{}", String::from_utf8_lossy(data));
         assert_eq!((parsed.skipped, parsed.ambiguous_images), (0, 0), "{}", String::from_utf8_lossy(data));
     }
+}
+
+#[test]
+fn invert_accepts_small_scale_and_rejects_singular() {
+    let m = Matrix([1e-7, 0., 0., 1e-7, 0., 0.]);
+    let inv = m.invert().expect("a uniform 1e-7 scale is invertible");
+    let id = m.then(&inv).0;
+    for (got, want) in id.iter().zip(Matrix::IDENTITY.0) {
+        assert!((got - want).abs() < 1e-9, "{id:?}");
+    }
+    assert!(Matrix([1., 2., 2., 4., 0., 0.]).invert().is_none());
+    assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
+    // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
+    assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }
