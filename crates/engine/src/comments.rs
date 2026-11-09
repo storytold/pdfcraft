@@ -24,9 +24,12 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
             points: s.points,
+            text_box: s.text_box,
+            popup: s.popup.map(|p| pdfcraft_render::Popup { rect: p.rect, open: p.open }),
         })
         .collect();
     pdfcraft_render::link_replies(&mut list);
+    pdfcraft_render::fill_group_text(&mut list);
     list
 }
 
@@ -79,9 +82,11 @@ pub fn comment_type_name(subtype: &str) -> &str {
     }
 }
 
-/// [`comment_type_name`], telling callouts, clouds and typewriter text apart by `/IT`.
+/// [`comment_type_name`], telling replaced text, callouts, clouds and typewriter text apart by `/IT`.
 pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     match a.intent.as_deref() {
+        Some("StrikeOutTextEdit" | "Replace") => "Replace Text",
+        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand Highlight",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -105,19 +110,26 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     }
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
-    fn write_replies(out: &mut String, children: &Children<'_>, parent: &pdfcraft_render::Annotation, depth: usize) {
+    // A group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) is part of the comment, not a
+    // reply: it is not written, and replies to it are written at its level, as the comment's.
+    // `depth` bounds the walk; `level` is the indent.
+    fn write_replies(out: &mut String, children: &Children<'_>, parent: &pdfcraft_render::Annotation, depth: usize, level: usize) {
         use std::fmt::Write;
         if depth > 64 {
             return;
         }
         for r in children.get(&(parent.page, parent.index)).into_iter().flatten() {
-            let indent = "    ".repeat(depth + 1);
+            if r.is_group_member() {
+                write_replies(out, children, r, depth + 1, level);
+                continue;
+            }
+            let indent = "    ".repeat(level + 1);
             let _ =
                 writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
             for line in r.contents.as_deref().unwrap_or("").lines() {
                 let _ = writeln!(out, "{indent}{line}");
             }
-            write_replies(out, children, r, depth + 1);
+            write_replies(out, children, r, depth + 1, level + 1);
         }
     }
     let mut numbered: Vec<(usize, &pdfcraft_render::Annotation)> = Vec::new();
@@ -156,7 +168,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
         if let Some(c) = a.contents.as_deref().filter(|c| !c.is_empty()) {
             let _ = writeln!(out, "{c}");
         }
-        write_replies(&mut out, &children, a, 0);
+        write_replies(&mut out, &children, a, 0, 0);
         out.push('\n');
     }
     out

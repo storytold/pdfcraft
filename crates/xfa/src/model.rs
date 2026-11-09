@@ -399,6 +399,37 @@ impl Para {
     }
 }
 
+/// Where an object is drawn: on screen, when the form is printed, or both (see
+/// [`Common::views`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Views {
+    pub screen: bool,
+    pub print: bool,
+}
+
+impl Views {
+    /// On screen and in print: what an object with nothing to say is.
+    pub const ALL: Views = Views { screen: true, print: true };
+
+    /// Where an object inside a container drawn in `self` is drawn, when it alone would be drawn
+    /// in `other`: only where both are.
+    pub fn and(self, other: Views) -> Views {
+        Views { screen: self.screen && other.screen, print: self.print && other.print }
+    }
+
+    /// Drawn somewhere.
+    pub fn any(self) -> bool {
+        self.screen || self.print
+    }
+}
+
+impl Default for Views {
+    /// On screen and in print.
+    fn default() -> Self {
+        Views::ALL
+    }
+}
+
 /// What every container and leaf shares: name, box, presence, margins, border, text defaults.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Common {
@@ -407,6 +438,9 @@ pub struct Common {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub anchor: Anchor,
+    /// Quarter turns counter-clockwise about the anchor (`rotate`), 0 to 3. Only a draw placed by
+    /// position is turned.
+    pub rotate: u8,
     pub w: Option<f64>,
     pub h: Option<f64>,
     pub min_w: Option<f64>,
@@ -414,6 +448,12 @@ pub struct Common {
     pub min_h: Option<f64>,
     pub max_h: Option<f64>,
     pub presence: Presence,
+    /// What `relevant` says about printing: `Some(true)` for `+print` (printed even when its
+    /// presence hides it on screen), `Some(false)` for `-print` (never printed), `None` when it
+    /// says nothing (printed as it is shown).
+    pub relevant: Option<bool>,
+    /// The first `relevant` token about a view other than print, which is left aside.
+    pub relevant_other: Option<String>,
     pub margin: Margin,
     pub border: Option<Border>,
     pub font: FontSpec,
@@ -457,6 +497,14 @@ pub enum Node {
 }
 
 impl Common {
+    /// Where the object itself is drawn, before what its containers say: on screen when it is
+    /// visible, and in print when `relevant` says so (`+print` even when hidden or invisible,
+    /// `-print` never), else when it is visible.
+    pub fn views(&self) -> Views {
+        let screen = self.presence == Presence::Visible;
+        Views { screen, print: self.relevant.unwrap_or(screen) }
+    }
+
     /// The top-left corner of a positioned box of `w` by `h`, from `x`, `y` and the anchor.
     pub fn top_left(&self, w: f64, h: f64) -> (f64, f64) {
         (self.x.unwrap_or(0.0) - w * self.anchor.h, self.y.unwrap_or(0.0) - h * self.anchor.v)
@@ -464,6 +512,26 @@ impl Common {
 }
 
 impl Node {
+    /// The box a positioned object of `w` by `h` stands in, in its parent: from `x`, `y` and the
+    /// anchor, and for a draw, the only object that turns, turned about the anchor.
+    pub fn standing_box(&self, w: f64, h: f64) -> Rect {
+        let c = self.common();
+        let (x, y) = c.top_left(w, h);
+        let upright = Rect::new(x, y, w, h);
+        if !matches!(self, Node::Draw(_)) {
+            return upright;
+        }
+        let (ax, ay) = (c.x.unwrap_or(0.0), c.y.unwrap_or(0.0));
+        let (left, top, right, bottom) = (x - ax, y - ay, x + w - ax, y + h - ay);
+        // Counter-clockwise on a page whose y grows down, from the anchor.
+        match c.rotate {
+            1 => Rect::new(ax + top, ay - right, h, w),
+            2 => Rect::new(ax - right, ay - bottom, w, h),
+            3 => Rect::new(ax - bottom, ay + left, h, w),
+            _ => upright,
+        }
+    }
+
     pub fn common(&self) -> &Common {
         match self {
             Node::Subform(s) => &s.common,
@@ -526,6 +594,9 @@ pub struct Subform {
     /// `<breakBefore targetType="pageArea">`: start on a new page.
     pub break_before_page: bool,
     pub break_after_page: bool,
+    /// Parsed from a `subformSet`: transparent to layout (XFA 3.3 p. 357), so in a flowing
+    /// container its members are laid out among their parent's other children.
+    pub set: bool,
     /// Tables: the width of each column.
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.
@@ -641,12 +712,26 @@ pub struct Field {
     /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
     /// shows when not being edited, and what scripts read as `formattedValue`.
     pub display_picture: Option<String>,
+    /// Its bind shares one data node among every field that names it: `match="global"`, or an
+    /// explicit data reference (`ref`). On a page area, such a field shows the same value on each
+    /// page made from it (XFA 3.3, "Page Background").
+    pub data_shared: bool,
+    /// `<keep intact="contentArea">` or `"pageArea"`: a page break doesn't split the field (XFA 3.3
+    /// p. 292). A field's default is `none`.
+    pub keep_intact: bool,
 }
 
 impl Field {
     /// Whether the text can determine this field's height.
     pub(crate) fn grows_with_text(&self) -> bool {
         self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+    }
+
+    /// Whether a page break may split the field (XFA 3.3 pp. 291–292): text splits between its
+    /// lines, and a field's `keep intact` is `none` unless it says otherwise. Only a multi-line
+    /// text field that grows with its text is split.
+    pub(crate) fn splits_at_page_break(&self) -> bool {
+        self.grows_with_text() && !self.keep_intact
     }
 
     /// A choice list's value as saved to the data: an item's shown text becomes its saved
@@ -700,6 +785,9 @@ pub enum Value {
     Image {
         content_type: String,
         data: Vec<u8>,
+        /// Where the template links the picture from (`href`), when it does: its data is then
+        /// found in the PDF ([`crate::linked_images`]).
+        href: Option<String>,
     },
     /// A diagonal line through the box: `\` (top-left to bottom-right) or `/`.
     Line {
@@ -839,6 +927,12 @@ pub struct Template {
     /// Fields that compute the page number or the page count on layout, by `id`, so text that
     /// embeds them can show the numbers.
     pub page_roles: Vec<(String, PageRole)>,
+    /// The `id`s of the fields some rich text embeds (`xfa:embed="#id"`, XFA 3.3 p. 1222): a new
+    /// value in one changes text shown elsewhere, so the form is laid out again.
+    pub embedded: std::collections::BTreeSet<String>,
+    /// The data paths of those fields, by name alone (any instance of a repeating subform), as
+    /// a script writes them: a write there changes text shown elsewhere.
+    pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
 }

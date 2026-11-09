@@ -88,6 +88,9 @@ pub struct FieldProps {
     pub max_len: Option<Option<usize>>,
     /// Choice options (display texts; export values equal them).
     pub options: Option<Vec<String>>,
+    /// Change one button widget's export value without changing its appearance state.
+    /// Widgets sharing that state are kept in sync. The index is zero-based.
+    pub export_value: Option<(usize, String)>,
     /// Font size (0 = auto).
     pub font_size: Option<f64>,
     /// Position: move or resize one widget (its index in [`Field::widgets`]) to a new rect in
@@ -120,10 +123,13 @@ pub struct FieldProps {
     pub rotation: Option<(usize, i64)>,
 }
 
+/// A [`FormError::Invalid`] with message `m`.
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }
 
+/// Put `value` into field `f` as its kind takes one (a text value through the field's Keystroke
+/// and Validate events and its scripts first), and redraw the field.
 fn rgb(c: [f64; 3]) -> Object {
     Object::Array(c.iter().map(|v| Object::Real(*v)).collect())
 }

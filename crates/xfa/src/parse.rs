@@ -21,6 +21,10 @@ const MAX_IMAGE: usize = 32 << 20;
 const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
+/// Most content areas kept on one page area. A master page has a handful (the most in the
+/// 500-form corpus is nine); laying a splittable subform out across tens of thousands of them,
+/// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
+const MAX_CONTENT_AREAS: usize = 128;
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -263,7 +267,38 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `relevant`: a space-separated list of views, each `+name` (or `name`) or `-name`. What it says
+/// about printing (`Some(true)` for `+print`, `Some(false)` for `-print`; the last one counts), and
+/// the first token about any other view, which is left aside.
+fn parse_relevant(s: Option<&str>) -> (Option<bool>, Option<String>) {
+    let (mut print, mut other) = (None, None);
+    for token in s.unwrap_or_default().split_whitespace().take(64) {
+        match token {
+            "+print" | "print" => print = Some(true),
+            "-print" => print = Some(false),
+            _ => {
+                if other.is_none() {
+                    other = Some(token.chars().take(64).collect());
+                }
+            }
+        }
+    }
+    (print, other)
+}
+
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
+/// What element `n` shares with every container and leaf ([`Common`]).
 fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
+    let (relevant, relevant_other) = parse_relevant(n.attribute("relevant"));
     Common {
         props: std::sync::Arc::new(parse_props(n, warnings)),
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -271,6 +306,7 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -278,6 +314,8 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         min_h: attr_measure(n, "minH"),
         max_h: attr_measure(n, "maxH"),
         presence: Presence::parse(n.attribute("presence")),
+        relevant,
+        relevant_other,
         margin: parse_margin(child(n, "margin")),
         border: parse_border(child(n, "border")),
         font: parse_font(child(n, "font")),
@@ -708,7 +746,8 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                     warnings.push("an image is larger than 32 MB; it is left out".into());
                     return Value::Empty;
                 }
-                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data };
+                let href = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()).map(str::to_string);
+                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data, href };
             }
             "line" => {
                 return Value::Line { slope_up: c.attribute("slope") == Some("/"), edge: child(c, "edge").map(parse_edge).unwrap_or_default() };
@@ -850,6 +889,8 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         },
         picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         data_picture: child(n, "bind").and_then(|b| child(b, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        data_shared: child(n, "bind")
+            .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
@@ -857,6 +898,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         required: must_be_filled(validate_el),
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
 }
 
@@ -877,6 +919,9 @@ fn parse_events(n: XmlNode) -> Vec<Script> {
     for ev in children(n, "event").take(64) {
         if let Some(s) = child(ev, "script") {
             let activity = ev.attribute("activity").unwrap_or("click");
+            // `ready` is two events, told apart by `ref`: layout:ready (`$layout`, once the form
+            // is laid out) and form:ready (`$form`).
+            let activity = if activity == "ready" && ev.attribute("ref").is_some_and(|r| r.trim() == "$layout") { "layoutReady" } else { activity };
             scripts.push(parse_script(s, activity));
         }
     }
@@ -912,11 +957,23 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
                     attr_measure(c, "h").unwrap_or(height).clamp(1.0, height),
                 )
             })
+            .take(MAX_CONTENT_AREAS + 1)
             .collect();
+        if content.len() > MAX_CONTENT_AREAS {
+            content.truncate(MAX_CONTENT_AREAS);
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them. It is
+            // kept first, so whether it was said is one comparison, not a scan of every warning
+            // for every page area (nothing else is put first).
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if warnings.first() != Some(&said) {
+                warnings.insert(0, said);
+            }
+        }
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
-        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1)).collect();
+        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1, Layout::Positioned)).collect();
         // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
@@ -933,16 +990,18 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
 }
 
 /// A `subform` element: its own attributes, its page set if it has one, and the nodes it holds,
-/// `depth` levels down (for the nesting limit).
-fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
+/// `depth` levels down (for the nesting limit). `set_layout` is the layout a `subformSet` takes
+/// on from its container, in place of its own.
+fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layout: Option<Layout>) -> Subform {
     let common = parse_common(n, warnings);
+    let layout = set_layout.unwrap_or_else(|| Layout::parse(n.attribute("layout")));
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1)),
             _ => {
-                if let Some(node) = parse_node(c, warnings, depth + 1) {
+                if let Some(node) = parse_node(c, warnings, depth + 1, layout) {
                     children_out.push(node);
                 }
             }
@@ -950,10 +1009,12 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
-    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_none_or(|t| t == "pageArea" || t == "contentArea"));
+    // A break to a page or content area. With no targetType, the default is `auto`: "layout
+    // continues using the current layout container" (XFA 3.3 p. 638), so no break.
+    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
     Subform {
         common,
-        layout: Layout::parse(n.attribute("layout")),
+        layout,
         children: children_out,
         scripts: parse_events(n),
         page_set,
@@ -961,6 +1022,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         break_before_page: break_to_page("breakBefore")
             || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
         break_after_page: break_to_page("breakAfter"),
+        set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
     }
@@ -968,22 +1030,26 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
 
 /// The template object element `c` stands for (a subform, area, field, draw or exclusion group,
 /// with what it holds), or `None` for anything else and past [`MAX_DEPTH`] levels. What can't be
-/// read faithfully is noted in `warnings`.
-fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<Node> {
+/// read faithfully is noted in `warnings`. `parent`: the layout of the container `c` is in, which
+/// a `subformSet` takes on.
+fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layout) -> Option<Node> {
     if depth > MAX_DEPTH {
         return None;
     }
     Some(match c.tag_name().name() {
-        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth))),
+        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth, None))),
+        // A set of related subforms is transparent to layout (XFA 3.3 p. 357): its members are laid out
+        // as its container lays out its own children, at their own positions in a positioned one. In a
+        // table or a row they go one under another.
         "subformSet" => {
-            // A set of alternative subforms: lay out its members in order.
-            let mut sf = parse_subform(c, warnings, depth);
-            sf.layout = Layout::Tb;
-            Node::Subform(Box::new(sf))
+            let layout = if matches!(parent, Layout::Table | Layout::Row) { Layout::Tb } else { parent };
+            let mut set = parse_subform(c, warnings, depth, Some(layout));
+            set.set = true;
+            Node::Subform(Box::new(set))
         }
         "area" => Node::Area(Box::new(Area {
             common: parse_common(c, warnings),
-            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
+            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1, Layout::Positioned)).collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
         "draw" => Node::Draw(Box::new(Draw { common: parse_common(c, warnings), value: parse_value(child(c, "value"), warnings) })),
@@ -999,16 +1065,200 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any.
-fn page_role(f: &Field) -> Option<PageRole> {
-    let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
+/// Whether a `layout:ready` script numbers its own field: assigns it (`this.rawValue = …`, and in
+/// FormCalc `$ = …` or `$.rawValue = …`) an expression that calls `xfa.layout.page(…)`,
+/// `absPage(…)` or `pageCount()`. Such a field is one the layout numbers itself, page by page.
+/// Its code is read (JavaScript, or FormCalc when `formcalc`), not its comments and strings, and
+/// the calls are matched as whole names, with or without spaces before the parenthesis.
+pub fn numbers_pages(script: &str, formcalc: bool) -> bool {
+    own_page_role(script, formcalc).is_some()
+}
+
+/// The page-number role a `layout:ready` script gives its own field ([`numbers_pages`]): the page
+/// count when what it assigns calls `pageCount()`, else the page number.
+fn own_page_role(script: &str, formcalc: bool) -> Option<PageRole> {
+    let code = code_of(script, formcalc);
+    // FormCalc names methods case-insensitively; JavaScript does not.
+    let own: Vec<String> =
+        own_assignments(&code, formcalc).into_iter().map(|rhs| if formcalc { rhs.to_ascii_lowercase() } else { rhs.to_string() }).collect();
+    let name = |n: &str| if formcalc { n.to_ascii_lowercase() } else { n.to_string() };
+    // On screen every page is a sheet of its own, so the sheet count is the page count, and the
+    // sheet number a form shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
+    let sheet_number = |rhs: &str| {
+        let compact: String = rhs.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+    };
+    if own.iter().any(|rhs| calls_layout(rhs, &name("pageCount")) || calls_layout(rhs, &name("sheetCount"))) {
         Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
+    } else if own.iter().any(|rhs| calls_layout(rhs, &name("page")) || calls_layout(rhs, &name("absPage")) || sheet_number(rhs)) {
         Some(PageRole::Number)
     } else {
         None
     }
+}
+
+/// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
+/// [`MAX_DEPTH`].
+fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>, depth: usize) {
+    fn of(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Rich(r) = value {
+            out.extend(r.paragraphs.iter().flat_map(|p| p.runs.iter()).filter_map(|r| r.embed.clone()));
+        }
+    }
+    fn field(f: &Field, out: &mut std::collections::BTreeSet<String>) {
+        of(&f.value, out);
+        if let Some(c) = &f.caption {
+            of(&c.value, out);
+        }
+    }
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Draw(d) => of(&d.value, out),
+            Node::Field(f) => field(f, out),
+            Node::ExclGroup(g) => g.fields.iter().for_each(|f| field(f, out)),
+            Node::Subform(s) => {
+                collect_embedded(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_embedded(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_embedded(&a.children, out, depth + 1),
+        }
+    }
+}
+
+/// Most places a name is looked at as an assignment to the script's own field ([`own_assignments`]).
+const MAX_ASSIGNMENTS: usize = 256;
+/// Most bytes of an assignment's expression read ([`expression`]); a page-number expression is short.
+const MAX_EXPRESSION: usize = 4096;
+
+/// What the statements of `code` assign to the script's own field: the expression after `=` of
+/// each `this.rawValue = …` (in FormCalc also `$.rawValue = …` and `$ = …`) that starts a
+/// statement. The expression runs to a `;` (JavaScript) or to the end of a line that completes it:
+/// brackets closed and not ending in an operator, so `this.rawValue =` with its value on the next
+/// line, or a sum broken over lines, is read whole.
+fn own_assignments(code: &str, formcalc: bool) -> Vec<&str> {
+    let targets: &[&str] = if formcalc { &["this.rawValue", "$.rawValue", "$"] } else { &["this.rawValue"] };
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == '.';
+    let mut out = Vec::new();
+    for t in targets {
+        // At most MAX_ASSIGNMENTS places looked at per name, each expression read at most
+        // MAX_EXPRESSION bytes: a hostile script can't make this scan quadratic.
+        for (i, _) in code.match_indices(t).take(MAX_ASSIGNMENTS) {
+            // A statement's start: nothing before it on its line but spaces, or a `;`, `{` or `}`.
+            let before = code.get(..i).unwrap_or_default().trim_end_matches([' ', '\t']);
+            if !(before.is_empty() || before.ends_with(['\n', '\r', ';', '{', '}'])) {
+                continue;
+            }
+            let Some(rest) = code.get(i + t.len()..) else { continue };
+            // `$` is the whole name (not `$record`, not `$.rawValue`, a target of its own).
+            if rest.chars().next().is_some_and(ident) {
+                continue;
+            }
+            let Some(rhs) = rest.trim_start().strip_prefix('=').filter(|r| !r.starts_with('=')) else { continue };
+            out.push(expression(rhs, formcalc));
+        }
+    }
+    out
+}
+
+/// The expression at the start of `rhs` (what follows an `=`): to a `;` outside brackets in
+/// JavaScript, or to a line break once something is written, the brackets are closed and the
+/// line doesn't end in an operator that continues it.
+fn expression(rhs: &str, formcalc: bool) -> &str {
+    // Read no further than MAX_EXPRESSION bytes (cut at a character boundary).
+    let cap = (0..=MAX_EXPRESSION.min(rhs.len())).rev().find(|&n| rhs.is_char_boundary(n)).unwrap_or(0);
+    let rhs = rhs.get(..cap).unwrap_or_default();
+    let mut depth = 0i32;
+    let mut last: Option<char> = None;
+    for (j, c) in rhs.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth = depth.saturating_add(1),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ';' if !formcalc && depth <= 0 => return rhs.get(..j).unwrap_or(rhs),
+            '\n' if depth <= 0 && last.is_some_and(|l| !"+-*/%=,(&|?:.<>!".contains(l)) => return rhs.get(..j).unwrap_or(rhs),
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = Some(c);
+        }
+    }
+    rhs
+}
+
+/// Whether `code` calls `layout.<method>(…)`: the method's whole name after `layout.` (spaces
+/// allowed around the dot), then `(` after any spaces.
+fn calls_layout(code: &str, method: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    code.match_indices(method).any(|(i, _)| {
+        let before = code.get(..i).unwrap_or_default().trim_end();
+        let after = code.get(i + method.len()..).unwrap_or_default();
+        !after.chars().next().is_some_and(ident)
+            && after.trim_start().starts_with('(')
+            && before
+                .strip_suffix('.')
+                .map(str::trim_end)
+                .and_then(|b| b.strip_suffix("layout"))
+                .is_some_and(|rest| !rest.chars().next_back().is_some_and(ident))
+    })
+}
+
+/// `script` with its comments blanked out and each string literal left as a bare `"`: `//` and
+/// `/* */` comments and `'…'`, `"…"` and `` `…` `` strings (with `\` escapes) in JavaScript; `;`
+/// and `//` comments and `"…"` strings (a doubled `""` inside) in FormCalc. Line breaks stay. An
+/// unclosed comment or string runs to the end.
+fn code_of(script: &str, formcalc: bool) -> String {
+    let mut out = String::with_capacity(script.len());
+    let mut chars = script.chars().peekable();
+    while let Some(c) = chars.next() {
+        let line_comment = (c == '/' && chars.peek() == Some(&'/')) || (formcalc && c == ';');
+        if line_comment {
+            for n in chars.by_ref() {
+                if n == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if !formcalc && c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut star = false;
+            for n in chars.by_ref() {
+                if star && n == '/' {
+                    break;
+                }
+                star = n == '*';
+            }
+            out.push(' ');
+        } else if c == '"' || (!formcalc && (c == '\'' || c == '`')) {
+            while let Some(n) = chars.next() {
+                if !formcalc && n == '\\' {
+                    chars.next();
+                } else if n == c {
+                    if formcalc && chars.peek() == Some(&c) {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // A mark where the string was: the expression it ends is still seen to end there.
+            out.push('"');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Which page-number role a field with a layout:ready script plays, if any.
+fn page_role(f: &Field) -> Option<PageRole> {
+    // Any of its layout:ready scripts, past a form:ready one.
+    f.scripts.iter().filter(|s| s.activity == "layoutReady").find_map(|s| own_page_role(&s.text, s.formcalc))
 }
 
 fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: usize) {
@@ -1052,8 +1302,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
-    let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(xml, opts()).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
     // xfa-template namespace, or at least has a subform in it.
@@ -1062,21 +1312,37 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             && n.tag_name().name() == "template"
             && (n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-template")) || children(*n, "subform").next().is_some())
     };
+    // The template is a packet of the XDP itself, a child of its root: one nested deeper is
+    // data (an imported dataset, say), which must not supply the form's scripts.
     let template = if is_template(&root) {
         root
     } else {
-        root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
-    let mut warnings = Vec::new();
+    // Prototype references (`use`, `usehref`) are resolved first: the parser reads the template
+    // written again with them merged in. The saved state below still comes from `doc`.
+    let (expanded, mut warnings) = crate::proto::expand(template);
+    let expanded_doc;
+    let template = match expanded.as_deref().map(|x| roxmltree::Document::parse_with_options(x, opts())) {
+        Some(Ok(d)) => {
+            expanded_doc = d;
+            expanded_doc.root_element()
+        }
+        Some(Err(e)) => {
+            warnings.push(format!("the template with its prototypes resolved could not be read again ({e}); it is read without them"));
+            template
+        }
+        None => template,
+    };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
-    let mut root_sf = parse_subform(sf, &mut warnings, 0);
+    let mut root_sf = parse_subform(sf, &mut warnings, 0, None);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
         root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root
-        .descendants()
+        .children()
         .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
     if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
         if let Some(p) = saved_root.attribute("presence") {
@@ -1085,8 +1351,18 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
     let mut page_roles = Vec::new();
-    collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles, cache: Default::default() }, warnings))
+    let root_node = [Node::Subform(Box::new(root_sf.clone()))];
+    collect_page_roles(&root_node, &mut page_roles, 0);
+    let mut embedded = std::collections::BTreeSet::new();
+    collect_embedded(&root_node, &mut embedded, 0);
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
+    let paths = crate::data::fields_with_ids(&tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
+        .collect();
+    tpl.embedded_paths = paths;
+    Ok((tpl, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

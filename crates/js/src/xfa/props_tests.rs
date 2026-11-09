@@ -394,7 +394,7 @@ fn items_list_their_entries_as_the_list_shows_them() {
 fn items_read_the_list_state_once_one_is_set() {
     use super::{ItemList, content, list_entries, occurrences};
     let doc = XfaDoc::default();
-    let mut h = super::super::XHost::new(caption_form(), "form1[0].list[0]", &doc);
+    let mut h = super::super::XHost::new(Arc::new(caption_form()), false, "form1[0].list[0]", &doc);
     let list = h.current;
     assert_eq!(list_entries(&h, list, 0).len(), 3, "as the template lists them");
     let entries = vec![("text".to_string(), "One".to_string()), ("text".to_string(), "Two".to_string())];
@@ -405,7 +405,7 @@ fn items_read_the_list_state_once_one_is_set() {
     assert_eq!(content(&h, list, "items#0/text#1"), "Two");
     assert_eq!(occurrences(&h, list, "", "items"), 1);
     // A list that had no `<items>` and got one entry.
-    let mut h = super::super::XHost::new(caption_form(), "form1[0].bare[0]", &doc);
+    let mut h = super::super::XHost::new(Arc::new(caption_form()), false, "form1[0].bare[0]", &doc);
     let bare = h.current;
     assert_eq!(list_entries(&h, bare, 0).len(), 0);
     if let Some(n) = h.nodes.get_mut(bare) {
@@ -785,7 +785,7 @@ fn edges_and_corners_past_the_fourth_are_none() {
         assert_eq!(eval(script, "styled"), "null", "{script}");
     }
     let doc = XfaDoc::default();
-    let mut h = super::super::XHost::new(form(), "form1[0].styled[0]", &doc);
+    let mut h = super::super::XHost::new(Arc::new(form()), false, "form1[0].styled[0]", &doc);
     let styled = h.current;
     h.instantiate(styled, "border#0/edge#7");
     h.instantiate(styled, "border#0/corner#5/color#0");
