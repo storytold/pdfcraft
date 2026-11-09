@@ -21,7 +21,12 @@ impl Layouter<'_> {
         // A field a page break may split starts here, and what doesn't fit goes on in the next
         // content area (XFA 3.3 pp. 291–292), rather than the whole field moving there.
         let splits = may_split && matches!(node, Node::Field(f) if f.splits_at_page_break());
-        if !splits && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+        // A growable flowing subform (`lr-tb`/`rl-tb`, no `h`) is split where its objects allow
+        // ("splittable: in margins and where consensus exists among contained objects", XFA 3.3
+        // p. 1520), so it starts here and the rest goes on in the next content area, as one
+        // taller than a content area does. Anything else that fits one moves there whole.
+        let flows_on = matches!(node, Node::Subform(s) if matches!(s.layout, Layout::LrTb | Layout::RlTb) && s.common.h.is_none());
+        if !splits && !flows_on && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
@@ -65,7 +70,7 @@ impl Layouter<'_> {
                 self.leaves.clear();
                 return self.place_block(node, x, (w, h), ctx, depth, sib, false);
             }
-            return self.split_block(first, y, drawn);
+            return self.split_block(first, y, drawn, flows_on);
         };
         // The field breaks into pieces, each with the field's border all round (a border's
         // default `break="close"`, XFA 3.3 pp. 629–630): the border drawn round the whole field
@@ -84,7 +89,7 @@ impl Layouter<'_> {
             _ => None,
         };
         self.splitting = Some(Splitting { som, rect: Rect::new(x, y, w, h), pieces: Vec::new() });
-        let split = self.split_block(first, y, drawn);
+        let split = self.split_block(first, y, drawn, false);
         let pieces = self.splitting.take().map(|s| s.pieces).unwrap_or_default();
         split?;
         if let Some(b) = border {
@@ -123,8 +128,11 @@ impl Layouter<'_> {
     /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
     /// `end`, past the bottom of its content area) over this and the following content areas.
     /// Breaks fall between text, pictures and fields, never through one that fits in an area;
-    /// fills and lines are cut at the break.
-    fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
+    /// fills and lines are cut at the break. A flowing subform (`flows_on`: one [`Self::flow_block`]
+    /// splits where it would otherwise move whole) breaks the flowed subforms round it there too
+    /// ([`Self::break_frames`]), so they keep their border; anything else just moves on, and
+    /// those subforms are drawn without theirs ([`Self::finish_frame`]).
+    fn split_block(&mut self, first: usize, top: f64, end: f64, flows_on: bool) -> Result<(), XfaError> {
         let items: Vec<Item> = match self.pages.last_mut() {
             Some(p) if first <= p.items.len() => p.items.split_off(first),
             _ => return Ok(()),
@@ -281,15 +289,21 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            let (rect, y) = if field.is_some() {
-                // A field breaks the flowed subforms round it as a field moving on whole does:
-                // each closes its part at the break and opens a new one, after its top margin,
-                // in the next content area.
+            let (rect, y) = if field.is_some() || flows_on {
+                // A field breaks the flowed subforms round it as a field moving on whole does, and
+                // so does a flowing subform: each closes its part at the break, after its bottom
+                // margin, and opens a new one, after its top margin, in the next content area.
+                let area_h = self.cursor().0.h;
                 if let Some(c) = &mut self.cur {
                     c.y = (cut - shift).min(c.rect.bottom()).max(c.y);
-                    c.placed = true;
+                    if field.is_some() {
+                        c.placed = true;
+                    }
                 }
-                self.break_frames(0.0, false)?;
+                // A flowing subform's rest that fits an area has the top margins give way to it,
+                // as `make_room` does.
+                let left = (end - cut).max(0.0);
+                self.break_frames(if flows_on && left <= area_h + 0.01 { left } else { 0.0 }, false)?;
                 let (rect, y, _) = self.cursor();
                 (rect, y)
             } else {
