@@ -270,6 +270,9 @@ pub enum RenderWarning {
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
+    /// A Type 3 font without the `/Widths` it requires (ISO 32000-2 Table 110) was used; its
+    /// glyphs were spaced by the widths their glyph procedures give.
+    Type3WidthsMissing,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -478,6 +481,7 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
+                InterpreterWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);
