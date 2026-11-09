@@ -550,6 +550,62 @@ fn set_state_no_op_and_named_actions_are_checked() {
     }
 }
 
+/// The SetState, NOP and Named checks of 6.5.1 apply wherever an action can be: the catalog's
+/// `/OpenAction`, an action standing alone as an object of its own (here one a page's `/AA`
+/// refers to), and a link's `/A`, not only an outline item's. A Named action's `/N` given by
+/// reference to a forbidden name is reported by that name. Save as PDF/A removes each one and
+/// keeps a Named page move in the same places.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked_wherever_actions_are() {
+    // Object 5 is the standalone action, 6 is /Print and 7 is /NextPage.
+    let doc_with = |open_action: &str, page_aa: &str, link_action: &str, standalone: &str| {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {open_action} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] {page_aa} >>");
+        let link = format!("<< /Type /Annot /Subtype /Link /Rect [0 0 0 0] /P 3 0 R /F 4 {link_action} >>");
+        build(&[&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, &link, standalone, "/Print", "/NextPage"], "")
+    };
+    let goto = "<< /S /GoTo /D [3 0 R /Fit] >>";
+    // Where the action is, as (open action, page /AA, link /A, object 5).
+    let placed = |action: &str| {
+        [
+            ("an open action", doc_with(&format!("/OpenAction {action}"), "", "", goto)),
+            ("an open action by reference", doc_with("/OpenAction 5 0 R", "", "", action)),
+            ("a page's /AA", doc_with("", "/AA << /O 5 0 R >>", "", action)),
+            ("a link's /A", doc_with("", "", &format!("/A {action}"), goto)),
+        ]
+    };
+    let forbidden = [
+        ("<< /S /SetState /T [] >>", "A SetState action isn't allowed"),
+        ("<< /S /NOP >>", "A NOP action isn't allowed"),
+        ("<< /S /Named /N /Print >>", "A Named Print action isn't allowed"),
+        ("<< /S /Named /N 6 0 R >>", "A Named Print action isn't allowed"),
+    ];
+    let plain = pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() };
+    for (action, message) in forbidden {
+        for (place, mut doc) in placed(action) {
+            let issues = verify(&doc, Level::A2b);
+            let found: Vec<&str> = issues.iter().filter(|i| i.clause == "6.5.1").map(|i| i.message.as_str()).collect();
+            assert_eq!(found, [message], "{action} in {place}: {issues:#?}");
+            let r = convert(&mut doc, Level::A2b).unwrap();
+            let left: Vec<_> = r.remaining.iter().filter(|i| i.clause.starts_with("6.5")).collect();
+            assert!(left.is_empty(), "{action} in {place}: {left:#?}");
+            let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+            for kind in [&b"/SetState"[..], b"/NOP", b"/Named"] {
+                assert!(!bytes.windows(kind.len()).any(|w| w == kind), "{action} in {place}: {}", String::from_utf8_lossy(&bytes));
+            }
+        }
+    }
+    // A Named page move, with its name given by reference, is allowed and kept outside /AA.
+    for (place, mut doc) in placed("<< /S /Named /N 7 0 R >>") {
+        let issues = verify(&doc, Level::A2b);
+        assert!(!issues.iter().any(|i| i.clause == "6.5.1"), "{place}: {issues:#?}");
+        convert(&mut doc, Level::A2b).unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+        let kept = bytes.windows(6).any(|w| w == b"/Named");
+        assert_eq!(kept, place != "a page's /AA", "{place}: {}", String::from_utf8_lossy(&bytes));
+    }
+}
+
 const XMP_NS: &str = concat!(
     r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
     r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
