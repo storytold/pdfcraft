@@ -199,7 +199,8 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Trust").click();
     h.run_steps(2);
 
-    h.get_by_label("This certificate is in your list of trusted certificates.");
+    // One click trusted the signer as a signer only (#6758).
+    h.get_by_label("You trust signatures made with this certificate. It does not vouch for any other certificate.");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(2);
@@ -282,7 +283,7 @@ fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     let mut fresh = PdfCraftApp::new();
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
-    assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
+    assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_signers().len()), (1, 1));
 }
 
 #[test]

@@ -1277,7 +1277,7 @@ fn dialog_duplicate_field(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pe
 fn dialog_certificate_viewer(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.set_width(700.0);
-    let trusted = app.session.trusted_certificates().to_vec();
+    let trusted = app.session.trust().clone();
     let Some(v) = app.cert_viewer.as_mut() else {
         req.close = true;
         return false;
@@ -1285,7 +1285,8 @@ fn dialog_certificate_viewer(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     let (done, action) = crate::sign_ui::cert_viewer(ui, v, &trusted, &t);
     req.close = done;
     match action {
-        Some(crate::sign_ui::CertAction::Trust(c)) => app.trust_certificate(*c),
+        Some(crate::sign_ui::CertAction::TrustSigner(c)) => app.trust_signer(*c),
+        Some(crate::sign_ui::CertAction::TrustRoot(c)) => app.trust_root(*c),
         Some(crate::sign_ui::CertAction::Export(c)) => {
             app.export_certificate(&c);
         }

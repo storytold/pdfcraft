@@ -81,8 +81,40 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);
 
-    // The trust store holds exactly the displayed signer, never the document-supplied root.
-    let trusted = h.state().session.trusted_certificates().to_vec();
+    // The trust store holds exactly the displayed signer, never the document-supplied root, and
+    // holds it as a signer only: one click makes no certificate a root that vouches for what it
+    // issues (#6758).
+    let session = &h.state().session;
+    let trusted = session.trusted_signers().to_vec();
     assert!(trusted.iter().any(|c| c.raw == signer.raw), "the displayed signer should be trusted");
     assert!(!trusted.iter().any(|c| c.raw == root.raw), "the embedded root must not be trusted by the one-click action");
+    assert!(session.trusted_certificates().is_empty(), "one click trusts no root");
+    let sig = session.get(h.state().views[0].id).unwrap().signatures.iter().find(|x| x.signed).cloned().unwrap();
+    assert_eq!(sig.status, SignatureStatus::Valid, "the trusted signer's own signature is valid");
+}
+
+/// Settings written before trust had a scope (#6758) kept one "trusted" list, filled by one-click
+/// trust. Its entries are read as trusted signers, never as roots; trust saved since keeps roots
+/// and signers apart.
+#[test]
+fn trust_from_older_settings_is_read_as_signers_and_scopes_persist() {
+    let cert = |name: &str| {
+        let p12 = format!("{}/../sign/tests/data/{name}", env!("CARGO_MANIFEST_DIR"));
+        pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate
+    };
+    let (signer, root) = (cert("rsa-aes.p12"), cert("ec-p256.p12"));
+    let pem = pdfcraft_engine::sign::x509::to_pem;
+    let mut old = PdfCraftApp::new();
+    old.restore(&serde_json::json!({ "trusted": [pem(&signer)] }).to_string());
+    assert!(old.session.trusted_certificates().is_empty(), "an old entry is not a root");
+    assert_eq!(old.session.trusted_signers().iter().map(|c| c.raw.clone()).collect::<Vec<_>>(), std::slice::from_ref(&signer.raw));
+    old.trust_root(root.clone());
+    let saved = old.persist();
+    let saved_json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert!(saved_json.get("trusted").is_none(), "the unscoped list is no longer written");
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&saved);
+    let raws = |c: &[pdfcraft_engine::sign::Certificate]| c.iter().map(|c| c.raw.clone()).collect::<Vec<_>>();
+    assert_eq!(raws(fresh.session.trusted_certificates()), std::slice::from_ref(&root.raw));
+    assert_eq!(raws(fresh.session.trusted_signers()), std::slice::from_ref(&signer.raw));
 }

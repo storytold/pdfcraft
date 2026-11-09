@@ -146,7 +146,8 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
                 } else {
                     // Only a token from a trusted authority (valid when it stamped) is trusted
                     // time; otherwise its time is reported but validation uses the signer's
-                    // own claimed time, as without a timestamp.
+                    // own claimed time, as without a timestamp. Only anchors are trusted
+                    // authorities: a certificate trusted as a signer alone is not one (#6758).
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
                     let tsa = t.signer_certificate();
@@ -245,13 +246,16 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     let SignatureValidation { doc, bytes, trust, info, cache } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
+    // Only anchors join the issuer pool: a certificate trusted as a signer alone vouches for no
+    // other (#6758).
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
     // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
     let at = info.timestamp_time.or(info.signing_time);
     let (chain, refused) = build_chain_noted(&cert, &pool, at);
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
-    let trusted = chain.iter().any(|c| trust.trusts(c));
+    // Trusted: the signer's own certificate is trusted as a signer, or the chain reaches an anchor.
+    let trusted = trust.trusts_signer(&cert) || chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
     info.certificate = Some(cert.clone());
     if let Some(why) = refused
@@ -570,7 +574,8 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     }
     if info.status != Status::Invalid {
         // An untrusted TSA is not proof of anything: the verdict stays Unknown, like an
-        // ordinary signature from an unknown signer.
+        // ordinary signature from an unknown signer. Only anchors are trusted authorities: a
+        // certificate trusted as a signer alone is not one (#6758).
         let mut pool = crate::timestamp::token_certs(&contents);
         pool.extend(trust.certs.iter().cloned());
         // A trusted authority whose certificate was not valid at the time it stamped proves
