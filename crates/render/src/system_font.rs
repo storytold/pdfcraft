@@ -560,6 +560,33 @@ mod tests {
         }
     }
 
+    /// Each listed face whose file is installed is found in that file under its own name, so a
+    /// wrong file name or a file naming its face otherwise can't leave a listed face undrawn.
+    /// Files Windows installs only with optional language features may be absent.
+    #[cfg(windows)]
+    #[test]
+    fn windows_finds_each_listed_face_in_its_installed_file() {
+        let dir = windows_fonts();
+        let (mut checked, mut wrong) = (0, Vec::new());
+        for (name, file) in WINDOWS_NAMED_FACES.iter().filter(|(_, file)| dir.join(file).is_file()) {
+            checked += 1;
+            let key = face_key(name);
+            let named = named_face_in(name, &dir, WINDOWS_NAMED_FACES).is_some_and(|(bytes, index)| {
+                skrifa::FontRef::from_index(bytes.as_ref(), index).is_ok_and(|font| {
+                    [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
+                        .into_iter()
+                        .flat_map(|id| font.localized_strings(id))
+                        .any(|n| face_key(&n.chars().collect::<String>()) == key)
+                })
+            });
+            if !named {
+                wrong.push(format!("{name} in {file}"));
+            }
+        }
+        eprintln!("{checked} of {} listed faces installed", WINDOWS_NAMED_FACES.len());
+        assert!(wrong.is_empty(), "not found under their names: {wrong:?}");
+    }
+
     /// Identity fonts are looked up by name only on Windows, where the faces have fixed files;
     /// elsewhere they keep the standard substitute.
     #[cfg(not(windows))]
