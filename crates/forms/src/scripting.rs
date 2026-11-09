@@ -42,6 +42,8 @@ pub struct FieldChange {
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    /// Move/resize the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 /// What a script did.
@@ -51,6 +53,8 @@ pub struct ScriptResult {
     pub rc: bool,
     /// `event.value` afterwards.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub changes: Vec<FieldChange>,
     /// Why it rejected the value (its alert), for the error shown.
     pub message: Option<String>,
@@ -60,6 +64,21 @@ pub struct ScriptResult {
 pub trait Scripts {
     /// Run `script` for `event` on `target`, whose value is `value`; `fields` is the whole form.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult;
+
+    /// [`Self::run`] again for an appearance, with dates written in English names (`util.printd`)
+    /// because no font of the field can draw the date language's (#5303); what it logs was
+    /// already logged by the first run. `None` when it can't: no English dates here, or the
+    /// script failed. What it returns is what the script made, even when that is the value.
+    fn rerun_with_english_dates(
+        &mut self,
+        _event: FieldEvent,
+        _script: &str,
+        _target: &Field,
+        _value: &str,
+        _fields: &[Field],
+    ) -> Option<ScriptResult> {
+        None
+    }
 }
 
 /// No script engine (or JavaScript turned off): scripts change nothing.
@@ -67,7 +86,7 @@ pub struct NoScripts;
 
 impl Scripts for NoScripts {
     fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
-        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+        ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None }
     }
 }
 
@@ -96,6 +115,13 @@ pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dy
     let js = f.actions.scripts.format.as_ref()?;
     let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc));
     Some(r.value)
+}
+
+/// [`formatted`] with dates in English names, for widgets whose fonts can't draw the date
+/// language's; `None` when the field has no Format script or the English run didn't happen.
+pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
+    let js = f.actions.scripts.format.as_ref()?;
+    scripts.rerun_with_english_dates(FieldEvent::Format, js, f, value, &fields(doc)).map(|r| r.value)
 }
 
 /// Apply script changes to other fields (values written without re-running their scripts;
@@ -150,6 +176,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
                 }
             }
+        }
+        if let Some(rect) = c.rect {
+            crate::set_props(doc, &c.name, &crate::FieldProps { rect: Some((0, rect)), ..Default::default() })?;
         }
     }
     Ok(())
