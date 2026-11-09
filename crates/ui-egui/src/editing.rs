@@ -134,10 +134,18 @@ fn form_edit_pages(
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        // In a shared session an edit is sent to the room and comes back as the broadcast
+        // operation; the replica applies that, not the local intent (STATUS §2 p.7). Kept out of
+        // the single-document path so that path stays within the complexity limit.
         #[cfg(feature = "collab")]
         if let Some(result) = self.collab_apply_edit(&edit) {
             return result;
         }
+        self.apply_local_edit(edit)
+    }
+
+    /// The single-document path of [`Self::apply_edit`].
+    fn apply_local_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
         let target_arrange_image = match &edit {
