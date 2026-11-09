@@ -197,7 +197,6 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
-use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
