@@ -13,8 +13,6 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
 
-> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** maintenance (M14: inherited native Clippy warnings removed; behavior and estimates unchanged)
-
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -302,9 +300,6 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
-**2026-11-02, patch:** M10 #2192 separates Windows queue listing from selected-printer capability reads. Tests cover cancellation, refresh, retry, independent Properties windows and stable control positions; CUPS is unchanged. No physical-output qualification or readiness re-estimate.
-
-**2026-11-09, maintenance:** Clear inherited native Clippy warnings with equivalent expressions and platform-specific mutability. No feature or readiness estimate changes.
 **2026-10-31 · minor:** M3/M4 #5330: direct quick-toolbar Crop pages action reuses command permissions and the existing crop tool. Estimates unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
