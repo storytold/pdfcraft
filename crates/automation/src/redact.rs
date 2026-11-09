@@ -2,7 +2,7 @@
 //! (removing what they cover for good) or clear them.
 
 use pdfcraft_engine::{
-    Edit, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACT_VALIDATORS, REDACTION_CODE_SETS, RedactPattern, RedactRegex, RedactValidator,
+    Edit, HIDDEN, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACT_VALIDATORS, REDACTION_CODE_SETS, RedactPattern, RedactRegex, RedactValidator,
     RedactionCodeSet, Shape, Style, find_pattern, rect_quad, redact_word_list, redacted_file_name,
 };
 use serde_json::{Value, json};
@@ -237,6 +237,9 @@ impl Automation {
         Ok(json!({ "findings": items, "count": items.len() }))
     }
 
+    /// `doc_remove_hidden`: remove the listed categories of hidden information, or all of them
+    /// (Sanitize Document) when none are listed, and report how many items the listed
+    /// categories lost as `removed`.
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
         let which = match a.get("categories") {
             None => None,
@@ -255,8 +258,11 @@ impl Automation {
         // One scan, for this check and for what was removed. The removal refuses when it counts
         // every listed category as 0 (an AcroForm with no fields counts 1), with an error about
         // redaction marks; this reads the same scan, so it refuses exactly then. A document that
-        // can't be edited has no scan: `apply` says why.
-        let info = self.doc(a)?.hidden_info();
+        // can't be edited has no scan: `apply` says why. Only the listed categories are counted,
+        // here and after: the others would read every page's content and every object for
+        // nothing (#5873).
+        let listed = which.clone().unwrap_or_else(|| HIDDEN.to_vec());
+        let info = self.doc(a)?.hidden_info_of(&listed);
         let edit = match which {
             None => Edit::Sanitize,
             Some(which) => {
@@ -268,7 +274,7 @@ impl Automation {
         };
         let before: usize = info.iter().map(|c| c.1).sum();
         let mut out = self.apply(a, edit)?;
-        let after: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
+        let after: usize = self.doc(a)?.hidden_info_of(&listed).iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));
         Ok(out)
     }

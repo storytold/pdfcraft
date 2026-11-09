@@ -5426,6 +5426,67 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
+/// A paragraph's edge and an open paragraph's frame are caught a few pixels either side of
+/// their hairline, and the cursor shows exactly where a press takes hold (#2203).
+#[test]
+fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
+    let start = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        // The drawn box: the text on screen, 2 px larger each side.
+        let bx = egui::Rect::from_min_max(
+            egui::pos2(r.left() + b.rect[0] as f32 * k, r.top() + (300.0 - b.rect[3] as f32) * k),
+            egui::pos2(r.left() + b.rect[2] as f32 * k, r.top() + (300.0 - b.rect[1] as f32) * k),
+        )
+        .expand(2.0);
+        (id, bx)
+    };
+    // A closed paragraph's right edge, 7 px inside and 7 px outside: the rewrap arrow, and a
+    // drag from there changes the width rather than moving the box.
+    for dx in [-7.0f32, 7.0] {
+        let mut h = harness(1, |_| {});
+        let (id, bx) = start(&mut h);
+        let p = egui::pos2(bx.right() + dx, bx.center().y);
+        h.hover_at(p);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "{dx} px from the edge");
+        drag(&mut h, p, p + egui::vec2(40.0, 0.0));
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"), "{dx} px from the edge rewraps");
+    }
+    // An open paragraph's frame, 7 px beyond its drawn line: the move arrow, and a press there
+    // selects the box instead of closing the paragraph.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    let p = egui::pos2(bx.center().x, bx.top() - 7.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the pointer shows the frame takes hold");
+    click_at(&mut h, p);
+    assert!(h.state().views[0].line_editor.is_none());
+    h.get_by_label("1 object selected");
+    // Once the text is changed, a press on the frame doesn't take the box (selecting it would
+    // drop the typing): it applies the typing like any click off the text, so the pointer doesn't
+    // offer the move arrow there either.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    h.state_mut().views[0].line_editor.as_mut().expect("open for typing").text = "Page one".into();
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "no move arrow where a press can't take the box");
+    click_at(&mut h, p);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});
@@ -9426,6 +9487,75 @@ fn test_cropped_image_selection_and_bounding_box() {
     click_at(&mut h, corner);
     h.run_steps(2);
     assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
+}
+
+/// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
+/// strokes and says how many; with nothing to fix it says so and changes nothing.
+#[test]
+fn fix_hairlines_from_the_dialog() {
+    // A page with a zero-width line and a 2 pt line.
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc
+        .add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S")));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FixHairlines));
+    h.get_by_label("Type 3 font glyphs");
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 1 hairline on 1 page");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+    // Nothing left: told, and no new undo step.
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "No hairlines found on those pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+}
+
+/// Several strokes on one page: the notice says "hairlines" and "1 page".
+#[test]
+fn fix_hairlines_notice_uses_singular_and_plural() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
+    for (n, page) in pdfcraft_model::pages(&doc).into_iter().enumerate() {
+        let lines = if n == 0 { "0 w 10 10 m 100 10 l S 0 w 10 20 m 100 20 l S" } else { "2 w 10 10 m 100 10 l S" };
+        let cs = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), lines.as_bytes())));
+        doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    // The dialog's default range is every page; only the first has hairlines.
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 2 hairlines on 1 page");
+}
+
+/// The `dialog` option goes through the command: with no document it does not open the dialog.
+#[test]
+fn fix_hairlines_option_needs_a_document() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("dialog", "fix-hairlines").unwrap();
+    assert_eq!(app.dialog, None);
 }
 
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as

@@ -58,6 +58,7 @@ mod stamp_preview;
 #[cfg(test)]
 mod test_hooks;
 pub mod text_fonts;
+pub mod text_links;
 mod text_preview;
 pub mod text_script;
 pub mod text_style_bookmarks;
@@ -95,8 +96,8 @@ pub use pdfcraft_edit::added::{
 };
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
-    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, Ink as TextInk,
-    MarkKind, Watermark,
+    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, Hairlines, HairlinesFixed,
+    HeaderFooter, Ink as TextInk, MarkKind, Watermark,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,
@@ -117,7 +118,7 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, scr
 
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;
-pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
+pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle, LinkZoom};
 pub use pdfcraft_annot::{
     Activation3d, AppearanceCache, AttachIcon, BorderShape, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont,
     OverlayLook, Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
