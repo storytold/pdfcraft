@@ -647,4 +647,24 @@ mod own_clipboard_tests {
             assert_eq!(app.own_clipboard_text.as_deref(), Some("newer words"), "snapshot first: {snapshot_first}");
         }
     }
+
+    /// #6169: ⌘V after the window copied text sees that text, which supersedes a cached picture,
+    /// without reading the clipboard back.
+    #[test]
+    fn paste_after_copying_text_does_not_read_the_clipboard_back() {
+        let mut app = PdfCraftApp::new();
+        app.system_clipboard = true;
+        app.create_blank();
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, true, Some("copied words"));
+
+        let opened = crate::os_clipboard::opens();
+        let paste = egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+        ctx.run_ui(egui::RawInput { events: vec![paste], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx())).drop_without_applying_deltas();
+        assert!(app.last_copied_image.is_none(), "the copied text supersedes the cached picture");
+        let id = app.active_ids().unwrap().1;
+        assert!(app.session.get(id).unwrap().page_images(0).is_empty(), "nothing pasted");
+        assert_eq!(crate::os_clipboard::opens(), opened, "the system clipboard was opened");
+    }
 }
