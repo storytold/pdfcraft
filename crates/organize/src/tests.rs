@@ -1591,13 +1591,12 @@ fn inserting_a_file_brings_its_bookmarks_under_one_named_after_it() {
     let page_of = |title: &str| marks.iter().find(|b| b.title == title).and_then(|b| b.page);
     assert_eq!((page_of("annex"), page_of("Chapter one"), page_of("Section"), page_of("End")), (Some(1), Some(1), Some(2), Some(4)));
     assert!(!marks.iter().find(|b| b.title == "annex").unwrap().open, "the file's bookmarks start collapsed");
-    // Inserted last, after every bookmark; only the pages chosen keep a destination.
+    // Inserted last, after every bookmark; a bookmark to a page left out stays behind with it.
     let mut host = open(fixture());
     add_bookmark(&mut host, &[], 0, "Start", 0).unwrap();
     insert_file_pages(&mut host, &doc_c(), "annex", &[0], 9, FieldConflicts::Rename).unwrap();
     let marks = bookmarks(&host);
-    assert_eq!(titles(&marks), ["Start", "annex[Chapter one[Section]]"]);
-    assert_eq!(marks.iter().find(|b| b.title == "Section").unwrap().page, None, "its page was left out");
+    assert_eq!(titles(&marks), ["Start", "annex[Chapter one]"], "Section's page was left out");
     // A file without bookmarks adds none, and a host without an outline gets one only when needed.
     let mut host = open(fixture());
     insert_file_pages(&mut host, &doc_b(), "plain", &[0], 0, FieldConflicts::Rename).unwrap();
@@ -4311,4 +4310,43 @@ fn a_form_action_brings_no_field_from_a_page_left_behind() {
     assert!(aa.get(b"U").is_some_and(|u| part.resolve(u).as_dict().is_some()));
     // With every page, the actions still list it.
     assert!(holds_value(&full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap()), "90000"));
+}
+
+/// The titles of a bookmark's children, each with its own children's titles.
+fn bookmark_titles(doc: &Document, first: Option<pdfcraft_cos::ObjRef>) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut at = first;
+    while let Some(r) = at {
+        let item = doc.get(r).as_dict().cloned().unwrap();
+        let title = item.get(b"Title").and_then(|t| t.as_string()).map(|t| t.to_text()).unwrap_or_default();
+        let children = bookmark_titles(doc, item.reference(b"First")).into_iter().map(|(t, _)| t).collect();
+        out.push((title, children));
+        at = item.reference(b"Next");
+    }
+    out
+}
+
+/// Combining some of a file's pages brings only the bookmarks that lead to them (and those above
+/// them), and none of the file's attachments.
+#[test]
+fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
+    let source_bookmarks = |out: &Document| {
+        let outlines = out.get(catalog(out).reference(b"Outlines").unwrap()).as_dict().cloned().unwrap();
+        let file = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+        bookmark_titles(out, file.reference(b"First"))
+    };
+    let attachments = |out: &Document| {
+        catalog(out).get(b"Names").map(|n| out.resolve(n)).is_some_and(|n| n.as_dict().is_some_and(|d| d.contains(b"EmbeddedFiles")))
+    };
+    // Page 1 only: "Section" leads to page 2.
+    let first = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0]))]).unwrap());
+    assert_eq!(source_bookmarks(&first), [("Chapter one".to_string(), vec![])]);
+    assert!(!attachments(&first), "an attachment came along with a selection of pages");
+    // Page 2 only: "Chapter one" stays, as the way to "Section".
+    let second = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[1]))]).unwrap());
+    assert_eq!(source_bookmarks(&second), [("Chapter one".to_string(), vec!["Section".to_string()])]);
+    // Every page: all of it, attachments too.
+    let all = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0, 1]))]).unwrap());
+    assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
+    assert!(attachments(&all));
 }
