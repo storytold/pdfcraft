@@ -29,7 +29,8 @@ pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
+# `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -94,6 +95,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 pdfcraft-testkit = { workspace = true }
 craft-update = { workspace = true }
 pdfcraft-xfa = { workspace = true }
+# A content stream that inflates past the renderer's limits, for the cut-content notice test.
+flate2 = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 # Tests draw PdfCraft text without a system provider: the bundled and monochrome emoji faces must
 # be enabled on the test graph itself (a dependency's dev-features do not propagate).
