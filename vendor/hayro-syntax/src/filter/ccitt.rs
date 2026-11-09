@@ -20,10 +20,14 @@ pub(crate) fn decode(
     // PdfCraft patch (19): fewer `/Rows` than the image's `/Height` doesn't cut the image short: a
     // plotter driver wrote `/Rows` equal to `/Columns`, and the rows after it were drawn black
     // (#3308). The decoder still stops where the data ends.
-    let rows = params
-        .get::<u32>(ROWS)
-        .filter(|&rows| rows != 0)
-        .map_or(image_params.height, |rows| rows.max(image_params.height));
+    // PdfCraft patch (41): more `/Rows` than the image's `/Height` doesn't make the decoder go
+    // past it either: the image is `/Height` rows (ISO 32000-2 Table 87), and a `/Rows` of
+    // 1,084,975,104 on 2,592 columns had the size check refuse every page of a scan (PDFBOX-771).
+    // `/Rows` counts only for a stream decoded without an image's height.
+    let rows = match image_params.height {
+        0 => params.get::<u32>(ROWS).unwrap_or(0),
+        height => height,
+    };
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
 
     let settings = DecodeSettings {
