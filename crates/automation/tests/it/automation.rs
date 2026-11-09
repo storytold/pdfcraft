@@ -2969,6 +2969,15 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
         {"input":"a.pdf","output":"a-numbered.pdf"}
     ]);
     let mut a = auto(&dir);
+    for invalid_start in [json!(0), json!(-1), json!(1.5), json!("17")] {
+        let error = err(&mut a, "doc_bates_multi", json!({"files":files,"start_number":invalid_start}));
+        assert!(matches!(error, ToolError::InvalidArgs(_)));
+    }
+    let unicode = ok(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"é".repeat(65),"dry_run":true}));
+    assert_eq!(unicode["files"].as_array().unwrap().len(), 2);
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"CASE>>"})), ToolError::InvalidArgs(_)));
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"suffix":"A>>B"})), ToolError::InvalidArgs(_)));
+
     let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
     assert_eq!(allocation["files"][0]["first"], 50);
     assert_eq!(allocation["files"][0]["last"], 51);
@@ -2987,15 +2996,24 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
     let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
     assert!(overflow.to_string().contains("overflows"));
     assert!(!dir.join("overflow.pdf").exists());
-    // A range may end at u64::MAX itself.
-    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
-    assert_eq!(at_max["files"][0]["last"], u64::MAX);
-    for bad in
-        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+    let max_number =
+        ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"one.pdf","output":"one-numbered.pdf"}],"start_number":u64::MAX,"dry_run":true}));
+    assert_eq!(max_number["files"][0]["first"], u64::MAX);
+    assert_eq!(max_number["files"][0]["last"], u64::MAX);
+
+    #[cfg(windows)]
     {
-        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
-        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+        let collision = err(
+            &mut a,
+            "doc_bates_multi",
+            json!({"files":[
+                {"input":"b.pdf","output":"Case.pdf"},
+                {"input":"a.pdf","output":"CASE.pdf"}
+            ]}),
+        );
+        assert!(collision.to_string().contains("same output path"));
+        assert!(!dir.join("Case.pdf").exists());
     }
 
     use pdfcraft_engine::{Changes, Edit, Protection, Session};
@@ -6183,6 +6201,80 @@ fn links_through_tools() {
     assert!(matches!(a.call("link_add", &json!({ "doc": doc, "page": 1, "rect": [0, 0, 50, 20] })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn link_zoom_through_tools() {
+    let dir = workdir("link-zoom");
+    std::fs::write(dir.join("notes.txt"), "Contents").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "notes.txt" }))["doc"].as_u64().unwrap();
+    let link = |a: &mut Automation| ok(a, "link_list", json!({ "doc": doc }))["links"][0].clone();
+    // A page link opens at Fit Page unless told otherwise.
+    ok(&mut a, "link_add", json!({ "doc": doc, "page": 1, "rect": [72, 300, 200, 320], "to_page": 1 }));
+    assert_eq!((link(&mut a)["to_page"].clone(), link(&mut a)["zoom"].clone()), (json!(1), json!("fit_page")));
+    let index = link(&mut a)["index"].clone();
+    // A zoom alone keeps the page; a page alone keeps the zoom.
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": 200 }));
+    let l = link(&mut a);
+    assert_eq!((l["to_page"].clone(), l["zoom"].clone()), (json!(1), json!(200.0)));
+    assert_eq!(l["destination"]["zoom"], 2.0, "the viewer reads the zoom the link writes: {l}");
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": "fit_width" }));
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "to_page": 1 }));
+    assert_eq!(link(&mut a)["zoom"], "fit_width");
+    for (name, zoom) in [("actual", json!(100.0)), ("inherit", json!("inherit")), ("fit_visible", json!("fit_visible"))] {
+        ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": name }));
+        assert_eq!(link(&mut a)["zoom"], zoom, "{name}");
+    }
+    // A zoom needs a page to show: refused with a web address, unknown, or not positive.
+    for args in [
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "url": "https://example.org", "zoom": "fit_page" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "zoom": "fit_page" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": "sideways" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": 0 }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": [2] }),
+    ] {
+        assert!(matches!(a.call("link_add", &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "url": "https://example.org" }));
+    assert!(matches!(a.call("link_edit", &json!({ "doc": doc, "page": 1, "index": index, "zoom": 150 })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// `link_edit` with a page and no zoom keeps the link's zoom, and with it the link's own `/XYZ`
+/// factor, even outside the 1–6400% a chosen zoom is written within: 0.5% and 10000% stay so, in
+/// link_list and in the viewer's destination. Naming the link's own page changes nothing, so its
+/// position stays too. A zoom chosen anew is still kept within 1–6400%.
+#[test]
+fn link_edit_keeps_a_links_own_zoom_outside_the_range_it_writes() {
+    let (_base, root) = sandbox("link-own-zoom");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /Border [0 0 0] /Dest [3 0 R /XYZ null null 0.005] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 50 100 70] /Border [0 0 0] /Dest [3 0 R /XYZ null null 100] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 90 100 110] /Border [0 0 0] /Dest [3 0 R /XYZ 72 300 2] >>",
+    ]);
+    std::fs::write(root.join("zooms.pdf"), pdf).unwrap();
+    let mut a = auto(&root);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "zooms.pdf" }))["doc"].as_u64().unwrap();
+    let link = |a: &mut Automation, index: u64| {
+        ok(a, "link_list", json!({ "doc": doc }))["links"].as_array().unwrap().iter().find(|l| l["index"] == index).unwrap().clone()
+    };
+    for (index, percent, factor) in [(1, 0.5, 0.005), (2, 10000.0, 100.0)] {
+        ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "to_page": 2 }));
+        let l = link(&mut a, index);
+        assert_eq!((l["to_page"].clone(), l["zoom"].clone()), (json!(2), json!(percent)), "{l}");
+        let shown = l["destination"]["zoom"].as_f64().unwrap();
+        assert!((shown - factor).abs() <= factor * 1e-6, "the viewer's zoom is the link's own: {l}");
+    }
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": 3, "to_page": 1 }));
+    let l = link(&mut a, 3);
+    // `/XYZ 72 300` on a 400 pt page: 72 from the left and 100 from the top, as the tools measure.
+    assert_eq!((&l["zoom"], &l["destination"]["left"], &l["destination"]["top"]), (&json!(200.0), &json!(72.0), &json!(100.0)), "{l}");
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": 1, "zoom": 10000 }));
+    assert_eq!(link(&mut a, 1)["zoom"], json!(6400.0));
+}
+
 /// #4168: a Launch action whose file is a PDF (here with Windows `\` separators, relative to the
 /// source as a remote link is) opens that PDF in PdfCraft through link_open, within the root; one
 /// naming a program is listed but never followed.
@@ -6208,6 +6300,40 @@ fn a_launch_link_to_a_pdf_opens_it_like_a_remote_link() {
     let before = a.session().docs().len();
     assert!(matches!(err(&mut a, "link_open", json!({ "doc": program, "page": 1, "index": 1 })), ToolError::InvalidArgs(_) | ToolError::Failed(_)));
     assert_eq!(a.session().docs().len(), before, "nothing was opened or launched");
+}
+
+/// A bookmark's action is reported as a link's target is, and only a go-to names a page here: a
+/// remote go-to's `[1 /Fit]` is the other file's page 2, so doc_info and bookmark_list give this
+/// file's no page for it.
+#[test]
+fn bookmarks_report_their_actions_and_a_remote_go_to_names_no_page_here() {
+    let (_base, root) = sandbox("bookmark-actions");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>",
+        "<< /Title (Web) /Parent 5 0 R /Next 7 0 R /A << /S /URI /URI (https://example.org/manual) >> >>",
+        "<< /Title (Other file) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoToR /F (other.pdf) /D [1 /Fit] >> >>",
+        "<< /Title (Here) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [4 0 R /Fit] >> >>",
+    ]);
+    std::fs::write(root.join("bookmarks.pdf"), pdf).unwrap();
+    let mut a = auto(&root);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "bookmarks.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let outline = &info["outline"];
+    assert_eq!((&outline[0]["page"], &outline[0]["action"]), (&Value::Null, &json!({ "uri": "https://example.org/manual" })), "{info}");
+    assert_eq!(outline[1]["page"], Value::Null, "{info}");
+    assert_eq!(
+        (&outline[1]["action"]["action"], &outline[1]["action"]["remote_document"], &outline[1]["action"]["destination"]["page"]),
+        (&json!("GoToR"), &json!("other.pdf"), &json!(2)),
+        "{info}"
+    );
+    assert_eq!((&outline[2]["page"], &outline[2]["action"]), (&json!(2), &Value::Null), "{info}");
+    let marks = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    let pages: Vec<_> = marks.as_array().unwrap().iter().map(|b| (b["title"].clone(), b["page"].clone())).collect();
+    assert_eq!(pages, [(json!("Web"), Value::Null), (json!("Other file"), Value::Null), (json!("Here"), json!(2))], "{marks}");
 }
 
 #[test]
@@ -6783,11 +6909,26 @@ fn drawing_comments_through_tools() {
         a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "polygon", "points": [[1, 1]] })),
         Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
     ));
-    // Replace Text: a strikeout over the found text and a grouped caret.
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page" }));
+    // Replace Text: a strikeout over the found text, grouped under a caret holding the
+    // replacement (the group's primary, ISO 32000-2 §12.5.6.2).
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page", "color": "green" }));
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 2 }));
-    let strike = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "StrikeOut").unwrap().clone();
-    assert_eq!(strike["replies"][0]["contents"], "second page", "the caret threads under the strikeout");
+    let caret = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+    assert_eq!(caret["contents"], "second page", "the replacement is on the caret");
+    assert_eq!(caret["replies"][0]["type"], "StrikeOut", "the strikeout is grouped under the caret");
+    // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
+    assert_eq!(caret["replies"][0]["color"], caret["color"], "one colour for the pair: {caret}");
+    assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
+    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
+    let pair = |a: &mut Automation| {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 2 }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+        (c["color"].clone(), c["replies"][0]["color"].clone())
+    };
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 2, "index": caret["index"], "color": "purple" }));
+    assert_eq!(pair(&mut a), (json!("#8A3FD1"), json!("#8A3FD1")), "the strikeout follows its caret");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(pair(&mut a), (json!("#2E9E5C"), json!("#2E9E5C")), "one undo puts both back");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();
@@ -8227,6 +8368,22 @@ fn action_run_keeps_outputs_with_duplicate_input_basenames() {
     assert_eq!(std::fs::read(first_path).unwrap(), first_bytes, "an earlier output must not be replaced");
 }
 
+#[cfg(unix)]
+#[test]
+fn action_run_never_replaces_an_entry_that_exists_check_misses() {
+    let dir = workdir("action-noclobber");
+    std::fs::create_dir_all(dir.join("results")).unwrap();
+    std::fs::write(dir.join("report.pdf"), fixture(1)).unwrap();
+    // A dangling link is invisible to `exists()` but is still an occupied name.
+    std::os::unix::fs::symlink(dir.join("nowhere.pdf"), dir.join("results/report.pdf")).unwrap();
+    let mut a = auto(&dir);
+    let args = json!({ "steps": [{ "step": "set_title", "arg": "Processed" }], "paths": ["report.pdf"], "folder": "results" });
+    let result = ok(&mut a, "action_run", args);
+    let output = result["files"][0]["output"].as_str().unwrap();
+    assert!(output.ends_with("report (2).pdf"), "{output}");
+    assert!(dir.join("results/report.pdf").symlink_metadata().unwrap().file_type().is_symlink(), "the existing entry must stay");
+}
+
 #[test]
 fn pdfa_through_tools() {
     let dir = workdir("pdfa");
@@ -8521,6 +8678,119 @@ BT /F1 12 Tf 72 640 Td (A paragraph further down.) Tj ET";
     assert_eq!(paragraphs.len(), 2, "{xml}");
 }
 
+/// A one-page PDF (612 x 792 pt) drawing `content`, with the standard fonts `fonts` as /F1, /F2
+/// and so on, each in its built-in encoding. A font given `bfchar` pairs ("<B7> <F0B7>") reads
+/// its codes through that ToUnicode map, as a symbol font Word embeds does.
+fn standard_fonts_pdf(content: &str, fonts: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let names: String = (1..=fonts.len()).map(|i| format!("/F{i} {} 0 R ", i + 4)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << {names}>> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut maps = Vec::new();
+    for (font, map) in fonts {
+        let to_unicode = map.map_or(String::new(), |map| {
+            let cmap = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange \
+1 beginbfchar {map} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+            );
+            maps.push(format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()));
+            format!(" /ToUnicode {} 0 R", fonts.len() + 4 + maps.len())
+        });
+        objs.push(format!("<< /Type /Font /Subtype /Type1 /BaseFont /{font}{to_unicode} >>"));
+    }
+    objs.extend(maps);
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// The text of each paragraph that holds any in `word/document.xml` of the .docx at `path`.
+fn word_paragraph_texts(path: &Path) -> Vec<String> {
+    let zip = std::fs::read(path).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    xml.split("<w:p>")
+        .skip(1)
+        .map(|p| {
+            let p = p.split_once("</w:p>").map_or(p, |(inside, _)| inside);
+            p.split("<w:t xml:space=\"preserve\">").skip(1).filter_map(|t| t.split_once("</w:t>").map(|(t, _)| t)).collect::<String>()
+        })
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+/// #4158: a sentence that wraps onto the next lines after a bold name and a slanted one reaches
+/// Word as one paragraph, though reading splits each of its lines where the style changes.
+#[test]
+fn exporting_to_word_keeps_a_wrapped_sentence_in_one_paragraph() {
+    let dir = workdir("wrapped-sentence-word");
+    let content = "BT /F1 10 Tf 72 700 Td (The parties to this lease are the owner, ) Tj /F2 10 Tf (Harbour Lane Properties) Tj \
+/F1 10 Tf (, of 4 Quay Street, and the) Tj ET \
+BT /F1 10 Tf 72 686 Td (tenant named in the schedule, ) Tj /F3 10 Tf (Blue Finch Studio) Tj \
+/F1 10 Tf (, who agree as follows to rent the upper) Tj ET \
+BT /F1 10 Tf 72 672 Td (rooms for the whole of the term.) Tj ET \
+BT /F1 10 Tf 72 640 Td (Rent is paid monthly in advance.) Tj ET";
+    let fonts = [("Helvetica", None), ("Helvetica-Bold", None), ("Helvetica-Oblique", None)];
+    std::fs::write(dir.join("lease.pdf"), standard_fonts_pdf(content, &fonts)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "lease.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "lease.docx" }));
+    let sentence = "The parties to this lease are the owner, Harbour Lane Properties, of 4 Quay Street, and the tenant named in the \
+schedule, Blue Finch Studio, who agree as follows to rent the upper rooms for the whole of the term.";
+    assert_eq!(word_paragraph_texts(&dir.join("lease.docx")), [sentence, "Rent is paid monthly in advance."]);
+}
+
+/// A bulleted list drawn as Word draws one, each bullet in the Symbol font (read as U+F0B7, as
+/// Word maps it) a tab stop before its item's text, reaches Word as one paragraph per item and
+/// not as a two-column table.
+#[test]
+fn exporting_to_word_keeps_a_bulleted_list_as_paragraphs() {
+    let dir = workdir("bulleted-list-word");
+    let mut content = String::from("BT /F1 10 Tf 72 700 Td (The tenant looks after:) Tj ET\n");
+    for (n, item) in ["the stairs and the landing;", "the shared yard and its gate;", "the bins, every week."].iter().enumerate() {
+        let y = 686 - 14 * n;
+        content.push_str(&format!("BT /F2 10 Tf 90 {y} Td (\\267) Tj ET BT /F1 10 Tf 108 {y} Td ({item}) Tj ET\n"));
+    }
+    content.push_str("BT /F1 10 Tf 72 630 Td (Rent is paid monthly in advance.) Tj ET");
+    std::fs::write(dir.join("list.pdf"), standard_fonts_pdf(&content, &[("Helvetica", None), ("Symbol", Some("<B7> <F0B7>"))])).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "list.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "list.docx" }));
+    assert_eq!(
+        word_paragraph_texts(&dir.join("list.docx")),
+        [
+            "The tenant looks after:",
+            "\u{F0B7} the stairs and the landing;",
+            "\u{F0B7} the shared yard and its gate;",
+            "\u{F0B7} the bins, every week.",
+            "Rent is paid monthly in advance."
+        ]
+    );
+}
+
 /// Hundreds of calculations run on opening and again after a change through the tools. The
 /// time limits are raised so that a busy machine does not stop them (the engine's tests check
 /// that the limits stop them).
@@ -8766,6 +9036,49 @@ fn cut_stack_printing_through_tools() {
     ok(&mut a, "doc_print", json!({"doc": doc, "layout": "multiple", "order": "cut-stack", "duplex": "printer", "path": "printer-default.pdf"}));
     assert!(dir.join("printer-default.pdf").exists());
     assert!(a.call("doc_print", &json!({"doc": doc, "layout": "multiple", "order": "cut-stack", "path": "../escaped.pdf"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn custom_pages_per_sheet_prints_the_grid_as_given() {
+    // Two narrow pages side by side on portrait A4: 2 columns by 1 row (#6551).
+    let dir = workdir("custom-grid");
+    std::fs::write(dir.join("narrow.pdf"), fixture(4)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "narrow.pdf"}))["doc"].as_u64().unwrap();
+    for orientation in ["auto", "portrait"] {
+        let r = ok(
+            &mut a,
+            "doc_print",
+            json!({"doc": doc, "layout": "multiple", "cols": 2, "rows": 1, "paper": "A4", "orientation": orientation, "path": "grid.pdf"}),
+        );
+        assert_eq!(r["sheets"], 2, "{orientation}");
+        let printed = ok(&mut a, "doc_open", json!({"path": "grid.pdf"}))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({"doc": printed}));
+        let sheet = &info["pages"][0];
+        assert!(sheet["width"].as_f64().unwrap() < sheet["height"].as_f64().unwrap(), "portrait sheet with {orientation}: {sheet}");
+        // Side by side: the second page level with the first, to its right.
+        let rows = ok(&mut a, "text_extract", json!({"doc": printed, "rect": [0, 0, 600, 850]}));
+        let rows: Vec<&str> = rows["pages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap().trim()).collect();
+        assert_eq!(rows, ["Page 1	Page 2", "Page 3	Page 4"], "{orientation}");
+        ok(&mut a, "doc_close", json!({"doc": printed}));
+    }
+    for bad in [
+        json!({"cols": 2}),
+        json!({"rows": 1}),
+        json!({"cols": 0, "rows": 1}),
+        json!({"cols": 2, "rows": 100}),
+        json!({"cols": -1, "rows": 2}),
+        json!({"cols": 2, "rows": 1, "per_sheet": 2}),
+        json!({"cols": 2, "rows": 1, "layout": "fit"}),
+    ] {
+        let mut args = json!({"doc": doc, "layout": "multiple", "path": "refused.pdf"});
+        for (k, v) in bad.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        assert!(matches!(a.call("doc_print", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("refused.pdf").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -11974,6 +12287,49 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(a.call("comments_copy", &json!({ "doc": src, "comments": [[9, 9]] })).is_err(), "no such comment");
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
+}
+
+/// A bitmap Type 3 font drawn with a flipped font matrix under a flipped text matrix (as TeX's
+/// bitmap fonts are): `text_lines` boxes a line by its glyphs' `d1` boxes (ISO 32000-2 §9.6.4),
+/// as high as the ink, not a 0.09-point sliver.
+#[test]
+fn text_lines_box_a_flipped_type3_line_by_its_glyphs() {
+    let content = "BT /F1 1 Tf 0.15 0 0 -0.15 10 20 Tm (ab) Tj ET";
+    let glyph_a = "46 0 3 -1 42 57 d1 3 -1 39 58 re f";
+    let glyph_b = "42 0 2 -18 40 38 d1 2 -18 38 56 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type3 /FontMatrix [1 0 0 -1 0 0] /FontBBox [-4 -18 51 57] /FirstChar 97 /LastChar 98 \
+         /Widths [46 42] /Encoding << /Differences [97 /a /b] >> /CharProcs << /a 6 0 R /b 7 0 R >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{glyph_a}\nendstream", glyph_a.len()),
+        format!("<< /Length {} >>\nstream\n{glyph_b}\nendstream", glyph_b.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let dir = workdir("type3-text-lines");
+    std::fs::write(dir.join("type3.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "type3.pdf" }))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    // Glyph space y -18..57, turned over twice: 57 × 0.15 above the baseline at y 20 (8.55) and
+    // 18 × 0.15 below it (2.7). Top-left origin on a 50-point page: 21.45 down to 32.7.
+    assert_eq!(lines["count"], 1, "{lines}");
+    assert_eq!(lines["lines"][0]["text"], "ab");
+    assert_eq!(lines["lines"][0]["rect"], json!([10.0, 21.45, 23.2, 32.7]), "{lines}");
 }
 
 #[test]
