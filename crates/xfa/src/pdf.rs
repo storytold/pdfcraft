@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetKind};
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
@@ -17,7 +17,9 @@ mod strip;
 
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
-use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+use common::{
+    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, standard_font, state_name,
+};
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
@@ -31,6 +33,9 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
+/// Private key on generated date fields: text the date pattern doesn't read is kept, and shown,
+/// as typed, as an XFA form keeps it (the forms layer reads this key).
+pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// Private key on the fields generated to name a signature field by its SOM path, one for each
 /// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
 /// fields they hold.
@@ -60,7 +65,7 @@ pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 /// Most pages searched for earlier pictures.
 const MAX_PAGES_SEARCHED: usize = 10_000;
-/// Most pictures remembered.
+/// Most pictures remembered from earlier passes.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
 
 struct Emitter<'a> {
@@ -105,8 +110,9 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     let mut names = HashSet::new();
     let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
     let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
-    let mut stack: Vec<(Object, String, bool, usize)> =
-        fields.as_array().into_iter().flatten().map(|f| (f.clone(), String::new(), false, 0)).collect();
+    // The accumulated name is shared by the children it is queued for, not copied into each.
+    let mut stack: Vec<(Object, std::rc::Rc<str>, bool, usize)> =
+        fields.as_array().into_iter().flatten().map(|f| (f.clone(), "".into(), false, 0)).collect();
     let mut seen = 0usize;
     while let Some((field, prefix, parent_is_sig, depth)) = stack.pop() {
         seen += 1;
@@ -119,7 +125,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             // Generated to name a signature field: only what it holds is looked at.
             if depth < MAX_FIELD_DEPTH {
                 let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-                stack.extend(kids.into_iter().map(|k| (k, String::new(), false, depth + 1)));
+                stack.extend(kids.into_iter().map(|k| (k, "".into(), false, depth + 1)));
             }
             continue;
         }
@@ -134,12 +140,12 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             continue;
         }
         let name = match d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())) {
-            Some(t) if prefix.is_empty() => t,
-            Some(t) => format!("{prefix}.{t}"),
+            Some(t) if prefix.is_empty() => t.into(),
+            Some(t) => format!("{prefix}.{t}").into(),
             None => prefix,
         };
         if !name.is_empty() {
-            names.insert(name.clone());
+            names.insert(name.to_string());
         }
         let is_sig = match d.name(b"FT") {
             Some(ft) => ft == b"Sig",
@@ -149,7 +155,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
         if is_sig && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some()) {
             // The appearance is on the field when it is its own widget, or on its one widget.
             let appearance = d.get(b"AP").cloned().or_else(|| kids.iter().find_map(|k| doc.resolve(k).as_dict().and_then(|k| k.get(b"AP").cloned())));
-            out.entry(name.clone()).or_insert(Signed { value: value.clone(), appearance });
+            out.entry(name.to_string()).or_insert(Signed { value: value.clone(), appearance });
         }
         if depth < MAX_FIELD_DEPTH {
             stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
@@ -204,9 +210,11 @@ impl Emitter<'_> {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
+                    d.set(DATE_KEY.to_vec(), Object::Bool(true));
                     let mut aa = Dict::new();
-                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx(\"{pattern}\");")));
-                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{pattern}\");")));
+                    let pattern = js_string(pattern);
+                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({pattern});")));
+                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx({pattern});")));
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
             }
@@ -485,9 +493,9 @@ impl Emitter<'_> {
             return Some(r);
         }
         let r = self.new_image_xobject(data, content_type, &hash)?;
-        if self.images.len() < MAX_REMEMBERED_IMAGES {
-            self.images.insert(hash, r);
-        }
+        // Always remembered: each entry is a hash and a reference to an object this pass wrote
+        // anyway, and a picture past a cap would be decoded and embedded again at every use.
+        self.images.insert(hash, r);
         Some(r)
     }
 
@@ -567,12 +575,30 @@ impl Emitter<'_> {
         let h = page.height;
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
-        for (i, item) in page.items.iter().enumerate() {
+        let steps = steps(&page.items);
+        let mut turn = None;
+        for (i, step) in steps.iter().enumerate() {
+            let item = match step {
+                Step::Item(item) => *item,
+                Step::Turn(t) => {
+                    let matrix = turn_matrix(t, h);
+                    turn = Some(matrix);
+                    last_link = None;
+                    content.extend(format!("q {} cm\n", matrix.map(n).join(" ")).bytes());
+                    continue;
+                }
+                Step::EndTurn => {
+                    turn = None;
+                    last_link = None;
+                    content.extend_from_slice(b"Q\n");
+                    continue;
+                }
+            };
             // A link's pieces join only across text and the underline drawn just before it: a fill,
             // picture, field or any other line (a rule) between them ends the link there.
             let keeps_link = match item {
                 Item::Text(_) => true,
-                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                Item::Line { from, to, .. } => matches!(steps.get(i + 1), Some(Step::Item(Item::Text(s)))
                     if (from.1 - to.1).abs() < 0.01
                         && (from.0 - s.x).abs() < 0.01
                         && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
@@ -627,7 +653,7 @@ impl Emitter<'_> {
                     );
                     content.extend(literal(&win_ansi(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
-                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link, turn)? {
                         annots.push(Object::Ref(r));
                     }
                 }
@@ -637,6 +663,8 @@ impl Emitter<'_> {
                     xobjects.set(name.clone().into_bytes(), Object::Ref(r));
                     content.extend(format!("q {} 0 0 {} {} {} cm /{name} Do Q\n", n(rect.w), n(rect.h), n(rect.x), n(h - rect.bottom())).bytes());
                 }
+                // Opened out by `steps`.
+                Item::Turned(_) => {}
                 Item::Widget(w) => {
                     if let Some(r) = self.widget(w, page, page_ref)? {
                         annots.push(Object::Ref(r));
@@ -675,12 +703,25 @@ impl Emitter<'_> {
     /// A span that goes on the link `last` ended in, on the same line, widens that annotation
     /// instead (a link whose text changes style partway is one link). An address PdfCraft
     /// wouldn't open from a document leaves the text as plain text, with one warning for the form.
-    fn text_link(&mut self, s: &Span, page_height: f64, page_ref: ObjRef, last: &mut Option<LinkPiece>) -> Result<Option<ObjRef>, XfaError> {
+    fn text_link(
+        &mut self,
+        s: &Span,
+        page_height: f64,
+        page_ref: ObjRef,
+        last: &mut Option<LinkPiece>,
+        turn: Option<[f64; 6]>,
+    ) -> Result<Option<ObjRef>, XfaError> {
         let piece = self.link_piece(s, page_height);
-        let Some((target, rect)) = piece else {
+        let Some((target, mut rect)) = piece else {
             *last = None;
             return Ok(None);
         };
+        // Turned text is drawn by a matrix, and clicked where that puts it. Its pieces don't join:
+        // that goes by the line they stand on before turning.
+        if let Some(m) = turn {
+            rect = turned_rect(rect, m);
+            *last = None;
+        }
         if let Some(prev) = last.as_mut()
             && prev.uri == target
             && (prev.baseline - s.baseline).abs() < 0.01
@@ -763,6 +804,45 @@ fn write_button_action(action: Option<&Action>, d: &mut Dict) {
         }
         None => {}
     }
+}
+
+/// What a page's content is written from: its items, with a turned draw opened out.
+enum Step<'a> {
+    Item(&'a Item),
+    Turn(&'a Turned),
+    EndTurn,
+}
+
+fn steps(items: &[Item]) -> Vec<Step<'_>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        if let Item::Turned(t) = item {
+            out.push(Step::Turn(t));
+            out.extend(t.items.iter().map(Step::Item));
+            out.push(Step::EndTurn);
+        } else {
+            out.push(Step::Item(item));
+        }
+    }
+    out
+}
+
+/// The matrix that turns `t` about its point, on a page `page_height` tall.
+fn turn_matrix(t: &Turned, page_height: f64) -> [f64; 6] {
+    let (cos, sin) = match t.quarters {
+        1 => (0.0, 1.0),
+        2 => (-1.0, 0.0),
+        _ => (0.0, -1.0),
+    };
+    let (x, y) = (t.about.0, page_height - t.about.1);
+    [cos, sin, -sin, cos, x - cos * x + sin * y, y - sin * x - cos * y]
+}
+
+/// Rectangle `r`, `[left, bottom, right, top]`, under quarter-turn matrix `m`.
+fn turned_rect(r: [f64; 4], m: [f64; 6]) -> [f64; 4] {
+    let at = |x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    let (a, b) = (at(r[0], r[1]), at(r[2], r[3]));
+    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
 /// The link annotation a page's text last ended in: the next piece of the same link on the same
@@ -961,7 +1041,7 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex32;
+    use super::*;
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {
@@ -973,5 +1053,32 @@ mod tests {
         let mut ok = b"Ff".to_vec();
         ok.resize(64, b'0');
         assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
+
+    #[test]
+    fn a_picture_past_the_earlier_pass_cap_is_still_embedded_once() {
+        let mut doc = Document::new_empty();
+        let mut em = Emitter {
+            doc: &mut doc,
+            images: HashMap::new(),
+            fields: Vec::new(),
+            radio_groups: HashMap::new(),
+            radio_selected: HashMap::new(),
+            field_count: 0,
+            warnings: Vec::new(),
+            signed: Default::default(),
+            taken: Default::default(),
+            nodes: HashMap::new(),
+        };
+        let png = crate::fixtures::tiny_png();
+        let picture = |i: u32| [png.clone(), i.to_be_bytes().to_vec()].concat();
+        let last = MAX_REMEMBERED_IMAGES as u32 + 10;
+        for i in 0..=last {
+            em.image_xobject(&picture(i), "image/png").expect("decodes");
+        }
+        let before = em.doc.object_numbers().len();
+        let again = em.image_xobject(&picture(last), "image/png").expect("decodes");
+        assert_eq!(em.doc.object_numbers().len(), before, "no new object for a repeated picture");
+        assert_eq!(em.image_xobject(&picture(last), "image/png"), Some(again));
     }
 }

@@ -2,7 +2,7 @@
 //! file in its original format. A picture drawn through grouped
 //! Form artwork (as Word, InDesign and many scanners write them) is found inside the group.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document as Cos, ObjRef, Object};
 
@@ -13,20 +13,56 @@ const MAX_COPY_PIXELS: u64 = 64_000_000;
 /// How deep Form artwork is searched for its picture.
 const MAX_FORM_DEPTH: usize = 12;
 
+/// A picture on a page, with its index in [`Document::page_images`].
+pub type PagePicture = (usize, pdfcraft_edit::PageImage);
+
+/// The topmost of `pictures` under user-space point `at` (`[x, y]`). `pictures` is bottom first,
+/// as [`Document::page_pictures_job`] lists them, so the last one that holds `at` wins.
+pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture> {
+    pictures.iter().rev().find(|(_, image)| image.contains(at))
+}
+
+/// The pictures on `page`, bottom first: raster images, and Form artwork that holds one.
+fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
+    let images = pdfcraft_edit::page_images(cos, page).unwrap_or_default();
+    // Artwork drawn many times is searched once.
+    let mut holds_one: HashMap<ObjRef, bool> = HashMap::new();
+    images
+        .into_iter()
+        .enumerate()
+        .filter(|(_, i)| match (i.is_form, i.object) {
+            (false, Some(_)) => true,
+            (true, Some(form)) => *holds_one.entry(form).or_insert_with(|| picture_in_form(cos, form).is_some()),
+            _ => false,
+        })
+        .collect()
+}
+
 impl Document {
     /// The topmost picture on `page` under user-space point `at`, as its index in
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
-        let inside = |r: &[f64; 4]| (r[0]..=r[2]).contains(&at[0]) && (r[1]..=r[3]).contains(&at[1]);
         self.page_images(page).iter().rposition(|i| {
-            inside(&i.rect)
+            i.contains(at)
                 && match (i.is_form, i.object) {
                     (false, Some(_)) => true,
                     (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
                     _ => false,
                 }
         })
+    }
+
+    /// Work that lists the pictures on `page`, bottom first, for another thread: it reads every
+    /// drawing operator on the page, seconds on a dense one, so it must not run on the window
+    /// thread. Look a point up with [`picture_at`].
+    ///
+    /// `None` when the document can't be read. The work reads the document as it is now: later
+    /// edits aren't seen (key its answer by [`Document::edit_generation`]). It returns no pictures
+    /// for a page that doesn't exist or can't be read.
+    pub fn page_pictures_job(&self, page: usize) -> Option<impl FnOnce() -> Vec<PagePicture> + Send + 'static> {
+        let cos = self.editor.as_ref()?.cos.clone();
+        Some(move || crate::guard(|| pictures(&cos, page)).unwrap_or_default())
     }
 
     /// Copy Image in Original Format: picture `index` on `page` as a file (extension, bytes):
@@ -113,7 +149,7 @@ pub(crate) fn added_picture(cos: &Cos, file: &[u8]) -> Option<ObjRef> {
 }
 
 /// The largest raster image Form `form` draws through its resources (nested Forms included).
-fn picture_in_form(cos: &Cos, form: ObjRef) -> Option<ObjRef> {
+pub(crate) fn picture_in_form(cos: &Cos, form: ObjRef) -> Option<ObjRef> {
     let mut seen = HashSet::from([form]);
     let mut best: Option<(u64, ObjRef)> = None;
     let res = resources(cos, form)?;

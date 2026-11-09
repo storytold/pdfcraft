@@ -410,6 +410,8 @@ fn parse_bf_segment(
         entries.push(BfRange {
             range: Range { start, end },
             dst_base,
+            // PdfCraft patch (4): a binary CMap doesn't record the length.
+            code_len: 0,
         });
 
         prev_end = Some(end);

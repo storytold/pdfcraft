@@ -131,18 +131,20 @@ fn finite(point: [f64; 2]) -> bool {
 
 fn geometry_of(content: &[u8]) -> Geometry {
     let doc = Document::open(Arc::new(one_page_pdf(content))).unwrap();
-    snap::geometry(&doc, 0).unwrap()
+    // The caps these properties were written for.
+    let limits = snap::Limits { segments: MAX_GEOMETRY_SEGMENTS, targets: 2 * MAX_GEOMETRY_SEGMENTS, bytes: 16 << 20 };
+    snap::geometry_with_limits(&doc, 0, limits).unwrap()
 }
 
 /// Checks the bounds and finiteness that snapping relies on, and returns the extracted geometry.
 fn check_snap_invariants(content: &[u8]) -> Geometry {
     assert!(content.len() <= MAX_CONTENT_BYTES, "generated content exceeded the byte cap");
     let geometry = geometry_of(content);
-    assert!(geometry.segments.len() <= MAX_GEOMETRY_SEGMENTS, "geometry exceeded the segment cap: {}", geometry.segments.len());
-    assert!(geometry.endpoints.len().saturating_add(geometry.midpoints.len()) <= MAX_SNAP_TARGETS, "geometry exceeded the snap-target cap");
-    assert!(geometry.segments.iter().flatten().copied().all(finite), "geometry contains a non-finite segment coordinate");
-    assert!(geometry.endpoints.iter().copied().all(finite), "geometry contains a non-finite endpoint");
-    assert!(geometry.midpoints.iter().copied().all(finite), "geometry contains a non-finite midpoint");
+    assert!(geometry.segment_count() <= MAX_GEOMETRY_SEGMENTS, "geometry exceeded the segment cap: {}", geometry.segment_count());
+    assert!(geometry.endpoints().count().saturating_add(geometry.midpoints().count()) <= MAX_SNAP_TARGETS, "geometry exceeded the snap-target cap");
+    assert!(geometry.segments().flatten().all(finite), "geometry contains a non-finite segment coordinate");
+    assert!(geometry.endpoints().all(finite), "geometry contains a non-finite endpoint");
+    assert!(geometry.midpoints().all(finite), "geometry contains a non-finite midpoint");
 
     geometry.intersection_limited([0.0, 0.0], 10_000.0);
     let snap = geometry.snap([0.0, 0.0], 10_000.0, SnapOptions::default()).unwrap();
@@ -173,7 +175,7 @@ fn mutated_snap_geometry_stays_bounded_and_finite() {
 fn high_curvature_geometry_hits_segment_cap() {
     let stress_curve = b"0 0 m 0 100000000 100000000 100000000 100000000 0 c S ".repeat(6);
     let geometry = check_snap_invariants(&stress_curve);
-    assert!(geometry.truncated, "high-curvature geometry did not report its extraction cap ({} segments)", geometry.segments.len());
+    assert!(geometry.truncated, "high-curvature geometry did not report its extraction cap ({} segments)", geometry.segment_count());
 }
 
 fn two_piece_pdf(first: &[u8], second: &[u8]) -> Vec<u8> {
@@ -215,4 +217,96 @@ fn snap_at_box_corner(first: &[u8]) -> Option<snap::Snap> {
 fn trailing_comment_in_previous_piece_hides_next_piece_first_line() {
     assert!(snap_at_box_corner(b"q % tail comment, no end of line").is_none(), "snapped to a rectangle the renderer comments out");
     assert!(snap_at_box_corner(b"q % tail comment\n").is_some(), "control: the rectangle is drawn");
+}
+
+/// A snap computed by scanning the whole page, as snapping did before its grid index: the
+/// reference the indexed snap must equal.
+fn snap_by_scan(g: &Geometry, at: [f64; 2], tolerance: f64, options: SnapOptions) -> Option<snap::Snap> {
+    let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let nearest = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len2 = dx * dx + dy * dy;
+        if len2 <= f64::EPSILON {
+            return a;
+        }
+        let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0);
+        [a[0] + t * dx, a[1] + t * dy]
+    };
+    let mut best: Option<snap::Snap> = None;
+    let consider = |best: &mut Option<snap::Snap>, p: [f64; 2], kind: snap::SnapKind| {
+        let d = distance(at, p);
+        if d <= tolerance && best.is_none_or(|b| d < b.distance - 1e-9) {
+            *best = Some(snap::Snap { point: p, kind, distance: d });
+        }
+    };
+    if options.endpoints {
+        g.endpoints().for_each(|p| consider(&mut best, p, snap::SnapKind::Endpoint));
+    }
+    if options.midpoints {
+        g.midpoints().for_each(|p| consider(&mut best, p, snap::SnapKind::Midpoint));
+    }
+    let local: Vec<[[f64; 2]; 2]> = g.segments().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
+    if options.intersections {
+        for (i, s) in local.iter().enumerate() {
+            for t in local.iter().skip(i + 1) {
+                if let Some(p) = snap::intersection(s[0], s[1], t[0], t[1]) {
+                    consider(&mut best, p, snap::SnapKind::Intersection);
+                }
+            }
+        }
+    }
+    if options.paths && best.is_none() {
+        g.segments().for_each(|[a, b]| consider(&mut best, nearest(at, a, b), snap::SnapKind::Path));
+    }
+    best
+}
+
+/// Whether more than 256 segments pass within `tolerance` of `at`, by a scan of the whole page.
+fn limited_by_scan(g: &Geometry, at: [f64; 2], tolerance: f64) -> bool {
+    g.segments()
+        .filter(|[a, b]| {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 <= f64::EPSILON { 0.0 } else { (((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) };
+            (at[0] - (a[0] + t * dx)).hypot(at[1] - (a[1] + t * dy)) <= tolerance
+        })
+        .count()
+        > 256
+}
+
+#[test]
+fn indexed_snapping_matches_a_scan_of_the_whole_page() {
+    let mut rng = Rng(SEED ^ 0x5eed);
+    let mut checked = 0usize;
+    for case in 0..200 {
+        let seed = SEEDS[rng.below(SEEDS.len())];
+        // A drawing with many short lines, some long ones (kept outside the cells) and curves.
+        let mut content = mutate(&mut rng, seed);
+        for i in 0..200 + rng.below(800) {
+            let (x, y) = (rng.below(600) as f64, rng.below(800) as f64);
+            let line = match i % 7 {
+                0 => format!("{x} {y} m {} {} l S ", x + rng.below(600) as f64, y),
+                1 => format!("{x} {y} m {} {} {} {} {} {} c S ", x + 5.0, y + 9.0, x + 9.0, y + 5.0, x + 12.0, y),
+                _ => format!("{x} {y} m {} {} l S ", x + rng.below(20) as f64, y + rng.below(20) as f64),
+            };
+            content.extend_from_slice(line.as_bytes());
+        }
+        let g = geometry_of(&content);
+        for _ in 0..40 {
+            let at = [rng.below(700) as f64 - 50.0 + 0.37, rng.below(900) as f64 - 50.0 + 0.61];
+            let tolerance = [0.5, 2.0, 7.5, 40.0, 400.0][rng.below(5)];
+            let options = SnapOptions {
+                endpoints: rng.below(4) != 0,
+                midpoints: rng.below(4) != 0,
+                intersections: rng.below(3) != 0,
+                paths: rng.below(2) == 0,
+            };
+            let indexed = g.snap(at, tolerance, options).unwrap();
+            let scanned = snap_by_scan(&g, at, tolerance, options);
+            assert_eq!(indexed, scanned, "case {case} at {at:?} tolerance {tolerance} {options:?}");
+            assert_eq!(g.intersection_limited(at, tolerance), limited_by_scan(&g, at, tolerance), "case {case} at {at:?} tolerance {tolerance}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 8000);
 }

@@ -1,10 +1,14 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
+
+/// `doc_optimize` with `target_bytes`: (max target ppi, max JPEG quality) per extra attempt, mildest first.
+/// The quality applies only to images the caller left on JPEG; zip and retain keep their encoding.
+const TARGET_LADDER: [(f64, u8); 5] = [(110.0, 45), (96.0, 35), (72.0, 28), (54.0, 20), (36.0, 12)];
 
 /// Bookmarks in one page of the bookmark list, by default and at most.
 const BOOKMARK_PAGE: usize = 100;
@@ -120,6 +124,7 @@ impl Automation {
         self.texts.remove(&id);
         self.listed.retain(|(d, _), _| *d != id);
         self.evicted.remove(&id);
+        self.ocr_reviews.remove(&id);
         Ok(json!({ "closed": id.0 }))
     }
 
@@ -130,18 +135,18 @@ impl Automation {
     pub(crate) fn doc_save_with(&mut self, a: &Args, write: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        let target = match a.opt_str("path")? {
+        let explicit = a.opt_str("path")?;
+        let target = match explicit {
             Some(p) => self.resolve(p, true)?,
             None => {
                 // Saving in place writes where the file was opened from, which the read root
-                // allows and the write root may not.
+                // allows and the write root may not. It also goes through --root again: a
+                // folder on the remembered path may have become a link out since (#1791).
                 let own = doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?;
-                let own_path = PathBuf::from(&own);
-                self.check_roots(&own, &own_path, file_access::Access::Write)?;
-                own_path
+                self.resolve(&own, true)?
             }
         };
-        let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        let same_file = explicit.is_none() || doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
@@ -279,7 +284,8 @@ impl Automation {
     }
 
     pub(crate) fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset};
+        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, Preset};
+        const MONO_KEYS: [&str; 4] = ["downsample", "ppi", "above_ppi", "compression"];
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -317,12 +323,45 @@ impl Automation {
         };
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
+        if let Some(mono) = a.get("mono") {
+            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, jbig2, retain)"));
+            let mono = mono.as_object().ok_or_else(|| {
+                ToolError::InvalidArgs("mono must be an object: { downsample, ppi, above_ppi, compression: ccitt_g4|jbig2|retain }".into())
+            })?;
+            // A misspelled key would otherwise leave the preset's setting in place unnoticed.
+            if let Some(key) = mono.keys().find(|k| !MONO_KEYS.contains(&k.as_str())) {
+                return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} ({})", MONO_KEYS.join(", "))));
+            }
+            let m = &mut settings.mono;
+            if let Some(d) = mono.get("downsample") {
+                m.downsample = d.as_bool().ok_or_else(|| ToolError::InvalidArgs(format!("mono downsample must be true or false, not {d}")))?;
+            }
+            for (key, ppi) in [("ppi", &mut m.target_ppi), ("above_ppi", &mut m.above_ppi)] {
+                if let Some(p) = mono.get(key) {
+                    *ppi = p
+                        .as_f64()
+                        .filter(|p| p.is_finite())
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("mono {key} must be a number, not {p}")))?
+                        .clamp(9.0, 2400.0);
+                }
+            }
+            m.above_ppi = m.above_ppi.max(m.target_ppi);
+            if let Some(c) = mono.get("compression") {
+                m.compression = match c.as_str() {
+                    Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
+                    Some("jbig2") => MonoCompression::Jbig2,
+                    Some("retain") => MonoCompression::Retain,
+                    _ => return Err(unknown(c)),
+                };
+            }
+        }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),
             ("discard_thumbnails", &mut settings.discard_thumbnails),
             ("discard_alternate_images", &mut settings.discard_alternate_images),
             ("discard_tags", &mut settings.discard_tags),
             ("discard_print_settings", &mut settings.discard_print_settings),
+            ("discard_form_actions", &mut settings.discard_form_actions),
             ("flate_unencoded", &mut settings.flate_unencoded),
             ("object_streams", &mut settings.object_streams),
             ("lzw_to_flate", &mut settings.lzw_to_flate),
@@ -346,7 +385,45 @@ impl Automation {
                 })
                 .collect::<Result<_>>()?,
         };
-        let (bytes, r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
+        let target = match a.opt_int("target_bytes")? {
+            None => None,
+            Some(t) if t >= 1 => Some(usize::try_from(t).map_err(|_| ToolError::InvalidArgs(format!("target_bytes {t} is too large")))?),
+            Some(t) => return Err(ToolError::InvalidArgs(format!("target_bytes must be at least 1, not {t}"))),
+        };
+        let (mut bytes, mut r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
+        let mut attempts = 1;
+        let mut step_used = 0;
+        // Settings already optimized with; a rung that changes nothing is not run again.
+        let mut tried = vec![settings.clone()];
+        if let Some(t) = target {
+            // Stronger image settings, one rung per attempt, until the copy fits. Every attempt
+            // starts from the open document, so a failed one changes nothing; the number of
+            // attempts is fixed. The smallest copy is kept if none fits.
+            for (k, &(ppi, quality)) in TARGET_LADDER.iter().enumerate() {
+                if bytes.len() <= t {
+                    break;
+                }
+                let mut s = settings.clone();
+                for img in [&mut s.color, &mut s.gray] {
+                    img.downsample = true;
+                    img.target_ppi = img.target_ppi.min(ppi);
+                    img.above_ppi = img.above_ppi.min(ppi * 1.5).max(img.target_ppi);
+                    // Only a caller who chose JPEG gets a lower quality; zip and retain stay as asked.
+                    if let Compression::Jpeg(q) = img.compression {
+                        img.compression = Compression::Jpeg(q.min(quality));
+                    }
+                }
+                if tried.contains(&s) {
+                    continue;
+                }
+                let (b2, r2) = self.session.optimized_bytes(id, &s, &discard).map_err(failed)?;
+                tried.push(s);
+                attempts += 1;
+                if b2.len() < bytes.len() {
+                    (bytes, r, step_used) = (b2, r2, k + 1);
+                }
+            }
+        }
         write_atomic(&path, &bytes)?;
         fn valid_version(v: &[u8]) -> Option<&str> {
             if matches!(v, [b'1'..=b'9', b'.', b'0'..=b'9']) { std::str::from_utf8(v).ok() } else { None }
@@ -356,7 +433,9 @@ impl Automation {
                 let pw = self.doc(a).ok().and_then(|d| d.password.as_deref());
                 let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), pw).ok()?;
                 let root = doc.root()?;
-                doc.get(root).as_dict()?.name(b"Version").and_then(valid_version).map(str::to_owned)
+                // Through a reference too, as the optimizer reads it.
+                let version = doc.get(root).as_dict()?.get(b"Version")?.clone();
+                doc.resolve(&version).as_name().and_then(valid_version).map(str::to_owned)
             })
             .flatten();
         let header_version = bytes.strip_prefix(b"%PDF-").and_then(|b| b.get(..3)).and_then(valid_version);
@@ -364,7 +443,19 @@ impl Automation {
         // entry). Both are "d.d", so text order is version order.
         let pdf_version = catalog_version.as_deref().into_iter().chain(header_version).max();
         let o = &r.optimize;
-        Ok(json!({
+        let mut extra = json!({});
+        if let Some(t) = target {
+            let (ppi, quality) = step_used.checked_sub(1).and_then(|k| TARGET_LADDER.get(k)).copied().unzip();
+            let lossy = matches!(settings.color.compression, Compression::Jpeg(_)) || matches!(settings.gray.compression, Compression::Jpeg(_));
+            let quality = quality.filter(|_| lossy);
+            extra = json!({
+                "target_bytes": t,
+                "target_reached": bytes.len() <= t,
+                "attempts": attempts,
+                "target_settings": { "step": step_used, "max_ppi": ppi, "max_jpeg_quality": quality },
+            });
+        }
+        let mut out = json!({
             "path": path.to_string_lossy(),
             "pdf_version": pdf_version,
             "object_streams": settings.effective_object_streams(),
@@ -375,11 +466,14 @@ impl Automation {
             "images": o.images,
             "images_resampled": o.images_resampled,
             "images_recompressed": o.images_recompressed,
+            "images_refused": o.images_refused,
             "image_bytes_before": o.image_bytes_before,
             "image_bytes_after": o.image_bytes_after,
             "thumbnails": o.thumbnails,
             "alternate_images": o.alternate_images,
             "tags_removed": o.tags_removed,
+            "print_settings": o.print_settings,
+            "form_actions": o.form_actions,
             "streams_compressed": o.streams_compressed,
             "lzw_streams": o.lzw_streams,
             "invalid_links": o.invalid_links,
@@ -388,7 +482,11 @@ impl Automation {
             "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
-        }))
+        });
+        if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
+            o.extend(e.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        Ok(out)
     }
 
     /// A watermark or background picture: `file` (an image or a PDF) and `file_page` (1-based).
@@ -407,6 +505,23 @@ impl Automation {
     pub(crate) fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
+        self.applied(a)
+    }
+
+    /// `text_prepare`: make a page's grouped text editable, with what that edit itself prepared,
+    /// repaired and left grouped.
+    pub(crate) fn prepare_text(&mut self, a: &Args, page: usize) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let prepared = self.session.prepare_text(id, page).map_err(failed)?;
+        let mut out = self.applied(a)?;
+        out["prepared_groups"] = json!(prepared.expanded);
+        out["repaired_fonts"] = json!(prepared.repaired_fonts);
+        out["refused_groups"] = json!(prepared.refused);
+        Ok(out)
+    }
+
+    /// The document's summary after an edit, with what it stored as typed but drew with `?`.
+    fn applied(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut out = summary(doc);
         // Text the edit stored as typed but drew with `?` (its font can't draw it): said, not silent.
@@ -414,6 +529,28 @@ impl Automation {
             out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
         }
         Ok(out)
+    }
+
+    /// Pages whose own backdrop hides a background (see `pdfcraft_edit::backdrop`).
+    pub(crate) fn backdrops(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let doc = self.doc(a)?;
+        let found: Vec<Value> = pages
+            .iter()
+            .zip(doc.page_backdrops(&pages))
+            .filter_map(|(p, found)| {
+                let kind = match found? {
+                    pdfcraft_engine::Backdrop::Fill => "fill",
+                    pdfcraft_engine::Backdrop::Image => "image",
+                };
+                Some(json!({ "page": p + 1, "backdrop": kind }))
+            })
+            .collect();
+        Ok(json!({ "pages": found }))
     }
 
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
@@ -483,6 +620,7 @@ impl Automation {
                     color: color("color", [1.0; 3])?,
                     opacity: a.opt_num("opacity")?.unwrap_or(1.0),
                     scale: a.opt_num("scale")?.unwrap_or(1.0).clamp(0.01, 1.0),
+                    replace_backdrop: a.opt_bool("replace_backdrop")?.unwrap_or(true),
                     ..Background::default()
                 },
                 replace,

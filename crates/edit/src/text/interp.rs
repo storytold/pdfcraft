@@ -18,13 +18,33 @@ pub(super) struct TextState {
     /// graphics state the text was painted with that [`TextState::ops`] doesn't restate.
     pub(super) stroke: Vec<Op>,
     pub(super) line_width: Option<f64>,
-    ext_gstate: Vec<Vec<u8>>,
+    ext_gstate: Vec<GsSelection>,
     /// The dash pattern and line cap in force (see [`Ts`]): compared, not restated.
     pub(super) dash: Dash,
     pub(super) line_cap: i64,
 }
 
 impl TextState {
+    /// The state a page's content starts in (ISO 32000-2 §8.4.1, §9.3.1): what is in force on
+    /// top of the page, after its content wrapped in `q`/`Q`.
+    pub(crate) fn initial() -> Self {
+        TextState {
+            font: None,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            fill: Vec::new(),
+            render_mode: 0,
+            stroke: Vec::new(),
+            line_width: None,
+            ext_gstate: Vec::new(),
+            dash: (Vec::new(), 0.0),
+            line_cap: 0,
+        }
+    }
+
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
@@ -54,13 +74,17 @@ impl TextState {
     ///
     /// A `gs` has no inverse, so a selection `current` has and this state doesn't stays in force:
     /// run these inside a `q`/`Q` that starts from `current`, one per state drawn.
-    pub(crate) fn paint_ops(&self, current: &TextState) -> Vec<Op> {
+    ///
+    /// `ctm` is the CTM where they run. A soft mask is placed by the CTM its `gs` ran at
+    /// (ISO 32000-2 §11.6.5.2), so one selected at another CTM is selected there and the CTM
+    /// set back.
+    pub(crate) fn paint_ops(&self, current: &TextState, ctm: [f64; 6]) -> Vec<Op> {
         let n = pdfcraft_content::num;
         let mut v = Vec::new();
         // The selections both share stay in force; the ones after them are selected again in order.
         let shared = self.ext_gstate.iter().zip(&current.ext_gstate).take_while(|(a, b)| a == b).count();
-        for name in self.ext_gstate.iter().skip(shared) {
-            v.push(Op::new("gs", vec![Object::Name(name.clone())]));
+        for sel in self.ext_gstate.iter().skip(shared) {
+            sel.push_ops(&mut v, ctm);
         }
         // A reselected ExtGState may set `/LW`, so the width (already the effective one) follows it.
         let reselected = !v.is_empty();
@@ -194,9 +218,139 @@ pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
+/// A convex part of the page, in page space: the corners of a convex polygon, in order. With fewer
+/// than three corners it covers nothing.
+pub(super) type Region = Vec<[f64; 2]>;
+
+/// A clip, as the union of the convex regions it leaves visible: one for each rectangle of its
+/// path. With no parts it leaves nothing visible.
+pub(super) type Clip = Vec<Region>;
+
+/// The most corners a clip region keeps. Each intersection with a four-cornered clip can add
+/// corners, so past this a region becomes its bounding box: still all it held, and a stream that
+/// sets clip after clip stays bounded.
+const MAX_REGION_CORNERS: usize = 32;
+
+/// The most parts a clip keeps. Clips intersect part by part, so past this its parts become one,
+/// the box around them: still all they held, and the work stays bounded.
+const MAX_CLIP_PARTS: usize = 16;
+
+/// `r` (`[x0, y0, x1, y1]`, either way round) under `m`, keeping its shape when `m` turns or
+/// skews it. A rectangle of no area is a region that covers nothing, however thin a rectangle
+/// with area is; `None` when a corner, or its measure, is not finite.
+pub(super) fn region(m: &Matrix, r: [f64; 4]) -> Option<Region> {
+    let corners: Region = [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]
+        .into_iter()
+        .map(|(x, y)| {
+            let (x, y) = m.apply(x, y);
+            [x, y]
+        })
+        .collect();
+    let finite = corners.iter().flatten().all(|v| v.is_finite()) && twice_area(&corners).is_finite() && perimeter(&corners).is_finite();
+    finite.then(|| if encloses_area(&corners) { corners } else { Vec::new() })
+}
+
+/// The polygon's signed area, doubled: positive when its corners run anticlockwise (y up).
+/// Measured from its first corner, so that far from the origin it keeps its precision.
+fn twice_area(p: &[[f64; 2]]) -> f64 {
+    let Some(o) = p.first() else { return 0.0 };
+    p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| (a[0] - o[0]) * (b[1] - o[1]) - (b[0] - o[0]) * (a[1] - o[1])).sum()
+}
+
+fn perimeter(p: &[[f64; 2]]) -> f64 {
+    p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1])).sum()
+}
+
+/// Whether the polygon encloses any area: its area against the square of its perimeter, so the
+/// answer is the same at any scale and a thin box still has one.
+fn encloses_area(p: &[[f64; 2]]) -> bool {
+    let around = perimeter(p);
+    p.len() >= 3 && twice_area(p).abs() > 1e-12 * around * around
+}
+
+/// The four corners of the box around `points`.
+fn bounding<'a>(points: impl Iterator<Item = &'a [f64; 2]>) -> Region {
+    let b = points.fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
+}
+
+/// The part of `a` inside `b`, both convex (Sutherland-Hodgman: `a` cut by each edge of `b`). Clips
+/// in force intersect, so text shows only where all of them let it through. Regions that share no
+/// area (apart, or meeting only along an edge) leave an empty one, as does an empty `a` or `b`.
+pub(super) fn intersect(a: &Region, b: &Region) -> Region {
+    if a.len() < 3 || b.len() < 3 {
+        return Vec::new();
+    }
+    let turn = twice_area(b).signum();
+    let mut out = a.clone();
+    for (p, q) in b.iter().zip(b.iter().cycle().skip(1)) {
+        // Positive on the side of the edge `p` → `q` that `b` lies on.
+        let inside = |v: &[f64; 2]| turn * ((q[0] - p[0]) * (v[1] - p[1]) - (q[1] - p[1]) * (v[0] - p[0]));
+        let cut = std::mem::take(&mut out);
+        for (s, e) in cut.iter().zip(cut.iter().cycle().skip(1)) {
+            let (ds, de) = (inside(s), inside(e));
+            if ds >= 0.0 {
+                out.push(*s);
+            }
+            // The edge crosses the line: `ds - de` is not zero, as one is negative and one is not.
+            if (ds >= 0.0) != (de >= 0.0) {
+                let t = ds / (ds - de);
+                out.push([s[0] + t * (e[0] - s[0]), s[1] + t * (e[1] - s[1])]);
+            }
+        }
+    }
+    if !encloses_area(&out) {
+        return Vec::new();
+    }
+    if out.len() > MAX_REGION_CORNERS {
+        out = bounding(out.iter());
+    }
+    out
+}
+
+/// The clip that leaves visible only what both `a` and `b` do: each part of one intersected with
+/// each part of the other.
+pub(super) fn clip_within(a: &Clip, b: &Clip) -> Clip {
+    let mut out: Clip = a.iter().flat_map(|p| b.iter().map(move |q| intersect(p, q))).filter(|r| !r.is_empty()).collect();
+    if out.len() > MAX_CLIP_PARTS {
+        out = vec![bounding(out.iter().flatten())];
+    }
+    out
+}
+
+/// Whether the box `r` shows through `clip`: through any of its parts.
+pub(super) fn clip_shows(r: [f64; 4], clip: &Clip) -> bool {
+    clip.iter().any(|part| shows(r, part))
+}
+
+/// Whether the box `r` (`[x0, y0, x1, y1]`) and `region` share some area, by the separating axis
+/// test: two convex shapes are apart exactly when their shadows on some axis, one of the box's or
+/// a normal of one of the region's edges, do not overlap. Touching is not sharing.
+pub(super) fn shows(r: [f64; 4], region: &Region) -> bool {
+    if region.len() < 3 {
+        return false;
+    }
+    let corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
+    let apart = |axis: [f64; 2]| {
+        let shadow = |points: &[[f64; 2]]| {
+            points.iter().map(|p| p[0] * axis[0] + p[1] * axis[1]).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+        };
+        let ((a0, a1), (b0, b1)) = (shadow(&corners), shadow(region));
+        a1 <= b0 || b1 <= a0
+    };
+    // An edge of no length (two corners in one place) has no normal to test.
+    let normals = region.iter().zip(region.iter().cycle().skip(1)).map(|(p, q)| [p[1] - q[1], q[0] - p[0]]).filter(|n| n[0] != 0.0 || n[1] != 0.0);
+    !([[1.0, 0.0], [0.0, 1.0]].into_iter().chain(normals).any(apart))
+}
+
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
+    /// The clip in force, if any, as what it leaves visible: the intersection of every
+    /// rectangular content-stream clip (`re` `W`/`W*` `n`, ISO 32000-2 §8.5.4) and every enclosing
+    /// form's `/BBox` ([`super::lines`]), each in the shape its matrix gives it. `q`/`Q` save and
+    /// restore it along with the rest of `Ts`.
+    pub(super) clip: Option<Clip>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
@@ -222,7 +376,7 @@ pub(super) struct Ts {
     /// The line width a `w` or an ExtGState's `/LW` set (`None`: the initial 1.0).
     pub(super) line_width: Option<f64>,
     /// The ExtGState resources selected with `gs`, oldest first (see [`select_gs`]).
-    pub(super) ext_gstate: Vec<Vec<u8>>,
+    pub(super) ext_gstate: Vec<GsSelection>,
     /// The dash pattern a `d` or an ExtGState's `/D` set (initially solid: `[] 0`).
     pub(super) dash: Dash,
     /// The line cap a `J` or an ExtGState's `/LC` set (initially 0, butt).
@@ -255,12 +409,38 @@ const MAX_GS: usize = 32;
 /// Record `gs /name` in `list`. A `gs` sets every parameter its dictionary names to an absolute
 /// value, so a later selection of the same dictionary overrides the earlier one completely: the
 /// earlier entry goes, which keeps replaying the list equivalent to replaying the stream.
-fn select_gs(list: &mut Vec<Vec<u8>>, name: &[u8]) {
-    list.retain(|n| n != name);
+fn select_gs(list: &mut Vec<GsSelection>, name: &[u8], anchor: Option<[f64; 6]>) {
+    list.retain(|s| s.name != name);
     if list.len() >= MAX_GS {
         list.remove(0);
     }
-    list.push(name.to_vec());
+    list.push(GsSelection { name: name.to_vec(), anchor });
+}
+
+/// One `gs` selection: the ExtGState's resource name, and the CTM it ran at when the dictionary
+/// has a soft mask, which that CTM places (ISO 32000-2 §11.6.5.2).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GsSelection {
+    name: Vec<u8>,
+    anchor: Option<[f64; 6]>,
+}
+
+impl GsSelection {
+    /// Select this ExtGState from where the CTM is `ctm`: at its anchor, then back to `ctm`. Both
+    /// moves need an invertible matrix; without one it is selected where it runs.
+    fn push_ops(&self, v: &mut Vec<Op>, ctm: [f64; 6]) {
+        let gs = Op::new("gs", vec![Object::Name(self.name.clone())]);
+        let moves = self.anchor.filter(|a| *a != ctm).and_then(|a| {
+            let (anchor, here) = (Matrix(a), Matrix(ctm));
+            Some((anchor.then(&here.invert()?), here.then(&anchor.invert()?)))
+        });
+        let Some((to, back)) = moves else {
+            v.push(gs);
+            return;
+        };
+        let cm = |m: Matrix| Op::new("cm", m.0.iter().map(|x| pdfcraft_content::num(*x)).collect());
+        v.extend([cm(to), gs, cm(back)]);
+    }
 }
 
 /// The text-showing operators of one stream with their text, font, box and baseline.
@@ -301,6 +481,14 @@ pub(super) struct Shown {
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
+    /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
+    pub(super) soft_break: bool,
+    pub(super) hard_break: bool,
+    /// The `/N` a `/PCSoft` marker carried: how many separator characters the wrap consumed (0
+    /// for a Chinese/Japanese word split). Meaningless unless `soft_break` is set; 1 for a
+    /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
+    /// matching the single space a rejoin always used before #2529.
+    pub(super) soft_gap: usize,
 }
 
 impl Shown {
@@ -434,6 +622,9 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
+    /// `TJ` that may start with the space glyph that gap widened.
+    pub(super) gap_space: bool,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -445,6 +636,7 @@ impl Carry {
     pub(super) fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
+            clip: None,
             fill: Vec::new(),
             font: None,
             face: None,
@@ -464,7 +656,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
     }
 }
 
@@ -509,32 +701,34 @@ impl MarkedContent {
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
-            let mut items = tail.into_iter();
-            if let Some(mut first) = items.next() {
-                for item in items {
-                    first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
-                    first.extra_ops.push(item.op);
-                    first.extra_ops.extend(item.extra_ops);
-                    first.rect = [
-                        first.rect[0].min(item.rect[0]),
-                        first.rect[1].min(item.rect[1]),
-                        first.rect[2].max(item.rect[2]),
-                        first.rect[3].max(item.rect[3]),
-                    ];
-                    first.frame = union(first.frame, item.frame);
-                    first.ink.extend(item.ink);
+            if tail.iter().any(|s| s.glyph_count > 0) {
+                let mut items = tail.into_iter();
+                if let Some(mut first) = items.next() {
+                    for item in items {
+                        first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
+                        first.extra_ops.push(item.op);
+                        first.extra_ops.extend(item.extra_ops);
+                        first.rect = [
+                            first.rect[0].min(item.rect[0]),
+                            first.rect[1].min(item.rect[1]),
+                            first.rect[2].max(item.rect[2]),
+                            first.rect[3].max(item.rect[3]),
+                        ];
+                        first.frame = union(first.frame, item.frame);
+                        first.ink.extend(item.ink);
+                    }
+                    first.extra_ops.extend([open, index]);
+                    // Only right-to-left ActualText is already in typing order and must stay out of
+                    // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
+                    first.logical_order = logical.chars().any(crate::bidi::is_rtl);
+                    first.actual_text = true;
+                    first.text = logical;
+                    first.start_x = first.rect[0];
+                    first.end_x = first.rect[2];
+                    first.end_y = first.baseline;
+                    first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                    shown.push(first);
                 }
-                first.extra_ops.extend([open, index]);
-                // Only right-to-left ActualText is already in typing order and must stay out of
-                // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
-                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
-                first.actual_text = true;
-                first.text = logical;
-                first.start_x = first.rect[0];
-                first.end_x = first.rect[2];
-                first.end_y = first.baseline;
-                first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
-                shown.push(first);
             }
         }
     }
@@ -549,6 +743,9 @@ struct TextRunState<'a> {
     marked: &'a MarkedContent,
     carry: &'a mut Carry,
     out: &'a mut Vec<Shown>,
+    soft_break: bool,
+    hard_break: bool,
+    soft_gap: usize,
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -593,6 +790,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // the next glyph continues the last word.
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
+    // Whether the text ends in a space read from a gap rather than from a glyph. The run just
+    // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
+    let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
     for p in &pieces {
         match p {
@@ -601,13 +801,17 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     glyph_count = glyph_count.saturating_add(1);
                     let shown = m.text_of(code);
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                    // A space glyph right after a gap that read as a space is that space:
+                    // LibreOffice stretches a justified line on both sides of each space glyph.
+                    let after_gap = std::mem::take(&mut gap_space);
                     match shown {
-                        Some(t) => {
+                        Some(shown) => {
+                            let t: &str = if after_gap { shown.strip_prefix(' ').unwrap_or(&shown) } else { &shown };
                             carry.text_left = carry
                                 .text_left
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                            text.push_str(&t);
+                            text.push_str(t);
                         }
                         None => decodable = false,
                     }
@@ -648,6 +852,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                         let dy = -n / 1000.0 * ts.size;
                         if -dy > ts.size * 0.2 && !text.ends_with(' ') {
                             text.push(' ');
+                            gap_space = true;
                         }
                         if dy.abs() > ts.size.abs() * 0.2 {
                             in_word = false;
@@ -659,6 +864,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     // A large gap inside TJ reads as a space.
                     if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
                         text.push(' ');
+                        gap_space = true;
                     }
                     // Tracking and kerning keep a word together; a larger jump
                     // ends it (whatever the sign of the size or `Tz`).
@@ -700,8 +906,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         .collect();
     let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
     // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
-    // It must not create a phantom editable line or enlarge its neighbours' boxes.
-    if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
+    // Outside an `/ActualText` replacement it must not create a phantom editable
+    // line or enlarge its neighbours' boxes; inside one (such as a space gap in a
+    // subset font without a space glyph, #4229) it is part of the span's box and
+    // operators when the span also paints glyphs.
+    if !marked.actual_text.iter().any(Option::is_some) && !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
         return Ok(());
     }
     out.push(Shown {
@@ -745,7 +954,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
+        soft_break: state.soft_break,
+        hard_break: state.hard_break,
+        soft_gap: state.soft_gap,
     });
+    carry.gap_space = gap_space;
     Ok(())
 }
 
@@ -759,8 +972,9 @@ pub(super) fn interpret(
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
     logical_text: Option<&Dict>,
 ) -> Result<Vec<Shown>, EditError> {
-    let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
+    let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
+    let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
@@ -769,11 +983,89 @@ pub(super) fn interpret(
     let mut bt = 0usize;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
+    // before the next line. Neither name is a paragraph region, so it does not change scope.
+    let mut soft_break = false;
+    let mut hard_break = false;
+    // `/PCSoft`'s `/N` property: how many separator characters the wrap consumed. A `/PCSoft`
+    // with no properties dict (a file saved before this was tracked, or by another writer) reads
+    // as 1, the single space a rejoin always used before #2529.
+    let mut soft_gap = 1usize;
+    // A pending path of `x y w h re`s, and whether a `W`/`W*` has marked it as the path that `n`
+    // turns into the new clip (ISO 32000-2 §8.5.4) -- the common "set a rectangular clip" idiom.
+    // The path is `Some(None)` once one of its rectangles can't be read, and then clips nothing.
+    // Each rectangle is a part of the clip; a path of more than `MAX_CLIP_PARTS` keeps the box
+    // around them, which still holds them all. Any other operator between `re` and `n` ends the
+    // idiom: the clip is not read then.
+    let mut pending_clip: Option<Option<Vec<[f64; 4]>>> = None;
+    let mut clip_pending = false;
     for (i, op) in ops.iter().enumerate() {
+        // A gap's space carries only into a `Tj` or `TJ` right after it.
+        if !matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+            carry.gap_space = false;
+        }
+        match op.op.as_slice() {
+            b"re" => {
+                let rect = op.nums::<4>().map(|[x, y, w, h]| [x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]);
+                pending_clip = Some(match (pending_clip.take(), rect) {
+                    (None, Some(rect)) => Some(vec![rect]),
+                    (Some(Some(mut path)), Some(rect)) => {
+                        if path.len() >= MAX_CLIP_PARTS {
+                            path = vec![path.iter().fold(rect, |all, r| union(all, *r))];
+                        } else {
+                            path.push(rect);
+                        }
+                        Some(path)
+                    }
+                    _ => None,
+                });
+            }
+            b"W" | b"W*" => clip_pending = pending_clip.is_some(),
+            b"n" => {
+                if clip_pending && let Some(Some(path)) = pending_clip.take() {
+                    // A rectangle past what a matrix can hold leaves the clip unread. One of no
+                    // area is a part that shows nothing, so a clip of no area hides everything.
+                    let parts: Option<Clip> = path.iter().map(|r| region(&ts.ctm, *r)).collect();
+                    if let Some(parts) = parts {
+                        let new: Clip = parts.into_iter().filter(|part| !part.is_empty()).collect();
+                        ts.clip = Some(match &ts.clip {
+                            Some(old) => clip_within(old, &new),
+                            None => new,
+                        });
+                    }
+                }
+                pending_clip = None;
+                clip_pending = false;
+            }
+            _ => {
+                pending_clip = None;
+                clip_pending = false;
+            }
+        }
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
             b"BMC" | b"BDC" => {
+                if op.name(0) == Some(b"PCSoft") {
+                    soft_break = true;
+                    hard_break = false;
+                    soft_gap = op
+                        .operands
+                        .get(1)
+                        .and_then(Object::as_dict)
+                        .and_then(|d| d.get(b"N"))
+                        .and_then(Object::as_int)
+                        .and_then(|n| usize::try_from(n).ok())
+                        .unwrap_or(1);
+                    // The marker is untrusted and later expands into spaces during reflow.
+                    // Charge it to the same page-wide budget as glyph text, so many individually
+                    // small markers cannot multiply the allocation past the limit either.
+                    carry.text_left =
+                        carry.text_left.checked_sub(soft_gap).ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                } else if op.name(0) == Some(b"PCHard") {
+                    hard_break = true;
+                    soft_break = false;
+                }
                 marked.begin(doc, op, i, logical_text, out.len());
             }
             b"EMC" => {
@@ -836,11 +1128,16 @@ pub(super) fn interpret(
             b"Ts" => ts.rise = op.num(0).unwrap_or(0.0),
             b"Tr" => ts.render_mode = op.operands.first().and_then(Object::as_int).unwrap_or(-1),
             b"gs" => {
+                let mut held = None;
+                let params = match op.name(0).and_then(|name| states.get(name)) {
+                    Some(p) => super::dict_in_place(doc, p, &mut held),
+                    None => None,
+                };
                 if let Some(name) = op.name(0) {
-                    select_gs(&mut ts.ext_gstate, name);
+                    let masked = params.and_then(|p| p.get(b"SMask")).is_some_and(|m| doc.resolve(m).as_dict().is_some());
+                    select_gs(&mut ts.ext_gstate, name, masked.then_some(ts.ctm.0));
                 }
-                let params = op.name(0).and_then(|name| states.get(name)).map(|p| doc.resolve(p));
-                if let Some(params) = params.as_deref().and_then(Object::as_dict) {
+                if let Some(params) = params {
                     ts.gs.apply(doc, params);
                     // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).
                     let lw = params.get(b"LW").and_then(|w| doc.resolve(w).as_f64()).filter(|w| w.is_finite());
@@ -878,8 +1175,28 @@ pub(super) fn interpret(
                 tm = tlm;
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => {
-                let mut state = TextRunState { ts: &mut ts, tm: &mut tm, tlm: &mut tlm, at_bt: &at_bt, bt, marked: &marked, carry, out: &mut out };
+                let before = out.len();
+                let mut state = TextRunState {
+                    ts: &mut ts,
+                    tm: &mut tm,
+                    tlm: &mut tlm,
+                    at_bt: &at_bt,
+                    bt,
+                    marked: &marked,
+                    carry,
+                    out: &mut out,
+                    soft_break,
+                    hard_break,
+                    soft_gap,
+                };
                 show_text(op, i, &mut state)?;
+                // A numeric-only TJ adjustment shows no glyphs and pushes nothing: the break
+                // belongs to whichever text-showing operator comes next.
+                if out.len() > before {
+                    soft_break = false;
+                    hard_break = false;
+                    soft_gap = 1;
+                }
             }
             _ => {}
         }
@@ -888,6 +1205,7 @@ pub(super) fn interpret(
     carry.stack = stack;
     carry.marked = marked.regions;
     carry.layers = marked.layers;
+    out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
     Ok(out)
 }

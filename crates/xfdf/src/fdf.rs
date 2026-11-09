@@ -42,13 +42,23 @@ struct FdfCopy<'a> {
     objects: Vec<Object>,
     numbers: HashMap<ObjRef, u32>,
     pending: Vec<(ObjRef, usize)>,
+    /// The leaf pages of the source document, by identity: whatever their `/Type` says (or does not).
+    source_pages: HashSet<ObjRef>,
     nodes: usize,
     bytes: usize,
 }
 
 impl<'a> FdfCopy<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { doc, objects: Vec::new(), numbers: HashMap::new(), pending: Vec::new(), nodes: MAX_FDF_OBJECTS, bytes: MAX_FDF_BYTES }
+        Self {
+            doc,
+            objects: Vec::new(),
+            numbers: HashMap::new(),
+            pending: Vec::new(),
+            source_pages: HashSet::new(),
+            nodes: MAX_FDF_OBJECTS,
+            bytes: MAX_FDF_BYTES,
+        }
     }
 
     fn charge(&mut self, bytes: usize) -> Result<(), DataError> {
@@ -86,13 +96,16 @@ impl<'a> FdfCopy<'a> {
         Ok(())
     }
 
-    /// Skip source-document links and appearances without cloning their values. The
-    /// dictionary and every retained entry are charged before any owned copy is made.
+    /// Skip source-document links without cloning their values. A stamp's appearance (`/AP`) is
+    /// copied with its streams and resources, so the stamp looks the same where it is imported;
+    /// other comments carry their formatting entries and leave the appearance out, as XFDF does.
+    /// The dictionary and every retained entry are charged before any owned copy is made.
     fn annotation_dict(&mut self, dict: &Dict) -> Result<Dict, DataError> {
         self.charge_value(0)?;
+        let stamp = dict.name(b"Subtype") == Some(b"Stamp".as_slice());
         let mut out = Dict::new();
         for (key, value) in dict.iter() {
-            if matches!(key.as_slice(), b"P" | b"AP" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") {
+            if matches!(key.as_slice(), b"P" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") || (key.as_slice() == b"AP" && !stamp) {
                 continue;
             }
             self.dict_entry(&mut out, key, value, 1)?;
@@ -178,7 +191,7 @@ impl<'a> FdfCopy<'a> {
         while let Some((source, index)) = self.pending.get(cursor).copied() {
             // ISO 32000-2 §7.3.10: an absent or stale reference denotes null. Keep reader
             // errors distinct so damaged objects cannot be silently lost during export.
-            let value = if doc.generation(source.num) != source.generation {
+            let value = if doc.generation(source.num) != source.generation || self.source_pages.contains(&source) {
                 std::sync::Arc::new(Object::Null)
             } else {
                 match doc.try_get(source.num) {
@@ -202,7 +215,7 @@ impl<'a> FdfCopy<'a> {
     }
 }
 
-/// FDF with field values and/or comments (appearances are not carried). Each comment is an
+/// FDF with field values and/or comments, a stamp with its appearance. Each comment is an
 /// indirect object of the FDF, so a reply's `/IRT` can point at its parent's object there
 /// (§12.7.8.3.1). Nested values are copied and renumbered, including shared or cyclic graphs.
 /// Source `/Page` and `/Pages` dictionaries become null at every copy depth.
@@ -231,7 +244,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
             body.extend_from_slice(b" /V ");
             match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio => {
-                    let v = f.value.first().cloned().unwrap_or_else(|| "Off".into());
+                    let v = f.export_values().first().cloned().unwrap_or_else(|| "Off".into());
                     pdfcraft_cos::serialize(&Object::Name(pdfcraft_forms::name_bytes(&v)), &mut body);
                 }
                 FieldKind::List if f.value.len() > 1 => {
@@ -247,6 +260,8 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
         // Keep the page/array owners once. Handles retain positions, never annotation
         // bodies: the document cache can evict and reparse even a repeated source reference.
         let pages = pdfcraft_model::pages(doc);
+        // Page discovery accepts a leaf with no /Type: the export keeps these out by reference too.
+        copy.source_pages = pages.iter().map(|p| p.obj).collect();
         let mut arrays = Vec::new();
         let mut picked: Vec<(Option<ObjRef>, usize, usize)> = Vec::new();
         for (pi, page) in pages.iter().enumerate() {
@@ -356,27 +371,69 @@ impl ImportBudget {
     }
 }
 
+/// Where [`deep`] copies to: the document, and the streams already copied into it (by their
+/// reference in the FDF), so a stream two comments share is copied once.
+struct DeepTarget<'a> {
+    doc: &'a mut Document,
+    streams: HashMap<ObjRef, ObjRef>,
+}
+
+/// How deeply [`deep`] follows a comment's objects, references included. A form that draws a form
+/// costs four levels (the reference, the stream's dictionary, `/Resources`, `/XObject`), and
+/// export writes a chain of them however long, so this leaves room for one sixty forms deep.
+const MAX_COPY_DEPTH: usize = 4 * MAX_DEPTH;
+
 /// Copy an object out of another document, resolving references. A reference back to an object
-/// being copied becomes null.
-fn deep(src: &Document, o: &Object, depth: usize, path: &mut Vec<ObjRef>, budget: &mut ImportBudget) -> Result<Object, DataError> {
+/// being copied becomes null. A stream (an appearance and the images and forms it draws) becomes
+/// an object of `dst`, its data charged to the budget. Objects nested past [`MAX_COPY_DEPTH`] are
+/// an error, not a partial copy: the comment would arrive with part of its appearance missing.
+fn deep(
+    src: &Document,
+    dst: &mut DeepTarget,
+    o: &Object,
+    depth: usize,
+    path: &mut Vec<ObjRef>,
+    budget: &mut ImportBudget,
+) -> Result<Object, DataError> {
     budget.spend(1, 0)?;
-    if depth > 16 {
-        return Ok(Object::Null);
+    if depth > MAX_COPY_DEPTH {
+        return Err(DataError::Malformed(format!("a comment's objects nest more than {MAX_COPY_DEPTH} levels deep")));
     }
     Ok(match o {
         Object::Ref(r) => {
             if path.contains(r) {
                 return Ok(Object::Null);
             }
+            if let Some(copied) = dst.streams.get(r) {
+                return Ok(Object::Ref(*copied));
+            }
+            let target = src.get(*r);
+            if let Object::Stream(stream) = target.as_ref() {
+                budget.spend(0, stream.raw.len())?;
+                path.push(*r);
+                let dict = deep(src, dst, &Object::Dict(stream.dict.clone()), depth + 1, path, budget);
+                path.pop();
+                let Object::Dict(mut dict) = dict? else { return Ok(Object::Null) };
+                dict.remove(b"Length");
+                let copied = dst.doc.add(Object::Stream(pdfcraft_cos::Stream { dict, raw: stream.raw.clone() }));
+                dst.streams.insert(*r, copied);
+                return Ok(Object::Ref(copied));
+            }
             path.push(*r);
-            let copy = deep(src, &src.get(*r), depth + 1, path, budget);
+            let copy = deep(src, dst, &target, depth + 1, path, budget);
             path.pop();
             copy?
         }
-        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1, path, budget)).collect::<Result<_, _>>()?),
+        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, dst, x, depth + 1, path, budget)).collect::<Result<_, _>>()?),
+        // A page or page tree the comment reaches is the file's, not the comment's: copied in, it
+        // would bring its contents along (as export, which nulls them; `resolve` bounds the hops
+        // of an indirect /Type).
+        Object::Dict(d) if d.get(b"Type").is_some_and(|t| matches!(src.resolve(t).as_name(), Some(b"Page" | b"Pages"))) => Object::Null,
         Object::Dict(d) => {
-            Object::Dict(d.iter().map(|(k, v)| Ok((k.clone(), deep(src, v, depth + 1, path, budget)?))).collect::<Result<_, DataError>>()?)
+            Object::Dict(d.iter().map(|(k, v)| Ok((k.clone(), deep(src, dst, v, depth + 1, path, budget)?))).collect::<Result<_, DataError>>()?)
         }
+        // A stream is always an indirect object (ISO 32000-2 §7.3.8); one held directly is not
+        // read.
         Object::Stream(_) => Object::Null,
         Object::String(s) => {
             budget.spend(0, s.bytes.len())?;
@@ -469,8 +526,17 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
     let mut placed: HashMap<ObjRef, ObjRef> = HashMap::new();
     let mut later: HashMap<ObjRef, (Option<ObjRef>, Option<String>)> = HashMap::new();
+    let mut copied_streams: HashMap<ObjRef, ObjRef> = HashMap::new();
     for a in body.get(b"Annots").map(|a| fdf.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
         let Some(mut src) = fdf.resolve(&a).as_dict().cloned() else { continue };
+        // Only a comment of a known type on a page of this document is copied in: its streams
+        // become objects of the document.
+        let on_page = src.get(b"Page").and_then(|p| fdf.resolve(p).as_int()).and_then(|p| usize::try_from(p).ok()).is_some_and(|p| p < pages.len());
+        let known =
+            src.get(b"Subtype").map(|s| fdf.resolve(s)).is_some_and(|s| s.as_name().is_some_and(|s| SUBTYPES.iter().any(|(x, _)| x.as_bytes() == s)));
+        if !on_page || !known {
+            continue;
+        }
         // The parent is another comment: link it below rather than copying it in.
         let irt = src.get(b"IRT").cloned();
         src.remove(b"IRT");
@@ -479,8 +545,19 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
         // placed on the page below, as the XFDF import does.
         let popup = src.get(b"Popup").map(|p| fdf.resolve(p)).and_then(|p| p.as_dict().cloned());
         src.remove(b"Popup");
+        // The comment's page is `/Page` here (§12.7.8.3.4, Table 254); a `/P` the file holds
+        // anyway points into the file and is replaced below, so it is not copied (nor what it
+        // reaches).
+        src.remove(b"P");
+        // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not copied.
+        if src.get(b"Subtype").is_some_and(|s| fdf.resolve(s).as_name() == Some(b"Redact".as_slice())) {
+            src.remove(b"AP");
+        }
         let mut path: Vec<ObjRef> = a.as_ref().into_iter().collect();
-        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0, &mut path, &mut budget)? else { continue };
+        let mut target = DeepTarget { doc: &mut *doc, streams: std::mem::take(&mut copied_streams) };
+        let copy = deep(&fdf, &mut target, &Object::Dict(src), 0, &mut path, &mut budget);
+        copied_streams = target.streams;
+        let Object::Dict(mut d) = copy? else { continue };
         let Some(page) = d.get(b"Page").and_then(Object::as_int).and_then(|p| usize::try_from(p).ok()).and_then(|p| pages.get(p).copied()) else {
             continue;
         };

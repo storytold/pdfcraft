@@ -20,6 +20,10 @@ pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 
 pub(crate) const FIND_MAX_WARNING_BYTES: usize = 1024;
 
+/// HTML that one `text_extract` with `format: "html"` returns across all its pages; a page past
+/// it gets none. `html_truncated` covers this and any page whose own copy hit its caps.
+const MAX_EXTRACT_HTML_BYTES: usize = 32 << 20;
+
 impl Automation {
     // ---- pages and text ----------------------------------------------------------------------
 
@@ -65,7 +69,9 @@ impl Automation {
         Ok(&mut entry.1)
     }
 
-    pub(crate) fn page_render(&mut self, a: &Args) -> Result<Content> {
+    /// The page as a PNG, followed by a JSON part listing the render warnings when there are any,
+    /// so a caller can tell that the picture is incomplete, as `pdfcraft-cli render` does (#4340).
+    pub(crate) fn page_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let id = self.doc(a)?.id;
         let page = self.page(a)?;
         let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
@@ -98,8 +104,7 @@ impl Automation {
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
-        let data = encode_png(out.width, out.height, &out.rgba)?;
-        Ok(Content::Png { data, width: out.width, height: out.height })
+        rendered_content(&out, page)
     }
 
     /// A page as RGBA pixels, without encoding a PNG. `page` is 1-based and `scale` is pixels
@@ -200,6 +205,16 @@ impl Automation {
     }
 
     pub(crate) fn text_extract(&mut self, a: &Args) -> Result<Value> {
+        self.text_extract_within(a, MAX_EXTRACT_HTML_BYTES)
+    }
+
+    /// [`Self::text_extract`] with at most `html_budget` bytes of HTML across all pages.
+    pub(crate) fn text_extract_within(&mut self, a: &Args, html_budget: usize) -> Result<Value> {
+        let html = match a.opt_str("format")?.unwrap_or("text") {
+            "text" => false,
+            "html" => true,
+            other => return Err(ToolError::InvalidArgs(format!("format must be \"text\" or \"html\", not {other:?}"))),
+        };
         let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
@@ -213,14 +228,54 @@ impl Automation {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
         };
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
-        Ok(json!({ "pages": out }))
+        let doc = self.doc(a)?;
+        let mut out = Vec::with_capacity(pages.len());
+        // `spent`: the budget ran out, so later pages get no HTML. `cut`: some page's HTML is
+        // missing part of its text, by the budget or by the copy's own caps.
+        let (mut html_left, mut spent, mut cut) = (html_budget, false, false);
+        for (&p, t) in pages.iter().zip(texts) {
+            let mut page = json!({ "page": p + 1, "text": text(&t) });
+            // Content cut at the renderer's limits (#623): the text is incomplete, and said so.
+            if t.truncated {
+                page["truncated"] = json!(true);
+            }
+            if html {
+                // Copy with formatting: the same glyphs as an HTML fragment, within one budget for
+                // the whole call; a page past it gets none and the call says so.
+                let mut copy = pdfcraft_engine::RichCopy::default();
+                if !spent {
+                    let glyphs: Vec<usize> = match rect {
+                        Some(r) => t.glyphs_in(r),
+                        None => (0..t.glyphs.len()).collect(),
+                    };
+                    copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                    match html_left.checked_sub(copy.html.len()) {
+                        Some(left) => html_left = left,
+                        None => {
+                            spent = true;
+                            copy = pdfcraft_engine::RichCopy::default();
+                        }
+                    }
+                }
+                cut |= spent || copy.truncated;
+                page["html"] = json!(copy.html);
+                page["styles_incomplete"] = json!(copy.styles_incomplete || spent);
+            }
+            out.push(page);
+        }
+        let mut result = json!({ "pages": out });
+        if html {
+            result["html_truncated"] = json!(cut);
+        }
+        Ok(result)
     }
 
     /// Matches in document order, extracting page text in growing batches and stopping as soon as
     /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
     /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
     /// as bounded warnings; `complete` requires both no continuation and no failed pages.
+    /// `stop_at_limit` drops that lookahead: the search ends at the `limit`th match, so a lone match
+    /// never sends it to the end of the document, and `next` is only where to resume (#5328).
     pub(crate) fn text_find(&mut self, a: &Args) -> Result<Value> {
         self.text_find_with(a, &mut extract_parallel)
     }
@@ -240,11 +295,15 @@ impl Automation {
             Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
+        let stop_at_limit = a.opt_bool("stop_at_limit")?.unwrap_or(false);
         let mut matches = Vec::new();
         let mut next = None;
+        let mut stopped = false;
         let mut warnings = Vec::new();
         let mut warning_count = 0usize;
-        let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
+        // A search that stops at its limit starts with one page, so a match on it reads nothing
+        // more; the batches still double for a match further in.
+        let (mut first, mut batch) = (start, if stop_at_limit { 1 } else { FIND_FIRST_BATCH });
         'search: while first < n {
             let end = first.saturating_add(batch).min(n);
             let pages: Vec<usize> = (first..end).collect();
@@ -266,13 +325,19 @@ impl Automation {
                 let skip_here = if p == start { skip } else { 0 };
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
-                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
+                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(usize::from(!stop_at_limit));
                 for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
                     }
                     matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
+                    if stop_at_limit && matches.len() == limit {
+                        // Resume just past this match; whether another exists isn't looked at.
+                        next = Some(json!({ "start_page": p + 1, "skip": k.saturating_add(1) }));
+                        stopped = true;
+                        break 'search;
+                    }
                 }
             }
             first = end;
@@ -280,8 +345,13 @@ impl Automation {
         }
         let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
             "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
-        if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
-            o.insert("next".into(), next);
+        if let Some(o) = out.as_object_mut() {
+            if let Some(next) = next {
+                o.insert("next".into(), next);
+            }
+            if stop_at_limit {
+                o.insert("stopped_at_limit".into(), stopped.into());
+            }
         }
         Ok(out)
     }
@@ -322,6 +392,31 @@ impl Automation {
 /// A rendered raster as PNG, through the engine's encoder (Export ▸ Image writes the same).
 pub(crate) fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
     pdfcraft_engine::export::encode_png(width, height, premultiplied).map_err(failed)
+}
+
+/// The output of a page-rendering tool: the PNG of the 0-based `page`, followed by a JSON part
+/// listing its render warnings when there are any. Without warnings it is the PNG alone, as it
+/// always was.
+pub(crate) fn rendered_content(out: &pdfcraft_render::RenderedPage, page: usize) -> Result<Vec<Content>> {
+    let data = encode_png(out.width, out.height, &out.rgba)?;
+    let mut content = vec![Content::Png { data, width: out.width, height: out.height }];
+    if !out.warnings.is_empty() {
+        // Sentences, like the other tools' `warnings`, so command_run can add its own to the list.
+        let warnings: Vec<&str> = out.warnings.iter().map(|&w| render_warning_text(w)).collect();
+        content.push(Content::Json(json!({ "page": page.saturating_add(1), "warnings": warnings })));
+    }
+    Ok(content)
+}
+
+/// What a render warning means, in the words `pdfcraft-cli render` prints for it.
+fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
+    use pdfcraft_render::RenderWarning;
+    match warning {
+        RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+        RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+        RenderWarning::MalformedIndexedImage => "an image with a malformed Indexed colour table may be drawn wrongly or not at all",
+        RenderWarning::Type3WidthsMissing => "a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give",
+    }
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.

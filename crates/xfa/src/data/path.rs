@@ -1,12 +1,14 @@
-use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template};
+use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
     let children: Vec<DataNode> =
         if depth < MAX_DEPTH { n.children().filter(|c| c.is_element()).map(|c| to_node(c, depth + 1)).collect() } else { Vec::new() };
-    // The text of a leaf is its value; a container's own text is whitespace.
-    let text = if children.is_empty() { n.children().filter_map(|c| c.text()).collect::<String>() } else { String::new() };
-    DataNode { name, text, children }
+    // The text of a leaf is its value (its text nodes: a comment is not part of it); a
+    // container's own text is whitespace.
+    let text = if children.is_empty() { n.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>() } else { String::new() };
+    let group = n.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup");
+    DataNode { name, text, children, group }
 }
 
 /// The `xfa:data` element of the datasets packet in `xdp` (or a bare datasets document), as a
@@ -15,7 +17,7 @@ pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(xdp) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(xdp, opts).ok()?;
     let datasets = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets")?;
     let data = datasets.children().find(|n| n.is_element() && n.tag_name().name() == "data")?;
@@ -149,6 +151,52 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
         Node::Field(f) => Some(f),
         _ => None,
     }
+}
+
+/// Every field with an `id`, with the SOM path the layout gives it: the root subform's
+/// fields under the root, a page area's under the area (as master pages lay them out), each
+/// named object adding its name and its number among its siblings (repeating subforms as their
+/// first instance). Bounded by [`MAX_DEPTH`].
+pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
+    fn walk<'a>(nodes: &'a [Node], som: &str, out: &mut Vec<(&'a str, String, &'a Field)>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            let here = match &n.common().name {
+                Some(name) if som.is_empty() => format!("{name}[{}]", sibs.at(i)),
+                Some(name) => format!("{som}.{name}[{}]", sibs.at(i)),
+                None => som.to_string(),
+            };
+            match n {
+                Node::Field(f) => {
+                    if let Some(id) = &f.common.id {
+                        out.push((id.as_str(), here, f));
+                    }
+                }
+                Node::Subform(s) => {
+                    walk(&s.children, &here, out, depth + 1);
+                    if let Some(ps) = &s.page_set {
+                        for a in &ps.areas {
+                            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), out, depth + 1);
+                        }
+                    }
+                }
+                Node::Area(a) => walk(&a.children, &here, out, depth + 1),
+                Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
+    walk(&tpl.root.children, &root, &mut out, 1);
+    if let Some(ps) = &tpl.root.page_set {
+        for a in &ps.areas {
+            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), &mut out, 1);
+        }
+    }
+    out
 }
 
 pub(super) fn path_som(path: &DataPath) -> String {
