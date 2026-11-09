@@ -852,6 +852,28 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
     );
 }
 
+#[test]
+fn paper_media_and_custom_dimensions() {
+    assert_eq!(custom_media((300.0, 500.0)), "Custom.300x500");
+    assert_eq!(custom_media((300.5, 500.25)), "Custom.300.5x500.25");
+
+    // Standard presets match by size regardless of name:
+    assert_eq!(paper_media(None, (612.0, 792.0)), "Letter");
+    assert_eq!(paper_media(Some("Driver Letter"), (612.0, 792.0)), "Letter");
+    assert_eq!(paper_media(Some("Shipping Label"), (288.0, 432.0)), "w288h432");
+
+    // Clean driver keyword that does not match PAPERS presets:
+    assert_eq!(paper_media(Some("Roll80mm"), (226.77, 800.0)), "Roll80mm");
+    assert_eq!(paper_media(Some("Photo5x7"), (360.0, 504.0)), "Photo5x7");
+
+    // Driver paper with spaces or raw dimensions falls back to Custom:
+    assert_eq!(paper_media(Some("Custom 5x7"), (360.0, 504.0)), "Custom.360x504");
+    assert_eq!(paper_media(Some("300x500"), (300.0, 500.0)), "Custom.300x500");
+    assert_eq!(paper_media(None, (300.0, 500.0)), "Custom.300x500");
+
+    assert_eq!(paper_media_option(Some("300x500"), (300.0, 500.0)), ("media".to_string(), "Custom.300x500".to_string()));
+}
+
 /// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
 /// its own size.
 #[test]

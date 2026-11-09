@@ -1,4 +1,5 @@
 use super::spool;
+use crate::matching_paper;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Orientation {
@@ -247,4 +248,49 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
 /// dialog's jobs and `doc_print`'s alike.
 pub fn media_option(index: usize) -> Option<(String, String)> {
     cups_media(index).map(|m| ("media".to_string(), m.to_string()))
+}
+
+/// Format custom dimensions in points as a CUPS custom media string (e.g. `Custom.300x500`).
+pub fn custom_media(size: (f64, f64)) -> String {
+    let format_dim = |d: f64| {
+        if (d.round() - d).abs() < 1e-4 {
+            format!("{:.0}", d.round())
+        } else {
+            let s = format!("{d:.2}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    };
+    format!("Custom.{}x{}", format_dim(size.0), format_dim(size.1))
+}
+
+/// The CUPS media name for a paper by its name and dimensions.
+///
+/// Matches standard [`PAPERS`] presets by size first, then a clean driver-reported keyword,
+/// falling back to custom media dimensions (`Custom.<width>x<height>`).
+pub fn paper_media(name: Option<&str>, size: (f64, f64)) -> String {
+    if let Some(index) = matching_paper(size)
+        && let Some(media) = cups_media(index)
+    {
+        return media.to_string();
+    }
+    if let Some(n) = name {
+        let is_dim = n.split_once(['x', 'X', '*']).is_some_and(|(w, h)| {
+            w.trim().trim_start_matches("Custom.").trim_start_matches("custom.").parse::<f64>().is_ok()
+                && h.trim().trim_end_matches("pt").trim_end_matches("points").trim().parse::<f64>().is_ok()
+        });
+        let is_clean = !n.is_empty()
+            && n.len() <= 64
+            && !n.contains(' ')
+            && !is_dim
+            && n.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{'));
+        if is_clean {
+            return n.to_string();
+        }
+    }
+    custom_media(size)
+}
+
+/// The media job option (`("media", <name>)`) for a paper by its optional name and dimensions.
+pub fn paper_media_option(name: Option<&str>, size: (f64, f64)) -> (String, String) {
+    ("media".to_string(), paper_media(name, size))
 }

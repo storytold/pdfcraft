@@ -421,7 +421,7 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(print::media_option(self.paper))
+            .chain(self.papers.get(self.paper).map(|(name, size)| print::paper_media_option(Some(name), *size)))
             .collect(),
         }
     }
