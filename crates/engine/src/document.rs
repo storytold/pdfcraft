@@ -728,6 +728,14 @@ pub(crate) fn write_display_copy(
     }
 }
 
+/// `doc` as the reader shows it: comments without an appearance stream drawn
+/// (`pdfcraft_annot::with_missing_appearances`) and form fields drawn from their values where the
+/// file leaves that to the viewer. `None` when `doc` needs neither. The vector print draws from
+/// this copy too, so what prints is what the page shows (#371, #3475 draw them for display only).
+pub(crate) fn as_displayed(doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
+    with_field_appearances(pdfcraft_annot::with_missing_appearances(doc), doc)
+}
+
 /// Carry the marks across a revalidation that leaves the display copy alone, when it may: only
 /// when every verdict is the one the copy was drawn with. Returns whether it did; otherwise the
 /// copy has to be drawn again.
@@ -779,7 +787,7 @@ pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec
         let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok()?;
         let mut signatures = signatures_of(&cos, &bytes, &TrustStore::default(), &pdfcraft_sign::DigestCache::default());
         let layered = pdfcraft_sign::has_status_layers(&cos, &signatures);
-        let (mut display, added) = match with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos) {
+        let (mut display, added) = match as_displayed(&cos) {
             Some(display) => (display, true),
             None if layered => (cos, false),
             None => return None,
