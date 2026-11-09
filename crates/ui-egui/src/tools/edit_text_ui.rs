@@ -540,11 +540,12 @@ pub struct BlockDrag {
     grip: Grip,
 }
 
-/// How far an edge grip reaches either side of a box's edge (screen pixels).
-const EDGE_REACH: f32 = 6.0;
+/// How far an edge grip reaches either side of a box's edge (screen pixels). Wide enough to
+/// catch without aiming for the hairline (#2203); a narrow box still keeps its middle for moving.
+const EDGE_REACH: f32 = 8.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
-pub(crate) const FRAME_REACH: f32 = 6.0;
+pub(crate) const FRAME_REACH: f32 = 8.0;
 
 /// The rewrap handles drawn on a paragraph box's left and right edges (screen).
 fn width_handles(b: Rect) -> [Rect; 2] {
@@ -568,12 +569,25 @@ fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
     }
 }
 
-/// The topmost box under `p` and what it grabs there; edges only on an upright page.
+/// The box under `p` and what it grabs there; edges only on an upright page. An edge reaches a
+/// little above and below its box, so where that reach overlaps another box the one `p` is level
+/// with wins: a press beside one paragraph's edge doesn't rewrap the paragraph just under it.
+/// Among boxes equally near, the topmost.
 fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
-    boxes.iter().enumerate().rev().find_map(|(i, b)| match upright.then(|| edge_at(*b, p)).flatten() {
-        Some(g) => Some((i, g)),
-        None => b.contains(p).then_some((i, Grip::Move)),
-    })
+    let mut best: Option<(f32, usize, Grip)> = None;
+    for (i, b) in boxes.iter().enumerate().rev() {
+        let grip = match upright.then(|| edge_at(*b, p)).flatten() {
+            Some(g) => g,
+            None if b.contains(p) => Grip::Move,
+            None => continue,
+        };
+        // How far above or below the box `p` is: 0 within its height.
+        let off = (b.top() - p.y).max(p.y - b.bottom()).max(0.0);
+        if best.is_none_or(|(o, ..)| off < o) {
+            best = Some((off, i, grip));
+        }
+    }
+    best.map(|(_, i, g)| (i, g))
 }
 
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
@@ -946,8 +960,12 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
-            // the pointer says so there, and reads as text inside.
-            if let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            // the pointer says so there, and reads as text inside. Once the text is changed, a
+            // press there applies the typing like any click off the text instead of taking the
+            // box (`object_ui` would drop the typing), so the pointer doesn't offer it then
+            // (review on #4624).
+            if !ed.has_changes()
+                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && ui.clip_rect().contains(p)
                 && live.expand(2.0 + FRAME_REACH).contains(p)
                 && !live.expand(2.0).contains(p)
@@ -972,6 +990,15 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 } else {
                     caret_color_on(fill)
                 };
+                // An unchanged paragraph's galley is unseen over the page's own text. Selecting
+                // part of it must not paint its stand-in glyphs over that text in the selection
+                // colour (a serif paragraph turned sans when highlighted), nor hide it under an
+                // opaque fill: the selection is a tint the page shows through.
+                if unchanged {
+                    let selection = &mut ui.visuals_mut().selection;
+                    selection.stroke.color = Color32::TRANSPARENT;
+                    selection.bg_fill = selection.bg_fill.gamma_multiply(0.45);
+                }
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -1085,6 +1112,27 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where an edge's reach above or below its box overlaps the next paragraph's edge, the
+    /// paragraph the pointer is level with takes the press, whichever is drawn on top (the play
+    /// session "resize grown neighbor" at 50% zoom).
+    #[test]
+    fn an_edge_goes_to_the_box_the_pointer_is_level_with() {
+        let upper = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 140.0));
+        let lower = Rect::from_min_max(Pos2::new(100.0, 146.0), Pos2::new(201.0, 160.0));
+        // Inside the upper box's height, 6 px above the lower one: within both edges' reach.
+        let p = Pos2::new(199.0, 140.0);
+        assert_eq!(edge_at(lower, p), Some(Grip::Right), "the lower edge reaches up to p");
+        assert_eq!(grab_at(&[upper, lower], p, true), Some((0, Grip::Right)));
+        assert_eq!(grab_at(&[lower, upper], p, true), Some((1, Grip::Right)));
+        // Level with neither, 4 px below one and 2 px above the other: the nearer box.
+        assert_eq!(grab_at(&[lower, upper], Pos2::new(199.0, 144.0), true), Some((0, Grip::Right)));
+        // Overlapping boxes both level with p: the topmost, as before.
+        assert_eq!(grab_at(&[upper, upper.translate(egui::vec2(5.0, 0.0))], upper.center(), true), Some((1, Grip::Move)));
+        // A body under p beats an edge reaching over from a box above or below it.
+        let body = Rect::from_min_max(Pos2::new(150.0, 146.0), Pos2::new(260.0, 160.0));
+        assert_eq!(grab_at(&[body, upper], Pos2::new(205.0, 147.0), true), Some((0, Grip::Move)));
+    }
 
     /// Formatting applied restarts the rows' alignments by text with the box's history: a Redo
     /// past the format can't bring back an alignment from before it (FredApps on bfc6f8b1).
