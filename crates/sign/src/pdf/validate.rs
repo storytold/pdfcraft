@@ -26,7 +26,7 @@ pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -
     list(doc, bytes, trust).into_iter().find(|s| s.field == field)
 }
 
-fn unhex(s: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     let digits: Vec<u8> = s.iter().copied().filter(|c| !c.is_ascii_whitespace()).collect();
     let val = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     digits.chunks(2).map(|p| Some(val(p[0])? << 4 | p.get(1).map_or(Some(0), |c| val(*c))?)).collect()
@@ -38,9 +38,9 @@ pub(super) fn is_doc_timestamp(d: &Dict) -> bool {
     d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
 }
 
-/// The DocMDP permission level (`/P`, 1–3) of signature value `v`, or `None` for an approval
-/// signature.
-fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
+/// The DocMDP permission level (`/P`, 1 to 3) that signature value `v` asks for in its `/Reference`,
+/// or `None` when it asks for none.
+fn docmdp_reference(doc: &Document, v: &Dict) -> Option<u8> {
     v.get(b"Reference")
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_array().cloned())
@@ -49,6 +49,31 @@ fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
         .filter_map(|r| doc.resolve(&r).as_dict().cloned())
         .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
         .map(|r| r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8)
+}
+
+/// Whether the catalog's `/Perms /DocMDP` in `doc` is the signature dictionary `v`.
+fn names_certification(doc: &Document, v: &Dict) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let catalog = doc.get(root);
+    let Some(perms) = catalog.as_dict().and_then(|c| c.get(b"Perms")).map(|p| doc.resolve(p)) else { return false };
+    let Some(named) = perms.as_dict().and_then(|p| p.get(b"DocMDP")).map(|d| doc.resolve(d)) else { return false };
+    named.as_dict() == Some(v)
+}
+
+/// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
+/// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
+/// so a DocMDP reference in any other signature dictionary does not choose the permissions later
+/// changes are judged by. Such a signature is checked as an approval signature, with a note.
+fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
+    let asked = docmdp_reference(doc, v);
+    info.certify = asked.filter(|_| names_certification(doc, v));
+    let note = Detail::plain(
+        "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
+    );
+    info.details.retain(|d| *d != note);
+    if asked.is_some() && info.certify.is_none() {
+        info.details.push(note);
+    }
 }
 
 pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
@@ -68,7 +93,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
     info.contact = text(doc, v, b"ContactInfo");
     info.sub_filter = v.name(b"SubFilter").map(|s| String::from_utf8_lossy(s).into_owned());
     info.signer = text(doc, v, b"Name");
-    info.certify = docmdp(doc, v);
+    set_certification(doc, v, info);
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -243,18 +268,24 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
-        // signature is the one whose byte range ends that revision.
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788) or the
+        // catalog's `/Perms`. This signature is the one whose byte range ends that revision. A
+        // revision that holds no such signature does not say which permissions apply, so what
+        // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        if let Some(old) = &old
-            && let Some(v) = sig_fields(old)
+        let signed = old.as_ref().and_then(|old| {
+            sig_fields(old)
                 .iter()
                 .filter_map(|f| f.signature(old))
                 .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        {
-            info.certify = docmdp(old, &v);
+        });
+        match (old, signed) {
+            (Some(old), Some(v)) => {
+                set_certification(&old, &v, info);
+                classify_changes(doc, Some(old), info.certify)
+            }
+            _ => classify_changes(doc, None, info.certify),
         }
-        classify_changes(doc, old, info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an

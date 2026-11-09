@@ -25,7 +25,7 @@ pub mod spool;
 #[cfg(test)]
 mod tests;
 
-pub use range::{Subset, select_listed, select_pages};
+pub use range::{Subset, position, select_listed, select_pages};
 
 mod error;
 mod imposition;
@@ -37,10 +37,10 @@ pub use error::{PrintError, WORDINGS, Words, in_english};
 use imposition::{PAGES_LISTED, appearance, appearance_matrix, decoded_contents, page_form, prints};
 pub use imposition::{impose, keep_printed, sheet_pages};
 pub use settings::{
-    Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
+    Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, MAX_GRID, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
     cups_media, custom_media, media_option, paper_media, paper_media_option,
 };
 #[cfg(test)]
 use sheets::text_direction;
-pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up};
+pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up, texts_read_up};
 pub use spool::{open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};

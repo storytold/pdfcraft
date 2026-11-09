@@ -14,17 +14,17 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
-use crate::page_router::{Hit, Owner, ParagraphPart};
+use crate::page_router::{Hit, Owner, PagePress, ParagraphPart};
 
 mod background;
 mod image;
 mod layout;
 
 pub(crate) use background::TextBackground;
-pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
+pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection};
 pub(crate) use image::{
-    ImageCx, Matrix, body_hit as picture_hit, crop_controls_contain, handle_hit as picture_handle_hit, image_context_menu, image_input,
-    quad_contains, user_to_screen,
+    ImageCx, Matrix, body_hit as picture_hit, crop_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, picture_context,
+    picture_keys, quad_contains, user_to_screen,
 };
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees, turn_degrees_delta};
@@ -105,9 +105,10 @@ pub struct LineEditor {
     typing_from: Option<String>,
 }
 
-/// The paragraph editor's text box.
-pub(crate) fn input_id() -> egui::Id {
-    egui::Id::unique("edit-text-line-input")
+/// The paragraph editor's text box: one for the tabs of a pane (they share it), and one for each pane
+/// of split view, which can show an editor in each.
+pub(crate) fn input_id(place: crate::panes::Place) -> egui::Id {
+    egui::Id::unique(("edit-text-line-input", place))
 }
 
 /// The page text box `id` keeps its own Undo history, across every paragraph or box it has shown
@@ -354,8 +355,8 @@ impl LineEditor {
 
     /// Take the shared text box for this paragraph ([`forget_typing_before`]): its own history,
     /// or none once the page has its text.
-    pub(crate) fn claim_typing(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId) {
-        forget_typing_before(ctx, input_id(), doc, &mut self.typing_from, &self.original);
+    pub(crate) fn claim_typing(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId, place: crate::panes::Place) {
+        forget_typing_before(ctx, input_id(place), doc, &mut self.typing_from, &self.original);
     }
 
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
@@ -488,8 +489,8 @@ impl LineEditor {
 
     /// The text changed from `before` through the box's own typing (typing, Undo, Redo): rows
     /// aligned on their own keep their alignment, and a row Undo brings back gets its own back.
-    pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str) {
-        follow_typing(ctx, input_id(), before, &self.text, &mut [&mut self.look.aligns, &mut self.look0.aligns]);
+    pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str, place: crate::panes::Place) {
+        follow_typing(ctx, input_id(place), before, &self.text, &mut [&mut self.look.aligns, &mut self.look0.aligns]);
     }
 
     /// The text changed from `before`: rows aligned on their own keep their alignment.
@@ -535,11 +536,12 @@ pub struct BlockDrag {
     grip: Grip,
 }
 
-/// How far an edge grip reaches either side of a box's edge (screen pixels).
-const EDGE_REACH: f32 = 6.0;
+/// How far an edge grip reaches either side of a box's edge (screen pixels). Wide enough to
+/// catch without aiming for the hairline (#2203); a narrow box still keeps its middle for moving.
+const EDGE_REACH: f32 = 8.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
-pub(crate) const FRAME_REACH: f32 = 6.0;
+pub(crate) const FRAME_REACH: f32 = 8.0;
 
 /// The rewrap handles drawn on a paragraph box's left and right edges (screen).
 fn width_handles(b: Rect) -> [Rect; 2] {
@@ -563,12 +565,25 @@ fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
     }
 }
 
-/// The topmost box under `p` and what it grabs there; edges only on an upright page.
+/// The box under `p` and what it grabs there; edges only on an upright page. An edge reaches a
+/// little above and below its box, so where that reach overlaps another box the one `p` is level
+/// with wins: a press beside one paragraph's edge doesn't rewrap the paragraph just under it.
+/// Among boxes equally near, the topmost.
 fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
-    boxes.iter().enumerate().rev().find_map(|(i, b)| match upright.then(|| edge_at(*b, p)).flatten() {
-        Some(g) => Some((i, g)),
-        None => b.contains(p).then_some((i, Grip::Move)),
-    })
+    let mut best: Option<(f32, usize, Grip)> = None;
+    for (i, b) in boxes.iter().enumerate().rev() {
+        let grip = match upright.then(|| edge_at(*b, p)).flatten() {
+            Some(g) => g,
+            None if b.contains(p) => Grip::Move,
+            None => continue,
+        };
+        // How far above or below the box `p` is: 0 within its height.
+        let off = (b.top() - p.y).max(p.y - b.bottom()).max(0.0);
+        if best.is_none_or(|(o, ..)| off < o) {
+            best = Some((off, i, grip));
+        }
+    }
+    best.map(|(_, i, g)| (i, g))
 }
 
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
@@ -659,10 +674,26 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
     });
 }
 
-/// Lines and their screen boxes for a page; hover outlines, click opens the editor. Returns
-/// `true` when the pointer was used.
-pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], view: &mut DocView, allow_interaction: bool) -> bool {
+/// What Edit text's paragraphs are told on one page.
+#[derive(Clone, Copy)]
+pub(crate) struct ParagraphCx<'a> {
+    /// What the press the pages hold is to this page.
+    pub press: PagePress,
+    /// Edit text's input is open: no dialog, palette, other window or other tab has it.
+    pub gate: bool,
+    /// What a press under the pointer would take (the top hit there): the paragraph outlined.
+    pub hover: Option<&'a Hit>,
+    /// With Add text, the page's added content: a click on a paragraph finishes the text being
+    /// typed before it opens the paragraph.
+    pub adding: Option<&'a [pdfcraft_engine::Added]>,
+}
+
+/// Lines and their screen boxes for a page: the paragraph under the pointer is outlined, and the
+/// press that is a paragraph's (`press`) moves it, rewraps it or, a click, opens it in the editor.
+/// Returns `true` when the pointer was used.
+pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], pcx: ParagraphCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
+    let ParagraphCx { press, gate, hover, adding } = pcx;
     let info = &doc.info;
     if view.block_drag.is_some_and(|d| d.generation != doc.edit_generation()) {
         view.block_drag = None;
@@ -679,7 +710,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     }
     // A box a switching click asked for opens now, once the edit queued with that click has
     // applied and `lines`/`boxes` are the document's new inventory (#2022).
-    if allow_interaction
+    if gate
         && active.is_none()
         && let Some((open_page, key)) = view.pending_text_open.clone()
         && open_page == page
@@ -691,7 +722,17 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             None => view.pending_text_open = None,
         }
     }
-    if !allow_interaction {
+    // A click on grouped text prepared the page (`image_input`): the paragraph now at the point
+    // clicked opens, and none if the point is on the group's artwork. A preparation that failed
+    // left the page as it was, where no paragraph is at that point. It is taken either way.
+    if let Some((_, [x, y])) = view.grouped_text_click.take_if(|(p, _)| *p == page)
+        && gate
+        && active.is_none()
+        && let Some((block, _)) = grab_at(&boxes, user_to_screen(xf, info, page, x, y), false)
+    {
+        open_editor(cx, lines, &boxes, block, view);
+    }
+    if !gate {
         return false;
     }
     let upright = has_edges(info, page);
@@ -750,12 +791,15 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     // What it grabs is what the press was on ([`hit`]), not what is under the pointer now: egui
     // only calls it a drag once the pointer has moved a few pixels (or been held a moment), and a
     // quick flick has left the edge by then.
-    let owner = match view.router.owner(page) {
-        Some(Owner::Paragraph { block, part }) => Some((block, part)),
+    let owner = match press {
+        PagePress::Mine(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
-    if resp.drag_started()
+    // Add text holds text that can't be drawn where it is being typed (#125).
+    let held_draft = adding.is_some() && view.content.blocked().is_some();
+    if ptr.drag_started
         && active.is_none()
+        && !held_draft
         && let Some(o) = ptr.origin
         && let Some((block, part)) = owner
     {
@@ -767,18 +811,35 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
-    let Some(p) = ptr.within(xf.rect) else { return false };
-    // The paragraph under the pointer: outlined, with its width handles when closed.
-    let Some((hovered, _)) = grab_at(&boxes, p, upright) else { return false };
-    if active != Some(hovered) {
-        painter.rect_stroke(boxes[hovered], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-    }
-    if upright && active.is_none() {
-        draw_handles(boxes[hovered]);
+    // The paragraph under the pointer, where a press would take it: outlined, with its width
+    // handles when closed. Not while the objects selected together or added content being moved
+    // hold the page.
+    let hovered = match hover.map(|h| h.owner) {
+        Some(Owner::Paragraph { block, .. }) => Some(block),
+        _ => None,
+    };
+    if let Some(b) = hovered.filter(|_| !view.objects.holds(page) && !view.content.moving_on(page)).and_then(|h| boxes.get(h).map(|b| (h, *b))) {
+        if active != Some(b.0) {
+            painter.rect_stroke(b.1, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        }
+        if upright && active.is_none() {
+            draw_handles(b.1);
+        }
     }
     // A click opens the paragraph the press was on.
-    let Some((hit, _)) = owner else { return true };
+    let Some((hit, _)) = owner else { return hovered.is_some() };
     if resp.clicked() {
+        // Add text: text that can't be drawn stays where it is being typed (#125), and text being
+        // typed is finished first.
+        if let Some(added) = adding {
+            if view.content.hold_blocked() {
+                return true;
+            }
+            if let Some(edit) = view.content.finish_draft(added) {
+                view.pending_edit = Some(edit);
+            }
+            view.content.selected = None;
+        }
         view.image_selection = None;
         // A click that moves the editor to another paragraph applies the open one first, so its
         // typed text is not dropped with the switched-away editor (#2022). A click on the open
@@ -812,6 +873,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let away = |p: egui::Pos2| !view.viewport_rect().contains(p);
     let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(away) || focus_pos(ctx).is_some_and(away);
     let page = view.line_editor.as_ref()?.page;
+    // Keyed by view: split view can show an editor in each pane.
+    let key = view.view_key();
+    let place = view.place();
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
     // An OCR word is invisible text over a scan: the textless background still shows the scanned
@@ -863,7 +927,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::unique("edit-text-line"))
+    egui::Area::new(egui::Id::unique(("edit-text-line", key)))
         .order(egui::Order::Foreground)
         .fade_in(false)
         .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
@@ -892,8 +956,12 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
-            // the pointer says so there, and reads as text inside.
-            if let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            // the pointer says so there, and reads as text inside. Once the text is changed, a
+            // press there applies the typing like any click off the text instead of taking the
+            // box (`object_ui` would drop the typing), so the pointer doesn't offer it then
+            // (review on #4624).
+            if !ed.has_changes()
+                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && ui.clip_rect().contains(p)
                 && live.expand(2.0 + FRAME_REACH).contains(p)
                 && !live.expand(2.0).contains(p)
@@ -918,6 +986,15 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 } else {
                     caret_color_on(fill)
                 };
+                // An unchanged paragraph's galley is unseen over the page's own text. Selecting
+                // part of it must not paint its stand-in glyphs over that text in the selection
+                // colour (a serif paragraph turned sans when highlighted), nor hide it under an
+                // opaque fill: the selection is a tint the page shows through.
+                if unchanged {
+                    let selection = &mut ui.visuals_mut().selection;
+                    selection.stroke.color = Color32::TRANSPARENT;
+                    selection.bg_fill = selection.bg_fill.gamma_multiply(0.45);
+                }
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -925,8 +1002,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
-                let input = input_id();
-                ed.claim_typing(ui.ctx(), view_id);
+                let input = input_id(place);
+                ed.claim_typing(ui.ctx(), view_id, place);
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(input)
                     .font(font.clone())
@@ -964,7 +1041,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     }
                 }
                 if r.changed() {
-                    ed.follow_typed_rows(ctx, &before);
+                    ed.follow_typed_rows(ctx, &before, place);
                     // The next pass measures the updated draft with the Apply/Save rewrite.
                     ctx.request_repaint();
                 }
@@ -1031,6 +1108,27 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where an edge's reach above or below its box overlaps the next paragraph's edge, the
+    /// paragraph the pointer is level with takes the press, whichever is drawn on top (the play
+    /// session "resize grown neighbor" at 50% zoom).
+    #[test]
+    fn an_edge_goes_to_the_box_the_pointer_is_level_with() {
+        let upper = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 140.0));
+        let lower = Rect::from_min_max(Pos2::new(100.0, 146.0), Pos2::new(201.0, 160.0));
+        // Inside the upper box's height, 6 px above the lower one: within both edges' reach.
+        let p = Pos2::new(199.0, 140.0);
+        assert_eq!(edge_at(lower, p), Some(Grip::Right), "the lower edge reaches up to p");
+        assert_eq!(grab_at(&[upper, lower], p, true), Some((0, Grip::Right)));
+        assert_eq!(grab_at(&[lower, upper], p, true), Some((1, Grip::Right)));
+        // Level with neither, 4 px below one and 2 px above the other: the nearer box.
+        assert_eq!(grab_at(&[lower, upper], Pos2::new(199.0, 144.0), true), Some((0, Grip::Right)));
+        // Overlapping boxes both level with p: the topmost, as before.
+        assert_eq!(grab_at(&[upper, upper.translate(egui::vec2(5.0, 0.0))], upper.center(), true), Some((1, Grip::Move)));
+        // A body under p beats an edge reaching over from a box above or below it.
+        let body = Rect::from_min_max(Pos2::new(150.0, 146.0), Pos2::new(260.0, 160.0));
+        assert_eq!(grab_at(&[body, upper], Pos2::new(205.0, 147.0), true), Some((0, Grip::Move)));
+    }
 
     /// Formatting applied restarts the rows' alignments by text with the box's history: a Redo
     /// past the format can't bring back an alignment from before it (FredApps on bfc6f8b1).
@@ -1307,6 +1405,49 @@ C", &picked
         assert!(app.views[0].line_editor.is_none(), "the paragraph was applied");
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+    }
+
+    /// Typing in a recognised phrase whose words OCR sized at 15, 9 and 11 pt lays every word out
+    /// at the phrase's one size, as the engine redraws it (#3313); each word used its own.
+    #[test]
+    fn typing_in_an_ocr_phrase_lays_every_word_out_at_one_size() {
+        use pdfcraft_engine::ocr::PlacedWord;
+        // A word box as OCR draws it around capitals: the cap height of a `size` pt word.
+        let word = |text: &str, x0: f64, x1: f64, size: f64| PlacedWord {
+            text: text.into(),
+            origin: [x0, 70.0],
+            across: [x1 - x0, 0.0],
+            up: [0.0, 0.718 * size],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        let mut app = crate::PdfCraftApp::new();
+        let png = pdfcraft_engine::export::encode_png(200, 100, &[235u8; 200 * 100 * 4]).unwrap();
+        let bytes = app.session.create_from_images(&[("scan.png".into(), png)]).unwrap();
+        app.open_bytes("scan.pdf", None, bytes.as_ref().clone()).unwrap();
+        let id = app.views[0].id;
+        let words = vec![word("JOHN", 20.0, 45.0, 15.0), word("SMITH", 49.0, 78.0, 9.0), word("EXAMPLE", 82.0, 124.0, 11.0)];
+        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let doc = app.session.get(id).unwrap();
+        let block = doc.text_blocks(0).remove(0);
+        assert!(block.invisible && block.lines.len() == 3, "one phrase of three recognised words: {block:?}");
+        let (_, mut ed) = preview_app();
+        ed.text = format!("{}S", block.editor_text);
+        ed.original = block.editor_text.clone();
+        ed.look = look_of(&block);
+        ed.look0 = look_of(&block);
+        ed.source = Some((block, doc.text_lines(0)));
+
+        let ctx = egui::Context::default();
+        let mut sizes = Vec::new();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let job = editor_job(ui, &ed, &ed.text, 1.0, f32::INFINITY);
+            sizes = job.sections.iter().map(|section| section.format.font_id.size).collect();
+        })
+        .textures_delta
+        .clear();
+        assert!(sizes.len() >= 3, "a section for each word: {sizes:?}");
+        assert!(sizes.iter().all(|size| (size - 11.0).abs() < 0.05), "every word at the phrase's 11 pt: {sizes:?}");
     }
 
     #[test]

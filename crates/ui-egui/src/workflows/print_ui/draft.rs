@@ -45,6 +45,10 @@ pub struct PrintDraft {
     pub size: SizeMode,
     pub custom_scale: f64,
     pub per_sheet: usize,
+    /// Pages per sheet: Custom, `cols` across by `rows` down instead of `per_sheet`.
+    pub custom_grid: bool,
+    pub cols: usize,
+    pub rows: usize,
     pub order: PageOrder,
     pub border: bool,
     pub auto_rotate: bool,
@@ -114,6 +118,9 @@ impl Default for PrintDraft {
             size: SizeMode::Fit,
             custom_scale: 100.0,
             per_sheet: 2,
+            custom_grid: false,
+            cols: 2,
+            rows: 1,
             order: PageOrder::Horizontal,
             border: false,
             auto_rotate: true,
@@ -369,12 +376,19 @@ impl PrintDraft {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
                 m => m,
             }),
-            Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, per_sheet, .. } => {
-                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+            Handling::Multiple => {
+                let grid = if self.custom_grid {
+                    Layout::grid(self.cols, self.rows).ok_or_else(|| tl!("Columns and rows must each be 1 to 99.").to_string())?
+                } else {
+                    Layout::multiple(self.per_sheet)
+                };
+                match grid {
+                    Layout::Multiple { cols, rows, per_sheet, custom, .. } => {
+                        Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate, custom }
+                    }
+                    other => other,
                 }
-                other => other,
-            },
+            }
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },

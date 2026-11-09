@@ -216,6 +216,38 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
 }
 
 #[test]
+fn custom_pages_per_sheet_takes_columns_by_rows() {
+    use pdfcraft_engine::print::{Layout, PageOrder};
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 4).unwrap();
+    h.state_mut().open_bytes("narrow.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.state_mut().execute("print.dialog");
+    h.run_steps(3);
+    h.get_by_label("Multiple").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Columns").is_none(), "a predefined count has no grid fields");
+    h.get_by_role_and_label(Role::ComboBox, "Pages per sheet:").click();
+    h.run_steps(2);
+    h.get_by_label("Custom").click();
+    h.run_steps(2);
+    // Two number fields, columns by rows, with 2 by 1 to start.
+    assert_eq!(h.get_by_label("Columns").value().as_deref(), Some("2"));
+    assert_eq!(h.get_by_label("Rows").value().as_deref(), Some("1"));
+    h.get_by_label("by");
+    let d = &h.state().print_draft;
+    assert!(d.custom_grid);
+    let layout = d.settings(4, &[]).unwrap().layout;
+    assert_eq!(
+        layout,
+        Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: true }
+    );
+    h.get_by_label("Sheet 1 of 2");
+    // A count outside 1 to 99 (set through the control channel) is explained, not drawn.
+    h.state_mut().print_draft.rows = 0;
+    assert!(h.state().print_draft.settings(4, &[]).is_err());
+}
+
+#[test]
 fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));

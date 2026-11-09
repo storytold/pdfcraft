@@ -70,6 +70,11 @@ pub enum Layout {
         order: PageOrder,
         border: bool,
         auto_rotate: bool,
+        /// A custom grid (the Print dialog's Custom pages per sheet): `cols` across and `rows`
+        /// down the sheet whatever its orientation, which is not picked for the grid, so Auto
+        /// prints portrait. A predefined count (`false`, [`Layout::multiple`]) is a grid on a
+        /// portrait sheet that turns to landscape when that suits it.
+        custom: bool,
     },
     Booklet {
         subset: BookletSubset,
@@ -108,9 +113,23 @@ impl Layout {
                 (c, n.div_ceil(c).max(1))
             }
         };
-        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true }
+        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: false }
+    }
+
+    /// A custom grid of `cols` across by `rows` down, each 1 to [`MAX_GRID`]; every cell holds a
+    /// page. `None` for a count outside that.
+    pub fn grid(cols: usize, rows: usize) -> Option<Layout> {
+        if !(1..=MAX_GRID).contains(&cols) || !(1..=MAX_GRID).contains(&rows) {
+            return None;
+        }
+        // At most 99 × 99, so this cannot overflow.
+        let per_sheet = cols.checked_mul(rows)?;
+        Some(Layout::Multiple { cols, rows, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: true })
     }
 }
+
+/// The most columns, or rows, a custom pages-per-sheet grid can have.
+pub const MAX_GRID: usize = 99;
 
 /// Acrobat's Comments & Forms choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

@@ -11,8 +11,26 @@ pub(crate) fn print_refused() -> &'static str {
 }
 
 enum ClipboardPaste {
-    Text,
+    Text(String),
     Image(std::sync::Arc<egui::ColorImage>),
+}
+
+/// What objects copied in Edit a PDF put on the system clipboard for other applications, so ⌘V
+/// can tell whether it still holds that copy or something copied since: their text, or else the
+/// first picture's pixels (a hash of them), or nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum ObjectClipMark {
+    Text(String),
+    Picture(u64),
+    #[default]
+    None,
+}
+
+fn picture_hash(width: usize, height: usize, rgba: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (width, height, rgba).hash(&mut h);
+    h.finish()
 }
 
 impl PdfCraftApp {
@@ -27,7 +45,8 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
+    /// ⌘C / ⌘X / ⌘V copy, cut and paste text, images or comments on canvas (unless a text field
+    /// has focus). With no text selected, ⌘C copies the selected comments, each with its replies.
     pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let pastes: Vec<_> = ctx.input(|input| {
@@ -35,7 +54,7 @@ impl PdfCraftApp {
                 .events
                 .iter()
                 .filter_map(|event| match event {
-                    egui::Event::Paste(_) => Some(ClipboardPaste::Text),
+                    egui::Event::Paste(text) => Some(ClipboardPaste::Text(text.clone())),
                     egui::Event::PasteImage(image) => Some(ClipboardPaste::Image(image.clone())),
                     _ => None,
                 })
@@ -52,7 +71,15 @@ impl PdfCraftApp {
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
         let paste = ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
 
+        // Objects selected together in Edit a PDF take ⌘C and ⌘X.
+        let objects = (copy || cut) && self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0);
+        if objects {
+            self.copy_objects(i, ctx, cut);
+        }
+        let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
         if copy
+            && !objects
+            && (text_selected || !self.copy_selected_comments(i))
             && !self.copy_selected_text(i, ctx)
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
@@ -61,11 +88,17 @@ impl PdfCraftApp {
             self.copy_page_image(sel.page, sel.index);
         }
         if cut
+            && !objects
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
             self.cut_page_image(sel.page, sel.index);
+        }
+        if (paste || !pastes.is_empty()) && self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(&pastes)
+        {
+            self.paste_objects(i);
+            return;
         }
         if !pastes.is_empty() {
             self.receive_pastes(i, pastes, true);
@@ -89,19 +122,184 @@ impl PdfCraftApp {
         }
     }
 
-    fn receive_pastes(&mut self, view: usize, pastes: Vec<ClipboardPaste>, images_allowed: bool) {
+    /// ⌘C / ⌘X in Edit a PDF with objects selected together: copy them for ⌘V in any open
+    /// document, and put their text (or else their first picture) on the system clipboard for
+    /// other applications. A cut then deletes them, as one undo step.
+    pub(crate) fn copy_objects(&mut self, i: usize, ctx: &egui::Context, cut: bool) -> bool {
+        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.objects.selection())) else { return false };
+        if !self.may_copy(id) {
+            return false;
+        }
+        let Some(doc) = self.session.get(id) else { return false };
+        if cut && !doc.allows_modification() {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+        let clip = match doc.copy_objects(page, &targets) {
+            Ok(clip) => clip,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        // A newer copy wins over a whole-document copy still reading its pages.
+        self.document_copy = None;
+        let text = clip.text();
+        let picture =
+            clip.objects().iter().find(|o| o.target.kind == pdfcraft_engine::ObjectKind::Image && o.content_type == "image").map(|o| o.target.index);
+        self.object_clip_mark = if !text.is_empty() {
+            ctx.copy_text(text.clone());
+            ObjectClipMark::Text(text)
+        } else if let Some(index) = picture.filter(|_| self.system_clipboard && cfg!(not(target_arch = "wasm32")))
+            && self.copy_page_image(page, index)
+            && let Some((w, h, rgba)) = &self.last_copied_image
+        {
+            ObjectClipMark::Picture(picture_hash(*w as usize, *h as usize, rgba))
+        } else {
+            ObjectClipMark::None
+        };
+        self.object_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
+        if cut && let Some(delete) = pdfcraft_engine::Edit::delete_objects(page, targets) {
+            self.apply_edit(delete);
+        }
+        true
+    }
+
+    /// Whether ⌘V's `pastes` (what the system clipboard gave, if anything) are the objects
+    /// copied in Edit a PDF, rather than something copied since, here or in another application.
+    fn pastes_objects(&self, pastes: &[ClipboardPaste]) -> bool {
+        pastes.iter().all(|paste| match (paste, &self.object_clip_mark) {
+            (ClipboardPaste::Text(text), ObjectClipMark::Text(copied)) => text.replace("\r\n", "\n").trim_end() == copied.trim_end(),
+            (ClipboardPaste::Text(text), ObjectClipMark::None) => !pdfcraft_engine::is_xfdf_comments(text),
+            (ClipboardPaste::Image(image), ObjectClipMark::Picture(hash)) => {
+                let rgba: Vec<u8> = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
+                picture_hash(image.size[0], image.size[1], &rgba) == *hash
+            }
+            (ClipboardPaste::Image(_), ObjectClipMark::None) => true,
+            _ => false,
+        })
+    }
+
+    /// ⌘V in Edit a PDF: the copied objects onto the current page of tab `i`, as page content
+    /// that draws the same (one undo step), and selected.
+    pub(crate) fn paste_objects(&mut self, i: usize) -> bool {
+        let Some((id, page)) = self.views.get(i).map(|v| (v.id, v.current)) else { return false };
+        let (Some(doc), Some(clipboard)) = (self.session.get(id), self.object_clipboard.as_mut()) else { return false };
+        if !doc.allows_modification() {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+        let before = doc.editable_objects(page).unwrap_or_default();
+        let edit = match clipboard.paste(doc, page) {
+            Ok(edit) => edit,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        if !self.apply_edit(edit) {
+            return false;
+        }
+        if let (Some(Ok(after)), Some(view)) = (self.session.get(id).map(|d| d.editable_objects(page)), self.views.get_mut(i)) {
+            view.objects.select_pasted(page, &before, after);
+        }
+        true
+    }
+
+    /// `on_canvas`: the paste is the canvas's (no text field, dialog or page grid has it), so
+    /// pictures and copied comments land on the page.
+    fn receive_pastes(&mut self, view: usize, pastes: Vec<ClipboardPaste>, on_canvas: bool) {
         let page = self.views.get(view).map_or(0, |view| view.current);
         for paste in pastes {
             match paste {
-                ClipboardPaste::Text => {
+                ClipboardPaste::Text(text) => {
                     // Text fields may own the paste; the canvas cache still observes its contents.
                     self.last_copied_image = None;
                     self.last_copied_file = None;
+                    if on_canvas {
+                        self.paste_comment_text(view, text);
+                    }
                 }
-                ClipboardPaste::Image(image) if images_allowed => {
+                ClipboardPaste::Image(image) if on_canvas => {
                     self.paste_received_image(page, &image);
                 }
                 ClipboardPaste::Image(_) => {}
+            }
+        }
+    }
+
+    /// A text pasted onto the canvas: XFDF with comments is pasted as comments. Copied comments
+    /// come from the system clipboard when it holds them, from the app's own only when it holds
+    /// nothing legible (a word copied in another app since is that word, not the comments copied
+    /// before it).
+    fn paste_comment_text(&mut self, i: usize, text: String) {
+        if pdfcraft_engine::is_xfdf_comments(&text) {
+            self.paste_comments(i, Some(text), None);
+        } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
+            self.paste_comments(i, None, None);
+        }
+    }
+
+    /// Copy the selected comments of tab `i` as XFDF, each with its replies: into the app's
+    /// clipboard (for ⌘V in any tab or window) and onto the system clipboard as text. False
+    /// when nothing is selected.
+    pub fn copy_selected_comments(&mut self, i: usize) -> bool {
+        let Some(view) = self.views.get(i) else { return false };
+        let keys = view.comments.selection();
+        if keys.is_empty() {
+            return false;
+        }
+        let id = view.id;
+        match self.session.export_comments(id, &keys) {
+            Ok(xfdf) => {
+                if let Some(ctx) = &self.ctx {
+                    ctx.copy_text(xfdf.clone());
+                }
+                self.comment_clipboard = Some(CommentClip { xfdf, count: keys.len() });
+                true
+            }
+            Err(e) => {
+                self.notify_error(e);
+                false
+            }
+        }
+    }
+
+    /// Paste copied comments (`text`, XFDF from the system clipboard, or else the app's
+    /// clipboard) into tab `i`. With `at` (a page and a user-space point, from the page's menu)
+    /// the bundle is placed at once, centred there; otherwise it hangs on the pointer as one
+    /// bundle until a click places it (`Gesture::Place`), so a copy never lands on its original
+    /// and a bundle from a large page goes where it fits on a small one. The copies are selected
+    /// once placed (see `apply_edit`).
+    pub fn paste_comments(&mut self, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
+        let Some(xfdf) = text.or_else(|| self.comment_clipboard.as_ref().map(|c| c.xfdf.clone())) else {
+            self.notify_tr("Copy comments first");
+            return false;
+        };
+        let Some(view) = self.views.get(i) else { return false };
+        let id = view.id;
+        let Some(doc) = self.session.get(id) else { return false };
+        if !doc.allows_annotation() {
+            self.notify_tr("The document's security settings don't allow this change");
+            return false;
+        }
+        let count = pdfcraft_engine::comment_count(&xfdf);
+        let Some(bounds) = pdfcraft_engine::comments_bounds(&xfdf).filter(|_| count > 0) else {
+            self.notify_tr("The clipboard holds no comments");
+            return false;
+        };
+        match at {
+            Some((page, [x, y])) => {
+                let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+                self.apply_edit(pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
+            }
+            None => {
+                let Some(view) = self.views.get_mut(i) else { return false };
+                view.comments.clear_selection();
+                let outlines = pdfcraft_engine::comment_outlines(&xfdf);
+                view.comments.gesture = Some(comments::Gesture::Place { xfdf, bounds, count, outlines });
+                self.notify_tr("Click where the copied comments go; Escape lets them go");
+                true
             }
         }
     }
@@ -127,8 +325,46 @@ impl PdfCraftApp {
         if !self.may_copy(id) {
             return false;
         }
-        ctx.copy_text(text);
+        // Built only when there is a clipboard to take it.
+        let html = if self.takes_html() {
+            self.views
+                .get(i)
+                .and_then(DocView::selected_glyphs)
+                .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
+                // A capped copy would paste less than the plain text holds; paste that instead.
+                .filter(|copy| !copy.truncated)
+                .map(|copy| copy.html)
+                .filter(|html| !html.is_empty())
+        } else {
+            None
+        };
+        if !html.is_some_and(|html| self.put_rich_text(&html, &text)) {
+            ctx.copy_text(text);
+        }
         true
+    }
+
+    /// Whether Copy with formatting has a clipboard to write: the system clipboard is on, and
+    /// this isn't the web build (or a test stands in for the clipboard).
+    fn takes_html(&self) -> bool {
+        self.system_clipboard && (self.html_clipboard_override.is_some() || cfg!(not(target_arch = "wasm32")))
+    }
+
+    /// Put `html` on the clipboard with `text` as its plain alternative, in one set (egui has no
+    /// HTML output, and its own text copy at the end of the frame would replace the HTML).
+    /// `false` when it wasn't, so the caller copies the plain text the usual way.
+    fn put_rich_text(&mut self, html: &str, text: &str) -> bool {
+        if let Some(set) = self.html_clipboard_override.as_mut() {
+            return set(html, text);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::os_clipboard::with_kept(&mut self.os_clipboard, |c| c.set().html(html, Some(text))).is_ok()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
