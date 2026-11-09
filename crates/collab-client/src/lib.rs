@@ -373,7 +373,7 @@ mod tests {
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{
         ActorId, Applied, BlobRef, ClientInfo, ClientMessage, CommitResult, ConflictClass, DocKey, ErrorCode, Op, OpId, OpKind, PageRef, Presence,
-        Rejected, Resync, Role, ServerMessage, Snapshot, SnapshotMode, Target, VersionHint, Viewport, Welcome,
+        Rejected, Resync, Role, Selection, ServerMessage, Snapshot, SnapshotMode, Target, VersionHint, Viewport, Welcome,
     };
     use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, RoomConfig};
     use serde_json::json;
@@ -606,6 +606,35 @@ mod tests {
         assert!(matches!(client.receive(ServerMessage::Presence(presence))?, Some(Effect::Presence(_))));
         assert_eq!(client.version(), 0);
         assert_eq!(client.participants().count(), 1);
+        Ok(())
+    }
+
+    /// Presence carries a selection as geometry or a comment name — never the document's
+    /// text, a comment's contents or a credential.
+    #[test]
+    fn a_presence_frame_carries_a_selection_and_no_document_content() -> Result<(), Box<dyn std::error::Error>> {
+        let presence = Presence {
+            actor_id: actor("ada")?,
+            role: Role::Editor,
+            page: PageRef { index: 3, epoch: 1 },
+            viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.25 },
+            cursor: Some([12, 34]),
+            selection: Some(Selection::Text { page: PageRef { index: 3, epoch: 1 }, rect: [100, 200, 400, 260] }),
+            color: "#3366cc".into(),
+        };
+        let message = ClientMessage::Presence(presence);
+        message.validate()?;
+        let value = serde_json::to_value(&message)?;
+        let object = value.as_object().ok_or("a presence frame is an object")?;
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["actor_id", "color", "cursor", "page", "role", "selection", "type", "viewport"]);
+        assert_eq!(object["selection"]["kind"], "text");
+        assert_eq!(object["selection"]["rect"], json!([100, 200, 400, 260]));
+        for forbidden in ["contents", "text", "jwt", "token", "bytes", "password", "author"] {
+            assert!(!object.contains_key(forbidden), "presence must not carry {forbidden}");
+        }
+        assert!(value.to_string().len() <= pdfcraft_collab_proto::MAX_PRESENCE_BYTES);
         Ok(())
     }
 

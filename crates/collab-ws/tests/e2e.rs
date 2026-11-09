@@ -12,7 +12,9 @@ use pdfcraft_collab_client_pdf::{
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
-use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, ServerMessage, Target, Viewport};
+use pdfcraft_collab_proto::{
+    ActorId, ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, ServerMessage, Target, Viewport,
+};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, RoomConfig};
 use pdfcraft_collab_ws::{Claims, Config, ServerHandle, TokenError, Verifier, WsServer};
 use pdfcraft_engine::Session;
@@ -90,6 +92,8 @@ struct Peer {
     ws: WebSocket<MaybeTlsStream<std::net::TcpStream>>,
     session: Session,
     id: pdfcraft_engine::DocId,
+    actor: ActorId,
+    role: Role,
     version: u64,
     epoch: u64,
 }
@@ -117,10 +121,12 @@ impl Peer {
         ))?;
         let mut session = Session::new();
         let id = session.open_new("e2e.pdf", fixture(2).into())?;
-        let mut peer = Self { ws, session, id, version: 0, epoch: 0 };
+        let mut peer = Self { ws, session, id, actor: ActorId::new("pending")?, role: Role::Viewer, version: 0, epoch: 0 };
         match peer.next()? {
             ServerMessage::Welcome(welcome) => {
                 // A late joiner is welcomed at the head; a `resync` brings its copy up.
+                peer.actor = welcome.actor_id;
+                peer.role = welcome.role;
                 peer.version = welcome.version;
                 peer.epoch = welcome.epoch;
             }
@@ -131,6 +137,20 @@ impl Peer {
 
     fn send(&mut self, op: Op) -> Result<(), Box<dyn std::error::Error>> {
         self.ws.send(Message::text(serde_json::to_string(&ClientMessage::Op(op))?))?;
+        Ok(())
+    }
+
+    fn send_presence(&mut self, selection: Option<Selection>) -> Result<(), Box<dyn std::error::Error>> {
+        let message = ClientMessage::Presence(Presence {
+            actor_id: self.actor.clone(),
+            role: self.role,
+            page: PageRef { index: 0, epoch: self.epoch },
+            viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
+            cursor: Some([10, 20]),
+            selection,
+            color: "#3366cc".into(),
+        });
+        self.ws.send(Message::text(serde_json::to_string(&message)?))?;
         Ok(())
     }
 
@@ -1101,5 +1121,57 @@ fn two_clients_reply_with_a_status_and_a_deleted_parent_refuses_a_reply() -> Res
     for peer in [&ada, &bo] {
         assert!(peer.names().is_empty(), "the refused reply added nothing");
     }
+    Ok(())
+}
+
+/// A selection is presence, not an operation: another replica and a viewer see it, no
+/// version or journal entry follows, and the room still accepts edits afterwards.
+#[test]
+fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let mut di = Peer::join(addr, "viewer:di", "di")?;
+
+    let text = Selection::Text { page: PageRef { index: 0, epoch: 0 }, rect: [20, 300, 220, 320] };
+    ada.send_presence(Some(text.clone()))?;
+    for peer in [&mut bo, &mut di] {
+        match peer.next()? {
+            ServerMessage::Presence(presence) => {
+                assert_eq!(presence.actor_id, ada.actor);
+                assert_eq!(presence.selection, Some(text.clone()), "the selection travels as presence");
+            }
+            other => return Err(format!("expected presence, got {other:?}").into()),
+        }
+    }
+
+    // A viewer's own selection is presence too; it writes no operation.
+    let named = Selection::Annotation { nm: "ada-hl-1".into() };
+    di.send_presence(Some(named.clone()))?;
+    match ada.next()? {
+        ServerMessage::Presence(presence) => {
+            assert_eq!(presence.actor_id, di.actor);
+            assert_eq!(presence.selection, Some(named), "a viewer's selection is seen by others");
+        }
+        other => return Err(format!("expected presence, got {other:?}").into()),
+    }
+
+    assert_eq!((ada.version, bo.version, di.version), (0, 0, 0), "presence never bumps the version");
+    let mut late = Peer::join(addr, "editor:eve", "eve")?;
+    assert!(late.resync(0)?.is_empty(), "a selection is not journaled and is not an operation");
+
+    // The room still accepts an operation afterwards: presence left nothing behind.
+    let doc = DocKey::new("file-1")?;
+    let rotate = structural_op(doc, OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
+    ada.send(rotate)?;
+    for peer in [&mut ada, &mut bo, &mut di] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    assert_eq!(ada.version, 1);
+    // A replica that joins after the edit sees the rotation alone: the selections are not
+    // in the journal it catches up from.
+    let mut last = Peer::join(addr, "viewer:frank", "frank")?;
+    assert_eq!(last.resync(0)?.len(), 1, "only the rotation is in the journal");
     Ok(())
 }

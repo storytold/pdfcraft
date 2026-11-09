@@ -12,11 +12,13 @@
 //! module does nothing.
 
 use crate::PdfCraftApp;
+use crate::canvas::{DocView, RemoteSelection, RemoteSelectionKind};
 use crate::hooks::HostSession;
 use pdfcraft_collab_client_pdf::{apply, inverse_after, inverse_for, ops_for_edit};
-use pdfcraft_collab_proto::{ActorId, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Viewport};
+use pdfcraft_collab_proto::{ActorId, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, Viewport};
 use pdfcraft_collab_session::{Config as WireConfig, Event, Sink};
 use pdfcraft_engine::{DocId, Edit};
+use pdfcraft_render::DocInfo;
 use std::collections::BTreeMap;
 use web_time::{Duration, Instant, SystemTime};
 
@@ -155,6 +157,99 @@ struct Seen {
     at: Instant,
 }
 
+impl Seen {
+    /// Presence older than the TTL is a reader we stop drawing (ADR-0006).
+    fn is_current(&self, now: Instant) -> bool {
+        now.duration_since(self.at) < PRESENCE_TTL
+    }
+}
+
+/// What another participant is selecting, as this replica may draw it. `None` when their
+/// presence is stale, on another page tree, or carries no selection. `epoch` is this
+/// replica's, so a selection addressed to a page set we have left is not drawn.
+fn visible_selection(seen: &Seen, now: Instant, epoch: u64) -> Option<RemoteSelection> {
+    if !seen.is_current(now) || seen.presence.page.epoch != epoch {
+        return None;
+    }
+    let actor = seen.presence.actor_id.as_str().to_owned();
+    let color = color_of_hex(&seen.presence.color);
+    match seen.presence.selection.as_ref()? {
+        Selection::Annotation { nm } => Some(RemoteSelection {
+            actor,
+            color,
+            page: usize::try_from(seen.presence.page.index).ok()?,
+            kind: RemoteSelectionKind::Annotation(nm.clone()),
+        }),
+        Selection::Text { page, rect } => {
+            if page.epoch != epoch {
+                return None;
+            }
+            Some(RemoteSelection {
+                actor,
+                color,
+                page: usize::try_from(page.index).ok()?,
+                kind: RemoteSelectionKind::Rects(vec![rect.map(|v| v as f64)]),
+            })
+        }
+    }
+}
+
+/// What this client is selecting, in the form presence carries: the `/NM` of the selected
+/// comment when it is on the page in view, else the selection's bounding rectangle in user
+/// space. `None` when nothing is selected. The payload is geometry and a name only — never
+/// the document's text or the comment's contents.
+fn local_selection(view: &DocView, info: &DocInfo, epoch: u64) -> Option<Selection> {
+    if let Some((page, index)) = view.comments.selected {
+        let annotation = info.annotations.iter().find(|a| a.page == page && a.index == index);
+        if page == view.current
+            && let Some(nm) = annotation.and_then(|a| a.name.clone())
+        {
+            return Some(Selection::Annotation { nm });
+        }
+        if let Some(annotation) = annotation
+            && let Some(rect) = annotation_selection_rect(annotation)
+        {
+            return Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect });
+        }
+    }
+    let (page, quads) = view.selection_quads(info)?;
+    Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect: rect_of_quads(&quads)? })
+}
+
+/// A selected comment's geometry: its markup quads, else its rectangle.
+fn annotation_selection_rect(annotation: &pdfcraft_render::Annotation) -> Option<[i64; 4]> {
+    let quads: Vec<[f64; 8]> = annotation.quads.iter().map(|q| q.map(f64::from)).collect();
+    rect_of_quads(&quads).or_else(|| {
+        let [x0, y0, x1, y1] = annotation.rect;
+        Some([round_unit(x0), round_unit(y0), round_unit(x1), round_unit(y1)])
+    })
+}
+
+/// The bounding rectangle of a selection's quadrilaterals, in user space, rounded to the
+/// whole units presence carries. Non-finite corners are skipped; no quads means no selection.
+fn rect_of_quads(quads: &[[f64; 8]]) -> Option<[i64; 4]> {
+    let mut rect: Option<[f64; 4]> = None;
+    for q in quads {
+        for [x, y] in [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]] {
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            rect = Some(match rect {
+                None => [x, y, x, y],
+                Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+            });
+        }
+    }
+    let [x0, y0, x1, y1] = rect?;
+    Some([round_unit(x0 as f32), round_unit(y0 as f32), round_unit(x1 as f32), round_unit(y1 as f32)])
+}
+
+/// A user-space coordinate as the whole unit presence sends; non-finite input becomes 0
+/// rather than a cast artefact.
+fn round_unit(value: f32) -> i64 {
+    if value.is_finite() { value.round() as i64 } else { 0 }
+}
+
 struct HistoryGroup {
     label: String,
     originals: Vec<Op>,
@@ -265,7 +360,7 @@ impl CollabUi {
     fn cursors(&self, now: Instant) -> Vec<crate::canvas::RemoteCursor> {
         self.participants
             .values()
-            .filter(|seen| now.duration_since(seen.at) < PRESENCE_TTL && seen.presence.page.epoch == self.epoch)
+            .filter(|seen| seen.is_current(now) && seen.presence.page.epoch == self.epoch)
             .filter_map(|seen| {
                 let cursor = seen.presence.cursor?;
                 Some(crate::canvas::RemoteCursor {
@@ -276,6 +371,12 @@ impl CollabUi {
                 })
             })
             .collect()
+    }
+
+    /// Other participants' selections this replica may draw: the same freshness and
+    /// page-tree rules as the pointers. A selection is presence, never an operation.
+    fn selections(&self, now: Instant) -> Vec<RemoteSelection> {
+        self.participants.values().filter_map(|seen| visible_selection(seen, now, self.epoch)).collect()
     }
 
     /// The session as the host page and the tests see it.
@@ -527,9 +628,10 @@ impl PdfCraftApp {
         let Some((index, doc)) = self.active_ids() else { return };
         let Some(collab) = self.collab.as_mut() else { return };
         if !collab.connected || collab.doc != doc {
-            // No session, no cursors: nothing must stay on the page from before.
+            // No session, no cursors or selections: nothing must stay on the page from before.
             if let Some(view) = self.views.get_mut(index) {
                 view.remote_cursors.clear();
+                view.remote_selections.clear();
             }
             return;
         }
@@ -538,23 +640,31 @@ impl PdfCraftApp {
         // still name a page in this replica's page tree.
         if let Some(view) = self.views.get_mut(index) {
             view.remote_cursors = collab.cursors(now);
+            view.remote_selections = collab.selections(now);
         }
         let Some(actor) = collab.actor.clone() else { return };
         let Some(view) = self.views.get(index) else { return };
         // The pointer over the page in PDF user space: the page module resolved
         // it this frame, so this is the same point the user sees.
         let cursor = view.local_cursor.filter(|(page, _)| *page == view.current).map(|(_, point)| [point[0].round() as i64, point[1].round() as i64]);
+        // The selection travels as a `/NM` or a rectangle, never as text: presence is not
+        // an operation and must not be a way to read the document's contents.
+        let selection = self.session.get(view.id).and_then(|document| local_selection(view, &document.info, collab.epoch));
         let presence = Presence {
             actor_id: actor,
             role: collab.role,
             page: PageRef { index: view.current.min(u32::MAX as usize) as u32, epoch: collab.epoch },
             viewport: Viewport { x: 0.0, y: 0.0, zoom: f64::from(view.zoom) },
             cursor,
-            selection: None,
+            selection,
             color: collab.color.clone(),
         };
         let moved = collab.sent_presence.as_ref().is_none_or(|sent| {
-            sent.page != presence.page || sent.cursor != presence.cursor || sent.role != presence.role || sent.viewport.zoom != presence.viewport.zoom
+            sent.page != presence.page
+                || sent.cursor != presence.cursor
+                || sent.selection != presence.selection
+                || sent.role != presence.role
+                || sent.viewport.zoom != presence.viewport.zoom
         });
         let elapsed = collab.last_presence.elapsed();
         if !moved && elapsed < PRESENCE_HEARTBEAT {
@@ -798,8 +908,60 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{doc_key_from_token, role_from_name, role_name};
-    use pdfcraft_collab_proto::Role;
+    use super::{
+        Duration, Instant, PRESENCE_TTL, RemoteSelectionKind, Seen, doc_key_from_token, rect_of_quads, role_from_name, role_name, visible_selection,
+    };
+    use pdfcraft_collab_proto::{ActorId, PageRef, Presence, Role, Selection, Viewport};
+
+    fn presence(selection: Option<Selection>) -> Result<Presence, Box<dyn std::error::Error>> {
+        Ok(Presence {
+            actor_id: ActorId::new("ada")?,
+            role: Role::Editor,
+            page: PageRef { index: 1, epoch: 2 },
+            viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
+            cursor: Some([5, 6]),
+            selection,
+            color: "#3366cc".into(),
+        })
+    }
+
+    /// A selection is presence: it is drawn while the sender's presence is fresh, and it
+    /// disappears with the cursor's TTL (ADR-0006). Nothing here touches a document.
+    #[test]
+    fn a_remote_selection_expires_with_its_presence() -> Result<(), Box<dyn std::error::Error>> {
+        let now = Instant::now();
+        let selection = Selection::Text { page: PageRef { index: 1, epoch: 2 }, rect: [10, 20, 30, 40] };
+        let fresh = Seen { presence: presence(Some(selection.clone()))?, at: now };
+        let drawn = visible_selection(&fresh, now, 2).expect("a fresh selection is drawn");
+        assert_eq!(drawn.page, 1);
+        assert_eq!(drawn.kind, RemoteSelectionKind::Rects(vec![[10.0, 20.0, 30.0, 40.0]]));
+        assert_eq!(drawn.actor, "ada");
+        assert!(visible_selection(&fresh, now, 3).is_none(), "a selection from another page tree is not drawn");
+        let stale_at = now.checked_sub(PRESENCE_TTL + Duration::from_millis(1)).expect("an instant before now");
+        let stale = Seen { presence: presence(Some(selection))?, at: stale_at };
+        assert!(visible_selection(&stale, now, 2).is_none(), "a stale selection disappears with the cursor");
+        Ok(())
+    }
+
+    #[test]
+    fn a_selected_comment_travels_by_its_name() -> Result<(), Box<dyn std::error::Error>> {
+        let now = Instant::now();
+        let seen = Seen { presence: presence(Some(Selection::Annotation { nm: "ada-hl-1".into() }))?, at: now };
+        let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
+        assert_eq!(drawn.page, 1);
+        assert_eq!(drawn.kind, RemoteSelectionKind::Annotation("ada-hl-1".into()));
+        Ok(())
+    }
+
+    /// A text range becomes one bounding rectangle in user space; one page's column select
+    /// is the same shape.
+    #[test]
+    fn a_text_range_travels_as_its_bounding_rect() {
+        let quads = [[10.0, 100.0, 50.0, 100.0, 10.0, 90.0, 50.0, 90.0], [10.0, 80.0, 30.0, 80.0, 10.0, 70.0, 30.0, 70.0]];
+        assert_eq!(rect_of_quads(&quads), Some([10, 70, 50, 100]));
+        assert_eq!(rect_of_quads(&[]), None);
+        assert_eq!(rect_of_quads(&[[f64::NAN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]), Some([0, 0, 0, 0]));
+    }
 
     /// A token is read for its `fileId` only: the server still verifies it, and
     /// the document a session joins must be the file the token names.

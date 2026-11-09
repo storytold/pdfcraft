@@ -513,6 +513,80 @@ pub struct RemoteCursor {
     pub point: [f64; 2],
 }
 
+/// Another participant's selection on a page. Ephemeral presence, like the pointer: it is
+/// never an edit and never touches the document.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteSelection {
+    /// Who selected it, kept for the colour and the tests.
+    pub actor: String,
+    pub color: Color32,
+    pub page: usize,
+    pub kind: RemoteSelectionKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteSelectionKind {
+    /// A comment named by its `/NM`; the canvas looks up its geometry on the page.
+    Annotation(String),
+    /// Rectangles in PDF user space (`[x0, y0, x1, y1]`): a text range's box, or the
+    /// rectangle of a column selection.
+    Rects(Vec<[f64; 4]>),
+}
+
+/// Draw other participants' selections on page `i`: a translucent fill in the actor's
+/// colour, so the page's own content stays readable. A page with none draws nothing.
+pub(crate) fn paint_remote_selections(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selections: &[RemoteSelection]) {
+    let Some(page_info) = info.pages.get(page) else { return };
+    for selection in selections.iter().filter(|selection| selection.page == page) {
+        let rects = match &selection.kind {
+            RemoteSelectionKind::Annotation(nm) => annotation_rects(info, page, nm),
+            RemoteSelectionKind::Rects(rects) => rects.iter().map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]).collect(),
+        };
+        let fill = Color32::from_rgba_unmultiplied(selection.color.r(), selection.color.g(), selection.color.b(), 48);
+        let stroke = egui::Stroke::new(1.0, selection.color);
+        for rect in rects {
+            let (x0, x1) = (rect[0].min(rect[2]), rect[0].max(rect[2]));
+            let (y0, y1) = (rect[1].min(rect[3]), rect[1].max(rect[3]));
+            if !x0.is_finite() || !x1.is_finite() || !y0.is_finite() || !y1.is_finite() {
+                continue;
+            }
+            let [vx0, vy0] = page_info.user_to_view(x0, y0);
+            let [vx1, vy1] = page_info.user_to_view(x1, y1);
+            let a = xf.norm_to_screen(vx0.min(vx1) / xf.pw, vy0.min(vy1) / xf.ph);
+            let b = xf.norm_to_screen(vx0.max(vx1) / xf.pw, vy0.max(vy1) / xf.ph);
+            let r = Rect::from_two_pos(a, b).intersect(xf.rect);
+            if r.is_positive() {
+                painter.rect_filled(r, 1.0, fill);
+                painter.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Inside);
+            }
+        }
+    }
+}
+
+/// The geometry of the comment `/NM` on `page`: its markup quads, or its rectangle when it
+/// has none (a note, a stamp, a text box). A name that is not on the page draws nothing.
+fn annotation_rects(info: &DocInfo, page: usize, nm: &str) -> Vec<[f32; 4]> {
+    let Some(annotation) = info.annotations.iter().find(|a| a.page == page && a.name.as_deref() == Some(nm)) else { return Vec::new() };
+    if annotation.quads.is_empty() {
+        return vec![annotation.rect];
+    }
+    annotation.quads.iter().filter_map(quad_rect).collect()
+}
+
+fn quad_rect(q: &[f32; 8]) -> Option<[f32; 4]> {
+    let mut rect: Option<[f32; 4]> = None;
+    for [x, y] in [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]] {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        rect = Some(match rect {
+            None => [x, y, x, y],
+            Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+        });
+    }
+    rect
+}
+
 /// Draw other participants' pointers on page `i`: an arrow with the actor's name beside
 /// it, in the colour the session gave them. A page with none draws nothing.
 pub(crate) fn paint_remote_cursors(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cursors: &[RemoteCursor]) {
@@ -606,6 +680,9 @@ pub struct DocView {
     /// Another participant's pointer, where the collaboration session last said it was. The
     /// canvas draws what it is given; without the feature the list stays empty.
     pub remote_cursors: Vec<RemoteCursor>,
+    /// Other participants' selections, where the collaboration session last said they were.
+    /// Ephemeral, like the pointers: without the feature the list stays empty.
+    pub remote_selections: Vec<RemoteSelection>,
     /// Where this frame's pointer is on a page, in PDF user space (page, x, y): what the
     /// collaboration session sends as presence. `None` when it is not over a page.
     pub local_cursor: Option<(usize, [f64; 2])>,
@@ -1148,6 +1225,7 @@ impl DocView {
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             remote_cursors: Vec::new(),
+            remote_selections: Vec::new(),
             local_cursor: None,
             screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
@@ -1851,6 +1929,9 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     page_overlays(ui, view, frame, &slot, &input);
     if !view.remote_cursors.is_empty() {
         paint_remote_cursors(ui.painter(), &xf, i, info, &view.remote_cursors);
+    }
+    if !view.remote_selections.is_empty() {
+        paint_remote_selections(ui.painter(), &xf, i, info, &view.remote_selections);
     }
 }
 
