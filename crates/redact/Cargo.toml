@@ -13,6 +13,8 @@ aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# The usable-quad rule `/QuadPoints` readers share.
+pdfcraft-geom = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
@@ -21,6 +23,7 @@ pdfcraft-xfa = { workspace = true }
 pdfcraft-organize = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
 # Already present in the lockfile: inspect XML values without searching markup names.
 roxmltree = "0.20"
