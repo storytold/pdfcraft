@@ -80,6 +80,7 @@ use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
@@ -262,6 +263,17 @@ struct PendingOpen {
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
+    /// A reply taken from `receiver` and kept back for later (a password prompt waiting for an
+    /// earlier file's password retry).
+    ready: Option<open_worker::ResultKind>,
+}
+
+/// A file named while the worker's queue was full: submitted once it has room.
+#[cfg(not(target_arch = "wasm32"))]
+struct DeferredOpen {
+    path: String,
+    then: Option<&'static str>,
+    display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
@@ -419,6 +431,13 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Files waiting for room in the worker's bounded queue, in the order they were named.
+    #[cfg(not(target_arch = "wasm32"))]
+    deferred_opens: std::collections::VecDeque<DeferredOpen>,
+    /// The open retrying a closed password prompt's file with its password: replies behind it
+    /// wait for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    password_retry: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -539,6 +558,16 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Frames in a row whose logic or drawing panicked, and whether this frame's did
+    /// (`frame_guard`, #3914).
+    panicking_frames: u32,
+    frame_panicked: bool,
+    /// The last `logic` ran without a `ui` after it yet (eframe skips `ui` while the window is
+    /// hidden).
+    logic_without_ui: bool,
+    /// Tests: the part of the next frame that panics on purpose.
+    #[cfg(test)]
+    panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
@@ -603,6 +632,10 @@ pub struct PdfCraftApp {
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
     pub comment_clipboard: Option<CommentClip>,
+    /// Objects copied together in Edit a PDF, to paste into this or another document (#5989).
+    pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
+    pub(crate) object_clip_mark: app::ObjectClipMark,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the

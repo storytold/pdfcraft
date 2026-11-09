@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, frame, handle_pos, held, is_callout, is_markup, point_handle, reaches_points, reshapable,
-    reshape_for, resizable, resized, snapped_caret,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, frame, handle_pos, held, is_callout, is_markup, on_text, point_handle, reaches_points,
+    reshapable, reshape_for, resizable, resized, snapped_caret,
 };
 use super::paint::{closes_at, drawn_shape, edit_anchor, erase, moves_box_only, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -137,7 +137,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
     }
-    let markup = is_markup(&a.subtype);
+    let markup = on_text(a);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // Text markup does not move: a click selects it, a drag across it selects the text.
     Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
@@ -253,7 +253,7 @@ fn select_input(
                 cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
                 consumed = true;
             }
-            CommentPart::Body if !is_markup(&a.subtype) => {
+            CommentPart::Body if !on_text(a) => {
                 // Dragging one of several selected comments moves them all; any other drag starts
                 // a selection of its own.
                 let grabbed = (cx.page, a.index);
@@ -347,14 +347,14 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
                     view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect: [f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy] });
                     return;
                 }
-                // The other selected comments on this page (not text markup, which is where
-                // its text is, nor a locked one, which would refuse the whole step) move with
-                // the dragged one, as one undo step.
+                // The other selected comments on this page (not text markup or a Replace Text
+                // caret, which are where their text is, nor a locked one, which would refuse the
+                // whole step) move with the dragged one, as one undo step.
                 let others: Vec<usize> = view
                     .comments
                     .also
                     .iter()
-                    .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !is_markup(&a.subtype) && !a.locked))
+                    .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !on_text(a) && !a.locked))
                     .map(|(_, i)| *i)
                     .collect();
                 view.pending_edit = Some(if others.is_empty() {
@@ -765,7 +765,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
         return;
     }
     let Some((page, index)) = cv.selected else { return };
-    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !is_markup(&a.subtype) && !a.locked);
+    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !on_text(a) && !a.locked);
     let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
     if !movable {
         return;

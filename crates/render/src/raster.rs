@@ -87,6 +87,10 @@ pub struct RenderConfig {
     /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
     /// be decoded.
     pub jbig2_work: Option<u64>,
+    /// Layer visibility overrides for print-preview rasters ([`PRINT_TAG`]), when the document
+    /// prints its layers differently from how they are shown (the Print event's auto state, ISO
+    /// 32000-2 §8.11.4.4): the preview shows the page as it prints. `None`: previews use `layers`.
+    pub print_layers: Option<Arc<Vec<(i32, i32, bool)>>>,
 }
 
 impl RenderConfig {
@@ -266,6 +270,9 @@ pub enum RenderWarning {
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
+    /// A Type 3 font without the `/Widths` it requires (ISO 32000-2 Table 110) was used; its
+    /// glyphs were spaced by the widths their glyph procedures give.
+    Type3WidthsMissing,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -355,16 +362,20 @@ fn render_page<'a>(
     config: &RenderConfig,
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
-    // Print previews share the viewer pool, but must use the output font policy. Keep the
-    // caller's cancellation/warning hooks, layers and annotation settings. A fresh cache is
-    // essential: hayro keys cached fonts by PDF dictionary, not by the font resolver, so the
-    // viewer cache could supply an installed face even after changing the resolver (and a
-    // cached missing font from print preview could blank the viewer on switching back).
+    // Print previews share the viewer pool, but must use the output font policy and the layers
+    // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
+    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // font resolver, so the viewer cache could supply an installed face even after changing the
+    // resolver (and a cached missing font from print preview could blank the viewer on switching
+    // back); nothing drawn with the viewer's layers is reused either.
     let print_settings;
     let print_cache;
-    let (settings, cache) = if config.system_fonts && req.tag & PRINT_TAG != 0 {
+    let print = req.tag & PRINT_TAG != 0;
+    let print_layers = config.print_layers.as_ref().filter(|_| print);
+    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
+            ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
             ..settings.clone()
         };
         print_cache = RenderCache::new();
@@ -408,6 +419,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    ..Default::default()
                 }
             }
             None => {
@@ -469,6 +481,7 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
+                InterpreterWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);

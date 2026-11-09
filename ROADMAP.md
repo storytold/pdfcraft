@@ -198,27 +198,28 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages (historical % snapshot vs 2,143 keys, except Vietnamese, Brazilian
-Portuguese and Spanish vs the current union). Detail and script notes: [localization-parity.md](docs/localization-parity.md).
+Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
+`cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
 |---|---|---|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 97.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
-| Spanish | `es` | 100% of current union | partial (dialogs / tooltips; no help) |
-| Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 100% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
-| French | `fr` | 99.3% | partial |
-| Portuguese (Brazil) | `pt-br` | 100% of current union | partial |
-| Indonesian | `id` | 0% | none |
-| Japanese | `ja` | 99.1% | partial |
-| German | `de` | 99.3% | partial |
-| Korean | `ko` | 0% | none |
-| Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
+| Simplified Chinese | `zh-hans` | 88.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
+| Spanish | `es` | 98.4% | partial (dialogs / tooltips; no help) |
+| Hindi | `hi` | 97.5% | partial (Devanagari rendering unqualified) |
+| Arabic | `ar` | 97.9% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
+| French | `fr` | 98.4% | partial |
+| Portuguese (Brazil) | `pt-br` | 98.4% | partial |
+| Indonesian | `id` | 97.5% | partial |
+| Japanese | `ja` | 89.6% | partial |
+| German | `de` | 89.7% | partial |
+| Korean | `ko` | 97.5% | partial (no Hangul UI face) |
+| Vietnamese | `vi` | 98.4% | partial (dialogs / tooltips; no help) |
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
-Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Romanian and Czech: **15 more catalogs**
-(24 interface languages including English).
+Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
+Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
+(35 interface languages including English).
 
 ## Upcoming
 
@@ -239,6 +240,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
+- **2026-11-07 (M2, #6449):** A non-embedded Times New Roman set as a TrueType CID font (`TimesNewRoman,Bold`, `TimesNewRomanPSMT` and the other faces) draws the glyphs its codes name, as the non-embedded Arial does: its first 258 glyphs follow the same standard Macintosh order, which the embedded Times New Roman subsets of a public French form confirm in 941 of 942 `/ToUnicode` entries (vendored hayro-interpret patch 88). That form drew "Salarié(e) du régime général" as "Salari²*g+f w't²i lo g'ì²p²tcn" and "changement" as "ej angement". Times and Times New Roman MT Std are not read this way.
+
+- **2026-11-05 (M2, #5889):** A non-embedded Arial set as a TrueType CID font (`CIDFontType2`, `Identity-H`, as Word and PDFMaker write it) draws the glyphs its codes name. Those codes are glyph indexes in the author's Arial, whose first 258 glyphs follow the standard Macintosh order, so the standard substitute now draws each glyph by name (vendored hayro-interpret patch 76). Before, it took each code as one of its own glyph indexes, and "Low Power" drew as "@ck 'Dck Yf". Arial Narrow, Black and Unicode MS, and `CIDFontType0` fonts, are not read this way. Copying or searching those runs still needs a `/ToUnicode`.
+
 - **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-07 (M10, `ocr.ocr-web`, port onto #977):** Web OCR rebuilt on main's engines and preprocessing (#977). `OcrJob::run` is now `OcrJob::steps` a page at a time: the page renders, crops to the region and cleans each page, a Web Worker runs ocrs on the result, and `OcrShot::place` maps the words back through the region and preprocessing. Every strategy reads like this when only one engine is present, and the web build has only ocrs. The downloaded models are installed into the engine cache (`ocr::install`), so the Verify screen and the engine-status checks see them too. The batch keeps main's skipped-files bucket, low-confidence notes and cancel. The translations moved to craft-i18n (storytold/craft-i18n#141). The Verify screen starts the model download itself and runs once the models land; before, on a fresh page it failed with the desktop's "set PDFCRAFT_MODELS" message. Known limits: the cleaning steps, and the Verify screen's Run OCR and re-reads, run on the page. Estimates unchanged.
@@ -249,12 +254,14 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
 
+- **2026-11-03 (community, M7, Thai word breaking):** Thai rows end between words, found with ICU4X's dictionary line segmenter (`icu_segmenter` 2.3, compiled dictionary data, no LSTM model; Unicode-3.0), instead of only at spaces when rewrapping and at any cluster in Add text. A row never starts with a following vowel, tone or other mark, Mai Yamok or Paiyannoi, nor ends with a leading vowel; a word wider than the row still breaks between clusters, and the spaces where an Add text row ends are dropped as in Latin text. Rewrapping existing text works out the breaks once per run of non-space characters. Rewriting a paragraph into Thai still needs a source font with the Thai glyphs (there is no Thai fallback face for it yet). The compiled dictionaries (Thai, Lao, Khmer, Burmese) add about 1.8 MB to a stripped release binary. Estimates unchanged.
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
-- **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
+- **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings in its denominator, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
+- **2026-11-02 (M3, #5708):** Pages shorter than the window sit in its middle, one page or row at a time and when scrolling continuously with every page in view.
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
@@ -442,6 +449,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-14 (M12, reading colours, #2059):** Pending page backgrounds use the document's reading colour immediately, preventing white flashes while scrolling to uncached pages. A headless canvas regression covers three pending pages in every preset and a custom background. Estimates unchanged.
 - **2026-10-15 (community, M6, #2608):** In Prepare a form the selected field moves with the arrow keys: a point per press, ten with Shift, as the object nudge and dragging it do. Each press is one undo step ("Change field properties"), and the keys no longer turn the page while a field is selected. Estimates unchanged.
 - **2026-10-15 (M3, closable community card):** The ArtCraft community card on Home has a close button that hides it for the rest of the run; it returns on the next launch, and its links stay in the top bar's Discord button and the Help menu. A UI regression covers closing and the fresh-launch default. Estimates unchanged.
+- **2026-10-15 (M14, MSI install folder, #1139):** The Windows installer's welcome dialog has an "Install to" row with a native folder browser, starting on the folder chosen for the per-user or per-machine scope (the recorded one on an update). `test-msi.ps1` checks the dialog wiring: both Install buttons set the folder before the dialog closes, and Browse's OK and Cancel. Estimates unchanged.
 - **2026-10-13 (community, M3, #1569 review):** Pixel-only Wayland wheel, wheel-tilt and continuous input use standalone moved events, so Ctrl zoom does not remain latched after the modifier is released (#991); vendored winit patch (13), with a policy test. Estimates unchanged.
 - **2026-10-18 (M1, PR #1143 repair policy):** A live in-file reference resolves when its generation matches the xref row or a same-number header at that indexed offset. Neither-match and free slots remain null, including when old object bytes remain. Opening records bounded xref/header disagreements without parsing object bodies or expanding compact xref rows. Synthetic controls cover read order, clones, overlays, dictionary edits, full classic/packed saves and an independent reader of incremental output. **Correction to the 2026-10-15 note below:** its async-opening-test sentence was not evidenced by this COS change; no fresh async-opening or GUI validation is claimed. The full-reference stream-length recursion key is defensive hardening, not an independently isolated regression fix. Estimates unchanged.
 - **2026-10-15 (M1, PR #1143 refresh):** COS reference lookups and full saves distinguish complete object references, so stale generations cannot expose replacement content. Snapshot restoration also keeps edits to objects with nonzero generations before incremental saves. Synthetic regressions cover caches, overlays, snapshots, stream lengths and classic/packed saves. Current upstream async-opening test corrections are included. Estimates unchanged.

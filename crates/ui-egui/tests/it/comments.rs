@@ -2598,9 +2598,45 @@ fn highlighting_an_area_off_the_text() {
     assert_eq!(comments(&h).len(), 2);
 }
 
+/// A Replace Text proposal is picked by its strikeout too, not only by its small caret: the
+/// strikeout is grouped under the caret (`/RT /Group`), and a click on it selects the caret, the
+/// proposal, so it can be deleted or restyled from either part.
+#[test]
+fn clicking_a_replace_text_strikeout_selects_the_proposal() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /IT /Replace /Contents (slow red) >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [40 100 130 120] /QuadPoints [40 120 130 120 40 100 130 100] /C [1 0 0] /T (Bob) /IT /StrikeOutTextEdit /IRT 4 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+    let p = at(&h, 70.0, 110.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((caret.page, caret.index)), "the strikeout picks the proposal");
+    // Review on #5689 (CodeRabbit): a drag from the strikeout, or from the caret, moves neither:
+    // the proposal lies on the text it replaces, and the caret alone would leave the strikeout.
+    let caret_at = at(&h, 140.0, 100.0);
+    for from in [p, caret_at] {
+        drag(&mut h, from, from + egui::vec2(60.0, 40.0));
+        h.run_steps(3);
+        let now = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+        assert_eq!(now.rect, caret.rect, "the caret stays on the text");
+    }
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), None, "nothing was moved");
+}
+
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
     let mut h = harness(|app| app.set_option("quick", "replace").unwrap());
+    // Review on #5689 (CodeRabbit): both parts take the Replace text tool's style.
+    h.state_mut().comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::ReplaceText, [0.1, 0.6, 0.2]);
     drag_pt(&mut h, (20.0, 155.0), (120.0, 155.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer asks for the replacement");
     field(&h, "Replacement text").type_text("slow red");
@@ -2611,15 +2647,19 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    assert_eq!((strike.color, caret.color), (Some([0.1, 0.6, 0.2]), Some([0.1, 0.6, 0.2])), "one style for the proposal");
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped under the caret, which holds the text");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
-    // so, and Make Current Properties Default updates the Replace text tool.
+    // Both members are the Replace text tool's, not Strikethrough's or Insert text's (#3947), so
+    // Make Current Properties Default updates the Replace text tool.
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    // The panel's card is the caret's, the group's primary: it shows the replacement, and
+    // nothing is named Strikethrough.
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "slow red").is_some(), "the panel shows the replacement");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -2753,16 +2793,12 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
     if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
-        assert!(s.views[0].auto_scrolling());
+        // Linux auto-scrolls while the wheel is held and stops on release.
+        assert!(!s.views[0].auto_scrolling());
     } else {
         assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
     }
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
-    }
     drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
     let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
     assert_eq!(kinds, ["Ink"]);
@@ -3635,6 +3671,40 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
 }
 
+/// #6548: resting on the hotbar's gear showed two stacked tooltips, "Hotbar settings" and
+/// "Hotbar settings / add tools". It shows the longer one only and keeps its short name.
+#[test]
+fn hotbar_settings_button_shows_one_tooltip() {
+    let mut h = harness(|_| {});
+    h.run_steps(2);
+    h.get_by_label("Hotbar settings").hover();
+    // egui shows a tooltip once the pointer has rested `tooltip_delay` seconds of *input* time,
+    // and the harness advances that clock by a fixed step every frame, so the wait is counted in
+    // simulated seconds rather than slept: it cannot pass early or depend on the machine's speed.
+    let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
+    let start = h.ctx.input(|i| i.time);
+    let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    // The button's name; a second tooltip repeating it would make two. Checked after every
+    // frame, so one that shows only briefly is caught too.
+    let names = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label("Hotbar settings").count();
+    let mut frames = 0;
+    while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
+        assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    // Rest two more delays, so a second tooltip would have had its chance to open.
+    let shown = elapsed(&h);
+    while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
+    assert_eq!(names(&h), 1, "the button's name, and no second tooltip");
+}
+
 #[test]
 fn hotbar_picker_searches_translated_tool_labels() {
     if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
@@ -4395,4 +4465,68 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
+/// one (also after a restart) takes it, along with the colour.
+#[test]
+fn properties_dialog_makes_the_text_box_font_size_default() {
+    let blue = [0.0, 0.47, 0.84];
+    let mut h = harness(|_| {});
+    let font_size_of_last = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let last = doc.info.annotations.len() - 1;
+        doc.comment_props(0, last).unwrap()
+    };
+    for (quick, size, first, second, third) in
+        [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
+    {
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
+        } else {
+            click_pt(&mut h, first);
+        }
+        post_text(&mut h, "First");
+        let index = comments(&h).len() - 1;
+        h.state_mut().open_comment_props(0, index);
+        h.run_steps(2);
+        {
+            let d = h.state_mut().comment_props.as_mut().expect("open");
+            d.edited.font_size = Some(size);
+            d.edited.color = Some(blue);
+        }
+        h.get_by_label("Make Properties Default").click();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(font_size_of_last(&h).font_size, Some(size));
+
+        // The next one takes the font size and the colour.
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
+        } else {
+            click_pt(&mut h, second);
+        }
+        post_text(&mut h, "Second");
+        let p = font_size_of_last(&h);
+        assert_eq!(p.font_size, Some(size), "{quick}: the next one takes the default font size");
+        assert_eq!(p.color, Some(blue), "{quick}: and the default colour");
+
+        // The default survives a restart.
+        let json = h.state().persist();
+        let mut fresh = harness(move |app| {
+            app.restore(&json);
+            app.set_option("quick", quick).unwrap();
+        });
+        if quick == "callout" {
+            drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
+        } else {
+            click_pt(&mut fresh, third);
+        }
+        post_text(&mut fresh, "Third");
+        assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
+    }
 }

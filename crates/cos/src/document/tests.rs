@@ -276,6 +276,10 @@ fn fax_images_decode_with_their_parameters() {
     let mut understated = parms.clone();
     understated.set(b"Rows".to_vec(), Object::Int(1));
     assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+    // More /Rows than /Height (PDFBOX-771: 1,084,975,104), as the renderer reads it too.
+    let mut overstated = parms.clone();
+    overstated.set(b"Rows".to_vec(), Object::Int(1_000_000_000));
+    assert_eq!(image(&doc, Some(Object::Dict(overstated)), 10, 3).unwrap(), bits, "/Height rows, not /Rows past it");
     // The parameters as the file gives them, /Rows included, and Table 11's defaults.
     let mut d = Dict::new();
     d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
@@ -2188,6 +2192,69 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
     let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
+}
+
+/// The width (`/MediaBox` x1) of each of `pages`, in order.
+fn page_widths(pages: &[Dict]) -> Vec<Option<i64>> {
+    pages.iter().map(|p| p.get(b"MediaBox").and_then(Object::as_array).and_then(|b| b.get(2)).and_then(Object::as_int)).collect()
+}
+
+/// The pages of `doc` in page-tree order, as the dictionaries the document holds.
+fn page_tree_pages(doc: &Document) -> Vec<Dict> {
+    let catalog = doc.get(doc.root().expect("root"));
+    let pages = doc.resolve(catalog.as_dict().and_then(|c| c.get(b"Pages")).expect("/Pages"));
+    let kids = pages.as_dict().and_then(|p| p.get(b"Kids")).and_then(Object::as_array).cloned().unwrap_or_default();
+    kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).collect()
+}
+
+/// ISO 32000-2 §7.5.6 and §7.5.8.2: an update reaches the revisions before it through `/Prev`.
+/// One without it cuts them off, page tree and all. The file is rebuilt from its object headers
+/// as a damaged one is, so its page tree is found, the newest definition of each object wins, and
+/// the repair log says why; a save rewrites it in full, with every page.
+#[test]
+fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.reconstructed() && doc.rebuilt_unlinked_update());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+
+    let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
+    let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
+    let pages = page_tree_pages(&reopened);
+    assert_eq!(page_widths(&pages), [Some(200), Some(300), Some(400)], "every page is saved, in order");
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page is saved: {pages:?}");
+    let catalog = reopened.get(reopened.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog is saved");
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+
+    // The same file with `/Prev` reads through its chain, as before.
+    let linked = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.reconstructed() && !linked.rebuilt_unlinked_update());
+    assert_eq!(linked.revisions().len(), 2);
+    assert!(linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+}
+
+/// A hybrid update (ISO 32000-2 §7.5.8.4) without `/Prev`: its `/XRefStm` stream belongs to the
+/// update, so the earlier revision is cut off just the same, and the file is rebuilt.
+#[test]
+fn a_hybrid_update_without_prev_is_rebuilt_too() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.rebuilt_unlinked_update(), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+    let linked = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.rebuilt_unlinked_update() && linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+    assert_eq!(linked.revisions().len(), 2);
 }
 
 #[test]
