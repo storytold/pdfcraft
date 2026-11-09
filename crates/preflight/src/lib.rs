@@ -586,7 +586,48 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         let message = fill(pattern, None, &values);
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
-    let cat = catalog(doc);
+    check_identification(doc, level, &mut issue);
+    let objs = objects(doc);
+    check_xmp_packets(&objs, &located_issue);
+    check_output_intent(doc, &objs, &mut issue);
+    check_catalog_actions(doc, &mut issue);
+    // Pages: annotations and page actions.
+    let pages = pdfcraft_model::pages(doc);
+    // Each annotation's page: the first page that lists it.
+    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+    for (i, p) in pages.iter().enumerate() {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            #[cfg(test)]
+            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
+            for r in a.iter().filter_map(Object::as_ref) {
+                annot_pages.entry(r).or_insert(i);
+            }
+        }
+    }
+    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
+    for (i, p) in pages.iter().enumerate() {
+        if p.dict.get(b"AA").is_some() {
+            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        }
+    }
+    check_transparency(doc, &pages, &mut issue);
+    let drawing = drawing_fonts(doc, &objs);
+    check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+    check_limits(doc, &objs, &pages, &mut issue);
+    check_spots(doc, &objs, &mut issue);
+    check_graphics_states(doc, &mut issue);
+    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
+    let mut out = out.into_inner();
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
+    out
+}
+
+/// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
+/// encryption.
+fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6: identification and metadata.
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
@@ -622,12 +663,16 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
     }
-    // 6.2.2: output intent when device colour is used.
-    let objs = objects(doc);
-    // 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
-    // every metadata stream.
+}
+
+/// 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
+/// every metadata stream.
+fn check_xmp_packets(
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    located_issue: &impl Fn(&'static str, &'static str, Vec<(&'static str, String)>, ObjRef, bool),
+) {
     let (mut mistyped, mut extension) = (Vec::new(), xmp_extension::Findings::default());
-    xmp_types::for_each_packet(&objs, |object, packet| {
+    xmp_types::for_each_packet(objs, |object, packet| {
         mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
         extension.add(object, packet);
     });
@@ -652,6 +697,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             );
         }
     }
+    report_xmp_extension(extension, located_issue);
+}
+
+/// 6.6.2.3.3: what the extension schema descriptions of the metadata streams lack.
+fn report_xmp_extension(
+    extension: xmp_extension::Findings,
+    located_issue: &impl Fn(&'static str, &'static str, Vec<(&'static str, String)>, ObjRef, bool),
+) {
     for m in extension.missing {
         let mut values = vec![("{schema}", m.schema), ("{object}", m.object.to_string()), ("{entry}", m.entry)];
         match (m.item, m.empty) {
@@ -733,7 +786,15 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             );
         }
     }
-    let used = uses_device_colour(doc, &objs);
+}
+
+/// 6.2.3 and 6.2.4.3: the output intent device colour needs.
+fn check_output_intent(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let used = uses_device_colour(doc, objs);
     match pdfa_intent_profile(doc) {
         None if used.any() => {
             issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
@@ -752,7 +813,11 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
         None => {}
     }
+}
+
+fn check_catalog_actions(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6.1: catalog actions.
+    let cat = catalog(doc);
     if cat.get(b"AA").is_some() {
         issue("6.5.2", "The document has additional actions (/AA)", None, None, true);
     }
@@ -766,27 +831,13 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     {
         issue("6.4.1", "The form asks viewers to make appearances (NeedAppearances)", None, None, true);
     }
-    // Pages: annotations and page actions.
-    let pages = pdfcraft_model::pages(doc);
-    // Each annotation's page: the first page that lists it.
-    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
-    for (i, p) in pages.iter().enumerate() {
-        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
-            && let Some(a) = a.as_array()
-        {
-            #[cfg(test)]
-            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
-            for r in a.iter().filter_map(Object::as_ref) {
-                annot_pages.entry(r).or_insert(i);
-            }
-        }
-    }
-    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
-    for (i, p) in pages.iter().enumerate() {
-        if p.dict.get(b"AA").is_some() {
-            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
-        }
-    }
+}
+
+fn check_transparency(
+    doc: &Document,
+    pages: &[pdfcraft_model::Page],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
     // 6.2.10: blend modes are those ISO 32000-1 defines, and without a PDF/A output intent (one with
     // a profile) a page with transparency names a blending colour space.
     let intent = pdfa_intent_has_profile(doc);
@@ -802,10 +853,16 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.2.10", "Page {} has transparency but no device-independent blending colour space or PDF/A output intent", n, Some(i), false);
         }
     }
-    let drawing = drawing_fonts(doc, &objs);
-    check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+}
+
+fn check_limits(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    pages: &[pdfcraft_model::Page],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
     // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
-    let over = limits::exceeded(doc, &objs, &referenced_content(doc, &objs));
+    let over = limits::exceeded(doc, objs, &referenced_content(doc, objs));
     if over.int {
         issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
     }
@@ -815,7 +872,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     if over.string {
         issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
     }
-    if limits::cid_over_limit(doc, &objs) {
+    if limits::cid_over_limit(doc, objs) {
         issue("6.1.13", "A CMap maps a character code to a CID above 65535", None, None, false);
     }
     if over.name {
@@ -826,14 +883,24 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
     }
+}
+
+fn check_spots(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
     // 6.2.4.4: Separation and DeviceN colour spaces.
-    let spots = spot::check(doc, &objs);
+    let spots = spot::check(doc, objs);
     for name in spots.differing {
         issue("6.2.4.4", "Separation colour spaces named {} differ in their alternate space or tint transform", Some(name), None, false);
     }
     for name in spots.undefined {
         issue("6.2.4.4", "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary", Some(name), None, false);
     }
+}
+
+fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.2.5: the extended graphics state.
     let gs = gstate::check(doc);
     if gs.transfer {
@@ -866,11 +933,6 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     if gs.intent_not_name {
         issue("6.2.5", "A graphics state has a rendering intent that isn't a name", None, None, false);
     }
-    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
-    let mut out = out.into_inner();
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
-    out
 }
 
 fn check_objects(
