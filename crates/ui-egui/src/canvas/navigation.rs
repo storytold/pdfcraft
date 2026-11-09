@@ -330,6 +330,18 @@ impl DocView {
     }
 }
 
+/// ⇧⌘+ / ⇧⌘−: rotate the view clockwise / counterclockwise.
+fn rotation_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if pressed(shift_cmd(Key::Plus)) || pressed(shift_cmd(Key::Equals)) {
+        view.rotate_view(true);
+    }
+    if pressed(shift_cmd(Key::Minus)) {
+        view.rotate_view(false);
+    }
+}
+
 /// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page, or size the pages in the page grid.
 fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
     use egui::{Key, KeyboardShortcut, Modifiers};
@@ -394,14 +406,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus))
-        || pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Equals))
-    {
-        view.rotate_view(true);
-    }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
-        view.rotate_view(false);
-    }
+    rotation_shortcuts(view, &pressed);
     zoom_shortcuts(view, &pressed);
     // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
     // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
