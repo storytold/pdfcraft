@@ -9799,6 +9799,33 @@ fn enhance_camera_image_reports_the_xfa_data_it_could_not_write_once() {
 }
 
 #[test]
+fn enhance_scanned_file_reports_the_xfa_data_it_could_not_write_once() {
+    let dir = workdir("xfa-scan-warnings");
+    // The data holds structured content where the price goes, so its value can't be written.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        "</xdp:xdp>",
+        "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><price><p>7</p></price></page1></form></xfa:data></xfa:datasets>\n</xdp:xdp>",
+    );
+    std::fs::write(dir.join("data.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
+    // Dull paper with a dark stroke, so the cleanup changes the picture.
+    let img = image::GrayImage::from_fn(300, 400, |_, y| image::Luma([if (100..110).contains(&y) { 30 } else { 150 }]));
+    img.save(dir.join("scan.jpg")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "data.pdf" }))["doc"].as_u64().unwrap();
+    let structured = |out: &Value, key: &str| {
+        out[key].as_array().map_or(0, |w| w.iter().filter(|w| w.as_str().is_some_and(|w| w.contains("structured content"))).count())
+    };
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "scan.jpg", "rect": [0, 0, 612, 792] }));
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": doc, "level": 100 }));
+    assert_eq!((r["undo"].clone(), r["images"].clone()), (json!("Enhance scanned file"), json!(1)), "{r}");
+    assert_eq!(structured(&r, "warnings"), 1, "{r}");
+    // form_set_script lists its edit's own warning in errors, and the scan edit's is not repeated.
+    let r = ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "qty", "event": "format", "script": "event.value = event.value;" }));
+    assert_eq!(structured(&r, "errors"), 1, "{r}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn growable_xfa_text_paginates_after_fill_save_and_print() {
     let dir = workdir("xfa-growable-text");
     let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();

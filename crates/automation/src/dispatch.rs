@@ -955,7 +955,7 @@ impl Automation {
             settings.despeckle = on;
         }
         let id = self.doc(a)?.id;
-        let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
+        let (report, own) = self.session.with_own_js_output(id, |s| s.enhance_scanned_pages(id, &pages, settings)).map_err(failed)?;
         let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
         let skipped: Vec<Value> = report.skipped.iter().map(|k| json!({ "pages": numbered(&k.pages), "name": k.name, "reason": k.reason })).collect();
         let mut out = summary(self.doc(a)?);
@@ -963,6 +963,6 @@ impl Automation {
         out["images"] = json!(report.images);
         out["not_scanned"] = json!(numbered(&report.not_scanned));
         out["skipped"] = json!(skipped);
-        Ok(out)
+        Ok(a11y::with_warnings(out, own.errors))
     }
 }
