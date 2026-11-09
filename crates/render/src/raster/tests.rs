@@ -8814,6 +8814,10 @@ mod icc_profile_cache;
 // A Type 3 glyph shown again decodes its procedure once (vendored hayro-interpret patch 87).
 mod type3_proc_cache;
 
+// A picture that doesn't decode is decoded once however often it is drawn (vendored
+// hayro-interpret patch 91).
+mod failed_image_decodes;
+
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 

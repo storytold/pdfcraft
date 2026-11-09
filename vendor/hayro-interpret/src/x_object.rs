@@ -596,7 +596,8 @@ impl<'a> ImageXObject<'a> {
             self.decode_key(cache, true, target_dimension),
             MAX_DECODED_IMAGE_BYTES,
             decoded_mask_size,
-            || decode_mask(self, target_dimension),
+            &self.warning_sink,
+            |sink| decode_mask(&self.reporting_to(sink), target_dimension),
         )
     }
 
@@ -616,7 +617,8 @@ impl<'a> ImageXObject<'a> {
             self.decode_key(cache, false, target_dimension),
             MAX_DECODED_IMAGE_BYTES,
             decoded_raster_size,
-            || decode_raster(self, target_dimension),
+            &self.warning_sink,
+            |sink| decode_raster(&self.reporting_to(sink), target_dimension),
         )
     }
 
@@ -686,12 +688,12 @@ impl<'a> ImageXObject<'a> {
         let to = (bw.min(self.width).max(1), bh.min(self.height).max(1));
         // Decoded in full and averaged down to `to`. A truncated stream decodes fewer rows than
         // the dictionary says: never more target samples than decoded ones on a side.
-        let from_full = |to: (u32, u32)| {
-            let full = decode_mask(self, target_dimension)?;
+        let from_full = |image: &Self, to: (u32, u32)| {
+            let full = decode_mask(image, target_dimension)?;
             Some(DecodedMask { luma: shrink_luma_within(full.luma, to)? })
         };
         let Some(cache) = &self.decoded_cache else {
-            return from_full(to);
+            return from_full(self, to);
         };
         let key = |to| self.decode_key(cache, true, target_dimension).map(|key| DecodedImageKey { shrunk_to: Some(to), ..key });
         // One image drawn at several sizes (rotated and scaled copies on one slide) needs the
@@ -700,10 +702,14 @@ impl<'a> ImageXObject<'a> {
         // size; a size larger than the intermediate comes from the full mask.
         let between = (self.width.min(SOFT_MASK_INTERMEDIATE), self.height.min(SOFT_MASK_INTERMEDIATE));
         if to == between || to.0 > between.0 || to.1 > between.1 {
-            return cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || from_full(to));
+            return cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, &self.warning_sink, |sink| {
+                from_full(&self.reporting_to(sink), to)
+            });
         }
-        cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || {
-            let mid = cache.get_or_insert_with(key(between), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || from_full(between))?;
+        cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, &self.warning_sink, |sink| {
+            let mid = cache.get_or_insert_with(key(between), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, sink, |sink| {
+                from_full(&self.reporting_to(sink), between)
+            })?;
             Some(DecodedMask { luma: shrink_luma_within(mid.luma, to)? })
         })
     }
@@ -733,6 +739,14 @@ impl<'a> ImageXObject<'a> {
             w.is_some_and(|w| w > self.width) || h.is_some_and(|h| h > self.height)
         };
         dict.get::<Stream<'_>>(SMASK).is_some_and(|s| larger(&s)) || dict.get::<Stream<'_>>(MASK).is_some_and(|s| larger(&s))
+    }
+
+    /// PdfCraft patch (91): this image, reporting its warnings to `sink`.
+    fn reporting_to(&self, sink: &WarningSinkFn) -> Self {
+        Self {
+            warning_sink: sink.clone(),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn width(&self) -> u32 {
