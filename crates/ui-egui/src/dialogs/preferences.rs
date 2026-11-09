@@ -398,7 +398,8 @@ fn date_language_follow_label(code: &str, name: &str) -> String {
     crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", name)])
 }
 
-/// The date picker's displayed name.
+/// The date picker's displayed name: Punjabi always discloses its English date vocabulary.
+/// Other languages keep drawable native names, otherwise English names even without a catalog.
 pub(crate) fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
     if l.code == "pa-guru" {
         return tl!(l.display_name());

@@ -1901,3 +1901,20 @@ fn fourth_review_startup_covering_fonts_enable_resolved_punjabi() {
         assert_eq!(app.language, "pa");
     }
 }
+
+/// English date-picker fallbacks cover the registry even when no catalogs are embedded.
+#[test]
+fn review_nov9_all_registered_codes_have_english_names_without_catalogs() {
+    for language in LANGUAGES.iter() {
+        let name = Lang::english_name_for_code(language.code);
+        assert!(!name.is_empty());
+        assert_ne!(name, language.code, "{} needs a fallback", language.code);
+    }
+    for date in pdfcraft_engine::dates::DATE_LANGUAGES.iter() {
+        if date.code == "pa-guru" {
+            assert_eq!(date.display_name(), "Punjabi (Gurmukhi; English date names)");
+        } else {
+            assert_ne!(Lang::english_name_for_code(date.code), date.code);
+        }
+    }
+}

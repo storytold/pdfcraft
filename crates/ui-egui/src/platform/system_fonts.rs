@@ -116,10 +116,10 @@ fn gurmukhi_from_candidates(candidates: &[PathBuf]) -> Option<Arc<FontData>> {
     }
     let mut first_partial = None;
     for path in candidates {
-        let Some(mut data) = read(path, GURMUKHI_PROBE, MAX_BYTES) else { continue };
+        let Some(mut data) = read_candidate(path, GURMUKHI_PROBE, MAX_BYTES) else { continue };
         if let Some(index) = face_with_text(data.bytes(), crate::i18n::punjabi_required_glyphs()) {
             Arc::make_mut(&mut data).index = index;
-            return Some(data);
+            return Some(log_selected(path, data));
         }
         first_partial.get_or_insert(path);
     }
@@ -500,7 +500,19 @@ fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
     paths
 }
 
+/// Read and report a selected fallback; other scripts retain their existing diagnostics.
 fn read(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
+    read_candidate(path, probe, max).map(|data| log_selected(path, data))
+}
+
+/// Report only the selected face, including its final collection index.
+fn log_selected(path: &Path, data: Arc<FontData>) -> Arc<FontData> {
+    log::info!("interface font fallback: {} (face {})", path.display(), data.index);
+    data
+}
+
+/// Validate candidate bytes silently until script-specific selection finishes.
+fn read_candidate(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > max {
         return None;
@@ -509,7 +521,6 @@ fn read(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
     let index = face_with(&bytes, probe)?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
-    log::info!("interface font fallback: {} (face {index})", path.display());
     Some(Arc::new(crate::theme::on_interface_baseline(data)))
 }
 
@@ -566,6 +577,52 @@ mod tests {
         font
     }
 
+    /// Observe actual log records from selection, excluding other test threads.
+    #[test]
+    fn review_nov9_only_selected_gurmukhi_font_is_logged() {
+        thread_local! {
+            static MESSAGES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                let text = record.args().to_string();
+                if text.starts_with("interface font fallback:") {
+                    MESSAGES.with(|v| v.borrow_mut().push(text));
+                }
+            }
+            fn flush(&self) {}
+        }
+        static CAPTURE: Capture = Capture;
+        log::set_logger(&CAPTURE).unwrap();
+        log::set_max_level(log::LevelFilter::Info);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("pdfcraft-log-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let a = dir.join("partial.ttf");
+        let b = dir.join("second.ttf");
+        std::fs::write(&a, coverage_font("ਕ")).unwrap();
+        std::fs::write(&b, coverage_font("ਕ")).unwrap();
+        let picked = gurmukhi_from_candidates(&[a.clone(), b.clone()]);
+        if installed_faces_switched_off() {
+            assert!(picked.is_none());
+            assert!(MESSAGES.with(|v| v.borrow().is_empty()));
+            return;
+        }
+        assert!(picked.is_some());
+        let logs = MESSAGES.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        assert_eq!(logs.len(), 1, "only selected partial must be logged once: {logs:?}");
+        assert!(logs[0].contains(a.to_str().unwrap()));
+        std::fs::write(&b, coverage_font(crate::i18n::punjabi_required_glyphs())).unwrap();
+        assert!(gurmukhi_from_candidates(&[a, b.clone()]).is_some());
+        let logs = MESSAGES.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        assert_eq!(logs.len(), 1, "only selected complete must be logged: {logs:?}");
+        assert!(logs[0].contains(b.to_str().unwrap()));
+    }
+
     /// A valid single-letter probe cannot hide a later face covering the required Gurmukhi set.
     #[test]
     fn review_regression_incomplete_gurmukhi_does_not_shadow_complete_face() {
@@ -575,7 +632,8 @@ mod tests {
         let complete = coverage_font(required);
         assert_eq!(face_with(&partial, GURMUKHI_PROBE), Some(0));
         assert_eq!(face_with(&partial, 'ੰ'), None);
-        let dir = std::env::temp_dir().join(format!("pdfcraft-coverage-{}", std::process::id()));
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("pdfcraft-coverage-{}-{stamp}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         let a = dir.join("partial.ttf");
         let b = dir.join("complete.ttf");

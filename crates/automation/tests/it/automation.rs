@@ -4986,7 +4986,13 @@ fn punjabi_date_format_discloses_and_preserves_english_names() {
     assert_eq!(result["language"], "pa-guru");
     assert_eq!(result["today"], "Tuesday, 14 November 2023");
     let choice = result["languages"].as_array().unwrap().iter().find(|l| l["code"] == "pa-guru").unwrap();
-    assert_eq!(choice["name"], "Punjabi (Gurmukhi; English date names)");
+    assert_eq!(choice["name"], "ਪੰਜਾਬੀ");
+    assert_eq!(choice["display_name"], "Punjabi (Gurmukhi; English date names)");
+    for language in pdfcraft_engine::dates::DATE_LANGUAGES.iter() {
+        let item = result["languages"].as_array().unwrap().iter().find(|l| l["code"] == language.code).unwrap();
+        assert_eq!(item["name"], language.name);
+        assert_eq!(item["display_name"], language.display_name());
+    }
     let reread = ok(&mut a, "fill_sign_date_format", json!({}));
     assert_eq!(reread["language"], "pa-guru");
     assert_eq!(reread["today"], result["today"]);
@@ -4995,6 +5001,10 @@ fn punjabi_date_format_discloses_and_preserves_english_names() {
     let canonical = ok(&mut a, "fill_sign_date_format", json!({ "language": "pa" }));
     assert_eq!(canonical["language"], "pa-guru");
     assert_eq!(canonical["today"], result["today"]);
+    for tag in ["pa-IN", "pa-Guru-IN", "pa-Arab"] {
+        assert!(matches!(a.call("fill_sign_date_format", &json!({ "language": tag })), Err(ToolError::InvalidArgs(_))));
+    }
+    assert_eq!(ok(&mut a, "fill_sign_date_format", json!({}))["language"], "pa-guru");
 }
 
 #[test]

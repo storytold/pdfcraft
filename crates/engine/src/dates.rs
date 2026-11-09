@@ -69,7 +69,9 @@ const CKB_MONTHS: [&str; 12] =
 const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەممە", "چوارشەممە", "پێنجشەممە", "هەینی", "شەممە"];
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
-/// the interface languages, in the same order and with the same names.
+/// independent of which interface catalogs are embedded. Registry order matches the interface
+/// list, with native names; Punjabi uses stable date code pa-guru rather than interface pa.
+/// Its picker/display label explicitly discloses English month and weekday names.
 pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
