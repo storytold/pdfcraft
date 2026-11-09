@@ -5,7 +5,7 @@
 use std::fmt;
 
 /// Scanned image color mode.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScanColorMode {
     #[default]
     Color,
@@ -24,7 +24,7 @@ impl ScanColorMode {
 }
 
 /// Scanning DPI resolution presets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScanResolution {
     Dpi75,
     Dpi150,
@@ -54,14 +54,14 @@ impl ScanResolution {
 }
 
 /// A discovered physical or network scanner device.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScannerDevice {
     pub id: String,
     pub name: String,
 }
 
 /// Options configured for a scan acquisition session.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanOptions {
     pub device_id: Option<String>,
     pub color_mode: ScanColorMode,

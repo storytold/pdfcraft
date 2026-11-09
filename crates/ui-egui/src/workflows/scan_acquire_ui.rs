@@ -245,19 +245,32 @@ impl PdfCraftApp {
 
     /// Check if the background scan completed and import the scanned image into a PDF.
     pub(crate) fn poll_scan_acquire(&mut self) {
-        let Some(run) = &self.scan_acquire_run else { return };
+        let is_running = if let Some(run) = &self.scan_acquire_run {
+            match run.progress.lock() {
+                Ok(guard) => match &guard.state {
+                    ScanState::Running => true,
+                    ScanState::Finished(_) => false,
+                },
+                Err(_) => false,
+            }
+        } else {
+            return;
+        };
+
+        if is_running {
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            return;
+        }
+
+        let Some(run) = self.scan_acquire_run.take() else { return };
         let state = match run.progress.lock() {
             Ok(guard) => match &guard.state {
-                ScanState::Running => {
-                    if let Some(ctx) = &self.ctx {
-                        ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                    }
-                    return;
-                }
+                ScanState::Running => return,
                 ScanState::Finished(res) => res.clone(),
             },
             Err(_) => {
-                self.scan_acquire_run = None;
                 self.notify_tr("Scan failed: internal lock error");
                 return;
             }
@@ -266,7 +279,6 @@ impl PdfCraftApp {
         let target = run.target;
         let recognize_text = run.recognize_text;
         let resolution = pdfcraft_engine::ImageResolution::Dpi(run.options.resolution.as_dpi() as f64);
-        self.scan_acquire_run = None;
 
         match state {
             Ok(bytes) => {
@@ -283,15 +295,15 @@ impl PdfCraftApp {
                         if let Some((_, doc_id)) = self.active_ids() {
                             let created = self.session.create_from_images_with_resolution(&images, resolution);
                             match created {
-                                Ok(new_doc_id) => {
-                                    // Combine pages from new document into the active document
+                                Ok(bytes) => {
                                     let active_page_count = self.session.get(doc_id).map_or(0, |d| d.info.pages.len());
-                                    let _ = self.apply_edit(pdfcraft_engine::Edit::InsertPages {
+                                    let _ = self.apply_edit(pdfcraft_engine::Edit::InsertPagesFrom {
+                                        name: "Scan.pdf".to_string(),
+                                        bytes,
+                                        pages: None,
                                         at: active_page_count,
-                                        from_doc: new_doc_id,
-                                        pages: vec![0],
+                                        field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
                                     });
-                                    let _ = self.session.close(new_doc_id);
                                     if recognize_text {
                                         self.start_ocr();
                                     }
