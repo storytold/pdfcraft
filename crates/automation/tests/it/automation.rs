@@ -12126,7 +12126,23 @@ fn doc_print_a_selected_area() {
     );
     assert_eq!((r["sheets"].as_u64(), r["pages"].as_u64()), (Some(1), Some(1)));
     let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).unwrap())).unwrap();
-    assert_eq!(pdfcraft_model::pages(&out).len(), 1);
+    let pages = pdfcraft_model::pages(&out);
+    assert_eq!(pages.len(), 1);
+    // The sheet is the paper (Letter, turned to suit the wide area); the page inside it is cut to the area: a clip to the
+    // area's rectangle, then the source page drawn through it, and nothing else of the page.
+    let media: Vec<f64> =
+        out.resolve(pages[0].dict.get(b"MediaBox").unwrap()).as_array().unwrap().iter().map(|v| out.resolve(v).as_f64().unwrap()).collect();
+    assert_eq!(media, [0.0, 0.0, 792.0, 612.0], "a landscape area takes a landscape Letter sheet");
+    let contents = out.resolve(pages[0].dict.get(b"Contents").unwrap());
+    let pdfcraft_cos::Object::Stream(stream) = &*contents else { panic!("sheet content") };
+    let content = String::from_utf8(stream.decoded().unwrap()).unwrap();
+    let tokens: Vec<&str> = content.split_whitespace().collect();
+    let at = tokens.iter().position(|t| *t == "re").expect("the sheet clips to a rectangle");
+    let rect: Vec<f64> = tokens[at - 4..at].iter().map(|t| t.parse().unwrap()).collect();
+    assert_eq!(&tokens[at + 1..at + 3], ["W", "n"], "the rectangle is the clip: {content}");
+    assert_eq!(rect, [36.0, 164.0, 164.0, 100.0], "the clip is the area (36..200 wide, 36..136 from the top, cut to the 200 x 300 page): {content}");
+    assert_eq!(tokens.iter().filter(|t| **t == "re").count(), 1, "one clip, nothing drawn outside it: {content}");
+    assert!(tokens.contains(&"Do"), "the page is drawn inside the clip: {content}");
     for (args, why) in [
         (json!({ "doc": doc, "pages": "1-2", "area": [36, 36, 236, 136], "path": "x.pdf" }), "one page"),
         (json!({ "doc": doc, "pages": "1", "area": [36, 36, 36.5, 136], "path": "x.pdf" }), "empty"),
