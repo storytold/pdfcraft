@@ -9085,7 +9085,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-implement",
- "windows-numerics",
+ "windows-numerics 0.3.1",
  "xml",
 ]
 
