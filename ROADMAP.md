@@ -252,6 +252,15 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
+- **2026-10-29 (M10, #5029):** Vector printing also honours the implicit NoRotate behavior of existing Text appearances when the flag is clear.
+  Print eligibility, source dictionaries and shared appearance streams remain unchanged.
+
+- **2026-10-27 (M10, #5029):** Vector printing retains the orientation and upper-left anchor of existing NoRotate annotation appearances on rotated source pages.
+  Crop origins, UserUnit and later sheet transforms remain effective; estimates unchanged.
+
+- **2026-10-27 (M10, annotation print precision):** Vector printing preserves small placement coefficients for existing form, comment and stamp appearances with large bounding boxes or matrices.
+  Synthetic render and save/reopen regressions cover the change; estimates unchanged.
+
 - **2026-10-31 (M6, PR #4166/#4088 integration):** Integrated main f137a289 (0.16.1), preserving upstream progress entries and automatic-field Print suppression with its console diagnostic. ShowPanel/SaveAs filtering, explicit button/console printing, field effects and document-error provenance remain intact, together with all three engine regressions and the headless automation regression. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
 
 - **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.

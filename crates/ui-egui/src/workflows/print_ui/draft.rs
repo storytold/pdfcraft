@@ -543,6 +543,8 @@ impl PrintDraft {
             },
             scaling: spool::Scaling::Exact,
             grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
+            // Set when the copy sent is made grey (`spooler_copy`, #5806).
+            grey_pages: false,
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {
