@@ -14,17 +14,18 @@
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
   pass's head `158ab7fa4` (the next bullet); no rebase was done in this pass, so
   the base stays `ba28458ad`.
-- Local head before this STATUS commit: `158ab7fa4` (fix(web): take
-  craft-web-host from storytold, not the fork) on `1590412aa` (docs(collab):
-  record the whole-outline replacement) on `642dabb5b` (feat(collab): replace
-  the whole outline in one operation); **107 commits** not in
+- Local head before this STATUS commit: `f48ec4754` (fix(ui): keep the selection
+  caret behind the collab feature) on `f31f00449` (fix(collab): verify and sign
+  JWTs with aws-lc-rs, not RustCrypto) on `f8e21e29d` (docs(collab): record the
+  CI git-source fix) on `158ab7fa4` (fix(web): take craft-web-host from
+  storytold, not the fork); **110 commits** not in
   `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
   local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
-  the remote's tip is not fetched here), and **27 ahead** of the PR head
-  `b27fa89c8`; this STATUS record is the second commit of the pass, so after it
-  the counts are 108/48/28. The branch was not rebased, so the base stays
+  the remote's tip is not fetched here), and **30 ahead** of the PR head
+  `b27fa89c8`; this STATUS record is the third commit of the pass, so after it
+  the counts are 111/48/31. The branch was not rebased, so the base stays
   `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `158ab7fa4`.
+  `f48ec4754`.
   The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
   `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
   at `c26867e9c` — were right when they were measured; `origin/main` kept
@@ -50,15 +51,17 @@
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
-- State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `158ab7fa4` for the crates this pass touched
-  (the web shell's manifest and the collab crates), and the CI job "Git
-  dependencies come from storytold" — the failed job of run `42720349704` at
-  `b27fa89c8` — now passes locally: every git source in `Cargo.lock` is under
-  `github.com/storytold/` and `cargo metadata --locked` exits 0 (§4, "The CI
-  git-source gate"). The earlier gates were run at their own heads
+- State: implemented behind the `collab` feature (off by default). Both reasons
+  the CI run `42720349704` (head `b27fa89c8`) failed on are closed on this tree:
+  the git source (§4, "The CI git-source gate") and the `deny` advisory
+  RUSTSEC-2026-0387 (§4, "The JWT crypto backend"): `cargo deny --log-level
+  error check` exits 0 and `crypto-bigint` 0.5.5 is out of the graph. The
+  workspace `clippy` step of `cargo xtask ci` was red for a third, older reason
+  and is fixed too (`f48ec4754`). `cargo xtask ci` still stops at its `test`
+  step on two targets that fail without these commits and are `origin/main`'s
+  own tests (§4). The earlier gates were run at their own heads
   (`5bad54c40`, `157f4d239`, `22d29d070`, `0c57e2271`, `2b61ff80f`,
-  `642dabb5b`, §4) and were not re-run here.
+  `642dabb5b`, `158ab7fa4`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -337,6 +340,19 @@ build enables the feature with `trunk build --release --features collab`.
     document never sees, and the room would not know about the change. Combine
     focuses the session's document before it closes the Combine tab, because
     the applied broadcast is delivered to the active view.
+26. **The JWT backend is `aws_lc_rs`, and it is not a preference.** jsonwebtoken
+    11.1's `rust_crypto` feature drags `p256`/`p384` 0.13 → `elliptic-curve`
+    0.13 → `crypto-bigint` 0.5.5, which is RUSTSEC-2026-0387 (timing branches in
+    constant-time arithmetic, fixed in 0.7.6); the tickets this verifies are the
+    cabinet's session tokens, so an ignore entry would keep the vulnerable code
+    in the binary. `aws_lc_rs` is the only provider feature that does not, this
+    stack is native-only, and the same binaries already link aws-lc-rs through
+    `pdfcraft-sign` (ADR-0009). Switching back, or enabling both features,
+    either brings the advisory back or makes jsonwebtoken refuse to pick a
+    provider — it panics with "Could not automatically determine the
+    process-level CryptoProvider" when both or neither is on. A repin is not
+    available either: `jsonwebtoken` 11.1.0 is the newest release and pins
+    `p256 = "0.13.2"`.
 
 ## 3. Running it
 
@@ -424,6 +440,89 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The JWT crypto backend — `deny` and RUSTSEC-2026-0387 (2026-11-10, local; not pushed)
+
+`fix(collab): verify and sign JWTs with aws-lc-rs, not RustCrypto` (`f31f00449`)
+on `f8e21e29d`, with `fix(ui): keep the selection caret behind the collab
+feature` (`f48ec4754`) on it, which is the third reason `cargo xtask ci` had
+gone red. The `cargo xtask ci` step of run `42720349704` (head `b27fa89c8`)
+failed at `deny` on two counts: the fork's git source (§4, "The CI git-source
+gate") and **RUSTSEC-2026-0387** — `crypto-bigint 0.5.5`, timing branches in its
+constant-time arithmetic, fixed in 0.7.6 — which `deny.toml` does not ignore and
+should not. It reached the tree along one chain only: `jsonwebtoken 11.1.0`
+with the `rust_crypto` feature → `p256 0.13.2` / `p384 0.13.1` →
+`ecdsa 0.16.9` → `elliptic-curve 0.13.8` → `crypto-bigint 0.5.5`; at
+`f8e21e29d` `cargo tree -i crypto-bigint@0.5.5` printed exactly that and
+nothing else.
+
+- **Both manifests ask for `aws_lc_rs`.** `crates/collab-ws` (the transport's
+  dependency) and `apps/pdfcraft-collab-server` (a dev-dependency: the crash
+  test signs its own RS256 tickets) now use
+  `features = ["aws_lc_rs", "use_pem"]`. jsonwebtoken 11.1 wants exactly one
+  provider feature; with both or neither it panics at the first ticket
+  ("Could not automatically determine the process-level CryptoProvider").
+- **A repin was not available.** `jsonwebtoken` 11.1.0 (2026-09-16) is the
+  newest release on crates.io and pins `p256 = "0.13.2"`, so the 0.14 stack
+  `pdfcraft-sign` already uses (`bp256 0.14` → `elliptic-curve 0.14.1` →
+  `crypto-bigint 0.7.6`) cannot be reached from the JWT side, and forking the
+  crate over a timing advisory was not on the table.
+- **No new native requirement, no wasm impact.** Both crates are native-only
+  (`collab-ws` holds its one native dependency under
+  `cfg(not(target_arch = "wasm32"))`, and the web client reaches the server
+  through the host bridge), and `aws-lc-rs 1.18.2` is already built for the same
+  binaries through `pdfcraft-sign` (ADR-0009). No source changed: `token.rs`
+  keeps `DecodingKey::from_secret` for HS256 and `from_rsa_pem` for RS256.
+- **The lock loses 17 packages and gains none**: crypto-bigint 0.5.5, p256
+  0.13.2, p384 0.13.1, ecdsa 0.16.9, elliptic-curve 0.13.8, primeorder 0.13.6,
+  sec1 0.7.3, rfc6979 0.4.0, base16ct 0.2.0, ff 0.13.1, group 0.13.0,
+  fiat-crypto 0.2.9, hkdf 0.12.4, hmac 0.12.1, curve25519-dalek 4.1.3, ed25519
+  2.2.3, ed25519-dalek 2.2.0. `crypto-bigint 0.7.6` stays, from
+  `elliptic-curve` 0.14.1. No other package moved.
+- **The workspace `clippy` step was red before this pass, for its own reason.**
+  `DocView::selection_caret` has one reader, `collab.rs`, which exists only with
+  the `collab` feature; without it the method is dead code and
+  `cargo clippy --workspace --all-targets -- -D warnings` fails. It arrived
+  with the presence caret (`5bad54c40`), whose slice was checked with
+  `-p pdfcraft-ui-egui --features collab`, so the workspace sweep had been red
+  since. The method now carries `#[cfg(feature = "collab")]`; the document's
+  selection code is untouched and the feature build is still clean.
+
+Gates at `f48ec4754` (host `agents`, rustc 1.99.1, `-j 4`; run by
+`../scripts/remote-build.sh`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Advisories, bans, licences, sources | `cargo deny --log-level error check` (cargo-deny 0.20.2, installed for this pass) | EXIT=0 — `advisories ok, bans ok, licenses ok, sources ok` |
+| The package is gone | `cargo tree -i crypto-bigint@0.5.5` | no such package; the only match is `crypto-bigint@0.7.6` |
+| The lock | package list before and after | 17 packages removed, 0 added |
+| The JWT crates | `cargo test -p pdfcraft-collab-ws -p pdfcraft-collab-daemon -j 8` | EXIT=0 — ws 16 unit + 36 e2e, daemon 34 + 5 integration (conflict resolve, crash recovery, publication retry, restore), 0 failed |
+| Workspace clippy | `cargo clippy --workspace --all-targets -- -D warnings` | EXIT=0 |
+| UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | EXIT=0 |
+| The steps after `test` | `cargo xtask i18n-report --workspace`, `layers`, `wasm`, `license-check`, `parity` | EXIT=0 each — 52 crates with no layering violation, wasm32 44 crates ok, 258 assets ok |
+| `cargo xtask ci` | `CI=1 cargo xtask ci` | **fails at `test`** — see below; `fmt`, `clippy` and `cli-no-default-features` passed |
+
+What `cargo xtask ci` still does not do here: its `test` step stops on two
+targets, and both fail identically with this pass's three files reverted to
+`f8e21e29d` (checked by running the one test each time):
+
+- `pdfcraft-automation --test it`:
+  `local_gotor_link_open_applies_destinations_and_honors_root` —
+  `assert_eq!(listed["links"][0]["other"], "GoToR")` fails with `left: Null,
+  right: "GoToR"`, so `link_list` names no `other` for a remote go-to. 433 of
+  the target's 434 tests pass. The bus already recorded it as pre-existing
+  (`20261110T100450Z-craft-04d6`).
+- `pdfcraft-ui-egui --test it`:
+  `comments::the_selection_bar_stays_inside_the_pages_area` — no area rect, so
+  "the selection bar is shown" panics at `comments.rs:4374`. 1779 of the
+  target's 1780 tests pass.
+
+Both are `origin/main` tests (`f28406f68` and `952636315`); the automation one
+lives in a file this branch edited for bookmarks, the UI one in a file the
+branch never touched, and neither exercises the JWT stack. That they predate
+this pass is proven; whether they also fail on `origin/main` in this checkout
+was not tested, because building `main` was outside the pass. They are left for
+their own pass rather than guessed at here.
 
 ### The CI git-source gate — one git source, storytold (2026-11-10, local; not pushed)
 
@@ -3515,6 +3614,15 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
+- **The `deny` step's advisory is closed** (`f31f00449`, 2026-11-10, not
+  pushed): `crypto-bigint` 0.5.5 (RUSTSEC-2026-0387) is out of the graph —
+  `jsonwebtoken` selects `aws_lc_rs` instead of `rust_crypto` in
+  `crates/collab-ws` and `apps/pdfcraft-collab-server`, the lock loses 17
+  packages and gains none, `cargo deny --log-level error check` exits 0 and
+  `cargo tree -i crypto-bigint@0.5.5` finds nothing (§4, "The JWT crypto
+  backend"). `cargo xtask ci` passes `fmt`, `clippy` — with the older
+  `selection_caret` break fixed in `f48ec4754` — and `cli-no-default-features`,
+  and stops at `test` on two pre-existing failures named in that section.
 - **The CI `git-sources` job passes on this tree** (`158ab7fa4`, 2026-11-10,
   not pushed): `craft-web-host` is fetched from `storytold/craft-libs` at
   PR #716's head instead of the fork, so `Cargo.lock` has no git source outside
