@@ -25,6 +25,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 /// How deep a direct object is followed: as deep as the parser nests them.
 const MAX_DEPTH: u8 = 128;
+/// How many indirect reference hops a dictionary lookup follows, matching `Document::resolve`.
+const MAX_REF_HOPS: u8 = 32;
 /// The rendering intents of ISO 32000-1 Table 70.
 const INTENTS: [&[u8]; 4] = [b"AbsoluteColorimetric", b"RelativeColorimetric", b"Saturation", b"Perceptual"];
 /// The entries of a type 5 halftone that aren't colorant halftones.
@@ -72,7 +74,15 @@ pub(crate) fn reached(doc: &Document) -> usize {
 }
 
 fn scan(doc: &Document) -> Scan<'_> {
-    let mut scan = Scan { doc, read: HashSet::new(), reached: HashSet::new(), queue: VecDeque::new(), findings: Findings::default() };
+    let mut scan = Scan {
+        doc,
+        read_resources: HashSet::new(),
+        read_maps: HashSet::new(),
+        read_states: HashSet::new(),
+        reached: HashSet::new(),
+        queue: VecDeque::new(),
+        findings: Findings::default(),
+    };
     scan.walk(&Object::Dict(doc.trailer().clone()), 0);
     // References are followed from a queue, not by recursion: a chain of them can be as long as
     // the file.
@@ -85,13 +95,49 @@ fn scan(doc: &Document) -> Scan<'_> {
 
 struct Scan<'a> {
     doc: &'a Document,
-    /// Resource dictionaries, `/ExtGState` maps and graphics states read so far, by object number.
-    read: HashSet<u32>,
-    /// Object numbers reached so far, queued or walked. Both sets go by number, as
+    /// Resource dictionaries, `/ExtGState` maps and graphics states read so far, by role and
+    /// object number.
+    read_resources: HashSet<u32>,
+    read_maps: HashSet<u32>,
+    read_states: HashSet<u32>,
+    /// Object numbers reached so far, queued or walked. All sets go by number, as
     /// [`Document::get`] does: references differing only in generation reach the same object.
     reached: HashSet<u32>,
     queue: VecDeque<ObjRef>,
     findings: Findings,
+}
+
+/// Resolves `o` through up to [`MAX_REF_HOPS`] indirect references for a dictionary read at most
+/// once in its role. Reference hops are marked in `read` only once a non-reference target is
+/// reached, so an aborted cycle or over-deep chain never hides a shorter path to a shared tail.
+fn resolve_once(doc: &Document, read: &mut HashSet<u32>, o: &Object) -> Option<std::sync::Arc<Object>> {
+    let Object::Ref(mut r) = *o else {
+        return Some(std::sync::Arc::new(o.clone()));
+    };
+    if read.contains(&r.num) {
+        return None;
+    }
+    let mut hops = Vec::with_capacity(4);
+    hops.push(r.num);
+    let mut held = doc.get(r);
+    for _ in 0..MAX_REF_HOPS {
+        let Object::Ref(next) = *held else {
+            read.extend(hops);
+            return Some(held);
+        };
+        if read.contains(&next.num) || hops.contains(&next.num) {
+            return None;
+        }
+        hops.push(next.num);
+        r = next;
+        held = doc.get(r);
+    }
+    if matches!(*held, Object::Ref(_)) {
+        None
+    } else {
+        read.extend(hops);
+        Some(held)
+    }
 }
 
 impl Scan<'_> {
@@ -124,50 +170,41 @@ impl Scan<'_> {
         }
     }
 
-    /// Whether `o` is a reference read before; marks it read.
-    fn read_before(&mut self, o: &Object) -> bool {
-        matches!(o, Object::Ref(r) if !self.read.insert(r.num))
-    }
-
-    /// A dictionary that holds graphics states: through its resources, or as a shading pattern.
+    /// A dictionary that holds graphics states: through its resources, or as a shading pattern
+    /// (`/PatternType 2`, ISO 32000-1 Table 76).
     fn holder(&mut self, d: &Dict) {
         for key in RESOURCES {
             if let Some(resources) = d.get(key) {
                 self.resources(resources);
             }
         }
-        if d.get(b"PatternType").is_some()
+        if self.present(d, b"PatternType").is_some_and(|t| matches!(*t, Object::Int(2)))
             && let Some(gs) = d.get(b"ExtGState")
-            && !self.read_before(gs)
-            && let Some(gs) = self.doc.resolve(gs).as_dict()
+            && let Some(gs) = resolve_once(self.doc, &mut self.read_states, gs)
+            && let Some(gs) = gs.as_dict()
         {
             self.gstate(gs);
         }
     }
 
     fn resources(&mut self, resources: &Object) {
-        if self.read_before(resources) {
-            return;
-        }
-        let resources = self.doc.resolve(resources);
+        let Some(resources) = resolve_once(self.doc, &mut self.read_resources, resources) else { return };
         let Some(states) = resources.as_dict().and_then(|r| r.get(b"ExtGState")) else { return };
-        if self.read_before(states) {
-            return;
-        }
-        let states = self.doc.resolve(states);
+        let Some(states) = resolve_once(self.doc, &mut self.read_maps, states) else { return };
         let Some(states) = states.as_dict() else { return };
         for (_, gs) in states.iter() {
-            if !self.read_before(gs)
-                && let Some(gs) = self.doc.resolve(gs).as_dict()
+            if let Some(gs) = resolve_once(self.doc, &mut self.read_states, gs)
+                && let Some(gs) = gs.as_dict()
             {
                 self.gstate(gs);
             }
         }
     }
 
-    /// `key` of `d`, resolved, unless it is missing or null (ISO 32000-1 7.3.9).
+    /// `key` of `d`, resolved, unless it is missing, null (ISO 32000-1 7.3.9), or an unresolved
+    /// reference chain.
     fn present(&self, d: &Dict, key: &[u8]) -> Option<std::sync::Arc<Object>> {
-        d.get(key).map(|v| self.doc.resolve(v)).filter(|v| !matches!(**v, Object::Null))
+        d.get(key).map(|v| self.doc.resolve(v)).filter(|v| !matches!(**v, Object::Null | Object::Ref(_)))
     }
 
     fn gstate(&mut self, gs: &Dict) {
@@ -180,10 +217,12 @@ impl Scan<'_> {
         if self.present(gs, b"HTP").is_some() {
             self.findings.phase = true;
         }
-        if let Some(ht) = self.present(gs, b"HT")
-            && let Some(ht) = ht.as_dict()
-        {
-            self.halftone(ht, None);
+        if let Some(ht) = self.present(gs, b"HT") {
+            match ht.as_dict() {
+                Some(ht) => self.halftone(ht, None),
+                None if ht.as_name() != Some(b"Default") => self.findings.untyped = true,
+                None => {}
+            }
         }
         if let Some(ri) = self.present(gs, b"RI") {
             match ri.as_name() {
@@ -293,5 +332,99 @@ mod tests {
         ]);
         let found = check(&doc);
         assert_eq!(found, Findings { untyped: true, missing_transfer: BTreeSet::from(["Spot".to_string()]), ..Findings::default() });
+    }
+
+    #[test]
+    fn non_default_non_dict_halftone_reports_untyped() {
+        for ht in ["/Round", "42", "[1 2]", "(Screen)"] {
+            let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /G << /HT {ht} >> >> >> >>");
+            let doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page]);
+            assert_eq!(check(&doc), Findings { untyped: true, ..Findings::default() }, "{ht}");
+            let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5").map(|i| i.message).collect();
+            assert_eq!(messages, ["A halftone's HalftoneType is missing or isn't an integer"], "{ht}");
+        }
+        for allowed in ["/Default", "null"] {
+            let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /G << /HT {allowed} >> >> >> >>");
+            let doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page]);
+            assert_eq!(check(&doc), Findings::default(), "{allowed}");
+        }
+    }
+
+    #[test]
+    fn chained_indirect_references_and_cycles_resolve_across_gstate() {
+        // Multi-hop chains to conformant values (/Default, null, /Perceptual, HalftoneType 1) must not trigger false positives.
+        let conformant = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 4 0 R >>",
+            "5 0 R",
+            "<< /ExtGState 6 0 R /Pattern << /P << /PatternType 18 0 R /Shading << /ShadingType 2 >> /ExtGState 8 0 R >> >> >>",
+            "7 0 R",
+            "<< /G 8 0 R /Cycle 22 0 R >>",
+            "9 0 R",
+            "<< /TR 10 0 R /TR2 12 0 R /HT 14 0 R /RI 16 0 R /HTP 22 0 R >>",
+            "11 0 R",
+            "null",
+            "13 0 R",
+            "/Default",
+            "15 0 R",
+            "<< /HalftoneType 20 0 R /HalftoneName 10 0 R /TransferFunction 10 0 R >>",
+            "17 0 R",
+            "/Perceptual",
+            "19 0 R",
+            "2",
+            "21 0 R",
+            "1",
+            "23 0 R",
+            "22 0 R",
+        ]);
+        assert_eq!(check(&conformant), Findings::default());
+
+        // Multi-hop chains to forbidden settings and shading pattern ExtGState are still caught,
+        // while non-shading /PatternType values (1, null, real 2.0) do not treat /ExtGState as a single state.
+        let violations = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 4 0 R >>",
+            "5 0 R",
+            "<< /ExtGState 6 0 R /Pattern << /S << /PatternType 14 0 R /Shading << /ShadingType 2 >> /ExtGState 10 0 R >> /T << /PatternType 1 /ExtGState << /TR2 /Identity >> >> /N << /PatternType null /ExtGState << /HTP [0 1] >> >> /R << /PatternType 2.0 /ExtGState << /RI /Custom >> >> >> >>",
+            "7 0 R",
+            "<< /G 8 0 R >>",
+            "9 0 R",
+            "<< /HT 12 0 R >>",
+            "11 0 R",
+            "<< /TR /Identity >>",
+            "13 0 R",
+            "/Round",
+            "15 0 R",
+            "2",
+        ]);
+        assert_eq!(check(&violations), Findings { transfer: true, untyped: true, ..Findings::default() });
+    }
+
+    #[test]
+    fn aborted_deep_ref_chain_and_shared_role_dict_do_not_hide_findings() {
+        // Objects 4..=38 form a 35-hop chain to object 39 (`<< /TR /Identity >>`), exceeding MAX_REF_HOPS
+        // from `/Long 4 0 R`, while `/Short 37 0 R` reaches object 39 in two hops.
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /Long 4 0 R /Short 37 0 R >> >> >>".to_owned(),
+        ];
+        for next in 5..=39 {
+            objs.push(format!("{next} 0 R"));
+        }
+        objs.push("<< /TR /Identity >>".to_owned());
+        let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+        assert_eq!(check(&build(&refs)), Findings { transfer: true, ..Findings::default() });
+
+        // One dictionary reused as /Resources, /ExtGState map, and graphics state is still checked in each role.
+        let reused = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 4 0 R >>",
+            "<< /ExtGState 4 0 R /G 4 0 R /HTP [0 1] >>",
+        ]);
+        assert_eq!(check(&reused), Findings { phase: true, ..Findings::default() });
     }
 }
