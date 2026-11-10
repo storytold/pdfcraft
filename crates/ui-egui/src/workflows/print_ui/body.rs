@@ -93,7 +93,10 @@ pub(crate) fn body(
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
-    let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let laid = settings.as_ref().ok().map(|s| print::layout(sizes, s));
+    // Creep within its field's range can still be too much for a thick booklet.
+    let too_much_creep = d.handling == Handling::Booklet && d.creep > 0.0 && matches!(laid, Some(Err(_)));
+    let sheets = laid.and_then(Result::ok).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     // Cap the settings+preview area to the screen's available height (#4252, #5317):
     // on a short screen, or with the driver's own Properties… panel expanded below, this row can
@@ -218,15 +221,35 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
-                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                ui.horizontal(|ui| {
+                    // A standard size's name is translated; a custom paper keeps the name it was given.
+                    let shown = if d.paper_is_custom() { d.paper_name() } else { tl!(d.paper_name().as_str()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                        for (i, (name, _)) in PAPERS.iter().enumerate() {
+                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                        }
+                        if !d.custom_papers.is_empty() {
+                            ui.separator();
+                        }
+                        for (i, p) in d.custom_papers.iter().enumerate() {
+                            let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
+                            ui.selectable_value(&mut d.paper, PAPERS.len() + i, label);
+                        }
+                    })
+                    .response
+                    .labelled_by(paper_label.id);
+                    if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
+                        d.custom_new = match d.custom_new {
+                            Some(_) => None,
+                            None => Some((String::new(), String::new(), String::new())),
+                        };
                     }
-                })
-                .response
-                .labelled_by(paper_label.id);
+                    if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
+                        d.remove_custom_paper();
+                    }
+                });
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
@@ -234,11 +257,16 @@ pub(crate) fn body(
                     d.sheet = 0;
                 }
                 ui.end_row();
+                if d.custom_new.is_some() {
+                    ui.label("");
+                    custom_paper_row(ui, d, t);
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
             if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
-                && p.two_sided == Some(false)
+                && p.two_sided.or_else(|| d.two_sided.get(&p.name).copied().flatten()) == Some(false)
             {
                 ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
             }
@@ -424,6 +452,10 @@ pub(crate) fn body(
                         );
                         ui.label(tl!("Binding:"));
                         combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
+                        let creep_label = ui.label(tl!("Creep:"));
+                        ui.add(egui::DragValue::new(&mut d.creep).range(0.0..=print::MAX_CREEP).speed(0.05).suffix(" pt"))
+                            .labelled_by(creep_label.id)
+                            .on_hover_text(tl!("Moves each sheet's pages toward the fold by this much more than the sheet outside it, so the margins match once the booklet is folded and trimmed."));
                     });
                 }
             }
@@ -482,6 +514,10 @@ pub(crate) fn body(
             match (&settings, sheets.get(d.sheet)) {
                 (Err(e), _) => {
                     ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
+                }
+                (Ok(_), None) if too_much_creep => {
+                    let msg = tl!("The creep moves the innermost sheet's pages too far for this many pages. Reduce Creep.");
+                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(msg).color(t.text_muted)).wrap());
                 }
                 (Ok(_), Some(sheet)) => {
                     let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
@@ -587,6 +623,33 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+/// The row that adds a custom paper: name, width and height in the preferences' unit.
+fn custom_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let unit = d.units;
+    let Some((name, width, height)) = d.custom_new.as_mut() else { return };
+    let side = |s: &str| s.trim().replace(',', ".").parse::<f64>().ok().map(|v| v / unit.per_point());
+    let paper = match (side(width), side(height)) {
+        (Some(w), Some(h)) => crate::print_paper::CustomPaper::new(name, w, h),
+        _ => None,
+    };
+    let (mut add, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).hint_text(tl!("Name")).desired_width(110.0)).accessible_name(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(width).hint_text(tl!("Width")).desired_width(52.0)).accessible_name(tl!("Width"));
+        ui.label("×");
+        ui.add(egui::TextEdit::singleline(height).hint_text(tl!("Height")).desired_width(52.0)).accessible_name(tl!("Height"));
+        ui.label(egui::RichText::new(unit.label()).color(t.text_muted));
+        add = ui.add_enabled(paper.is_some(), egui::Button::new(tl!("Add"))).clicked();
+        cancel = ui.button(tl!("Cancel")).clicked();
+    });
+    if add && let Some(paper) = paper {
+        d.add_custom_paper(paper);
+        d.custom_new = None;
+    } else if cancel {
+        d.custom_new = None;
+    }
 }
 
 #[cfg(test)]

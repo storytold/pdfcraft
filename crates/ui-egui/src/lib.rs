@@ -60,7 +60,8 @@ mod hotbar;
 mod panels;
 pub mod panes;
 pub use print_ui::{
-    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, Which as PrintWhich, system_printers,
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
+    system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -103,6 +104,7 @@ use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
 use canvas::page_cursor;
+use canvas::page_keys;
 use canvas::page_pointer;
 use canvas::page_router;
 pub use canvas::scroll_speed;
@@ -202,6 +204,7 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
+use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
@@ -279,6 +282,7 @@ struct PendingOpen {
 #[cfg(not(target_arch = "wasm32"))]
 struct DeferredOpen {
     path: String,
+    after_open: Option<pdfcraft_render::RemoteDestination>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
@@ -286,6 +290,15 @@ struct DeferredOpen {
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
 /// used instead.
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
+
+/// A named destination being looked up off the UI thread: reading a large document's name tree
+/// takes a noticeable moment.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
+}
 
 pub struct PdfCraftApp {
     /// Split view (`panes`); which pane shows each tab is its view's.
@@ -422,6 +435,9 @@ pub struct PdfCraftApp {
     pub options_source: Option<OptionsSource>,
     /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
     pub spooler: Option<Spooler>,
+    /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
+    /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
+    pub two_sided_source: Option<TwoSidedSource>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
@@ -478,6 +494,8 @@ pub struct PdfCraftApp {
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     password_retry: Option<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -734,8 +752,14 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
+    /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,
+    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
+    /// `release_menu_input`).
+    pub(crate) menu_pastes: usize,
+    /// This frame's keys as the pages see them: none while something is over them.
+    pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,

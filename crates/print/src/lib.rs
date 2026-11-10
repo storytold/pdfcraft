@@ -45,7 +45,7 @@ pub use settings::{
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{
-    LABEL_MARGIN, MARGIN, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
+    LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
 };
 pub use summary::{PageLayout, SummaryComment, SummaryOptions, summary_with_pages};
 

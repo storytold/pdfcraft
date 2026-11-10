@@ -75,9 +75,12 @@ pub enum Layout {
         /// portrait sheet that turns to landscape when that suits it.
         custom: bool,
     },
+    /// `creep` (points, per sheet) moves sheet k's pages toward the fold by `k × creep`, sheet 0
+    /// being the outermost, so the margins match once the nested sheets are folded and trimmed.
     Booklet {
         subset: BookletSubset,
         binding: Binding,
+        creep: f64,
     },
     /// Tile scale (percent), overlap (points), cut marks.
     Poster {
