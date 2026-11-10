@@ -824,6 +824,27 @@ mod tests {
         Ok(PathBuf::from(&app.digital_ids[i].path))
     }
 
+    /// #6788 review: a certificate trusted both as a signer and for timestamps says both in the
+    /// Certificate Viewer's Trust tab, not only that it is a trusted signer.
+    #[test]
+    fn the_trust_tab_says_a_signer_is_also_trusted_for_timestamps() {
+        use egui_kittest::kittest::Queryable;
+        let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12");
+        let cert = sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.trust_signer(cert.clone());
+            app.trust_tsa(cert.clone());
+            app.cert_viewer = Some(CertViewer { chain: vec![cert.clone()], selected: 0, tab: CertTab::Trust });
+            app.dialog = Some(crate::Dialog::CertificateViewer);
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("You trust signatures made with this certificate. It does not vouch for any other certificate.");
+        h.get_by_label("You also trust timestamps made with this certificate.");
+    }
+
     #[test]
     fn an_exported_certificate_is_written_inside_the_chosen_folder() {
         let dir = scratch();

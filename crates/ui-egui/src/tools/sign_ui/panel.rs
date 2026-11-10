@@ -350,6 +350,11 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trust: &pdfcraf
                     } else {
                         tl!("This certificate is not trusted. Signatures made with it show an unknown identity.")
                     });
+                    // A signer can be trusted for timestamps too; the sentence above names only the
+                    // first, and with both the button below is gone, so say the second as well.
+                    if !root && signer && tsa {
+                        ui.label(tl!("You also trust timestamps made with this certificate."));
+                    }
                     ui.add_space(8.0);
                     if !root && !signer && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
                         action = Some(CertAction::TrustSigner(Box::new(c.clone())));
