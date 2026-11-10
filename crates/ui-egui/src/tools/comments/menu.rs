@@ -148,7 +148,7 @@ pub(crate) fn context_menu(
             let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
             let deletes = deletable(dpage, dindex) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
             if ui.add_enabled(allowed && deletes, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
-                action = delete_selected(&mut view.comments).map(|e| CanvasAction::Edit(Box::new(e)));
+                action = delete_selected(&mut view.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
