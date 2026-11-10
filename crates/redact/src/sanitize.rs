@@ -929,11 +929,7 @@ pub(crate) fn remove_counted(
     let listed_before = if annotations { listed_annotations(doc) } else { std::collections::HashSet::new() };
     if fields {
         // Fields without appearances get one first, so their values stay visible.
-        for f in pdfcraft_forms::fields(doc) {
-            if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
-                pdfcraft_forms::redraw_field(doc, &f.name)?;
-            }
-        }
+        pdfcraft_forms::redraw_fields(doc, |doc, f| f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))))?;
         let n = pdfcraft_model::pages(doc).len();
         pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
         doc.update_dict(root, |d| {
