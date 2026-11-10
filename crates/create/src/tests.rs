@@ -2635,3 +2635,33 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
 }
+
+/// A mask past the pixel limit is counted as a refusal, so Office export reports the page truncated;
+/// a mask of no size is only unreadable.
+#[test]
+fn an_oversized_mask_is_a_limit_refusal() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let refusals = |side: i64| {
+        let mut mask = Dict::new();
+        mask.set(b"Subtype".to_vec(), Object::name("Image"));
+        mask.set(b"Width".to_vec(), Object::Int(side));
+        mask.set(b"Height".to_vec(), Object::Int(side));
+        mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let mut doc = Document::new_empty();
+        let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0])));
+        let mut image = Dict::new();
+        image.set(b"Subtype".to_vec(), Object::name("Image"));
+        image.set(b"Width".to_vec(), Object::Int(1));
+        image.set(b"Height".to_vec(), Object::Int(1));
+        image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        image.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
+        budget.refused()
+    };
+    assert_eq!(refusals(100_000), 1, "past the pixel limit");
+    assert_eq!(refusals(0), 0, "no size is only unreadable");
+}

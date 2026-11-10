@@ -572,7 +572,13 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut Ima
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
     let (Some(mw), Some(mh)) = (m.dict.int(b"Width"), m.dict.int(b"Height")) else { return Err(unreadable_mask()) };
-    let (mw, mh) = size(mw, mh).ok_or_else(unreadable_mask)?;
+    let Some((mw, mh)) = size(mw, mh) else {
+        // A mask past the pixel limit is a limit refusal (its page is reported truncated); a malformed size is not.
+        if mw > 0 && mh > 0 && (mw as u64).saturating_mul(mh as u64) > MAX_PIXELS {
+            budget.refuse();
+        }
+        return Err(unreadable_mask());
+    };
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);
     let refused = budget.refused();
