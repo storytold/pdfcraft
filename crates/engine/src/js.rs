@@ -208,8 +208,21 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 
 /// A form field as scripts see it.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
-    field_state_with_display(f, display(doc, f))
+    let mut s = field_state_with_display(f, display(doc, f));
+    (s.text_color, s.fill_color) = colours(doc, f);
+    s
 }
+
+/// `field.textColor` and `field.fillColor` as Acrobat colour arrays, from the field's look
+/// (`None` for a transparent fill, which scripts read as `["T"]`).
+fn colours(doc: &pdfcraft_cos::Document, f: &Field) -> Colours {
+    let rgb = |c: [f64; 3]| std::iter::once("RGB".to_string()).chain(c.map(|v| v.to_string())).collect::<Vec<_>>();
+    let look = pdfcraft_forms::look(doc, f);
+    (Some(rgb(look.text)), look.fill.map(rgb))
+}
+
+/// A field's text and fill colours as scripts read them.
+type Colours = (Option<Vec<String>>, Option<Vec<String>>);
 
 fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
@@ -255,9 +268,18 @@ fn changes(
                 display: (a.display != b.display).then_some(a.display),
                 caption: a.caption_was_set.then(|| a.caption.clone()).flatten(),
                 rect: (a.rect != b.rect).then_some(a.rect).flatten(),
+                text_color: (a.text_color != b.text_color).then(|| a.text_color.clone()).flatten(),
+                fill_color: (a.fill_color != b.fill_color).then(|| a.fill_color.clone()).flatten(),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some() || c.caption.is_some() || c.rect.is_some())
-                .then_some(c)
+            (c.value.is_some()
+                || c.read_only.is_some()
+                || c.required.is_some()
+                || c.display.is_some()
+                || c.caption.is_some()
+                || c.rect.is_some()
+                || c.text_color.is_some()
+                || c.fill_color.is_some())
+            .then_some(c)
         })
         .collect()
 }
@@ -274,6 +296,14 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// Field colours read from `cos`, cached for the same reason as `displays`.
+    colours: std::collections::HashMap<pdfcraft_cos::ObjRef, Colours>,
+    /// Colours this runner's scripts wrote, by field name: they reach the document only once
+    /// the edit applies each script's changes, after `cos` was taken, so a later script in the
+    /// same edit reads them from here.
+    written_colours: std::collections::HashMap<String, Colours>,
+    /// Whether a document-level script names a colour property (`fillColor`, `textColor`, …).
+    doc_scripts_use_colours: bool,
     calculations: Option<std::sync::Arc<Vec<(String, String)>>>,
 }
 
@@ -300,7 +330,18 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new(), calculations: None }
+        let doc_scripts_use_colours = doc_scripts.iter().any(|source| source.contains("Color"));
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+            colours: std::collections::HashMap::new(),
+            written_colours: std::collections::HashMap::new(),
+            doc_scripts_use_colours,
+            calculations: None,
+        }
     }
 
     fn calculations(&mut self, fields: &[Field]) -> std::sync::Arc<Vec<(String, String)>> {
@@ -315,6 +356,8 @@ impl JsRunner {
     pub(crate) fn invalidate_calculations(&mut self, cos: &pdfcraft_cos::Document) {
         self.cos = cos.clone();
         self.displays.clear();
+        self.colours.clear();
+        self.written_colours.clear();
         self.calculations = None;
     }
 }
@@ -399,6 +442,12 @@ impl JsRunner {
     /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
     /// when the script failed.
     fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
+        // Field colours are read (and their arrays built for every field) only for a script
+        // that can reach them: one that names a colour property, or any script when a document
+        // script does. A large form's calculations then cost what they did before colours were
+        // readable. A property name built at run time (`f["fill" + "Color"]`) reads as
+        // transparent in a script that names no colour.
+        let reads_colours = self.doc_scripts_use_colours || script.contains("Color");
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -406,7 +455,14 @@ impl JsRunner {
                     Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
                     None => pdfcraft_js::DISPLAY_VISIBLE,
                 };
-                field_state_with_display(f, display)
+                let mut state = field_state_with_display(f, display);
+                if reads_colours {
+                    (state.text_color, state.fill_color) = match self.written_colours.get(&f.name) {
+                        Some(written) => written.clone(),
+                        None => self.colours.entry(f.obj).or_insert_with(|| colours(&self.cos, f)).clone(),
+                    };
+                }
+                state
             })
             .collect();
         let states = std::sync::Arc::new(states);
@@ -431,11 +487,17 @@ impl JsRunner {
         if o.error.is_some() {
             return None;
         }
+        let changes = changes(&states, &o.changed, &o.formatted);
+        for c in changes.iter().filter(|c| c.text_color.is_some() || c.fill_color.is_some()) {
+            if let Some(state) = o.changed.iter().find(|s| s.name == c.name) {
+                self.written_colours.insert(c.name.clone(), (state.text_color.clone(), state.fill_color.clone()));
+            }
+        }
         Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
             value_set: o.value_set,
-            changes: changes(&states, &o.changed, &o.formatted),
+            changes,
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         })
     }

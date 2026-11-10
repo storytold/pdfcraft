@@ -3657,8 +3657,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
-                        caption: None,
-                        rect: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
@@ -3740,6 +3739,65 @@ fn an_export_value_wins_over_an_earlier_options_display_text() {
         assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
         assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
     }
+}
+
+#[test]
+fn validation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: value.into(),
+                value_set: false,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "validate", Some("set_red")).unwrap();
+    set_value_with(&mut doc, "name", &FieldValue::Text("Grace".into()), &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Validate script's updated appearance");
+}
+
+#[test]
+fn calculation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: "Grace".into(),
+                value_set: true,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "calculate", Some("set_red")).unwrap();
+    recalculate_with(&mut doc, &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["Grace"]);
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Calculate script's updated appearance");
 }
 
 #[test]
