@@ -1,6 +1,6 @@
 # Document Properties sessions and interaction replay
 
-Status: proposed integration, updated 2026-11-09.
+Status: proposed integration, updated 2026-11-10.
 
 Document Properties binds its Description, Initial View and accepted Custom values to
 the document identity, edit generation and modification permission at opening. A
@@ -89,6 +89,7 @@ This integration can be evaluated independently of craft-common-actions #84.
 
 ## Revision history
 
+- 2026-11-10: reconcile current main's roadmap header; preserve both inactive password cleanup and the Properties draft guard. The vendored library and local replay contract are unchanged.
 - 2026-11-09: reconcile current main, preserving the vendor snapshot, local replay, both projects' license notices and the Properties-session and current upstream test modules.
 
 - 2026-11-05: vendor the original Rust revision with its lifecycle tests and licenses; keep the ten-scenario Python replay local.

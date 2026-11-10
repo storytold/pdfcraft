@@ -11,6 +11,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 use crate::widgets;
@@ -632,8 +633,9 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_active: bool) {
+/// Delete removes the selected item; Escape clears the selection. Not while something is over the
+/// pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
@@ -642,7 +644,8 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_act
     {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
+    let esc = keys.pressed(ctx, egui::Key::Escape);
     // Not while a button is down: the press held would then name another item.
     if del
         && !view.content.held
@@ -671,7 +674,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
     let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
@@ -811,7 +814,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
                     || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+                cancel |= keys.pressed(ui.ctx(), egui::Key::Escape);
                 commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
