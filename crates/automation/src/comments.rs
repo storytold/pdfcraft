@@ -175,6 +175,7 @@ impl Automation {
         Ok((page, index))
     }
 
+    /// List every comment in the document or on one page, reporting properties, groups, and status.
     pub(crate) fn comment_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
@@ -214,6 +215,9 @@ impl Automation {
                 && let Some(shape) = doc.comment_props(c.page, c.index).and_then(|p| p.border_shape).filter(|s| *s != BorderShape::Rectangle)
             {
                 v["border_shape"] = json!(shape.name().to_ascii_lowercase());
+            }
+            if c.subtype == "Highlight" && doc.comment_props(c.page, c.index).and_then(|p| p.round_corners).unwrap_or(false) {
+                v["round"] = json!(true);
             }
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
             // Not for replies, which are drawn with the comment they answer.
@@ -290,6 +294,7 @@ impl Automation {
         Ok(json!({ "count": roots.len(), "comments": roots }))
     }
 
+    /// Add a comment annotation to a page, applying geometry, markup, and visual styling.
     pub(crate) fn comment_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -493,6 +498,12 @@ impl Automation {
                 return Err(ToolError::InvalidArgs("border_shape is for a text box or typewriter text".into()));
             }
             style.border_shape = b;
+        }
+        if let Some(round) = a.opt_bool("round")? {
+            if kind != "highlight" {
+                return Err(ToolError::InvalidArgs("round is for a highlight".into()));
+            }
+            style.round_corners = round;
         }
         let contents = a.opt_str("contents")?.unwrap_or_default().to_string();
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
@@ -750,6 +761,7 @@ impl Automation {
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 
+    /// Edit an existing comment annotation's geometry, contents, style, or properties.
     pub(crate) fn comment_edit(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -771,6 +783,14 @@ impl Automation {
         }
         if let Some(shape) = border_shape(a)? {
             edits.push(Edit::BorderShapeAnnotation { page, index, shape });
+        }
+        if let Some(round) = a.opt_bool("round")? {
+            let doc = self.doc(a)?;
+            let target = doc.info.annotations.iter().find(|c| c.page == page && c.index == index);
+            if !target.is_some_and(|c| c.subtype == "Highlight") {
+                return Err(ToolError::InvalidArgs("round is for a highlight".into()));
+            }
+            edits.push(Edit::RoundCornersAnnotation { page, index, round });
         }
         // After `opacity`, which sets the whole comment's.
         let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
@@ -813,7 +833,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, round, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

@@ -312,6 +312,25 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
 }
 
 /// Add a comment; returns its index in the page's `/Annots`.
+fn set_text_markup_properties(d: &mut Dict, style: &Style, kind: Markup, quads: &[[f64; 8]]) {
+    d.set(b"C".to_vec(), rgb(style.color));
+    d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+    if kind == Markup::Highlight && style.round_corners {
+        d.set(b"PCRoundCorners".to_vec(), Object::Bool(true));
+    }
+}
+
+fn apply_part_opacities(d: &mut Dict, style: &Style) -> Result<(), AnnotError> {
+    if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
+        return Err(AnnotError::Invalid("invalid opacity".into()));
+    }
+    let line = style.opacity.clamp(0.0, 1.0);
+    let fill = style.fill_opacity.map_or(line, |o| o.clamp(0.0, 1.0));
+    let text = style.text_opacity.map_or(fill, |o| o.clamp(0.0, 1.0));
+    set_part_keys(d, appearance::PartOpacity { line, fill, text });
+    Ok(())
+}
+
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
@@ -319,13 +338,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
-    if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
-        return Err(AnnotError::Invalid("invalid opacity".into()));
-    }
-    let line = style.opacity.clamp(0.0, 1.0);
-    let fill = style.fill_opacity.map_or(line, |o| o.clamp(0.0, 1.0));
-    let text = style.text_opacity.map_or(fill, |o| o.clamp(0.0, 1.0));
-    set_part_keys(&mut d, appearance::PartOpacity { line, fill, text });
+    apply_part_opacities(&mut d, style)?;
     let border = |d: &mut Dict| {
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(style.width.max(0.0)));
@@ -341,10 +354,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"Open".to_vec(), Object::Bool(false));
             popup = Some([rect[2] + 10.0, rect[3] - 120.0, rect[2] + 210.0, rect[3]]);
         }
-        Shape::TextMarkup { quads, .. } => {
-            d.set(b"C".to_vec(), rgb(style.color));
-            d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
-        }
+        Shape::TextMarkup { kind, quads } => set_text_markup_properties(&mut d, style, *kind, quads),
         Shape::Redact { quads, overlay, look } => set_redaction_properties(&mut d, style, quads, overlay, look),
         Shape::Rectangle { .. } | Shape::Oval { .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
