@@ -37,6 +37,7 @@ const SUPERIOR: Contour = &[(100, 400), (300, 400), (300, 700), (100, 700)];
 const T_STEM: Contour = &[(150, 0), (250, 0), (250, 600), (150, 600)];
 /// A slash through a letter, from below the baseline.
 const SLASH: Contour = &[(20, -120), (80, -120), (480, 520), (420, 520)];
+const LOW_APOSTROPHE: Contour = &[(330, 500), (370, 500), (400, 700), (360, 700)];
 const APOSTROPHE: Contour = &[(330, 620), (370, 620), (400, 780), (360, 780)];
 
 /// Each accented letter's contours, by the character it draws.
@@ -45,6 +46,10 @@ fn drawing(c: char) -> &'static [Contour] {
         'č' | 'š' => &[BODY, CARON],
         'Č' | 'Ž' => &[CAPITAL, CAPITAL_CARON],
         'ť' => &[T_STEM, APOSTROPHE],
+        // A `ť` whose apostrophe starts below the `t`'s top, as many fonts draw it.
+        'Ť' => &[T_STEM, LOW_APOSTROPHE],
+        // A bullet, floating above the baseline.
+        '•' => &[DOT],
         // A cedilla alone, below the baseline.
         '¸' => &[OGONEK],
         // A spacing double acute, all of it above the baseline.
@@ -221,13 +226,15 @@ fn windows_1257_letters_drawn_at_winansi_codes_are_read_as_drawn() {
 }
 
 /// One code is not enough evidence (a `¿` whose dot an outline check reads as `ż`'s); two are.
+/// `ł` at 0xB3 and `ű` at 0xFB are Windows-1250's alone (Mac OS Central European has `≥` and
+/// `Ż` there).
 #[test]
 fn one_code_alone_reads_nothing() {
-    let (strict, recovered, _) = read(&Font::new("ABCDEF+Arial", &[(0xF5, 'ő'), (b'o', 'o')]));
-    assert_eq!(strict, "õo");
+    let (strict, recovered, _) = read(&Font::new("ABCDEF+Arial", &[(0xB3, 'ł'), (b'o', 'o')]));
+    assert_eq!(strict, "³o");
     assert_eq!(recovered, None);
-    let (_, recovered, _) = read(&Font::new("ABCDEF+Arial", &[(0xF5, 'ő'), (0xFB, 'ű'), (b'o', 'o')]));
-    assert_eq!(recovered.as_deref(), Some("őűo"));
+    let (_, recovered, _) = read(&Font::new("ABCDEF+Arial", &[(0xB3, 'ł'), (0xFB, 'ű'), (b'o', 'o')]));
+    assert_eq!(recovered.as_deref(), Some("łűo"));
 }
 
 /// A single glyph that draws the WinAnsi letter rules the code page out, however many draw its
@@ -471,18 +478,18 @@ fn a_truetype_program_with_a_cut_cmap_is_read() {
     assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("kčőű"));
 }
 
-/// The glyphs that draw neither letter must be fewer than those that draw the code page's: a
-/// caron and a double acute against two glyphs that draw no letter of Windows-1250 or WinAnsi is
-/// a font of some other encoding; a second double acute decides it.
+/// The glyphs that draw neither letter must be fewer than those that draw the code page's: `ű`
+/// and `ł` against two glyphs that draw no letter of Windows-1250 or WinAnsi is a font of some
+/// other encoding; a `č` decides it.
 #[test]
 fn glyphs_that_draw_neither_letter_must_be_fewer() {
-    let even = [(0xE8, 'č'), (0xF5, 'ő'), (0xEC, '*'), (0xF2, '*')];
+    let even = [(0xFB, 'ű'), (0xB3, 'ł'), (0xEC, '*'), (0xF2, '*')];
     let (strict, recovered, _) = read(&Font::new("ABCDEF+TimesNewRomanCE", &even));
-    assert_eq!(strict, "èõìò");
+    assert_eq!(strict, "û³ìò");
     assert_eq!(recovered, None);
-    let more = [(0xE8, 'č'), (0xF5, 'ő'), (0xEC, '*'), (0xF2, '*'), (0xFB, 'ű')];
+    let more = [(0xFB, 'ű'), (0xB3, 'ł'), (0xEC, '*'), (0xF2, '*'), (0xE8, 'č')];
     let (_, recovered, _) = read(&Font::new("ABCDEF+TimesNewRomanCE", &more));
-    assert_eq!(recovered.as_deref(), Some("čőěňű"));
+    assert_eq!(recovered.as_deref(), Some("űłěňč"));
 }
 
 /// A font whose codes from 0x80 on read as the letters of another encoding (Mac OS Roman's
@@ -510,24 +517,26 @@ fn a_font_whose_high_codes_read_as_other_letters_is_not_read() {
 }
 
 /// Codes Windows-1252 leaves undefined read as bullets in WinAnsi (ISO 32000-2 Annex D.2); the
-/// code page's letter replaces one only where its own glyph draws it: `ť` (an apostrophe beside
-/// the stem) at 0x9D is read, a `Ž` at 0x8F, where Windows-1250 has `Ź`, is not.
+/// code page's letter replaces one only where its own glyph doesn't contradict it. `ť` at 0x9D is
+/// read, whether its apostrophe stands above the `t` or starts below its top; a `Ž` at 0x8F, where
+/// Windows-1250 has `Ź`, and a bullet at 0x8D, where it has `Ť`, are not.
 #[test]
-fn undefined_codes_are_read_only_where_their_glyphs_draw_the_letter() {
-    let glyphs = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű'), (0x9D, 'ť'), (0x8F, 'Ž')];
-    let pairs: Vec<(u8, u16)> = glyphs.iter().enumerate().map(|(i, (code, _))| (*code, u16::try_from(i + 1).unwrap())).collect();
-    let outlines: Vec<(u16, &[Contour])> = glyphs.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
-    let program = with_outlines(6, &outlines, Cmap::Symbolic(&pairs), None);
-    let font = Font::new("ABCDEF+TimesNewRomanCE", &glyphs);
-    let (strict, recovered, plain, _) = layers(&parse(page_with_program(&font, Program::TrueType(program), "", 4)));
-    assert_eq!(strict, plain);
-    // WinAnsi reads undefined codes as bullets (ISO 32000-2 Annex D.2).
-    assert_eq!(strict.plain_text(), "èõû\u{2022}\u{2022}");
-    let r = recovered.expect("recovered");
-    assert_eq!(r.text.plain_text(), "čőűť\u{2022}");
-    let modes: Vec<RecoveryMode> = r.recovery.iter().flatten().map(|x| x.mode).collect();
-    assert_eq!(modes.len(), 4, "{modes:?}");
-    assert!(modes.iter().all(|m| matches!(m, RecoveryMode::Override { .. })), "{modes:?}");
+fn undefined_codes_are_read_only_where_their_glyphs_dont_contradict_the_letter() {
+    for t in ['ť', 'Ť'] {
+        let glyphs = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű'), (0x9D, t), (0x8F, 'Ž'), (0x8D, '•')];
+        let pairs: Vec<(u8, u16)> = glyphs.iter().enumerate().map(|(i, (code, _))| (*code, u16::try_from(i + 1).unwrap())).collect();
+        let outlines: Vec<(u16, &[Contour])> = glyphs.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
+        let program = with_outlines(7, &outlines, Cmap::Symbolic(&pairs), None);
+        let font = Font::new("ABCDEF+TimesNewRomanCE", &glyphs);
+        let (strict, recovered, plain, _) = layers(&parse(page_with_program(&font, Program::TrueType(program), "", 4)));
+        assert_eq!(strict, plain);
+        assert_eq!(strict.plain_text(), "èõû\u{2022}\u{2022}\u{2022}");
+        let r = recovered.expect("recovered");
+        assert_eq!(r.text.plain_text(), "čőűť\u{2022}\u{2022}", "{t}");
+        let modes: Vec<RecoveryMode> = r.recovery.iter().flatten().map(|x| x.mode).collect();
+        assert_eq!(modes.len(), 4, "{modes:?}");
+        assert!(modes.iter().all(|m| matches!(m, RecoveryMode::Override { .. })), "{modes:?}");
+    }
 }
 
 /// A slashed `O` whose slash reaches below the baseline is no ogonek: `Ø` and `ø` at 0xD8 and 0xF8

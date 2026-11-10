@@ -23,7 +23,7 @@
 //! uses; a font embedded whole that replaced only some letters of Windows-1252 with a code page's
 //! keeps Windows-1252 glyphs at the other codes, and is not read.
 
-use super::accents::{self, Shape};
+use super::accents::{self, Mark, Shape};
 use super::{Counter, FontFacts, FontKind, GlyphFacts, RecoveryMode, RecoveryRule, Rule, count};
 use super::{symbol_font, untagged};
 use crate::font::generated::glyph_names;
@@ -339,8 +339,8 @@ pub(crate) struct Reading {
 /// It then reads each code from 0x80 on whose strict text is Windows-1252's character, where the
 /// code page has a letter, as that letter, overriding the strict text (a spacing accent such as
 /// Windows-1250's `˝` at 0xBD, where a `½` may be drawn, is left alone). A code Windows-1252
-/// leaves undefined (WinAnsi's bullet, or no text) is read only where its own glyph draws the code
-/// page's letter.
+/// leaves undefined (WinAnsi's bullet, or no text) is read only where its own glyph doesn't
+/// contradict the code page's letter (another mark, or a sign floating above the baseline).
 pub(crate) struct CodePageByOutline;
 
 impl Rule for CodePageByOutline {
@@ -407,7 +407,9 @@ impl Rule for CodePageByOutline {
             return None;
         }
         // The codes Windows-1252 leaves undefined (WinAnsi's bullet, or no text) whose own glyphs
-        // draw the code page's letter.
+        // don't contradict the code page's letter: they draw its mark, or a letter whose mark the
+        // classifier can't place (the apostrophe of a `ť` that starts below the `t`'s top), not
+        // another mark or a sign floating above the baseline (a bullet).
         let mut fills = 0_u128;
         for code in 0x80..=u8::MAX {
             let Some(letter) = page.decode(code).filter(|_| windows_1252(code).is_none()) else {
@@ -420,9 +422,11 @@ impl Rule for CodePageByOutline {
                 continue;
             };
             count(Counter::OutlineClassified);
-            if accents::classify(&path).and_then(|shape| accents::matches(shape, letter))
-                == Some(true)
-            {
+            let letter_like = accents::classify(&path).is_some_and(|shape| {
+                accents::matches(shape, letter) == Some(true)
+                    || matches!(shape.mark, Mark::Nothing | Mark::Other)
+            });
+            if letter_like {
                 fills |= 1_u128 << (code & 0x7F);
             }
         }
