@@ -12,20 +12,19 @@
   pass's start it was `274b7a042` ("Merge pull request #6800 from
   storytold/merge/fonts-budget-6239"), so the branch is now **48 behind**
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
-  pass's head `2797c2eca` (the next bullet); no rebase was done in this pass, so
+  pass's head `b86c4963a` (the next bullet); no rebase was done in this pass, so
   the base stays `ba28458ad`.
-- Local head before this STATUS commit: `628f6176e` (feat(automation): write a
-  bookmark's open state with `bookmark_set_style`) on `f4cd86faf` (docs(collab):
-  record the bookmark look and the named-destination interface) on `f262cb8d5`
-  (feat(collab): share a bookmark's look and edit named destinations) on
-  `aa4f23dc4` (docs(collab): record the link operations); **101 commits** not in
+- Local head before this STATUS commit: `b86c4963a` (feat(collab): share
+  whole-document link operations) on `9adba7257` (docs(collab): record the open
+  state's automation tool) on `628f6176e` (feat(automation): write a
+  bookmark's open state with `bookmark_set_style`); **103 commits** not in
   `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
   local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
-  the remote's tip is not fetched here), and **21 ahead** of the PR head
-  `b27fa89c8`; this STATUS record is the fourth commit of the pass, so after it
-  the counts are 102/48/22. The branch was not rebased, so the base stays
+  the remote's tip is not fetched here), and **23 ahead** of the PR head
+  `b27fa89c8`; this STATUS record is the second commit of the pass, so after it
+  the counts are 104/48/24. The branch was not rebased, so the base stays
   `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `628f6176e`.
+  `b86c4963a`.
   The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
   `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
   at `c26867e9c` — were right when they were measured; `origin/main` kept
@@ -42,20 +41,19 @@
   (`0c57e2271`) and its record (`38d0bf56d`), the selection operation
   (`5bad54c40`) and its two records (`b6244142c`, `dc773c609`), the publication
   restore (`21aaf357a`), the page labels (`c26867e9c`) and their record
-  (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record (this
-  STATUS commit). `UNSTABLE` is
+  (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, and the
+  whole-document link operations (`b86c4963a`) and this record. `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `2b61ff80f` for the crates this pass touched
-  (annot, organize, engine, collab-proto, collab-link, collab-pdf,
-  collab-client-pdf, collab-server, collab-ws, automation, `pdfcraft-ui-egui
-  --features collab` and the wasm target); the whole-suite gates named earlier
-  were run at their own heads (`5bad54c40`, `157f4d239`, `22d29d070`,
-  `0c57e2271`, §4) and were not re-run here.
+  §4 are green at the local head `b86c4963a` for the crates this pass touched
+  (annot, engine, collab-link, collab-pdf, collab-client-pdf, collab-ws,
+  `pdfcraft-ui-egui --features collab` and the app); the whole-suite gates named
+  earlier were run at their own heads (`5bad54c40`, `157f4d239`, `22d29d070`,
+  `0c57e2271`, `2b61ff80f`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -76,16 +74,18 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   (`d1229deb9`, §4), a bookmark's look in `outline.item.update`/`add`, the
   named-destination interface and the `bookmark_set_style` open state
   (`f262cb8d5`, `628f6176e`, §4), the page labels as two structural operations
-  (`c26867e9c`, §4), and links as two structural operations over a page's whole
-  link list (`2b61ff80f`, §4). The whole
+  (`c26867e9c`, §4), links as two structural operations over a page's whole
+  link list (`2b61ff80f`, §4), and the whole-document link actions as
+  `links.add_many`/`links.remove_many` over several pages at once
+  (`b86c4963a`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
-  closes a bookmark's colour/style/open and the named-destination editor
-  (§5 p.3, §4): what a room still cannot do with them is in that section and in
-  RFC §3.1.7. It leaves
+  closes the last open item of §6.6's links line — the whole-document actions —
+  and the encrypted-PDF policy is now written down in §3 and RFC §12. What a
+  room still cannot do with links is in §4 and RFC §3.1.9. It leaves
   `https` without a reverse proxy, the in-process `conflict` flag and the
   journal tail (published by the next commit) as they were. A kill between the
   base write and the `CURRENT` rename is covered at the `Store` level only
@@ -400,6 +400,10 @@ cargo run -p pdfcraft-collab-daemon --release -- \
 - TLS: neither the callback nor a source `url` speaks `https`; both are expected
   to go through the reverse proxy on `http://`. No token, comment text or PDF
   byte is logged.
+- An encrypted or signed PDF never starts a room: `PdfAdapter::open` refuses it
+  with `Unsupported` before the first operation (a password would have to live on
+  the server, and a full rewrite would invalidate the signature; RFC §12). The
+  control plane sees the open failing, not a half-session.
 
 Client (desktop):
 
@@ -415,6 +419,88 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Whole-document link operations — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
+
+`feat(collab): share whole-document link operations`. This closes the last item
+§6.6 left open: `Edit::AddLinks` and `Edit::RemoveLinks` were `unsupported` in a
+room because they touch the whole document, and the protocol had only
+per-page link operations. Now they are two document operations over several
+pages, so every link action the app and automation offer is shared.
+
+- **One operation over every page it touches** (RFC §3.1.9). `links.add_many`
+  carries `pages: [{"page": N, "links": [...]}]` — the links each page gains, in
+  the order of the text — and `links.remove_many` carries the same shape, where
+  `links` is the list the page keeps (an entry without one, or an empty list,
+  removes every link on the page). The address is the first page the operation
+  touches (`Target::Page`, its `epoch` checked like every page operation), and
+  the payload names the rest; a document that moved is `stale` and the client
+  retries against the new head. One operation is one epoch step, one journal
+  record and one host-version step, not one per page.
+- **Every refusal happens before the first write**: a page twice in one
+  operation, a page past the end, an operation that names no page, an
+  `add_many` without a link, a page already holding a link the model cannot
+  carry (JavaScript, Launch, a malformed area — `unsupported` whole), an area
+  that is not four finite numbers or is under 2 pt a side, a target page past
+  the last, a blank or over-long address (`MAX_LINK_URI_BYTES`, 2 048), a list
+  over `MAX_LINKS_PER_PAGE` (1 024) or a document over `MAX_LINKS` (10 000)
+  (`limit`), a `remove_many` that would change nothing (`invalid`), and a
+  `before` that no longer matches the pages (`conflict`). None of them moves
+  `version`, `epoch`, the document or the journal, and a viewer or a commenter
+  gets `forbidden` from the room before the adapter runs.
+- **The undo image is every touched page's links, whole.** The accepted
+  operation carries `pages` (the lists it leaves) and `before` (the lists it
+  replaced), plus `added`/`removed`; the undo is one `links.remove_many` over
+  `before` with `pages` as its check, so an add and a removal undo through one
+  shape and neither replica guesses. A redo repeats the original operation.
+- **The engine writes the lists in one edit**: `Edit::SetPagesLinks` over
+  `pdfcraft_annot::links::set_pages_links`, which checks every page (the page,
+  every body, and the links the page holds now) before the first write and then
+  rewrites each list with the same in-place rules as `page.link.set` — an
+  unchanged link keeps its annotation object.
+- **The client projects both ways**: `Edit::AddLinks` becomes one
+  `links.add_many` (the `(page, rects, uri)` findings grouped by page in the
+  text's order), `Edit::RemoveLinks` one `links.remove_many` (`pages: None` is
+  every page of the document); `edit_for` applies an accepted operation as
+  `Edit::SetPagesLinks`, and `inverse_after` builds the undo from the accepted
+  operation. `collab_apply_edit` lists `SetPagesLinks` as structural, and
+  `automation`'s `links_from_urls`/`links_remove` reach the room through the
+  same edits.
+- **Page operations still keep the links**: the added links go through the same
+  annotation objects, so insert/duplicate/blank/combine/move/split/delete/
+  replace keep each link on its page and renumber a destination written as a
+  page number (the e2e test checks a go-to added by `add_many` after a blank
+  insert).
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-link` | `pages_round_trip_and_are_bounded` (the same pages come back; a page twice, one past the bound and a list over the room's total refused before a document is read) |
+| `annot` | `several_pages_are_written_whole_and_a_bad_one_writes_nothing` (a bad area on the second page leaves the first untouched; the same span without it writes both and survives a save) |
+| `collab-pdf` | `many_links_are_added_and_removed_as_operations` (three links on two pages in one epoch step; the undo over the lists it replaced; a redo; a plain removal and its undo; a stale check is `conflict` and moves nothing), `a_bad_many_link_operation_changes_nothing` (16 refusals — no pages, a page past the end, no link, a page twice, small and huge areas, a target page past the end, a blank and a long address, an unknown target, too many links, no change, and a stale `before` — each with version, epoch and document unchanged), `a_page_with_an_unshared_link_refuses_a_whole_document_operation`, `a_viewer_and_a_commenter_cannot_remove_many_links` |
+| `collab-client-pdf` | `link_edits_become_addressed_operations` (both whole-document edits become one operation addressed at the first page; each page listed once with its links), `accepted_link_operations_become_edits` (an accepted add and removal through `edit_for`; the undo over the lists they replaced with the lists they left as the check) |
+| `collab-ws` e2e (socket) | `whole_document_links_are_operations_over_a_socket` (two editors and a viewer: a link on each of two pages in one operation converges on all three replicas; the undo and the redo apply; a plain removal and its undo; a stale check is `conflict` without a version move; a viewer `forbidden`; a blank insert keeps each link on its page and a page-number go-to follows the page it named) |
+
+Gates at `feat(collab): share whole-document link operations` (host `agents`,
+rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | EXIT=0 |
+| Clippy, the crates this pass touched | `cargo clippy -p pdfcraft-annot -p pdfcraft-engine -p pdfcraft-organize -p pdfcraft-collab-{proto,link,pdf,client-pdf,ws} -p pdfcraft-automation --all-targets -- -D warnings` | EXIT=0 |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | EXIT=0 |
+| App wiring | `cargo check -p pdfcraft --features collab` | EXIT=0 |
+| Tests, the four crates of the slice | `cargo test -p pdfcraft-collab-link -p pdfcraft-collab-client-pdf -p pdfcraft-collab-pdf -p pdfcraft-collab-ws` | EXIT=0 — client-pdf 45, link 7, pdf 69, ws 16 unit + 35 e2e; 0 failed, 0 ignored |
+| Tests, the crates whose edits and links changed | `cargo test -p pdfcraft-annot -p pdfcraft-engine` | EXIT=0 — annot 198, engine 636 + 9 + 46; 2 ignored (pre-existing) |
+
+What this does **not** cover: a link whose action the model cannot carry
+(JavaScript, Launch) still refuses its page — and therefore the whole
+whole-document operation — whole; a link copied in from another file keeps its
+own file's page numbers; and a link to a named destination is not rewritten
+when `dest.delete` removes that name (its undo puts the name back). The state
+is still local: nothing was pushed, and PR #6622 keeps the fork's head
+`b27fa89c8`.
 
 ### A bookmark's look and the named-destination interface — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
 
@@ -580,8 +666,9 @@ carry a link a page operation had moved.
   `page.link.clear` with the link's position; `edit_for` turns both accepted
   operations into `Edit::SetPageLinks`, and `inverse_after` swaps the two lists
   the server carried. `Edit::RemoveLinks` and `Edit::AddLinks` (remove every
-  link; make links from the addresses in the text) stay `unsupported` in a
-  room: they are whole-document actions the protocol has no operation for.
+  link; make links from the addresses in the text) were `unsupported` in a
+  room at this commit — whole-document actions with no operation then; §4's
+  whole-document links section closes them.
 
 Tests:
 
@@ -591,7 +678,7 @@ Tests:
 | `annot` | `a_remote_go_to_and_a_named_destination_round_trip` (both survive a save; a GoToR writes `/D` as a number, never a page of this document), `a_page_link_list_is_written_whole_and_keeps_what_did_not_change` (a quad area, a changed target, a third link, the surplus removed; the unchanged link keeps its object), `a_link_the_model_cannot_carry_refuses_the_whole_page` (a JavaScript action: reading and rewriting refuse, nothing changes) |
 | `organize` | `page_numbers_in_links_follow_the_pages_they_name` (a move, then a blank insert; the remote go-to and the name untouched), `a_link_to_a_deleted_page_loses_its_destination` (the annotation stays, its destination goes) |
 | `collab-pdf` | `page_links_are_set_and_cleared_as_operations` (a web address, then a page with a text area; the first link keeps its object; clear, its lists and `removed`; the undo writes the old list), `a_bad_link_operation_changes_nothing` (11 refusals — page past the end, stale `before`, small and huge areas, target page past the end, blank and long address, unknown kind, too many links, clear outside the list, clear with no index — each with version, epoch and document unchanged), `a_page_with_an_unshared_link_is_refused_whole`, `a_viewer_and_a_commenter_cannot_change_links`, `page_operations_keep_the_links_on_their_pages` (a blank insert, then a delete) |
-| `collab-client-pdf` | `link_edits_become_addressed_operations` (an add, a change by `/Annots` index, a delete as a position, the whole-document actions and a missing index refused), `accepted_link_operations_become_edits` (set and clear through `edit_for`, the inverse swap and its epoch) |
+| `collab-client-pdf` | `link_edits_become_addressed_operations` (an add, a change by `/Annots` index, a delete as a position, a missing index refused; the whole-document actions as one operation), `accepted_link_operations_become_edits` (set and clear through `edit_for`, the inverse swap and its epoch) |
 | `collab-ws` e2e (socket) | `page_links_are_operations_over_a_socket` (two editors and a viewer; a web address, then a page with a view, a name and another file's page converge on all three replicas; a stale check is `conflict` without a version move; the undo and the redo apply; a clear and its undo; a viewer `forbidden`; a blank insert keeps both links on their page) |
 
 Gates at `2b61ff80f` (host `agents`, rustc 1.99.1, `-j 12`):
@@ -612,8 +699,7 @@ Gates at `2b61ff80f` (host `agents`, rustc 1.99.1, `-j 12`):
 | Layers | `cargo xtask layers` | OK — 52 crates, no violations |
 | Browser | `cargo xtask wasm` | 44 crates ok |
 
-What this does **not** cover: `Edit::RemoveLinks` and `Edit::AddLinks` are still
-`unsupported` in a room (whole-document actions with no operation); a link
+What this does **not** cover: a link
 annotation's subtype is assumed `Link` with a rectangle and an action the model
 carries, and anything else refuses its page whole; a page's link list is
 rewritten as one operation, so two editors adding a link to the same page at
@@ -2880,9 +2966,10 @@ Ordered by the risk they pose to production.
    `page.link.clear` carry the list before and after for the undo, a target is
    a page with a view, a named destination, a page of another file (remote
    go-to) or a web address, and a page operation keeps a link's page while it
-   renumbers a destination written as a page number. What a room still cannot
-   do with links: remove every link or create links from the text
-   (`Edit::RemoveLinks`/`Edit::AddLinks`, `unsupported`); a link whose action
+   renumbers a destination written as a page number; a whole-document action is
+   one `links.add_many`/`links.remove_many` over every page it touches, so
+   `Edit::RemoveLinks` and `Edit::AddLinks` are shared too (§4, RFC §3.1.9).
+   What a room still cannot do with links: a link whose action
    the model cannot carry (JavaScript, Launch) refuses its page whole; a link
    copied in from another file keeps that file's page numbers; and a link to a
    named destination is not rewritten when the name is deleted (its undo puts
@@ -3291,9 +3378,14 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   and renumbering the destination numbers that are this document's. Tests:
   `collab-link` (6), `annot` (3), `organize` (2), `collab-pdf` (5),
   `collab-client-pdf` (2) and `collab-ws` e2e (1, two editors and a viewer).
-  What is left: `RemoveLinks`/`AddLinks` as whole-document operations, and the
-  link actions the model does not carry (JavaScript, Launch) still refuse the
-  page.
+  **The whole-document actions are done in §4** (2026-11-10, not pushed):
+  `links.add_many` and `links.remove_many` carry several pages' whole lists in
+  one structural operation, so `Edit::AddLinks` and `Edit::RemoveLinks` are no
+  longer `unsupported`; one operation is one epoch step and one undo over the
+  lists the pages had. Tests: `collab-link` (1), `annot` (1), `collab-pdf` (4),
+  `collab-client-pdf` (1) and `collab-ws` e2e (1, two editors and a viewer).
+  What is left: the link actions the model does not carry (JavaScript, Launch)
+  still refuse the page whole.
 - **Page labels are done locally in §4** (`c26867e9c`, 2026-11-10, not pushed):
   `page.label.set` and `page.label.clear` addressed by the page a range starts
   on, the whole replaced range in `before` for the undo (a list when the set
