@@ -152,7 +152,7 @@ fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t
     let at = |x: f32, y: f32| Pos2::new((c.x - 8.0 + x).round() + 0.5, (c.y - 8.0 + y).round() + 0.5);
     match button {
         Button::Minimize => {
-            painter.line_segment([at(4.0, 11.0), at(11.0, 11.0)], stroke);
+            painter.line_segment([at(4.0, 7.5), at(11.0, 7.5)], stroke);
         }
         Button::Maximize if maximized => {
             // Restore: a smaller window in front of another.
@@ -377,6 +377,63 @@ mod tests {
             let (up, down) = (fill_color(*a, false), fill_color(*a, true));
             assert!(down.r() <= up.r() && down.g() <= up.g() && down.b() <= up.b());
             assert_ne!(up, down);
+        }
+    }
+
+    /// Exercises the actual Windows painter, so changing only the colour helper cannot hide
+    /// a missing traffic-light branch or a text-coloured glyph on a coloured button.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_hovered_and_pressed_buttons_paint_coloured_fills_and_dark_glyphs() {
+        use egui::{Color32, Event, PointerButton, Sense, Shape};
+
+        for (button, rgb) in [(Button::Minimize, [0xFE, 0xBC, 0x2E]), (Button::Maximize, [0x28, 0xC8, 0x40]), (Button::Close, [0xFF, 0x5F, 0x57])] {
+            for pressed in [false, true] {
+                let ctx = egui::Context::default();
+                let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 100.0));
+                let mut pointer = Pos2::ZERO;
+                ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(super::BUTTON), Sense::click());
+                    pointer = rect.center();
+                })
+                .drop_without_applying_deltas();
+                let mut events = vec![Event::PointerMoved(pointer)];
+                if pressed {
+                    events.push(Event::PointerButton {
+                        pos: pointer,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+                    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(super::BUTTON), Sense::click());
+                    assert!(response.hovered());
+                    assert_eq!(response.is_pointer_button_down_on(), pressed);
+                    let mut tokens = crate::theme::Tokens::get(ui.ctx());
+                    // Deliberately distinct from the expected dark stroke in either theme.
+                    tokens.text = Color32::WHITE;
+                    super::paint(ui.painter(), rect, button, false, &tokens, &response);
+                });
+                let base = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                let expected_fill = if pressed { base.gamma_multiply(0.75) } else { base };
+                let fill = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    Shape::Circle(circle) if (circle.radius - super::BUTTON / 2.0).abs() < 0.1 => Some(circle.fill),
+                    _ => None,
+                });
+                assert_eq!(fill, Some(expected_fill), "{button:?}, pressed={pressed}");
+                let strokes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                        Shape::Rect(rect) => Some(rect.stroke.color),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!strokes.is_empty(), "the glyph must be painted");
+                assert!(strokes.iter().all(|color| *color == Color32::from_black_alpha(190)), "{button:?}, pressed={pressed}: {strokes:?}");
+            }
         }
     }
 
