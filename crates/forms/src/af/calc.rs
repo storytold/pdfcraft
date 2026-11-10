@@ -32,6 +32,24 @@ enum Delimiter {
     Group,
     Condition,
     For { left: bool },
+    Template,
+}
+
+/// Scans template-literal text from `from` (past the opening `` ` `` or substitution `}`) to its
+/// closing `` ` `` (`false`) or the `${` of the next substitution (`true`).
+fn scan_template(js: &str, s: &[u8], mut j: usize) -> Option<(usize, bool)> {
+    loop {
+        match s.get(j) {
+            None => return None,
+            Some(b'\\') => {
+                let step = js.get(j + 1..).and_then(|r| r.chars().next()).map(char::len_utf8)?;
+                j += 1 + step;
+            }
+            Some(b'`') => return Some((j + 1, false)),
+            Some(b'$') if s.get(j + 1) == Some(&b'{') => return Some((j + 2, true)),
+            Some(_) => j += 1,
+        }
+    }
 }
 
 /// Whether a line ends at `s[j]`: JavaScript ends one at `\n`, `\r`, U+2028 and U+2029.
@@ -95,22 +113,15 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 Js::Str(text)
             }
             b'`' => {
-                let mut j = i + 1;
-                loop {
-                    match s.get(j) {
-                        None => break 'scan,
-                        Some(b'\\') => {
-                            let Some(step) = js.get(j + 1..).and_then(|r| r.chars().next()).map(char::len_utf8) else {
-                                break 'scan;
-                            };
-                            j += 1 + step;
-                        }
-                        Some(b'`') => break,
-                        Some(_) => j += 1,
-                    }
-                }
-                i = j + 1;
-                Js::Other
+                let Some((end, open)) = scan_template(js, s, i + 1) else { break 'scan };
+                i = end;
+                if open { Js::Punct('{') } else { Js::Other }
+            }
+            b'}' if matches!(delimiters.last(), Some(('}', Delimiter::Template))) => {
+                delimiters.pop();
+                let Some((end, open)) = scan_template(js, s, i + 1) else { break 'scan };
+                i = end;
+                if open { Js::Punct('{') } else { Js::Other }
             }
             b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition, after_for_of) => {
                 // A regular expression ends at a `/` outside a class; a line break first means it
@@ -206,7 +217,10 @@ fn advance_context(js: &str, token: &Token, tokens: &[Token], delimiters: &mut V
     match token.1 {
         Js::Punct('(') => delimiters.push((')', opens_condition(js, tokens))),
         Js::Punct('[') => delimiters.push((']', Delimiter::Group)),
-        Js::Punct('{') => delimiters.push(('}', Delimiter::Group)),
+        Js::Punct('{') => {
+            let kind = if js.get(token.0.clone()).is_some_and(|t| t.ends_with("${")) { Delimiter::Template } else { Delimiter::Group };
+            delimiters.push(('}', kind));
+        }
         Js::Punct(close @ (')' | ']' | '}')) if delimiters.last().is_some_and(|(end, _)| *end == close) => {
             after_condition = matches!(delimiters.pop(), Some((_, Delimiter::Condition | Delimiter::For { .. })));
         }
@@ -679,5 +693,31 @@ mod tests {
             _ => Vec::new(),
         });
         assert_eq!(out.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn template_substitutions_read_and_rename_fields_without_breaking_outer_lexing() {
+        let js = r#"var skip = `getField("price") \${getField("price")}`; event.value = `${this.getField("price").value} + ${{ v: getField('tax').value }.v} + ${`nested ${getField("fee").value}`}`;"#;
+        assert_eq!(calculation_reads(js), vec!["price".to_owned(), "tax".to_owned(), "fee".to_owned()]);
+        assert!(!reads_built_names(js));
+        let renamed = rename_in_calculation(js, "price", "unit_price").unwrap();
+        assert!(renamed.contains(r#"`getField("price") \${getField("price")}`"#), "{renamed}");
+        assert!(renamed.contains(r#"${this.getField("unit_price").value}"#), "{renamed}");
+
+        let built = r#"event.value = `${getField("row" + i).value}`;"#;
+        assert!(reads_built_names(built));
+
+        // Nested quotes/backticks and regex vs division around `${...}` keep later calls intact.
+        let fmt_after_nested = "const q = `${\"`\"}`; AFPercent_Format(2, 1);";
+        assert_eq!(parse_format(fmt_after_nested), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let regex_in_subst =
+            "const r = `${/AFPercent_Format(0, 0)/.test(x)}-${/AFPercent_Format(0, 0)/.test(y)}` / 2; AFPercent_Format(2, 1); var z = 1 / 2;";
+        assert_eq!(parse_format(regex_in_subst), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let for_of_subst = "for (const [x = `${of / 2}`] of /AFPercent_Format(0, 0)/g) {} AFPercent_Format(2, 1);";
+        assert_eq!(parse_format(for_of_subst), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let for_of_iterable = "for (const x of `${of / 2}`) /AFPercent_Format(0, 0)/.test(x); AFPercent_Format(2, 1);";
+        assert_eq!(parse_format(for_of_iterable), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let unterminated_tail = "event.value = `${this.getField(\"a\").value} unterminated + this.getField(\"b\").value";
+        assert_eq!(calculation_reads(unterminated_tail), vec!["a".to_owned()]);
     }
 }
