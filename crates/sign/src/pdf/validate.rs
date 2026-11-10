@@ -60,6 +60,46 @@ fn names_certification(doc: &Document, v: &Dict) -> bool {
     named.as_dict() == Some(v)
 }
 
+/// The permission level (1 to 3, with the meaning of a DocMDP level) that a signature set for the
+/// document by locking it, or `None` when it set none. Two places carry it, and the stricter one
+/// counts: `/P` of the `/Lock` of `field`, the signature's field (ISO 32000-2 §12.7.5.5), and `/P`
+/// in the parameters of a FieldMDP `/Reference` in `v`, its value, which is where other signers
+/// write "lock the document after signing". Both are read from `doc`, the revision the signature
+/// covers, and through references. A level below 1 or above 3 is the nearest one, as for DocMDP;
+/// a `/P` that is not a number sets none. Which fields a lock names is not read here.
+fn lock_level(doc: &Document, field: &Dict, v: &Dict) -> Option<u8> {
+    let level = |d: &Dict| {
+        let p = d.get(b"P").and_then(|p| doc.resolve(p).as_f64())?;
+        Some(if p < 2.0 {
+            1
+        } else if p < 3.0 {
+            2
+        } else {
+            3
+        })
+    };
+    let lock = field.get(b"Lock").map(|l| doc.resolve(l));
+    let of_field = lock.as_deref().and_then(Object::as_dict).and_then(level);
+    let references = v.get(b"Reference").map(|r| doc.resolve(r));
+    let of_value = references
+        .as_deref()
+        .and_then(Object::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let r = doc.resolve(r);
+            let r = r.as_dict()?;
+            let method = r.get(b"TransformMethod").map(|m| doc.resolve(m));
+            if method.as_deref().and_then(Object::as_name) != Some(b"FieldMDP".as_slice()) {
+                return None;
+            }
+            let params = r.get(b"TransformParams").map(|p| doc.resolve(p));
+            params.as_deref().and_then(Object::as_dict).and_then(level)
+        })
+        .min();
+    [of_field, of_value].into_iter().flatten().min()
+}
+
 /// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
 /// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
 /// so a DocMDP reference in any other signature dictionary does not choose the permissions later
@@ -275,14 +315,18 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         let old = cache.revision(doc, bytes, covered);
         let signed = old.as_ref().and_then(|old| {
             sig_fields(old)
-                .iter()
-                .filter_map(|f| f.signature(old))
-                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
+                .into_iter()
+                .filter_map(|f| f.signature(old).map(|v| (f, v)))
+                .find(|(_, v)| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
         });
         match (old, signed) {
-            (Some(old), Some(v)) => {
+            (Some(old), Some((field, v))) => {
                 set_certification(&old, &v, info);
-                classify_changes(doc, Some(old), info.certify)
+                // A signature that locked the document set a level too (#6865); the stricter of
+                // it and the certification's decides. `info.certify` stays the certification's:
+                // a lock does not make an approval signature a certification.
+                let level = [info.certify, lock_level(&old, &field.dict, &v)].into_iter().flatten().min();
+                classify_changes(doc, Some(old), level)
             }
             _ => classify_changes(doc, None, info.certify),
         }
@@ -682,4 +726,103 @@ fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, c
         SignatureValidation { doc, bytes, trust, info, cache },
         VerifiedSignature { covered, certificate: cert, embedded: &certs, cms_time: None, unverified_time: None },
     );
+}
+
+#[cfg(test)]
+mod lock_level_tests {
+    use std::sync::Arc;
+
+    use super::{Document, ObjRef, lock_level};
+
+    /// The level of the signature whose field is object 2 and whose value is object 3, in a
+    /// document that holds `objs` from object 2 on (object 1 is the catalog).
+    fn level(objs: &[&str]) -> Option<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in std::iter::once(&"<< /Type /Catalog >>").chain(objs).enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+        for o in &offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+        let doc = Document::open(Arc::new(out)).unwrap();
+        let dict = |num| doc.get(ObjRef { num, generation: 0 }).as_dict().cloned().unwrap();
+        lock_level(&doc, &dict(2), &dict(3))
+    }
+
+    const FIELD: &str = "<< /FT /Sig /T (Approval) >>";
+    const VALUE: &str = "<< /Type /Sig >>";
+
+    fn locked_field(lock: &str) -> String {
+        format!("<< /FT /Sig /T (Approval) /Lock {lock} >>")
+    }
+
+    /// A value whose `/Reference` holds one entry per `(method, parameters)`.
+    fn value_with(references: &[(&str, &str)]) -> String {
+        let entries: Vec<String> = references
+            .iter()
+            .map(|(method, params)| format!("<< /Type /SigRef /TransformMethod /{method} /TransformParams << {params} >> >>"))
+            .collect();
+        format!("<< /Type /Sig /Reference [{}] >>", entries.join(" "))
+    }
+
+    #[test]
+    fn the_fields_lock_sets_the_level() {
+        assert_eq!(level(&[FIELD, VALUE]), None, "no lock");
+        for (p, expected) in [(1, Some(1)), (2, Some(2)), (3, Some(3))] {
+            assert_eq!(level(&[&locked_field(&format!("<< /Type /SigFieldLock /Action /All /P {p} >>")), VALUE]), expected, "/P {p}");
+        }
+        assert_eq!(
+            level(&[&locked_field("<< /Type /SigFieldLock /Action /Include /Fields [(amount)] >>"), VALUE]),
+            None,
+            "a lock that only names fields"
+        );
+        // The lock (object 4) and its /P (object 5) written by reference.
+        assert_eq!(level(&[&locked_field("4 0 R"), VALUE, "<< /Type /SigFieldLock /Action /All /P 5 0 R >>", "1"]), Some(1));
+    }
+
+    #[test]
+    fn a_fieldmdp_reference_in_the_value_sets_the_level() {
+        assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /All /P 1 /V /1.2")])]), Some(1));
+        assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /All /P 2 /V /1.2")])]), Some(2));
+        assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /Include /Fields [(amount)] /V /1.2")])]), None, "it only names fields");
+        // The array (object 4), the method (5), the parameters (6) and their /P (7) by reference.
+        let by_reference = [
+            FIELD,
+            "<< /Type /Sig /Reference 4 0 R >>",
+            "[<< /TransformMethod 5 0 R /TransformParams 6 0 R >>]",
+            "/FieldMDP",
+            "<< /Action /All /P 7 0 R >>",
+            "1",
+        ];
+        assert_eq!(level(&by_reference), Some(1));
+        // A DocMDP reference is the certification's level, which `set_certification` reads: it
+        // counts only where the catalog names the signature, so it is no lock level.
+        assert_eq!(level(&[FIELD, &value_with(&[("DocMDP", "/P 1 /V /1.2")])]), None);
+    }
+
+    #[test]
+    fn the_stricter_level_counts() {
+        let lock = |p: u8| locked_field(&format!("<< /Type /SigFieldLock /Action /All /P {p} >>"));
+        assert_eq!(level(&[&lock(3), &value_with(&[("FieldMDP", "/Action /All /P 1")])]), Some(1));
+        assert_eq!(level(&[&lock(1), &value_with(&[("FieldMDP", "/Action /All /P 3")])]), Some(1));
+        assert_eq!(level(&[&lock(2), &value_with(&[("FieldMDP", "/Action /All")])]), Some(2), "the reference sets none");
+        assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /All /P 3"), ("FieldMDP", "/Action /All /P 2")])]), Some(2), "two references");
+    }
+
+    #[test]
+    fn a_level_out_of_range_is_the_nearest_and_what_is_not_a_number_sets_none() {
+        let lock = |p: &str| locked_field(&format!("<< /Type /SigFieldLock /Action /All /P {p} >>"));
+        for (p, expected) in
+            [("0", Some(1)), ("-4", Some(1)), ("1.0", Some(1)), ("2.5", Some(2)), ("9", Some(3)), ("/One", None), ("(1)", None), ("null", None)]
+        {
+            assert_eq!(level(&[&lock(p), VALUE]), expected, "/P {p}");
+        }
+        assert_eq!(level(&[&locked_field("7"), VALUE]), None, "a /Lock that is no dictionary");
+        assert_eq!(level(&[FIELD, "<< /Type /Sig /Reference (none) >>"]), None, "a /Reference that is no array");
+    }
 }
