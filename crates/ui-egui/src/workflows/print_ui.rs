@@ -227,6 +227,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            custom_new: None,
             ..keep
         };
         if changed {

@@ -1107,6 +1107,95 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     std::fs::remove_file(out).unwrap();
 }
 
+/// After the Print dialog opens: frames until its printer list has loaded (its arrival changes
+/// the dialog's rows, even an empty list, which adds the "no printers" line), then a few more so
+/// the dialog has settled where it stays. A click before then can land where a control was
+/// (windows-latest CI).
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..500 {
+        h.run_steps(1);
+        if !h.state().print_draft.printers_loading {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!h.state().print_draft.printers_loading, "the printer list loaded");
+    h.run_steps(8);
+}
+
+/// Page setup: a paper size of one's own joins the Paper list (Custom…) and prints at its size.
+/// The printer it was printed on keeps it (#2001) by name, across a restart, and Remove takes it
+/// off the list; the printer's setup then leaves the paper as it is.
+#[test]
+fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
+    use pdfcraft_engine::print::spool::{Job, Printer};
+    use std::sync::{Arc, Mutex};
+    let sent: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let attach = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().printer_source =
+            Some(Arc::new(|| vec![Printer { name: "Labeller".into(), default: true, two_sided: None, description: String::new() }]));
+        let sent = sent.clone();
+        h.state_mut().spooler = Some(Arc::new(move |pdf: &[u8], _job: &Job| {
+            sent.lock().unwrap().push(pdf.to_vec());
+            Ok(String::new())
+        }));
+    };
+    let mut h = harness();
+    attach(&mut h);
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Labeller"));
+    h.get_by_label("Custom…").click();
+    h.run_steps(2);
+    // Typed in the preferences' unit, landscape: 6 × 4 inches.
+    let per_point = h.state().print_draft.units.per_point();
+    h.state_mut().print_draft.custom_new = Some(("Label 4×6".into(), format!("{}", 432.0 * per_point), format!("{}", 288.0 * per_point)));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    {
+        let d = &h.state().print_draft;
+        assert!(d.paper_is_custom() && d.paper_name() == "Label 4×6", "{}", d.paper_name());
+        let (w, l) = d.paper_size();
+        assert!((w - 288.0).abs() < 0.01 && (l - 432.0).abs() < 0.01, "portrait: {w}×{l}");
+    }
+    // The custom row has closed: let the dialog settle at its new height before clicking.
+    h.run_steps(8);
+    h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+    for _ in 0..400 {
+        h.run_steps(1);
+        if !sent.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let pdf = sent.lock().unwrap().first().cloned().expect("the job reached the spooler");
+    let printed = pdfcraft_cos::Document::open(Arc::new(pdf)).unwrap();
+    let sheet = pdfcraft_model::pages(&printed)[0].display_size(&printed);
+    assert!((sheet.0.min(sheet.1) - 288.0).abs() < 0.5 && (sheet.0.max(sheet.1) - 432.0).abs() < 0.5, "the label paper: {sheet:?}");
+    assert_eq!(h.state().print_draft.setups.first().map(|(p, s)| (p.as_str(), s.paper.as_str())), Some(("Labeller", "Label 4×6")));
+
+    // After a restart the list has it, and the printer starts on it.
+    let settings = h.state().persist();
+    let mut h = harness_with_settings(Some(settings));
+    attach(&mut h);
+    assert_eq!(h.state().print_draft.paper_count(), pdfcraft_engine::print::PAPERS.len() + 1);
+    h.state_mut().print_draft.paper = 0;
+    h.state_mut().print_draft.printer = None;
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!((h.state().print_draft.printer.as_deref(), h.state().print_draft.paper_name().as_str()), (Some("Labeller"), "Label 4×6"));
+
+    // Remove takes it off the list; the printer's setup, still naming it, then changes nothing.
+    h.get_by_label("Remove").click();
+    h.run_steps(2);
+    let d = &mut h.state_mut().print_draft;
+    assert_eq!((d.paper_count(), d.paper), (pdfcraft_engine::print::PAPERS.len(), 0));
+    d.paper = 3;
+    d.apply_setup();
+    assert_eq!(d.paper, 3);
+}
+
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.
