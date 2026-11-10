@@ -20,6 +20,7 @@ pub mod picture;
 mod proto;
 pub mod script;
 pub mod text;
+mod traverse;
 
 use pdfcraft_cos::Document;
 
