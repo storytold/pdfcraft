@@ -1441,9 +1441,13 @@ cargo run -p pdfcraft-collab-daemon --release -- \
    (§3.1.6);
    не разделяются подписи, custom stamp, redaction и вложения. Из
    структурных операций разделяются insert/duplicate/delete/move/rotate/
-   replace/blank insert (§3.1.4), split/combine (§3.1.5) и закладки с named
-   destinations (§3.1.7) и page labels (§3.1.8); не разделяется правка
-   содержимого страницы, слои, вложения, структура форм и ссылки. Combine в комнате шлёт по одной `page.combine`
+   replace/blank insert (§3.1.4), split/combine (§3.1.5), закладки с named
+   destinations (§3.1.7), page labels (§3.1.8) и ссылки (§3.1.9, включая remote
+   go-to); не разделяется правка содержимого страницы, слои, вложения и
+   структура форм. Из ссылок комната пока не умеет удалять все ссылки и
+   создавать их из адресов в тексте (`RemoveLinks`/`AddLinks` —
+   `unsupported`), а страница со ссылкой, действие которой модель не несёт
+   (JavaScript, Launch), отклоняется целиком. Combine в комнате шлёт по одной `page.combine`
    на часть списка, по порядку и одну за другой, и всё подтверждение — одна
    группа истории; часть, отклонённая `stale`, откатывает уже вошедшие части
    (STATUS §4, «The split part and several parts per Combine»).
