@@ -176,7 +176,7 @@ fn calculate_json(f: &FormField) -> Option<Value> {
     match (&f.actions.calculate, &f.actions.scripts.calculate) {
         (Calculate::Simple { op, fields }, _) => Some(json!({ "op": op_name(*op), "fields": fields })),
         (Calculate::Notation(n), _) => Some(json!({ "notation": n })),
-        (Calculate::None, Some(js)) => Some(json!({ "script": js })),
+        (Calculate::Custom(js), _) | (Calculate::None, Some(js)) => Some(json!({ "script": js })),
         (Calculate::None, None) => None,
     }
 }
@@ -208,13 +208,58 @@ fn kind_name(k: FormFieldKind) -> &'static str {
     }
 }
 
+/// A JSON number as the radio option it names: its integer spelling when it is a whole number
+/// (`1`, `1.0` and `1e0` are all `1`; `-0` is `0`), otherwise JSON's own spelling (`1.5`), which
+/// names only an option exported as exactly that text. A whole number at or past 2^53, where a
+/// float no longer holds every integer, keeps JSON's spelling too (`1e300`), so it names no option
+/// by accident.
+fn number_option(n: &serde_json::Number) -> String {
+    // Integers as parsed (u64, i64) print exactly.
+    if n.is_u64() || n.is_i64() {
+        return n.to_string();
+    }
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    match n.as_f64() {
+        // Finite, whole and below 2^53 in magnitude, so the cast is exact and in range.
+        Some(x) if x.is_finite() && x.fract() == 0.0 && x.abs() < EXACT => (x as i64).to_string(),
+        _ => n.to_string(),
+    }
+}
+
 /// A JSON value → the value for this field (booleans for check boxes, arrays for lists…).
 fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
     let wrong = |what: &str| ToolError::InvalidArgs(format!("{}: {what}", f.name));
     Ok(match (f.kind, v) {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
+        // {"widget": n} turns on button n (1-based, as form_fields numbers them) and never turns it
+        // off: radio buttons that share an on state stay exclusive (ISO 32000-2 Table 229).
+        (FormFieldKind::CheckBox | FormFieldKind::Radio, Value::Object(o)) => {
+            let n = o.get("widget").and_then(Value::as_u64).filter(|&n| n >= 1).ok_or_else(|| wrong("use {\"widget\": n} with n from 1"))?;
+            let i = usize::try_from(n - 1).map_err(|_| wrong("there is no such widget"))?;
+            if f.widgets.get(i).and_then(|w| w.on_state.as_ref()).is_none() {
+                return Err(wrong(&format!("there is no button {n} with an on state (the field has {})", f.widgets.len())));
+            }
+            FieldValue::Widget(i)
+        }
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
-        (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(s.clone())),
+        // An option as `form_fields` lists it (an export value) names its button's on state. The
+        // export values are matched first and the on-state names after them
+        // (`Field::state_for_export`): with `/Opt [(1) (2)]` and states `/0` `/1`, `1` is the first
+        // button, not the second one's state. A value matching neither is refused when written,
+        // with the options listed.
+        (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(f.state_for_export(s).unwrap_or(s).to_owned())),
+        // A number is the same option written without quotes (`1` for the export value `1`).
+        // Below 2^53 it is compared as a number with the export values first, so `1.0` names the button
+        // exported as `1.0` (`/Opt [(1.0) (2.0)]`, states `/0 /1`) and not the one whose state is
+        // `/1`; then as text, as a string would be.
+        (FormFieldKind::Radio, Value::Number(n)) => {
+            if let Some(state) = n.as_f64().and_then(|x| f.state_for_number(x)) {
+                FieldValue::Radio(Some(state.to_owned()))
+            } else {
+                let s = number_option(n);
+                FieldValue::Radio(Some(f.state_for_export(&s).map_or_else(|| s.clone(), str::to_owned)))
+            }
+        }
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
             a.iter().map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings"))).collect::<Result<_>>()?,
         ),
@@ -294,9 +339,41 @@ impl Automation {
                     }
                     FormFieldKind::Radio => {
                         o.insert("options".into(), json!((0..f.widgets.len()).filter_map(|i| f.export_of(i)).collect::<Vec<_>>()));
+                        // Buttons sharing an on state have the same value: which is on (1-based).
+                        o.insert(
+                            "on_widgets".into(),
+                            json!((0..f.widgets.len()).filter(|&i| f.widget_on(i)).map(|i| i.saturating_add(1)).collect::<Vec<_>>()),
+                        );
+                    }
+                    // A check box whose kids have different on states (ISO 32000-2 §12.7.5.2.3):
+                    // which one is ticked, and the names form_fill takes to tick each. One option
+                    // per distinct on state: kids sharing a state tick together (EXAMPLE 2), so
+                    // their `/Opt` exports are not separate choices. Exports name the options
+                    // unless two states share one (Table 230 allows it) or an export would tick
+                    // another state (form_fill reads a name as an on state first); then the
+                    // states do.
+                    FormFieldKind::CheckBox => {
+                        let mut seen = std::collections::HashSet::new();
+                        let states: Vec<&str> = f.widgets.iter().filter_map(|w| w.on_state.as_deref()).filter(|s| seen.insert(*s)).collect();
+                        if states.len() > 1 {
+                            let mut exports = std::collections::HashSet::new();
+                            let by_export = states.iter().all(|s| {
+                                let e = f.export_for_state(s);
+                                exports.insert(e) && f.state_for(e) == Some(*s)
+                            });
+                            let name = |s: &str| if by_export { f.export_for_state(s).to_owned() } else { s.to_owned() };
+                            // The ticked kid is the one whose `/AS` is its on state: §12.7.5.2.3
+                            // makes `/AS` decide where it and `/V` differ.
+                            let on = (0..f.widgets.len()).find(|&i| f.widget_on(i)).and_then(|i| f.widgets.get(i)?.on_state.as_deref());
+                            o.insert("options".into(), json!(states.iter().map(|s| name(s)).collect::<Vec<_>>()));
+                            o.insert("checked".into(), json!(on.map(name)));
+                        }
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());
+                        // The selected options as 1-based positions in `options`: two options can share
+                        // an export value, and `value` alone does not tell them apart.
+                        o.insert("selected".into(), json!(f.selected.iter().map(|i| i.saturating_add(1)).collect::<Vec<_>>()));
                         o.insert("multi_select".into(), json!(f.has(field_flags::MULTI_SELECT)));
                         o.insert("editable".into(), json!(f.has(field_flags::EDIT)));
                     }
