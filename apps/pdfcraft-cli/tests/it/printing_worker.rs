@@ -41,4 +41,12 @@ fn printer_worker_preserves_available_names_and_default() {
         let listed: Vec<_> = queues.into_iter().map(|(name, default)| serde_json::json!({"name": name, "default": default})).collect();
         assert_eq!(listed, expected);
     }
+    if let Some(printer) = answer["printers"].as_array().unwrap().iter().find(|p| p["two_sided"].is_boolean()) {
+        let capability = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+            .args(["--craft-printer-query", "two-sided", printer["name"].as_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(capability.status.success());
+        assert_eq!(serde_json::from_slice::<Option<bool>>(&capability.stdout).unwrap(), printer["two_sided"].as_bool());
+    }
 }

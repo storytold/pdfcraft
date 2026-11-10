@@ -13,9 +13,12 @@ use crate::{PdfCraftApp, widgets};
 
 mod body;
 mod draft;
+mod setups;
 
 pub(crate) use body::body;
-pub use draft::{Handling, PrintDraft, Which};
+pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
+pub use setups::PrinterSetup;
+pub(crate) use setups::{from_json as setups_from_json, to_json as setups_to_json};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
 const PREVIEW_W: f32 = 320.0;
@@ -25,7 +28,6 @@ pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PRE
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
 /// the UI thread); further pages print whole.
 pub(crate) const LABEL_CROP_PAGES: usize = 50;
-
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
 /// CUPS' driverless discovery can wait on the network. Without a source the dialog reads them as
 /// it opens, so tests stay deterministic.
@@ -69,6 +71,7 @@ pub(crate) struct PrintTasks {
     two_sided: spool::DuplexSession,
     #[cfg(not(target_arch = "wasm32"))]
     preferences: Vec<(String, std::sync::mpsc::Receiver<Result<(), String>>)>,
+
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -130,9 +133,10 @@ enum JobNews {
     Done(Result<String, String>),
 }
 
-/// The printer the dialog preselects: the system default, else the first.
-fn default_printer(printers: &[spool::Printer]) -> Option<String> {
-    printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone())
+/// The printer the dialog preselects: the one printed to last while it is listed (#2001), else
+/// the system default, else the first.
+fn default_printer(d: &PrintDraft, printers: &[spool::Printer]) -> Option<String> {
+    d.last_printer(printers).or_else(|| printers.iter().find(|p| p.default)).or(printers.first()).map(|p| p.name.clone())
 }
 
 /// Whether `printer` can still be chosen from `printers`: Save as PDF (`None`) always can.
@@ -169,21 +173,49 @@ impl PdfCraftApp {
             }
             _ => (listed_printers(), false),
         };
-        let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
-        let keep = std::mem::take(&mut self.print_draft);
+        let mut keep = std::mem::take(&mut self.print_draft);
+        // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
+        if keep.handling == Handling::Label {
+            keep.set_handling(Handling::Size);
+        }
+        let default = default_printer(&keep, &printers);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
-        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, a choice
-        // left over from another document falls back to the whole document.
-        let which = match (selected.is_empty(), keep.which) {
-            (false, _) => Which::Selected,
-            (true, Which::Selected) => Which::All,
-            (true, other) => other,
-        };
+        // A printer other than last time's brings back what it was last printed with (#2001);
+        // the same one keeps this session's choices.
+        let changed = printer != keep.printer;
+        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, the whole
+        // document.
+        let which = if selected.is_empty() { Which::All } else { Which::Selected };
+        // Copies, pages, the layout with its own options and orientation are this job's, and start
+        // from the defaults each time the dialog opens: ISO 32000-2 Table 147 initialises them per
+        // document when the print dialog opens (NumCopies, "typically 1"; PrintPageRange). The
+        // choices that describe how this computer prints (two-sided, grayscale, collate, sizing,
+        // Comments & forms, a booklet's binding) carry over, and are remembered across restarts
+        // (#2001).
+        let fresh = PrintDraft::default();
         self.print_draft = PrintDraft {
+            copies: fresh.copies,
+            range: fresh.range,
+            subset: fresh.subset,
+            reverse: fresh.reverse,
+            handling: fresh.handling,
+            per_sheet: fresh.per_sheet,
+            custom_grid: fresh.custom_grid,
+            cols: fresh.cols,
+            rows: fresh.rows,
+            order: fresh.order,
+            border: fresh.border,
+            auto_rotate: fresh.auto_rotate,
+            booklet_subset: fresh.booklet_subset,
+            poster_scale: fresh.poster_scale,
+            overlap: fresh.overlap,
+            cut_marks: fresh.cut_marks,
+            label_flip: fresh.label_flip,
+            orientation: fresh.orientation,
             crops: Vec::new(),
             crop_pages: None,
             printers,
@@ -197,6 +229,9 @@ impl PdfCraftApp {
             which,
             ..keep
         };
+        if changed {
+            self.print_draft.apply_setup();
+        }
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -342,13 +377,18 @@ impl PdfCraftApp {
                     // A picked printer that is no longer listed falls back to the default too.
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
+                        let printer = default_printer(d, &printers);
+                        if printer != d.printer {
+                            d.printer = printer;
+                            d.apply_setup();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;
                 }
             }
             self.poll_printer_preferences();
+
             self.poll_two_sided();
             let mut finished = Vec::new();
             self.print_tasks.jobs.retain_mut(|job| {
@@ -521,7 +561,8 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        match self.print_draft.printer.clone() {
+        let to_printer = self.print_draft.printer.is_some();
+        let sent = match self.print_draft.printer.clone() {
             #[cfg(target_arch = "wasm32")]
             Some(printer) if printer == crate::web_print::BROWSER_PRINTER => {
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
@@ -544,7 +585,12 @@ impl PdfCraftApp {
                 self.send_to_printer(printer, bytes, job)
             }
             None => self.save_print_pdf(&name, bytes),
+        };
+        // What this printer printed with is what it starts with next time (#2001).
+        if sent && to_printer {
+            self.print_draft.remember_setup();
         }
+        sent
     }
 
     /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
@@ -787,6 +833,18 @@ mod tests {
             draft.current_page = current;
             assert!(draft.settings(count, &labels).is_err());
         }
+    }
+
+    /// #5806: with Print as image, grayscale makes the pictures grey, so the job doesn't ask the
+    /// driver for it as well; a driver that keeps no grayscale setting then still prints.
+    #[test]
+    fn grey_pictures_dont_ask_the_driver_for_grayscale() {
+        let vector = PrintDraft { grayscale: true, ..PrintDraft::default() };
+        assert!(vector.job("a.pdf").grayscale, "vector pages: the driver makes them grey");
+        let pictures = PrintDraft { grayscale: true, as_image: true, ..PrintDraft::default() };
+        assert!(!pictures.job("a.pdf").grayscale, "grey pictures: nothing for the driver to do");
+        assert!(pictures.settings(1, &[]).unwrap().raster.is_some_and(|r| r.grayscale), "grey pictures: the pages are rendered grey");
+        assert!(!PrintDraft::default().job("a.pdf").grayscale);
     }
 
     #[test]
