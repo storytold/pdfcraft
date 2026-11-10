@@ -2,20 +2,24 @@
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
 - Base: `origin/main` `ba28458ad` ("M3: a password prompt keeps a place in the
-  open queue for its retry (#6731)", 2026-11-09). The pass's brief named
-  `d2139e58a`, the base of the previous rebase, but by the time the tree was
-  fetched `origin/main` had moved 204 commits further (139 files, +11 470/−374);
-  the branch was rebased onto the current tip instead, because the goal is an
-  empty `merge-tree` against `origin/main`. All **76 branch commits** were
+  open queue for its retry (#6731)", 2026-11-09), the tip the branch was rebased
+  onto. All **76 branch commits** were
   replayed with **four conflict stops in three files**
   (`crates/ui-egui/src/app.rs` twice, `crates/ui-egui/src/canvas.rs`,
   `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
-  them. The branch is 0 behind and
-  `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: `22d29d070` (feat: share a comment's
-  parts, a move and its geometry) on `be5ac3570` (docs(collab): reconcile
-  STATUS with PR #6622 and the cabinet HS256 image) on `3f3bbedb0` (docs:
-  record the cabinet HS256 auth pass and its gates) on `157f4d239` (feat:
+  them. `origin/main` has moved since: at this pass's start it was
+  `ca66667f3` ("fix: cap print dialog height to the screen…", 9 commits past the
+  base) and while the slice was built it advanced two more, to `a71b5124b`
+  ("M10 #5130: resolve Windows printer-default duplex before spooling
+  (#5180)"). The branch is **11 behind** `a71b5124b` and
+  `git merge-tree --write-tree origin/main HEAD` exits 0 at `0c57e2271`; no
+  rebase was done in this pass, so the base stays `ba28458ad`.
+- Local head before this STATUS commit: `0c57e2271` (feat: open, close and move
+  a comment's pop-up window as one operation) on `199076765` (docs(collab):
+  record the parts, move and geometry operations) on `22d29d070` (feat: share a
+  comment's parts, a move and its geometry) on `be5ac3570` (docs(collab):
+  reconcile STATUS with PR #6622 and the cabinet HS256 image) on `3f3bbedb0`
+  (docs: record the cabinet HS256 auth pass and its gates) on `157f4d239` (feat:
   accept the cabinet's HS256 session tickets next to RS256) on `b27fa89c8`
   (docs: record the split part and the ordered Combine confirmation) on
   `843a8f533` (feat: keep a split's part and join Combine as ordered parts) on
@@ -26,26 +30,31 @@
   on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
   `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
   `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
-  clippy complexity limit) — **84 commits** on `ba28458ad`
-  (`git rev-list --count origin/main..HEAD`), 0 behind and 4 ahead of the PR
-  head. Commits named below and
+  clippy complexity limit) — **86 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD` at `0c57e2271`), **11 behind** and
+  **6 ahead** of the PR head; this STATUS commit makes 87. The numbers the
+  brief named — 85 commits, 9 behind, 5 ahead — were right for `199076765`
+  against `ca66667f3`; `origin/main` then advanced two commits and the slice
+  added one. Commits named below and
   in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
 - PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
   2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the two local commits above it — the
-  cabinet's HS256 tickets (`157f4d239`) and their record (`3f3bbedb0`) — are not
-  in it, which is exactly the 2-commit gap. `UNSTABLE` is the CI rollup, not a
-  conflict: the branch is 0 behind `origin/main` and
-  `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was pushed
-  from these sessions: only the owner's force-push moves the PR, and
+  through the Split/Combine record; the seven local commits above it are in it
+  only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
+  and their record (`3f3bbedb0`), the parts/move/geometry operation
+  (`22d29d070`) and its record (`199076765`), and this pass's pop-up operation
+  (`0c57e2271`) and its record (this STATUS commit). `UNSTABLE` is
+  the CI rollup, not a
+  conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
+  pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `22d29d070` (the HS256 crates' gates were run
-  at `157f4d239`; the parts/move/geometry operations' gates at `22d29d070`,
-  §4).
+  §4 are green at the local head `0c57e2271` (the HS256 crates' gates were run
+  at `157f4d239`; the parts/move/geometry operations' gates at `22d29d070`;
+  the pop-up window's at `0c57e2271`, §4).
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -59,7 +68,8 @@
   plus one Combine confirmation as ordered parts (`843a8f533`, §4), and the
   cabinet's HS256 session tickets next to RS256 (`157f4d239`, §4), and a
   comment's parts, a move, a resize and a reshape as addressable operations
-  (`22d29d070`, §4). The whole
+  (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4). The
+  whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table).
 - Known gaps before production are listed in §5, the plan in §6. The one this
@@ -1175,7 +1185,7 @@ Tests:
 |---|---|
 | `collab-annot` | `a_parts_update_round_trips_and_refuses_a_part_the_comment_has_not` (0–1, unknown part, a rectangle's text, the before and the CAS), `a_geometry_update_round_trips_a_rect_and_refuses_a_bad_one` (corner order, under 1 pt, non-finite, a note and a callout without a text box), `a_geometry_update_round_trips_points_and_a_measurement_keeps_its_own` (line/polygon/callout counts, a Dimension, the CAS), `a_move_round_trips_and_keeps_text_markup_in_place` (dx/dy, the `/Rect` before and after, markup and a Replace caret refused) |
 | `collab-pdf` | `a_parts_update_sets_the_fill_and_text_opacities_and_undoes_as_one_operation` (before, replay on a fresh replica, a rectangle's text refused with the version unmoved, a stale undo a conflict), `a_move_and_a_resize_are_addressable_and_undo_with_a_compare_and_set` (before/after, replay, a stranger's drag blocks the undo, the resize undone from `before`/`after`), `a_reshape_sets_the_points_of_a_line_and_refuses_a_comment_without_them` (points, a rectangle refused, a stale undo, replay) |
-| `collab-client-pdf` | `a_mixed_properties_batch_becomes_one_operation_per_kind` (style → parts → font size → info → move → geometry; a two-comment batch is one group per comment; a batch with `SetAnnotationPopup` refused whole), `a_parts_update_and_a_move_round_trip_two_replicas` (accepted op applied on both, undo applied on both, a note's resize builds no operation), `a_resize_and_a_reshape_round_trip_two_replicas` |
+| `collab-client-pdf` | `a_mixed_properties_batch_becomes_one_operation_per_kind` (style → parts → font size → info → move → geometry; a two-comment batch is one group per comment; a style + pop-up group; a batch with `LockAnnotation` refused whole), `a_parts_update_and_a_move_round_trip_two_replicas` (accepted op applied on both, undo applied on both, a note's resize builds no operation), `a_resize_and_a_reshape_round_trip_two_replicas` |
 | `collab-ws` e2e | `two_clients_change_parts_and_move_a_comment_and_undo_them` (both replicas, the undo's `expect` from the accepted op, a note's resize and a text box's points refused with the version unmoved), `two_clients_resize_and_reshape_a_comment_and_undo_them` |
 
 Gates at `22d29d070` (host `agents`, rustc 1.99.1, `-j 4`/`-j 8`/`-j 12` per
@@ -1196,10 +1206,81 @@ source changed — the dialog's `PartOpacity` arm and the drag's
 `MoveAnnotation`/`ResizeAnnotation`/`ReshapeAnnotation` were already in
 `ops_for_edit`'s reach; clippy with the feature compiles them); a callout's
 resize is the frame the interface names, and a comment whose `/RD` or
-appearance cannot be read is refused rather than guessed; the pop-up window
-(`Edit::SetAnnotationPopup`), signatures, custom stamps, redaction marks and
-attachments are still refused; and nothing was run against a real cabinet or in
+appearance cannot be read is refused rather than guessed; signatures, custom
+stamps, redaction marks and
+attachments are still refused (the pop-up window was shared afterwards,
+`0c57e2271`, below); and nothing was run against a real cabinet or in
 a browser.
+
+### A comment's pop-up window — §5 p.2 / limitation 2 (2026-11-10, local; not pushed)
+
+`0c57e2271` on `199076765`. This closes the last edit inside a comment: the
+note window's place and open state are an addressable operation now, so the
+room refuses no edit of an existing comment as a whole any more.
+
+- **`annotation.popup`** (`{"action":"annotation.popup","popup":{"rect":[80,
+  130,280,250],"open":true},"expect":{"open":false}}`) sets the final place
+  (`rect`, the `/Rect` of the comment's `/Popup` annotation, corners ordered, at
+  least 1 pt on a side) and the open state (`open`, `/Open`) of its own window —
+  one addressable `merge`-class operation over `Edit::SetAnnotationPopup`
+  (`pdfcraft_annot::set_popup`). A field left out stays as it is. A comment
+  without a `/Popup` gets one beside it, so opening a highlight's or a
+  rectangle's note window is this operation, not client-only state.
+- A text box (it draws no window), a Fill & Sign mark and a reply (`/IRT`,
+  shown in its parent's window) are refused `invalid` **before** anything
+  changes: no journal line, no version step, and the request is answered only
+  to its sender. The comment's lock does not apply — the window's place and
+  state are not the comment, as in the engine.
+- The accepted operation carries `popup`, `before` (the state the update
+  replaced, for exactly the fields it names; `null` when the comment had no
+  window) and `after` (what the document reads after the edit: the place a new
+  window gets is the engine's). The undo is a normal operation built from the
+  accepted one (`inverse_after`), `popup = before`, `expect = after`; a
+  stranger's move or open since the edit is `conflict` (`retryable: false`) and
+  their place stays. A window the open itself created has no state to restore:
+  its undo closes it where it was created, because the engine has no edit that
+  removes a `/Popup` — the one approximation of this operation, stated in the
+  RFC (§3.1.6).
+- `Props` now reports the comment's own `/Popup` (`popup`), a Fill & Sign mark
+  (`fill_sign`) and a reply (`reply`), so `check_for` can refuse before mutation
+  (`crates/annot/src/info.rs`); `collab-annot` gained `PopupUpdate` (the
+  intent) and `PopupState` (the accepted operation's `before`/`after`), with the
+  usual `check_for`/`before`/`still_matches`. The client projection maps
+  `Edit::SetAnnotationPopup` both alone and inside a Comment Properties group
+  (style → parts → font size → info → move → geometry → window) and builds the
+  undo from the accepted operation. UI code needed no change: the comment
+  tool's close, open and title-bar drag already send `Edit::SetAnnotationPopup`
+  (and `one_page_changed` already skips its raster), so the operation is reached
+  through the existing edit.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-annot` | `a_popup_update_round_trips_and_refuses_a_comment_without_a_window` (parse/serialize, corner order, under 1 pt, unknown keys, an empty update; a note, a text box, a reply and a Fill & Sign mark; the `before` of only the named fields, and the CAS on both fields, including no window at all) |
+| `collab-pdf` | `a_popup_window_is_opened_moved_and_undone_with_a_compare_and_set` (an open with `before`, a move with `before`/`after`, replay on a fresh replica, a window created on a rectangle with `before: null`, a text box refused with the version unmoved and nothing changed, a stranger's drag blocking the undo, the undo of the creation closing it) |
+| `collab-client-pdf` | `a_popup_window_round_trips_two_replicas` (the accepted open and move applied on both replicas, the undo from `inverse_after` on both, the creation closed on both, a text box building no operation and leaving the other replica untouched), `a_mixed_properties_batch_becomes_one_operation_per_kind` (a style + open group on one comment; the refused batch now uses `LockAnnotation`, which still has no operation) |
+| `collab-ws` e2e | `two_clients_open_and_move_a_comment_window_and_undo_it` (both replicas converge on the open and on the move, the undo's `expect` and `popup` from the accepted operation, a text box's window refused with the version unmoved) |
+
+Gates at `0c57e2271` (host `agents`, rustc 1.99.1, `-j 12` for the compile
+steps):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list, plus `-p pdfcraft-annot` (the crate whose `Props` grew) | pass — **448** (annot 194, proto 12, server 29 + bin 34, hub 5, client 13, client-pdf 38, session 5, ws 14 unit, pdf 51, collab-annot 23, daemon 3 + e2e 27) |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **27/27** (one new) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+
+What this does **not** cover: the full `ui-egui` suite was not re-run (no UI
+source changed; clippy with the feature compiles it and the edit was already on
+the comment tool's path); `cargo xtask assets` and the wasm check were not run
+in this pass (no asset and no new dependency); a window's rectangle travels as
+`f32` in `Props`, so an undo can differ from the original `/Rect` by well under
+0.001 pt; and nothing was run against a real cabinet or in a browser.
 
 ### Page insert and duplicate — §5 p.3 (2026-11-09, local; not pushed)
 
@@ -2122,13 +2203,20 @@ Ordered by the risk they pose to production.
    `annotation.parts`, `annotation.move` and `annotation.geometry` share a
    comment's fill and text opacities, its move, its resize and the points of a
    line or polygon (`22d29d070`, §4), each as its own operation with the same
-   compare-and-set undo. A Comment Properties batch or a group drag that
+   compare-and-set undo; and `annotation.popup` (`0c57e2271`, §4) opens, closes
+   or moves the comment's own pop-up window, with the same undo — the last edit
+   inside a comment the room had no operation for. A Comment Properties batch or
+   a group drag that
    carries them is no longer refused whole: it becomes one group of operations
    per comment. Drawn and
    typed signatures, custom stamps, redaction marks and attachments are still
-   refused with `unsupported` (RFC §3.1.1). What is still not shared inside a
-   comment: the pop-up window (`Edit::SetAnnotationPopup`) is the one edit the
-   room has no operation for (RFC §3.1.6, §13 p.7).
+   refused with `unsupported` (RFC §3.1.1). Nothing an edit inside a comment
+   can change is left unshared: what remains outside the wire is the shape and
+   style of other comment types, not an edit of an existing one. A window the
+   open itself created has no state to restore (`before` is `null`), so its undo
+   closes it where the open put it — the engine has no edit that removes a
+   `/Popup`, and the window's place is view state, not document content (RFC
+   §3.1.6).
 3. **Structural coverage.** Page rotate, move, delete and restore, insert and
    duplicate (§4, `b13933e9b`), replace and blank insert
    (`e9756d138`, §4, RFC §3.1.4), and now split and combine
@@ -2320,10 +2408,13 @@ undo. **Done since (`22d29d070`, §4):** a comment's fill and text opacities
 (`annotation.parts`), its move (`annotation.move`), its resize and the points
 of a line or polygon (`annotation.geometry`), each with a compare-and-set undo,
 and a Comment Properties batch or a group drag folded into one group of
-operations per comment. What is still open here: the same typed envelope for
-`AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
-would need the blob channel), and the pop-up window (`Edit::SetAnnotationPopup`),
-which has no operation yet.
+operations per comment. **Done since (`0c57e2271`, §4):** the comment's pop-up
+window (`annotation.popup`) — its place and its open state, with the same
+compare-and-set undo; a comment without a window of its own gets one beside it,
+and the undo of that creation closes it where the open put it (RFC §3.1.6).
+What is still open here: the same typed envelope for `AddCustomStamp` if the
+cabinet ever needs it (it references an XObject, so it would need the blob
+channel).
 
 ### 6.3 Web host bridge — done in this branch (local, not pushed)
 
