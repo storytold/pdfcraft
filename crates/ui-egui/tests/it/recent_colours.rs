@@ -43,6 +43,38 @@ fn recent_colours_survive_a_restart() {
 }
 
 #[test]
+fn colours_picked_after_a_restart_are_kept_and_saved() {
+    let (pink, blue, green) = ([0.96, 0.42, 0.71], [0.25, 0.55, 0.95], [0.3, 0.8, 0.4]);
+    let h = harness(None);
+    remember_custom_colour(&h.ctx, pink);
+    remember_custom_colour(&h.ctx, blue);
+    let mut again = harness(Some(h.state().persist()));
+    // A new pick goes first and later frames don't put the restored row back over it.
+    remember_custom_colour(&again.ctx, green);
+    again.run_steps(3);
+    let recent = recent_custom_colours(&again.ctx);
+    assert!(recent.len() == 3 && near(recent[0], green) && near(recent[1], blue) && near(recent[2], pink), "{recent:?}");
+    // Picking a restored colour again moves it first, once.
+    remember_custom_colour(&again.ctx, pink);
+    again.run_steps(3);
+    let recent = recent_custom_colours(&again.ctx);
+    assert!(recent.len() == 3 && near(recent[0], pink) && near(recent[1], green) && near(recent[2], blue), "{recent:?}");
+    // And that is what is saved.
+    let saved: serde_json::Value = serde_json::from_str(&again.state().persist()).unwrap();
+    assert_eq!(saved["recent_colours"].as_array().map(Vec::len), Some(3));
+    assert_eq!(recent_custom_colours(&harness(Some(again.state().persist())).ctx), recent);
+}
+
+#[test]
+fn a_colour_that_clamps_to_a_swatch_is_not_a_recent_colour() {
+    let h = harness(None);
+    // Black and Red are swatches, the first only once clamped.
+    remember_custom_colour(&h.ctx, [-1.0, 0.0, 0.0]);
+    remember_custom_colour(&h.ctx, [0.89, 0.13, 0.13]);
+    assert!(recent_custom_colours(&h.ctx).is_empty(), "{:?}", recent_custom_colours(&h.ctx));
+}
+
+#[test]
 fn saved_recent_colours_are_untrusted() {
     // Entries that are not three finite numbers are dropped, values are clamped, a repeat is
     // kept once, and only the five newest usable colours stay.
@@ -65,6 +97,17 @@ fn saved_recent_colours_are_untrusted() {
     assert!(near(recent[1], [0.1, 0.2, 0.3]), "kept once: {recent:?}");
     assert_eq!(recent.iter().filter(|c| near(**c, [0.1, 0.2, 0.3])).count(), 1);
     assert!(recent.iter().flatten().all(|v| (0.0..=1.0).contains(v)));
+
+    // Swatches are not repeated in the row, from settings either.
+    let saved = serde_json::json!({ "recent_colours": [[0.0, 0.0, 0.0], [0.2, 0.4, 0.6], [0.89, 0.13, 0.13]] }).to_string();
+    let recent = recent_custom_colours(&harness(Some(saved)).ctx);
+    assert!(recent.len() == 1 && near(recent[0], [0.2, 0.4, 0.6]), "no swatches: {recent:?}");
+
+    // Only the first 64 entries are read: usable colours after them are not.
+    let mut list = vec![serde_json::json!("x"); 64];
+    list.push(serde_json::json!([0.2, 0.4, 0.6]));
+    let saved = serde_json::json!({ "recent_colours": list }).to_string();
+    assert!(recent_custom_colours(&harness(Some(saved)).ctx).is_empty(), "read up to a bound");
 
     // A settings file of another shape leaves the row empty and doesn't fail.
     for odd in [r#"{"recent_colours": "red"}"#, r#"{"recent_colours": {"0": [1, 0, 0]}}"#, r#"{"recent_colours": null}"#] {

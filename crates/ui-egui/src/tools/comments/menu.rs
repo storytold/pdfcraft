@@ -222,10 +222,14 @@ pub fn remember_custom_colour(ctx: &egui::Context, c: Rgb) {
 
 /// Put `c` first in `recent`, under [`remember_custom_colour`]'s rules.
 fn push_recent(recent: &mut Vec<Rgb>, c: Rgb) {
-    if !c.iter().all(|v| v.is_finite()) || SWATCHES.iter().any(|(_, s)| same_colour(s, &c)) {
+    if !c.iter().all(|v| v.is_finite()) {
         return;
     }
+    // Clamped first, so a colour that clamps to a swatch is that swatch.
     let c = c.map(|v| v.clamp(0.0, 1.0));
+    if SWATCHES.iter().any(|(_, s)| same_colour(s, &c)) {
+        return;
+    }
     recent.retain(|r| !same_colour(r, &c));
     recent.insert(0, c);
     recent.truncate(RECENT_CUSTOM);
