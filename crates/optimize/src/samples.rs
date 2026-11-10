@@ -37,12 +37,16 @@ pub enum NotDecoded {
     BitDepth(i64),
     #[error("its decode array remaps the samples")]
     Decode,
-    #[error("it is compressed in a format PdfCraft cannot read back yet (JBIG2 or CCITT fax)")]
+    #[error("it is compressed in a format PdfCraft cannot read back yet (JBIG2, CCITT fax, or JPEG 2000 behind another filter)")]
     Filter,
     #[error("its JPEG colour transform is ambiguous, so readers may disagree about its colours")]
     Ambiguous,
     #[error("it is larger than 80 million pixels")]
     TooLarge,
+    #[error("it is a JPEG 2000 image too large to read here (more than 40 million pixels, or more tiles than a real image has)")]
+    JpxTooLarge,
+    #[error("it has an alpha channel (transparency stored in the JPEG 2000 data), which a JPEG cannot keep")]
+    Alpha,
     #[error("its data could not be decoded, or is shorter than its size says")]
     Corrupt,
 }
@@ -108,93 +112,158 @@ fn is_jpx(s: &Stream) -> bool {
     }
 }
 
-/// The samples of a JPEG 2000 image: 8-bit grey or RGB without an alpha channel, whose size is the
-/// dictionary's. Written back as a JPEG, since the pages' scans are JPEG 2000 only for size and
-/// PdfCraft has no JPEG 2000 encoder.
+/// The most pixels a JPEG 2000 image is read at: half of what other images may have, because its
+/// decoder holds every sample as a float (about ten bytes a sample at its peak).
+const JPX_MAX_PIXELS: u64 = MAX_PIXELS / 2;
+
+/// The samples of a JPEG 2000 image: 8-bit grey or RGB without an alpha channel or a palette,
+/// whose size is the dictionary's. Written back as a JPEG, since the pages' scans are JPEG 2000
+/// only for size and PdfCraft has no JPEG 2000 encoder.
+///
+/// What the decoder cannot be trusted with is refused from the data's own header before it sees
+/// any of it ([`jpx_head`]), and a panic inside it is that image's corrupt data, not the caller's
+/// crash. The header checks come first because a browser build cannot catch a panic.
 fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Samples, NotDecoded> {
-    use hayro_jpeg2000::{ColorSpace, DecodeSettings, Image};
-    let d = &s.dict;
-    // The data's colour space is the image's unless the dictionary names one, which must agree.
-    let image = Image::new(&s.raw, &DecodeSettings::default()).map_err(|_| NotDecoded::Corrupt)?;
-    let (width, height) = (image.width(), image.height());
-    if width == 0 || height == 0 {
-        return Err(NotDecoded::Corrupt);
-    }
-    let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_PIXELS {
-        return Err(NotDecoded::TooLarge);
-    }
-    // The decoder makes a structure a tile before it reads any: a tile index is 16 bits, so more
-    // tiles than that are no real image, only a small file asking for a great deal of memory.
-    if jpx_tiles(&s.raw).is_none_or(|t| t > u64::from(u16::MAX)) {
-        return Err(NotDecoded::TooLarge);
-    }
-    let n = match image.color_space() {
-        ColorSpace::Gray => 1,
-        ColorSpace::RGB => 3,
-        _ => return Err(NotDecoded::ColourSpace),
-    };
-    if image.has_alpha() || image.original_bit_depth() > 8 {
-        return Err(NotDecoded::BitDepth(i64::from(image.original_bit_depth())));
-    }
-    if d.get(b"ColorSpace").is_some_and(|cs| components(doc, cs) != Some(n)) {
+    let head = jpx_head(&s.raw).ok_or(NotDecoded::Corrupt)?;
+    // A palette makes it an indexed image, and the decoder does not check a palette against the
+    // colour space it goes with.
+    if head.palette {
         return Err(NotDecoded::ColourSpace);
     }
-    let dict_side = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_int());
-    if [(b"Width".as_slice(), width), (b"Height", height)].iter().any(|(k, v)| dict_side(k).is_some_and(|x| x != i64::from(*v))) {
-        return Err(NotDecoded::Corrupt);
+    let n = match head.components {
+        1 => 1,
+        3 => 3,
+        // Grey or RGB with one more channel.
+        2 | 4 => return Err(NotDecoded::Alpha),
+        _ => return Err(NotDecoded::ColourSpace),
+    };
+    // The decoder makes a structure for every component of every tile before it reads one: a tile
+    // index is 16 bits, so more tiles than that are no real image, only a small file asking for a
+    // great deal of memory.
+    if head.tiles > u64::from(u16::MAX) {
+        return Err(NotDecoded::JpxTooLarge);
+    }
+    // The size is the dictionary's, which the data must agree with: the rewritten image needs it.
+    let d = &s.dict;
+    let side = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).and_then(|v| u32::try_from(v).ok()).filter(|v| *v > 0);
+    let (Some(width), Some(height)) = (side(b"Width"), side(b"Height")) else { return Err(NotDecoded::Corrupt) };
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > JPX_MAX_PIXELS {
+        return Err(NotDecoded::JpxTooLarge);
+    }
+    let named = d.get(b"ColorSpace").map(|cs| components(doc, cs));
+    if named.is_some_and(|c| c != Some(n)) {
+        return Err(NotDecoded::ColourSpace);
     }
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n)) {
         return Err(NotDecoded::Decode);
     }
-    if !budget.pay_pixels(pixels.saturating_mul(n as u64)) {
+    let read = || jpx_decode(&s.raw, (width, height), n, named.is_some(), budget);
+    // The budget is spent whether or not the decoder panics, and nothing else is shared with it.
+    let data = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or(Err(NotDecoded::Corrupt))?;
+    Ok(Samples { width, height, components: n, data, jpeg: true, bilevel: false, inverted: false })
+}
+
+/// The decoder's part of [`jpx_samples`]: `raw` as `size` pixels of `n` 8-bit components.
+/// `named` is whether the image dictionary names the colour space.
+fn jpx_decode(raw: &[u8], size: (u32, u32), n: usize, named: bool, budget: &mut ImageBudget) -> Result<Vec<u8>, NotDecoded> {
+    use hayro_jpeg2000::{ColorSpace, DecodeSettings, Image};
+    let image = Image::new(raw, &DecodeSettings::default()).map_err(|_| NotDecoded::Corrupt)?;
+    if (image.width(), image.height()) != size {
+        return Err(NotDecoded::Corrupt);
+    }
+    let channels = match image.color_space() {
+        ColorSpace::Gray => 1,
+        ColorSpace::RGB => 3,
+        // A colour space the dictionary names is the image's, and the data's own profile is
+        // ignored (ISO 32000-2, 8.9.5.1): the samples are read as they are. With no name in the
+        // dictionary the profile is the only word on the colours, and a JPEG could not carry it.
+        ColorSpace::Icc { num_channels, .. } if named => usize::from(*num_channels),
+        _ => return Err(NotDecoded::ColourSpace),
+    };
+    if channels != n {
+        return Err(NotDecoded::ColourSpace);
+    }
+    if image.has_alpha() {
+        return Err(NotDecoded::Alpha);
+    }
+    if image.original_bit_depth() > 8 {
+        return Err(NotDecoded::BitDepth(i64::from(image.original_bit_depth())));
+    }
+    let samples = u64::from(size.0).saturating_mul(u64::from(size.1)).saturating_mul(n as u64);
+    if !budget.pay_jpeg(samples, raw) {
         return Err(NotDecoded::TooLarge);
     }
     let data = image.decode().map_err(|_| NotDecoded::Corrupt)?;
-    if Some(data.len()) != usize::try_from(pixels).ok().and_then(|p| p.checked_mul(n)) {
+    if u64::try_from(data.len()).ok() != Some(samples) {
         return Err(NotDecoded::Corrupt);
     }
-    Ok(Samples { width, height, components: n, data, jpeg: true, bilevel: false, inverted: false })
+    Ok(data)
 }
 
 /// The first two markers of a JPEG 2000 codestream: SOC, then SIZ.
 const JPX_CODESTREAM: [u8; 4] = [0xff, 0x4f, 0xff, 0x51];
 
-/// How many tiles the codestream `cs` says it has, from its SIZ segment: the image's far corner,
-/// less the tile grid's origin, over the tile size.
-fn codestream_tiles(cs: &[u8]) -> Option<u64> {
+/// What JPEG 2000 data says of itself, read without the decoder.
+#[derive(Debug, PartialEq, Eq)]
+struct JpxHead {
+    /// The most tiles and components a codestream has.
+    tiles: u64,
+    components: u16,
+    /// A JP2 file with a palette (`pclr`) box.
+    palette: bool,
+}
+
+/// The tiles and components the codestream `cs` says it has, from its SIZ segment: the image's
+/// far corner, less the tile grid's origin, over the tile size; and `Csiz` after those.
+fn codestream_head(cs: &[u8]) -> Option<(u64, u16)> {
     if !cs.starts_with(&JPX_CODESTREAM) {
         return None;
     }
     let word = |i: usize| Some(u64::from(u32::from_be_bytes(cs.get(8 + 4 * i..12 + 4 * i)?.try_into().ok()?)));
     let along = |end: u64, tile: u64, origin: u64| (tile > 0 && end > origin).then(|| (end - origin).div_ceil(tile));
-    along(word(0)?, word(4)?, word(6)?)?.checked_mul(along(word(1)?, word(5)?, word(7)?)?)
+    let tiles = along(word(0)?, word(4)?, word(6)?)?.checked_mul(along(word(1)?, word(5)?, word(7)?)?)?;
+    Some((tiles, u16::from_be_bytes(cs.get(40..42)?.try_into().ok()?)))
 }
 
-/// The most tiles a codestream of the JPEG 2000 data `raw` says it has: `raw` itself when it is a
-/// bare codestream, else every `jp2c` box of the JP2 file, found by walking its boxes as the
-/// decoder does (it reads each one), not by looking for the markers, which other boxes may hold.
-fn jpx_tiles(raw: &[u8]) -> Option<u64> {
-    if raw.starts_with(&JPX_CODESTREAM) {
-        return codestream_tiles(raw);
-    }
-    let (mut at, mut most) = (0usize, None);
-    while let Some(head) = raw.get(at..at.checked_add(8)?) {
-        let length = u32::from_be_bytes(head.get(..4)?.try_into().ok()?);
-        // A length of 0 is "to the end of the file" and of 1 "in the next eight bytes".
-        let (start, end) = match length {
-            0 => (at + 8, raw.len()),
-            1 => (at.checked_add(16)?, at.checked_add(usize::try_from(u64::from_be_bytes(raw.get(at + 8..at + 16)?.try_into().ok()?)).ok()?)?),
+/// The boxes of JP2 data, as (type, contents), read as the decoder reads them. A length of 0 is
+/// "to the end of the data" and of 1 "in the next eight bytes"; a box that does not fit ends it.
+fn jp2_boxes(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    let mut at = 0usize;
+    std::iter::from_fn(move || {
+        let head = data.get(at..at.checked_add(8)?)?;
+        let (start, end) = match u32::from_be_bytes(head.get(..4)?.try_into().ok()?) {
+            0 => (at + 8, data.len()),
+            1 => (at.checked_add(16)?, at.checked_add(usize::try_from(u64::from_be_bytes(data.get(at + 8..at + 16)?.try_into().ok()?)).ok()?)?),
             n => (at + 8, at.checked_add(usize::try_from(n).ok()?)?),
         };
-        // A box that does not fit ends the file, for the decoder too.
-        let Some(data) = raw.get(start..end) else { break };
-        if head.get(4..) == Some(b"jp2c") {
-            most = most.max(Some(codestream_tiles(data)?));
-        }
+        let body = data.get(start..end)?;
         at = end;
+        Some((head.get(4..)?, body))
+    })
+}
+
+/// [`JpxHead`] of the JPEG 2000 data `raw`: `raw` itself when it is a bare codestream, else every
+/// `jp2c` box of the JP2 file (the decoder reads each one), found by walking its boxes, not by
+/// looking for the markers, which other boxes may hold. `None` when there is no codestream.
+fn jpx_head(raw: &[u8]) -> Option<JpxHead> {
+    if raw.starts_with(&JPX_CODESTREAM) {
+        let (tiles, components) = codestream_head(raw)?;
+        return Some(JpxHead { tiles, components, palette: false });
     }
-    most
+    let (mut most, mut palette) = (None, false);
+    for (kind, body) in jp2_boxes(raw) {
+        match kind {
+            b"jp2c" => {
+                let (tiles, components) = codestream_head(body)?;
+                let (t, c) = most.unwrap_or((0, 0));
+                most = Some((tiles.max(t), components.max(c)));
+            }
+            b"jp2h" => palette |= jp2_boxes(body).any(|(kind, _)| kind == b"pclr"),
+            _ => {}
+        }
+    }
+    most.map(|(tiles, components)| JpxHead { tiles, components, palette })
 }
 
 /// `[1 0]`: a bi-level image whose 1 bits are black.
@@ -264,6 +333,8 @@ pub fn encode_samples(old: &Stream, samples: &Samples, quality: u8) -> Option<St
         d.remove(k);
     }
     // A JPEG 2000 image may leave its colour space to the data: the new encoding needs it said.
+    // The data's sRGB or greyscale becomes the device space, which is how a reader without colour
+    // management shows it, not the same space by name.
     if d.get(b"ColorSpace").is_none() {
         d.set(b"ColorSpace".to_vec(), Object::name(if n == 1 { "DeviceGray" } else { "DeviceRGB" }));
     }
@@ -466,19 +537,82 @@ mod tests {
         // 1024 × 1024 in tiles of one pixel: a million tiles, refused before any is made.
         let mut tiled = jpx_codestream(1);
         tiled[8..16].copy_from_slice(&[0, 0, 4, 0, 0, 0, 4, 0]);
-        assert_eq!(jpx_tiles(&tiled), Some(1 << 20));
-        assert_eq!(decode_samples(&doc(), &image(&[("Filter", Object::name("JPXDecode"))], tiled.clone()), &mut budget()), Err(NotDecoded::TooLarge));
+        assert_eq!(jpx_head(&tiled).map(|h| h.tiles), Some(1 << 20));
+        d[1] = ("Width", Object::Int(1024));
+        d[2] = ("Height", Object::Int(1024));
+        assert_eq!(decode_samples(&doc(), &image(&d, tiled.clone()), &mut budget()), Err(NotDecoded::JpxTooLarge));
         // In a JP2 file the codestream is its `jp2c` box, not the first place the markers show up:
         // a small one tucked into another box does not hide the tiles of the real one.
         let boxed = |kind: &[u8; 4], data: &[u8]| [&(data.len() as u32 + 8).to_be_bytes()[..], kind, data].concat();
         let mut jp2 = boxed(b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]);
         jp2.extend(boxed(b"free", &jpx_codestream(1)));
         jp2.extend(boxed(b"jp2c", &tiled));
-        assert_eq!(jpx_tiles(&jp2), Some(1 << 20));
-        assert_eq!(jpx_tiles(&boxed(b"free", &tiled)), None, "no codestream box");
-        assert_eq!(jpx_tiles(&[&[0u8][..], &tiled].concat()), None, "a bare codestream starts with its markers");
+        assert_eq!(jpx_head(&jp2).map(|h| h.tiles), Some(1 << 20));
+        assert_eq!(jpx_head(&boxed(b"free", &tiled)), None, "no codestream box");
+        assert_eq!(jpx_head(&[&[0u8][..], &tiled].concat()), None, "a bare codestream starts with its markers");
         // Out of budget.
-        let s = image(&[("Filter", Object::name("JPXDecode"))], jpx_codestream(1));
-        assert_eq!(decode_samples(&doc(), &s, &mut ImageBudget::with_work(0)), Err(NotDecoded::TooLarge));
+        let one = [("Filter", Object::name("JPXDecode")), ("Width", Object::Int(1)), ("Height", Object::Int(1))];
+        assert_eq!(decode_samples(&doc(), &image(&one, jpx_codestream(1)), &mut ImageBudget::with_work(0)), Err(NotDecoded::TooLarge));
+        // The size is the dictionary's: without it the rewritten image would have none.
+        assert_eq!(decode_samples(&doc(), &image(&one[..2], jpx_codestream(1)), &mut budget()), Err(NotDecoded::Corrupt));
+        // More than 40 million pixels is refused from the dictionary, before the decoder is asked.
+        let huge = [one[0].clone(), ("Width", Object::Int(8944)), ("Height", Object::Int(8944))];
+        assert_eq!(decode_samples(&doc(), &image(&huge, jpx_codestream(3)), &mut budget()), Err(NotDecoded::JpxTooLarge));
+    }
+
+    /// A JP2 file: the signature and file type boxes, a header box of `header` boxes, and the
+    /// codestream.
+    fn jp2(header: &[Vec<u8>], codestream: &[u8]) -> Vec<u8> {
+        let boxed = |kind: &[u8; 4], data: &[u8]| [&(data.len() as u32 + 8).to_be_bytes()[..], kind, data].concat();
+        [boxed(b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]), boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "), boxed(b"jp2h", &header.concat()), boxed(b"jp2c", codestream)]
+            .concat()
+    }
+
+    fn jp2_box(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        [&(data.len() as u32 + 8).to_be_bytes()[..], kind, data].concat()
+    }
+
+    /// What the JPEG 2000 decoder is not to be handed is refused from the data's own header, with
+    /// a reason, before it is decoded (#6811 review: these panicked in the decoder or asked it for
+    /// memory without bound).
+    #[test]
+    fn jpeg_2000_data_the_decoder_cannot_be_trusted_with_is_refused_from_its_header() {
+        let budget = || ImageBudget::with_work(u64::MAX);
+        let one = [("Filter", Object::name("JPXDecode")), ("Width", Object::Int(1)), ("Height", Object::Int(1))];
+        let read = |raw: Vec<u8>| decode_samples(&doc(), &image(&one, raw), &mut budget());
+        // A grey image with a palette of three columns: the decoder takes the palette for the
+        // channels and the colour box for their meaning, and they disagree.
+        let grey = jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
+        let palette = jp2_box(b"pclr", &[&[1u8, 0, 3, 7, 7, 7][..], &[9u8; 256 * 3]].concat());
+        let hostile = jp2(&[grey.clone(), palette], &jpx_codestream(1));
+        assert_eq!(jpx_head(&hostile), Some(JpxHead { tiles: 1, components: 1, palette: true }));
+        assert_eq!(read(hostile), Err(NotDecoded::ColourSpace));
+        // The same file without the palette is an ordinary grey image.
+        assert_eq!(read(jp2(&[grey], &jpx_codestream(1))).map(|s| s.data), Ok(vec![128]));
+        // An alpha channel says so; a component count no grey or RGB image has is no such image,
+        // however few tiles it has (the decoder allocates for every component of every tile).
+        assert_eq!(read(jpx_codestream(2)), Err(NotDecoded::Alpha));
+        assert_eq!(read(jpx_codestream(4)), Err(NotDecoded::Alpha));
+        assert_eq!(jpx_head(&jpx_codestream(16384)).map(|h| h.components), Some(16384));
+        assert_eq!(read(jpx_codestream(16384)), Err(NotDecoded::ColourSpace));
+        // JPEG 2000 behind another filter is not read, and the reason names it.
+        let chain = [("Filter", Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("JPXDecode")])), one[1].clone(), one[2].clone()];
+        let refused = decode_samples(&doc(), &image(&chain, jpx_codestream(1)), &mut budget());
+        assert_eq!(refused, Err(NotDecoded::Filter));
+        assert!(NotDecoded::Filter.to_string().contains("JPEG 2000 behind another filter"));
+    }
+
+    /// A JP2 file with an ICC profile of its own is cleaned when the dictionary names the colour
+    /// space, which then is the image's; without a name the profile would be lost, so it is left.
+    #[test]
+    fn a_jpeg_2000_scan_with_its_own_profile_is_read_when_the_dictionary_names_the_colours() {
+        let mut profile = vec![0u8; 128];
+        profile[16..20].copy_from_slice(b"RGB ");
+        let raw = jp2(&[jp2_box(b"colr", &[&[2u8, 0, 0][..], &profile].concat())], &jpx_codestream(3));
+        let mut d = vec![("Filter", Object::name("JPXDecode")), ("Width", Object::Int(1)), ("Height", Object::Int(1))];
+        let read = |d: &[(&str, Object)]| decode_samples(&doc(), &image(d, raw.clone()), &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(read(&d), Err(NotDecoded::ColourSpace));
+        d.push(("ColorSpace", Object::name("DeviceRGB")));
+        assert_eq!(read(&d).map(|s| (s.components, s.data)), Ok((3, vec![128; 3])));
     }
 }
