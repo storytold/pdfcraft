@@ -190,6 +190,8 @@ Newest first: the date, what moved, and the new overall estimate.
   Synthetic render and save/reopen regressions cover the change; estimates unchanged.
 - **2026-10-27 (M10, #5029):** Vector printing retains the orientation and upper-left anchor of existing NoRotate annotation appearances on rotated source pages.
   Crop origins, UserUnit and later sheet transforms remain effective; estimates unchanged.
+- **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
+  Shared appearances and existing layer state remain independent; estimates unchanged.
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-26 (M10, `ocr.ocr-web`, review fix):** On the web, Edit on a scanned page starts the OCR model download, and the page is read once the models load; it was taken for no scan and left unread until the document changed.
@@ -695,6 +697,7 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-28 | minor | M10: Recognize text widens each found line by fractions of its word height before reading it, so the first and last letters are no longer clipped at 300 dpi (word errors on synthetic 150–400 dpi pages 3.8 % → 0.3 %); word boxes keep their size. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-27 | minor | M10: vector printing retains small appearance placement coefficients. Synthetic rendering and save/reopen regressions cover the change. Estimates unchanged. |
+| 2026-10-27 | minor | M10 #5005: vector printing preserves annotation optional-content membership. Source resources and shared appearances remain unchanged. |
 | 2026-10-26 | patch | M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged. |
 | 2026-10-26 | minor | M10: annotation rectangles, coordinates and appearance-state names follow up to 64 indirect references with cycle detection; standalone-object save/reopen and malformed-chain regressions, estimates unchanged. |
 | 2026-10-25 | minor | M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged. |
