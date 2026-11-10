@@ -49,7 +49,7 @@ fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashS
             Some(r) => {
                 let obj = doc.get(r);
                 let Object::Stream(s) = &*obj else { continue };
-                match doc.with_direct_parms(s).decoded() {
+                match doc.decoding_view(s).decoded() {
                     Ok(data) => std::borrow::Cow::Owned(data),
                     Err(_) => {
                         unknown = true;
@@ -416,7 +416,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 pending.push(res);
                 continue;
             }
-            let data = doc.with_direct_parms(form).decoded()?;
+            let data = doc.decoding_view(form).decoded()?;
             let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
@@ -498,7 +498,7 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let data = budget.decode(&doc.with_direct_parms(s))?;
+            let data = budget.decode(&doc.decoding_view(s))?;
             let mut read = pdfcraft_content::ops(&data);
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
