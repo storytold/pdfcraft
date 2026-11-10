@@ -4,7 +4,10 @@ use super::fallback::{
     source_encodes, source_family, source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
-use super::lines::{content_streams, joined, page_dict, rewritten_contents, splice, text_lines};
+use super::lines::{
+    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, reopen_text_object, rewritten_contents, show_side_effects, splice,
+    text_lines,
+};
 use super::{
     Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
     parse, rewrite_changed_words, rewrite_styled_block,
@@ -68,16 +71,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let reused = font.as_ref().filter(|m| source_encodes(m, &shown));
     let mut substituted = None;
     let mut replacement: Vec<Op> = Vec::new();
-    // ' and " also move to the next line; keep that.
-    match ops[first].op.as_slice() {
-        b"'" => replacement.push(Op::new("T*", vec![])),
-        b"\"" => {
-            replacement.push(Op::new("Tw", vec![ops[first].operands.first().cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("Tc", vec![ops[first].operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("T*", vec![]));
-        }
-        _ => {}
-    }
+    // ' and " also move to the next line (and " sets the spacing); keep that.
+    replacement.extend(ops.get(first).map(show_side_effects).unwrap_or_default());
     match reused {
         Some(metrics) => replacement.extend(source_show(
             metrics,
@@ -134,8 +129,23 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             }
         }
     }
-    // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    // Rebuild: the line's first operator becomes the replacement, its others go. Each other
+    // dropped `'` or `"` (a later run, or a copy on the same baseline) leaves its line move and
+    // spacing behind, as the first one does inside the replacement, and a dropped copy its advance
+    // where text after it is placed by that (the line's own runs give way to the replacement's).
+    let mut advances = dropped_advances(doc, &ops, &res, &drops);
+    for i in &target.ops {
+        advances.remove(i);
+    }
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            return (std::mem::take(&mut replacement), false);
+        }
+        let keep = !drops.contains(&i);
+        let mut insert = dropped_side_effects(&ops, i, keep, None);
+        insert.extend(advances.remove(&i));
+        (insert, keep)
+    });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -995,16 +1005,18 @@ pub(crate) fn rewrite_block_from(
     };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
     let on_top = crate::lift_on_top(over, &mut block_ops);
-    let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.extend(reopen_text_object(emit.tlm, emit.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
+    let mut advances = dropped_advances(doc, &ops, &res, &dropped);
     let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !dropped.contains(&i))
+        let mut insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
+        let keep = !dropped.contains(&i);
+        insert.extend(dropped_side_effects(&ops, i, keep, split.then_some(start)));
+        insert.extend(advances.remove(&i));
+        (insert, keep)
     });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     let new_font = !reuse;
