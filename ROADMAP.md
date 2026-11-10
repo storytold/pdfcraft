@@ -636,6 +636,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
+- **2026-11-09 (M4, #4594):** Reconcile upstream changes in the license ledger, roadmap and UI test registry; retain the vendored draft guard, local interaction replay and upstream split-view tests. Behavior and estimates unchanged; maintainer review remains pending.
+
 - **2026-10-28 (M10, #1595):** Export to Markdown: `doc_export_office` with a `.md` or `.markdown` path writes CommonMark with GitHub pipe tables (headings, paragraphs with bold and italic, tables with their first row as the header, a rule between pages); text that Markdown would read as markup is escaped. Images, lists and links are not in the export's layout model and are left out. No menu item yet. Estimates unchanged.
 - **2026-10-12 (M10, `ocr.ocr-web`):** OCR in the browser, partly. The web zip carries the text recognition models in `models/` beside `index.html`; the first time Recognize Text is needed the web build downloads them (about 12 MB, with a spinner, an error and a retry). Pages are rendered on the page and read in Web Workers (up to two at once, so the page keeps responding), built with WebAssembly SIMD: 8.5 s a page instead of 20.5 s in wasmtime, still about 17× native. Where workers can't start, the page reads the pages itself. No automated browser test yet. Estimates unchanged.
 - **2026-10-12 (M10, `ocr.ocr-web`):** Web OCR shipped: reading scanned pages in Web Workers was checked by hand in a browser (4-page synthetic scan). Still no automated browser test, and a page reads about 17× slower than native.
@@ -865,6 +868,10 @@ Newest first: the date, what moved, and the new overall estimate.
 
 - M13: common command, batch, inspection and bounded preview tools share the existing confined automation path. MCP tools carry complete hints and reject unknown top-level keys as invalid parameters.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
+
+- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. The original proposal depended on a shared release exception. The revised proposal vendors the Rust source and keeps the Python replay local. Maintainer review is pending.
+
+- **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
 
 ## Revision history
 

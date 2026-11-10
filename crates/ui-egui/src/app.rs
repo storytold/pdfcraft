@@ -64,7 +64,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct an application with the default session, panels, theme and control state.
+    /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
@@ -211,6 +211,7 @@ impl PdfCraftApp {
             attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
+            props_session: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
