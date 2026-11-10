@@ -832,6 +832,33 @@ mod tests {
         assert!(cut.settings(4, &[]).is_err());
     }
 
+    /// #5772: a booklet's both sides ask the printer for the short edge, unless its driver doesn't
+    /// take two-sided settings: it would refuse the job, so its own setting (manual two-sided, say)
+    /// prints it. One side on its own stays one-sided.
+    #[test]
+    fn a_booklet_leaves_two_sided_to_a_driver_that_keeps_its_own() {
+        // Listed as the dialog lists them (#3554), drivers unasked; the answers for the printers
+        // picked arrive in `two_sided`, and the network printer's never came.
+        let printer = |name: &str| spool::Printer { name: name.into(), default: false, two_sided: None, description: String::new() };
+        let mut d = PrintDraft {
+            printers: vec![printer("Epson"), printer("Laser"), printer("Network")],
+            two_sided: [("Epson".to_string(), Some(false)), ("Laser".to_string(), Some(true))].into_iter().collect(),
+            handling: Handling::Booklet,
+            ..PrintDraft::default()
+        };
+        for (name, both) in [("Epson", None), ("Laser", Some(spool::Duplex::ShortEdge)), ("Network", Some(spool::Duplex::ShortEdge))] {
+            d.printer = Some(name.into());
+            d.booklet_subset = BookletSubset::BothSides;
+            assert_eq!(d.job("a.pdf").duplex, both, "{name}");
+            d.booklet_subset = BookletSubset::FrontOnly;
+            assert_eq!(d.job("a.pdf").duplex, Some(spool::Duplex::Off), "{name}");
+        }
+        // Save as PDF has no driver: as before.
+        d.printer = None;
+        d.booklet_subset = BookletSubset::BothSides;
+        assert_eq!(d.job("a.pdf").duplex, Some(spool::Duplex::ShortEdge));
+    }
+
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
     /// them; the card goes when the job ends and its answer arrives as a notice. A card another
     /// long job is showing is left alone.
