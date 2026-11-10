@@ -64,6 +64,21 @@ pub fn asked_for_the_clipboard(h: &Harness<'static, PdfCraftApp>) -> bool {
     h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::RequestPaste))
 }
 
+/// The colour the last frame painted `word` of `script` in, where `word` is one token of it, or
+/// `None` when nothing painted `script` whole.
+pub fn painted_colour(h: &Harness<'static, PdfCraftApp>, script: &str, word: &str) -> Option<egui::Color32> {
+    fn walk(shape: &egui::Shape, script: &str, word: &str) -> Option<egui::Color32> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| walk(s, script, word)),
+            egui::Shape::Text(t) if t.galley.text() == script => {
+                t.galley.job.sections.iter().find(|s| script.get(s.byte_range.start.0..s.byte_range.end.0) == Some(word)).map(|s| s.format.color)
+            }
+            _ => None,
+        }
+    }
+    h.output().shapes.iter().find_map(|c| walk(&c.shape, script, word))
+}
+
 /// The menu row labelled `label` in an open menu.
 pub fn menu_row<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> egui_kittest::Node<'h> {
     use egui_kittest::kittest::Queryable;

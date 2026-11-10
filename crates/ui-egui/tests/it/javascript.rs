@@ -70,6 +70,31 @@ fn console_runs_scripts_against_the_document() {
     assert!(h.state().js_console.log.is_empty(), "{:?} {:?}", h.state().js_console.log, h.state().dialog);
 }
 
+/// The console's box and Document JavaScripts' box colour the script in them: a keyword, a string
+/// and a comment each in a colour of its own, a name as plain text.
+#[test]
+fn the_console_and_document_javascripts_colour_their_scripts() {
+    use crate::support::painted_colour;
+    let script = "var total = getField(\"total\").value; // sum";
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.state_mut().js_console.input = script.into();
+    h.run_steps(2);
+    let name = painted_colour(&h, script, "total").expect("the console shows the script");
+    for token in ["var", "\"total\"", "// sum"] {
+        assert_ne!(painted_colour(&h, script, token), Some(name), "{token} is coloured in the console");
+    }
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.state_mut().doc_js.script = script.into();
+    h.run_steps(2);
+    let name = painted_colour(&h, script, "total").expect("Document JavaScripts shows the script");
+    for token in ["var", "\"total\"", "// sum"] {
+        assert_ne!(painted_colour(&h, script, token), Some(name), "{token} is coloured in Document JavaScripts");
+    }
+}
+
 /// A button's script fills a field and its message takes the toast.
 #[test]
 fn button_scripts_run_and_alert() {

@@ -247,7 +247,15 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
         };
         ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
         if a.kind == 0 {
-            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.add(
+                crate::widgets::block(&mut a.text)
+                    .code_editor()
+                    .layouter(&mut crate::widgets::script_layout)
+                    .desired_rows(3)
+                    .desired_width(340.0)
+                    .hint_text(hint)
+                    .id_salt("action-text"),
+            );
         } else {
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         }
@@ -412,7 +420,9 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
         // The box is named by its radio, and a note about it is its description too, so a screen
         // reader on the box hears it.
         let script_box = |ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer| {
-            let edit = crate::widgets::block(text).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
+            let mut layout = crate::widgets::script_layout;
+            let edit =
+                crate::widgets::block(text).code_editor().layouter(&mut layout).hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
             let scroll = egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0);
             scroll.show(ui, |ui| ui.add(edit.char_limit(MAX_EDITED_SCRIPT + 1)).labelled_by(radio.id).id).inner
         };

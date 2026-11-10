@@ -280,6 +280,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     let input = ui.add(
         crate::widgets::block(&mut app.js_console.input)
             .code_editor()
+            .layouter(&mut crate::widgets::script_layout)
             .desired_rows(4)
             .desired_width(f32::INFINITY)
             .hint_text(tl!("JavaScript, e.g. getField(\"total\").value"))
@@ -323,7 +324,14 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(6.0);
-    ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
+    ui.add(
+        crate::widgets::block(&mut app.doc_js.script)
+            .code_editor()
+            .layouter(&mut crate::widgets::script_layout)
+            .desired_rows(8)
+            .desired_width(f32::INFINITY)
+            .id_salt("doc-js-script"),
+    );
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();
     let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
