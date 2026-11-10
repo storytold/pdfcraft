@@ -22,6 +22,29 @@ const MAX_STEPS: usize = 100_000;
 /// How many action values the walk may look at in the whole document.
 const MAX_TOTAL_STEPS: usize = 1_000_000;
 
+/// Maximum reference hops followed when resolving an indirect object, matching `pdfcraft_cos`.
+const MAX_REF_HOPS: usize = 32;
+
+/// Follow an indirect reference chain to its non-reference target and the [`ObjRef`] that holds it.
+fn resolve_ref(doc: &Document, mut r: ObjRef) -> Option<(ObjRef, std::sync::Arc<Object>)> {
+    let mut current = doc.get(r);
+    for _ in 1..MAX_REF_HOPS {
+        let Object::Ref(next) = *current else {
+            return Some((r, current));
+        };
+        r = next;
+        current = doc.get(r);
+    }
+    (!matches!(*current, Object::Ref(_))).then_some((r, current))
+}
+
+/// The terminal [`ObjRef`] that `v` resolves to, when `v` is an indirect reference whose chain
+/// reaches a non-reference object within [`MAX_REF_HOPS`] hops.
+fn target_ref(doc: &Document, v: &Object) -> Option<ObjRef> {
+    let Object::Ref(r) = *v else { return None };
+    resolve_ref(doc, r).map(|(target, _)| target)
+}
+
 /// Remove every form submission, import and reset action. Returns how many the document held in
 /// action entries, each counted once: an indirect action however many entries refer to it, and a
 /// direct one in the object that holds it. Fails with [`OptimizeError::ActionLimit`] when an
@@ -91,8 +114,11 @@ impl Count {
                     }
                 }
                 match d.get(b"AA") {
-                    Some(Object::Ref(r)) if self.shared.insert(*r) => {
-                        if let Object::Dict(t) = &*doc.get(*r) {
+                    Some(Object::Ref(r)) => {
+                        if let Some((target, obj)) = resolve_ref(doc, *r)
+                            && let Object::Dict(t) = &*obj
+                            && self.shared.insert(target)
+                        {
                             for (_, v) in t.iter() {
                                 self.entry(doc, v, depth);
                             }
@@ -130,19 +156,23 @@ impl Count {
                     self.entry(doc, item, depth + 1);
                 }
             }
-            Object::Ref(r) => match &*doc.get(*r) {
-                Object::Dict(a) if is_form_action(doc, a) => {
-                    self.indirect.insert(*r);
-                }
-                // An indirect `/Next` array: its direct actions are counted from the first entry
-                // that refers to it, and their own entries by the array's own pass.
-                Object::Array(items) if self.shared.insert(*r) => {
-                    for item in items {
-                        self.entry(doc, item, depth + 1);
+            Object::Ref(r) => {
+                if let Some((target, obj)) = resolve_ref(doc, *r) {
+                    match &*obj {
+                        Object::Dict(a) if is_form_action(doc, a) => {
+                            self.indirect.insert(target);
+                        }
+                        // An indirect `/Next` array: its direct actions are counted from the first entry
+                        // that refers to it, and their own entries by the array's own pass.
+                        Object::Array(items) if self.shared.insert(target) => {
+                            for item in items {
+                                self.entry(doc, item, depth + 1);
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
@@ -191,7 +221,7 @@ impl Walk {
     fn clean_dict(&mut self, doc: &Document, d: &mut Dict, depth: usize) {
         for key in ACTION_KEYS {
             if let Some(v) = d.get(key)
-                && let shared = v.as_ref()
+                && let shared = target_ref(doc, v)
                 && let Some(rest) = self.take(doc, v)
             {
                 let a = chain(doc, rest);
@@ -199,7 +229,7 @@ impl Walk {
             }
         }
         if let Some(v) = d.get(b"Next")
-            && let shared = v.as_ref()
+            && let shared = target_ref(doc, v)
             && let Some(mut rest) = self.take(doc, v)
         {
             let next = match rest.len() {
@@ -213,7 +243,7 @@ impl Walk {
         }
         // Additional actions: each trigger holds one action.
         if let Some(aa) = d.get(b"AA")
-            && let shared = aa.as_ref()
+            && let shared = target_ref(doc, aa)
             && let Object::Dict(t) = &*doc.resolve(aa)
         {
             let mut triggers = t.clone();
@@ -289,10 +319,10 @@ impl Walk {
             self.exhausted = true;
             return None;
         }
+        let r = target_ref(doc, v);
         let resolved = doc.resolve(v);
         match &*resolved {
             Object::Dict(a) if is_form_action(doc, a) => {
-                let r = v.as_ref();
                 // A chain that comes back to an action it is still inside ends there.
                 if let Some(r) = r
                     && !self.chain.insert(r)
@@ -315,7 +345,6 @@ impl Walk {
                 Some(rest)
             }
             Object::Array(items) => {
-                let r = v.as_ref();
                 // An indirect array that lists itself, directly or through other arrays, is left
                 // as it is where it comes back.
                 if let Some(r) = r
@@ -375,11 +404,15 @@ impl Walk {
             match item {
                 Object::Dict(a) if is_form_action(doc, a) => return true,
                 Object::Array(inner) => stack.extend(inner.iter()),
-                Object::Ref(r) => match &*doc.get(*r) {
-                    Object::Dict(a) if is_form_action(doc, a) => return true,
-                    Object::Array(_) if seen.insert(*r) => pending.push(*r),
-                    _ => {}
-                },
+                Object::Ref(r) => {
+                    if let Some((target, obj)) = resolve_ref(doc, *r) {
+                        match &*obj {
+                            Object::Dict(a) if is_form_action(doc, a) => return true,
+                            Object::Array(_) if seen.insert(target) => pending.push(target),
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -427,7 +460,7 @@ fn holds_form_action(doc: &Document, o: &Object) -> bool {
 fn is_or_refers_to_form_action(doc: &Document, v: &Object) -> bool {
     match v {
         Object::Dict(a) => is_form_action(doc, a),
-        Object::Ref(r) => matches!(&*doc.get(*r), Object::Dict(a) if is_form_action(doc, a)),
+        Object::Ref(r) => resolve_ref(doc, *r).is_some_and(|(_, obj)| matches!(&*obj, Object::Dict(a) if is_form_action(doc, a))),
         _ => false,
     }
 }
@@ -435,7 +468,8 @@ fn is_or_refers_to_form_action(doc: &Document, v: &Object) -> bool {
 /// Whether `v` refers to a form action, or to an indirect array that lists one.
 fn refers_to_form_action(doc: &Document, v: &Object) -> bool {
     let Object::Ref(r) = v else { return false };
-    match &*doc.get(*r) {
+    let Some((_, obj)) = resolve_ref(doc, *r) else { return false };
+    match &*obj {
         Object::Dict(a) => is_form_action(doc, a),
         Object::Array(items) => items.iter().any(|item| is_or_refers_to_form_action(doc, item)),
         _ => false,
@@ -464,5 +498,88 @@ fn chain(doc: &Document, actions: Vec<Object>) -> Option<Object> {
         next.extend(rest);
         head.set(b"Next".to_vec(), Object::Array(next));
         return Some(Object::Dict(head));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn obj_ref(num: u32) -> ObjRef {
+        ObjRef { num, generation: 0 }
+    }
+
+    fn dict(entries: &[(&[u8], Object)]) -> Object {
+        let mut d = Dict::new();
+        for (k, v) in entries {
+            d.set(k.to_vec(), v.clone());
+        }
+        Object::Dict(d)
+    }
+
+    #[test]
+    fn chained_indirect_refs_count_and_clean_actions() {
+        let mut doc = Document::new_empty();
+        // 1 0 obj: widget whose /A points through 4 0 R -> 5 0 R to a /SubmitForm action,
+        // and whose /AA points through 6 0 R -> 7 0 R to a trigger dictionary with 8 0 R -> 9 0 R (/ResetForm).
+        doc.set(obj_ref(1), dict(&[(b"Type", Object::Name(b"Annot".to_vec())), (b"A", Object::Ref(obj_ref(4))), (b"AA", Object::Ref(obj_ref(6)))]));
+        // 2 0 obj: second widget sharing 5 0 R directly via 1-hop ref; 5 0 R must still be counted once.
+        doc.set(obj_ref(2), dict(&[(b"A", Object::Ref(obj_ref(5)))]));
+        doc.set(obj_ref(4), Object::Ref(obj_ref(5)));
+        doc.set(
+            obj_ref(5),
+            dict(&[
+                (b"S", Object::Name(b"SubmitForm".to_vec())),
+                (b"Next", dict(&[(b"S", Object::Name(b"URI".to_vec())), (b"URI", Object::Name(b"https://example.com".to_vec()))])),
+            ]),
+        );
+        doc.set(obj_ref(6), Object::Ref(obj_ref(7)));
+        doc.set(obj_ref(7), dict(&[(b"U", Object::Ref(obj_ref(8)))]));
+        doc.set(obj_ref(8), Object::Ref(obj_ref(9)));
+        doc.set(obj_ref(9), dict(&[(b"S", Object::Name(b"ResetForm".to_vec()))]));
+
+        // Also test a standalone 2-hop /Next array 10 0 R -> 11 0 R -> [ << /S /ImportData >> ].
+        doc.set(obj_ref(3), dict(&[(b"A", dict(&[(b"S", Object::Name(b"URI".to_vec())), (b"Next", Object::Ref(obj_ref(10)))]))]));
+        doc.set(obj_ref(10), Object::Ref(obj_ref(11)));
+        doc.set(obj_ref(11), Object::Array(vec![dict(&[(b"S", Object::Name(b"ImportData".to_vec()))])]));
+
+        let removed = discard(&mut doc).expect("discard should succeed");
+        assert_eq!(removed, 3);
+
+        // 1 0 R's /A (via 4 0 R -> 5 0 R) now resolves to the surviving /URI action.
+        let w1 = doc.get(obj_ref(1));
+        let w1_dict = w1.as_dict().expect("widget 1 dict");
+        let a_ref = w1_dict.get(b"A").expect("widget 1 /A should remain");
+        let resolved_a = doc.resolve(a_ref);
+        assert_eq!(resolved_a.as_dict().and_then(|d| d.name(b"S")), Some(b"URI".as_slice()));
+        assert!(w1_dict.get(b"AA").is_none());
+    }
+
+    #[test]
+    fn chained_indirect_refs_enforce_depth_and_loop_limits() {
+        // 1. 2-hop reference to a form action past MAX_DEPTH must fail with ActionLimit.
+        let mut deep_doc = Document::new_empty();
+        let mut nested = dict(&[(b"A", Object::Ref(obj_ref(2)))]);
+        for _ in 0..=MAX_DEPTH {
+            nested = Object::Array(vec![nested]);
+        }
+        deep_doc.set(obj_ref(1), nested);
+        deep_doc.set(obj_ref(2), Object::Ref(obj_ref(3)));
+        deep_doc.set(obj_ref(3), dict(&[(b"S", Object::Name(b"SubmitForm".to_vec()))]));
+        assert!(matches!(discard(&mut deep_doc), Err(OptimizeError::ActionLimit(r)) if r == obj_ref(1)));
+
+        // 2. Self-referential /Next array looping via 2-hop reference while still reaching a form action.
+        let mut loop_doc = Document::new_empty();
+        loop_doc.set(obj_ref(1), dict(&[(b"A", dict(&[(b"S", Object::Name(b"URI".to_vec())), (b"Next", Object::Ref(obj_ref(5)))]))]));
+        loop_doc.set(obj_ref(4), Object::Ref(obj_ref(5)));
+        loop_doc.set(obj_ref(5), Object::Array(vec![dict(&[(b"S", Object::Name(b"SubmitForm".to_vec()))]), Object::Ref(obj_ref(4))]));
+        assert!(matches!(discard(&mut loop_doc), Err(OptimizeError::ActionLimit(r)) if r == obj_ref(1)));
+
+        // 3. Pure reference cycle 2 0 R -> 3 0 R -> 2 0 R terminates cleanly with 0 removed.
+        let mut cycle_doc = Document::new_empty();
+        cycle_doc.set(obj_ref(1), dict(&[(b"A", Object::Ref(obj_ref(2))), (b"AA", Object::Ref(obj_ref(2)))]));
+        cycle_doc.set(obj_ref(2), Object::Ref(obj_ref(3)));
+        cycle_doc.set(obj_ref(3), Object::Ref(obj_ref(2)));
+        assert_eq!(discard(&mut cycle_doc).expect("cycle should not fail"), 0);
     }
 }
