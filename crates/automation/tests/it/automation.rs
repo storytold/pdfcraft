@@ -12298,6 +12298,38 @@ fn doc_print_with_app_managed_colour() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Under `--root`, a profile link inside the root that leads out of it is neither listed nor
+/// found by name.
+#[test]
+fn colour_profile_links_out_of_the_root_are_not_read() {
+    let dir = workdir("print-colour-link");
+    let outside = dir.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    let profile = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    std::fs::write(dir.join("wide.icc"), profile.as_slice()).unwrap();
+    std::fs::write(outside.join("other.icc"), profile.as_slice()).unwrap();
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(outside.join("other.icc"), dir.join("leak.icc")).is_ok();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(outside.join("other.icc"), dir.join("leak.icc")).is_ok();
+    #[cfg(not(any(unix, windows)))]
+    let linked = false;
+    // Windows needs Developer Mode or elevation to make links.
+    if !linked {
+        eprintln!("skipped: symbolic links can't be made here");
+        return;
+    }
+    let mut a = auto(&dir);
+    let listed = ok(&mut a, "print_color_profiles", json!({}));
+    assert_eq!(listed["count"], 1, "only the profile inside the root: {listed}");
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let print = json!({ "doc": doc, "pages": "1", "dpi": 72, "path": "m.pdf", "color_management": "app", "color_profile": "leak" });
+    assert!(a.call("doc_print", &print).is_err(), "a link out of the root isn't found by name");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
 /// made, nothing is left beside the file, and a folder at the path is refused.
 #[test]
