@@ -281,6 +281,7 @@ struct PendingOpen {
 #[cfg(not(target_arch = "wasm32"))]
 struct DeferredOpen {
     path: String,
+    after_open: Option<pdfcraft_render::RemoteDestination>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
@@ -288,6 +289,15 @@ struct DeferredOpen {
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
 /// used instead.
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
+
+/// A named destination being looked up off the UI thread: reading a large document's name tree
+/// takes a noticeable moment.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
+}
 
 pub struct PdfCraftApp {
     /// Split view (`panes`); which pane shows each tab is its view's.
@@ -483,6 +493,8 @@ pub struct PdfCraftApp {
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     password_retry: Option<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
