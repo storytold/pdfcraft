@@ -4565,6 +4565,7 @@ dependencies = [
  "pdfcraft-fonts",
  "png 0.18.1",
  "rten",
+ "rten-imageproc",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
