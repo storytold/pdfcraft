@@ -464,8 +464,8 @@ Target::NamedDest { name: String }
 
 | action | target | payload (принятая операция добавляет) |
 |---|---|---|
-| `outline.item.add` | родитель (ключ или `null`) | `title`, `dest`, `index?` → `parent`, `path`, `index`, `key` |
-| `outline.item.update` | ключ закладки | `title?`, `dest?` → `path`, `before {title, dest}` |
+| `outline.item.add` | родитель (ключ или `null`) | `title`, `dest`, `index?`, `color?`, `italic?`, `bold?` → `parent`, `path`, `index`, `key` |
+| `outline.item.update` | ключ закладки | `title?`, `dest?`, `color?`, `italic?`, `bold?`, `open?` → `path`, `before {title, dest, color, italic, bold, open}` |
 | `outline.item.delete` | ключ закладки | — → `path`, `subtree`, `parent`, `parent_key`, `index` |
 | `outline.item.restore` | родитель (ключ или `null`) | `subtree`, `index?` → `path`, `index`, `key` |
 | `outline.item.move` | ключ закладки | `parent` (ключ или `null`), `index?` → `from`, `to_parent`, `index`, `before {parent, index, path}` |
@@ -492,13 +492,29 @@ destination **таким, каким он был в файле**, а не пер
 указывать только на страницу с координатами или на view: имя имени и
 «никуда» — `invalid` (комната держит одну запись на имя).
 
+**Вид закладки (`color`, `italic`, `bold`, `open`).** Цвет — `/C`, начертание —
+`/F` (ISO 32000-2 §12.3.3, Table 152), раскрытость — знак `/Count`
+(Table 151). Все четыре поля необязательны и едут в том же
+`outline.item.update`/`add`, что заголовок и destination: панель закладок
+меняет цвет, Bold/Italic и «Expanded in the document» одной адресуемой
+операцией, а не набором локальных правок. `color` — `null` (по умолчанию
+чёрный, `/C` снимается) или ровно три числа от 0 до 1; «не три числа» или
+число вне 0..1 — `invalid`. `italic`/`bold`/`open` — булевы; строка или число
+вместо булева — `invalid` (неизвестный стиль). `open` у закладки **без
+детей** — `invalid`: у неё нет `/Count`, менять нечего, и операция не должна
+делать вид, что что-то изменила. `add` принимает `color`/`italic`/`bold`
+(новая закладка без детей, поэтому `open` там тоже `invalid`). `update`, не
+назвавший ни заголовка, ни destination, ни одного поля вида, — `invalid`.
+
 **Что проверяется до первой записи** (ни один отказ не двигает `version`,
 `epoch`, документ и журнал):
 
 - неизвестный ключ родителя или закладки, ключ объекта `0`, путь, которого нет
   в листинге, — `invalid`;
 - пустой или длиннее `MAX_OUTLINE_TITLE` (512 байт) заголовок — `invalid` /
-  `limit`; `update` без `title` и без `dest` — `invalid`;
+  `limit`; `update` без `title`, `dest` и без полей вида — `invalid`;
+- цвет не три числа или вне 0..1, `italic`/`bold`/`open` не булевы,
+  `open` у закладки без детей (и у `add`) — `invalid`;
 - страница за последней, имя, которого нет, координата не число —
   `invalid`; `NaN`/бесконечность отсекает уже разбор (`serde_json`);
 - цикл (`move` в себя или в собственное поддерево) — `invalid`;
@@ -522,7 +538,11 @@ destination **таким, каким он был в файле**, а не пер
 обычная операция, а не догадка (ADR-0010):
 
 - `add` → `outline.item.delete` по ключу из принятой операции;
-- `update` → `outline.item.update` с `before {title, dest}`;
+- `update` → `outline.item.update` с `before`: **весь узел**, который заменила
+  операция — `title`, `dest`, `color`, `italic`, `bold`, `open`. Обратная
+  операция называет только те поля вида, которые назвала прямая (цвет
+  возвращается как `null`, если его сняли), поэтому undo не трогает то, чего
+  не менял, и не пытается вернуть `open` закладке, у которой детей уже нет;
 - `delete` → `outline.item.restore` с `subtree`, `parent_key` и `index`;
   поддерево едет **в самой операции** (как `bytes` у `page.split`), поэтому
   реплики и журнал кладут его обратно без второго канала и без серверного
@@ -561,14 +581,25 @@ destination на удалённую страницу удаляется (`delete
 проверено и в движке, и на сокете.
 
 **Клиент.** `Edit::AddBookmark`/`AddBookmarkWith`, `RenameBookmark`,
-`SetBookmarkPage`, `UpdateBookmark`, `DeleteBookmark`, `MoveBookmark`,
-`SetNamedDestination`, `DeleteNamedDestination` проецируются в операции
+`SetBookmarkPage`, `UpdateBookmark`, `SetBookmarkColor`, `SetBookmarkStyle`,
+`DeleteBookmark`, `MoveBookmark`, `SetNamedDestination`,
+`DeleteNamedDestination` проецируются в операции
 (`collab-client-pdf::ops_for_edit`) по ключу, который реплика находит в своём
 списке (`Document::bookmarks`), а `ImportBookmarks` с `replace` — не
-разделяется (он затёр бы чужой список) и отклоняется на клиенте. Панель
-закладок и её команды — существующие: новых команд интерфейса срез не
-добавляет, named destinations в приложении пока не редактируются, они лишь
-переживают сессию и commit.
+разделяется (он затёр бы чужой список) и отклоняется на клиенте. Заголовок,
+destination и вид закладки — один `outline.item.update`: `UpdateBookmark`
+несёт все четыре поля вида, поэтому цвет, Bold/Italic и «Expanded in the
+document» панели закладок едут той же операцией, а не отдельными правками.
+
+**Интерфейс named destinations.** В Bookmarks ▸ Named destinations… список
+имён (имя → страница и вид) и форма для add/update/delete. Каждое изменение —
+`Edit::SetNamedDestination`/`Edit::DeleteNamedDestination` через
+`apply_edit`, то есть в сессии `dest.add`/`dest.update`/`dest.delete`, а вне
+сессии — обычный undoable-шаг движка: диалог не пишет документ сам. В
+комнате `commenter` и `viewer` получают `forbidden` от сервера и ReadOnly от
+клиента; форма показывает отказ. Те же три действия доступны без интерфейса
+в `crates/automation` (`destinations`, `destination_set`,
+`destination_delete`), с той же проверкой имени, страницы и вида до записи.
 
 #### 3.1.8 Page labels
 
@@ -1298,7 +1329,13 @@ Headless, без GUI, 2–3 клиента:
     ключ, цикл, страница или имя, которых нет, пустой и слишком длинный
     заголовок, глубина, количество и размер копии — `invalid`/`limit` без
     записи; viewer и commenter — `forbidden` без движения `version`; тот же
-    путь по сокету (`collab-ws` e2e).
+    путь по сокету (`collab-ws` e2e). Цвет, Bold/Italic и `open` — тот же
+    `outline.item.update`: две реплики сходятся, undo возвращает весь узел
+    (`before {title, dest, color, italic, bold, open}`), redo — обратно, цвет
+    не три числа или вне 0..1, неизвестный стиль и `open` у закладки без детей
+    — `invalid` до записи, viewer — `forbidden`. Named destinations
+    редактируются в интерфейсе и через `crates/automation`
+    (`destinations`/`destination_set`/`destination_delete`).
 15. page labels (§3.1.8): две реплики сходятся на set/clear; undo возвращает
     прежний диапазон целиком (в том числе разрезанный set'ом — одним
     compare-and-set по оставшимся диапазонам) и redo снимает его снова;
@@ -1335,8 +1372,11 @@ Headless, без GUI, 2–3 клиента:
    размер принимаемого файла — `--max-source-bytes` (256 МиБ по умолчанию),
    размер сообщения — 256 КиБ (protocol).
 7. **Не разделяются в v1**: аннотации вне §3.1.1 (рисованные/печатные подписи,
-   custom stamp, redaction, вложения), закладки, слои, изменение содержимого
-   страницы, повтор/redo структурных правок на сервере. Клиент показывает
+   custom stamp, redaction, вложения), слои, изменение содержимого
+   страницы, повтор/redo структурных правок на сервере. Закладки и named
+   destinations разделяются с `d1229deb9`, их вид (цвет, начертание,
+   раскрытость) — с этого среза (§3.1.7); из закладочных правок не разделяется
+   только замена всего outline (`ImportBookmarks` с `replace`). Клиент показывает
    причину отказа и не применяет их локально. Внешний вид (`/LE`, `font size`,
    автор, subject, иконка заметки) входит в §3.1.2–3.1.3, доли прозрачности,
    перемещение, геометрия и окно комментария — §3.1.6; замена страницы и
