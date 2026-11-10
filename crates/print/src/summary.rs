@@ -143,7 +143,11 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
             .map(|(c, lines)| Item {
                 lines,
                 color: c.color.filter(|c| c.iter().all(|v| v.is_finite())).map_or(GREY, |c| c.map(|v| v.clamp(0.0, 1.0))),
-                anchor: printed(c).then_some((c.rect, c.number)),
+                anchor: printed(c).then_some(Anchor {
+                    rect: c.rect,
+                    number: c.number,
+                    upright: c.index.and_then(|i| annots.get(i)).and_then(|a| doc.resolve(a).as_dict().map(|d| no_rotate(&doc, d))).unwrap_or(false),
+                }),
             })
             .collect();
         // The comments that become annotations on the page's first sheet, drawn there by
@@ -289,7 +293,7 @@ struct Item<'a> {
     lines: &'a [(usize, String)],
     color: [f64; 3],
     /// Its rectangle and number, when the page draws it: where its connector or number goes.
-    anchor: Option<([f64; 4], usize)>,
+    anchor: Option<Anchor>,
 }
 
 /// A comment's box (or the part of it on one sheet).
@@ -299,7 +303,7 @@ struct SummaryBox {
     rows: Vec<(usize, String)>,
     color: [f64; 3],
     /// On the part with its heading: the comment's rectangle and number.
-    anchor: Option<([f64; 4], usize)>,
+    anchor: Option<Anchor>,
 }
 
 /// One finished sheet. A sheet showing a page draws it as `/P0`.
@@ -448,8 +452,7 @@ impl Out {
             draw_page(&mut c, &m, frame);
             self.boxes(&mut c, &boxes, col_x, col_w)?;
             for bx in &boxes {
-                let Some((rect, _)) = bx.anchor else { continue };
-                let Some(b) = on_sheet(&m, rect) else { continue };
+                let Some(b) = bx.anchor.and_then(|a| a.on_sheet(&m)) else { continue };
                 // From the middle of the comment's right edge, toward the column.
                 let spot = (b[2].clamp(frame[0], frame[2]), ((b[1] + b[3]) / 2.0).clamp(frame[1], frame[3]));
                 let end = (col_x, bx.top - PAD - FONT / 2.0);
@@ -517,8 +520,9 @@ impl Out {
     /// what it marks, on a page placed with `m` inside `frame`.
     fn numbers(&self, c: &mut Vec<u8>, items: &[Item<'_>], m: &Matrix, frame: [f64; 4]) -> Result<(), PrintError> {
         for item in items {
-            let Some((rect, number)) = item.anchor else { continue };
-            let Some(b) = on_sheet(m, rect) else { continue };
+            let Some(anchor) = item.anchor else { continue };
+            let Some(b) = anchor.on_sheet(m) else { continue };
+            let number = anchor.number;
             let spot = (b[2].clamp(frame[0], frame[2]), b[3].clamp(frame[1], frame[3]));
             let [r, g, bl] = item.color;
             let label = number.to_string();
@@ -599,16 +603,7 @@ fn copy_annotations(
         };
         let Some(rect) = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4) else { continue };
         let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-        // A NoRotate annotation (a note's icon) stays upright where its top-left corner is, as a
-        // viewer shows it on a turned page (ISO 32000-2 §12.5.3): scaled and moved, not turned.
-        const NO_ROTATE: i64 = 16;
-        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-        let place = if flags & NO_ROTATE != 0 {
-            let (x, y) = m.apply(rect[0], rect[3]);
-            Matrix([scale, 0.0, 0.0, scale, x - rect[0] * scale, y - rect[3] * scale])
-        } else {
-            *m
-        };
+        let place = placement(m, rect, no_rotate(doc, &d));
         let Some(placed) = on_sheet(&place, rect) else { continue };
         let normal = appearance(doc, &d);
         for key in [&b"P"[..], b"Popup", b"Parent", b"StructParent", b"A", b"AA", b"AP", b"AS"] {
@@ -679,6 +674,40 @@ fn place(src: &Document, pages: &[pdfcraft_model::Page], index: usize, area: [f6
     let (x, y) = (area[0] + (area_w - pw) / 2.0, area[1] + (area_h - ph) / 2.0);
     let to_display = Matrix(page.view_matrix(src)).invert().unwrap_or_default();
     (to_display.then(&Matrix([s, 0.0, 0.0, s, x, y])), [x, y, x + pw, y + ph])
+}
+
+/// Where a comment's connector or number points: its rectangle (user space), its number, and
+/// whether it stays upright on a turned page ([`placement`]).
+#[derive(Clone, Copy)]
+struct Anchor {
+    rect: [f64; 4],
+    number: usize,
+    upright: bool,
+}
+
+impl Anchor {
+    /// Its rectangle on a sheet showing the page with `m`, as drawn there.
+    fn on_sheet(&self, m: &Matrix) -> Option<[f64; 4]> {
+        on_sheet(&placement(m, self.rect, self.upright), self.rect)
+    }
+}
+
+/// Whether annotation `d` has the NoRotate flag.
+fn no_rotate(doc: &Document, d: &Dict) -> bool {
+    const NO_ROTATE: i64 = 16;
+    d.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & NO_ROTATE != 0)
+}
+
+/// The matrix placing an annotation at `rect` on a sheet showing its page with `m`. An `upright`
+/// (NoRotate) one, such as a note's icon, stays upright where its top-left corner is, as a viewer
+/// shows it on a turned page (ISO 32000-2 §12.5.3): scaled and moved, not turned.
+fn placement(m: &Matrix, rect: [f64; 4], upright: bool) -> Matrix {
+    if !upright {
+        return *m;
+    }
+    let scale = m.0[0].hypot(m.0[1]);
+    let (x, y) = m.apply(rect[0], rect[3]);
+    Matrix([scale, 0.0, 0.0, scale, x - rect[0] * scale, y - rect[3] * scale])
 }
 
 /// A comment's rectangle (user space) on the sheet; `None` when it doesn't map to finite numbers.

@@ -368,7 +368,8 @@ impl Session {
         let layout = match opts.layout {
             SummaryLayout::CommentsOnly => {
                 // Without a readable source the dates as listed still sort it.
-                let dates = source().map(|cos| dated(&cos)).unwrap_or_default();
+                let dates =
+                    if opts.sort == crate::SummarySort::Date { source().map(|cos| dated(&cos)).unwrap_or_default() } else { Default::default() };
                 let text = comment_summary_with(&doc.name, &doc.info.annotations, opts.sort, &dates);
                 return self.create_report_on(&title, &text, paper);
             }

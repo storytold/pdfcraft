@@ -219,6 +219,9 @@ fn a_note_stays_upright_on_a_turned_page() {
     let body = String::from_utf8(form.decoded().unwrap()).unwrap();
     let m: Vec<f64> = body.trim_start_matches("q ").split(' ').take(6).map(|v| v.parse().unwrap()).collect();
     assert_eq!((m[1], m[2]), (0.0, 0.0), "scaled, not turned: {body}");
+    // The connector starts at the upright icon's right edge, halfway down: (94, 328.8).
+    let first = sheets(&doc).remove(0);
+    assert!(first.contains("94 328.8 m"), "{first}");
 }
 
 /// The sheets' page labels, in order.
