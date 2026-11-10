@@ -40,6 +40,7 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
 >
 >
@@ -251,6 +252,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
+
+- **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
+  Shared appearances and existing layer state remain independent; estimates unchanged.
 
 - **2026-10-29 (M10, #5029):** Vector printing also honours the implicit NoRotate behavior of existing Text appearances when the flag is clear.
   Print eligibility, source dictionaries and shared appearance streams remain unchanged.
@@ -864,6 +868,8 @@ Newest first: the date, what moved, and the new overall estimate.
 
 ## Revision history
 
+**2026-10-27 · minor:** M10 #5005: vector printing preserves annotation optional-content membership.
+Source resources and shared appearances remain unchanged.
 **2026-10-31 · patch:** M6/PR #4166 integrated main f137a289 (0.16.1), preserving both roadmap histories. Automatic Keystroke, Validate, Calculate and Format scripts still suppress Print alongside ShowPanel/SaveAs; explicit button and console Print requests, field effects and document-error provenance are retained. The three engine regressions and headless automation regression remain in their current modules. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
 
 **2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.
