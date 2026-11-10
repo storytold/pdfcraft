@@ -503,7 +503,7 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         } else {
             v.go_to_match(0);
         }
-        assert_eq!(v.back, vec![0], "explicit search jump must remember its origin");
+        assert_eq!(v.back, vec![(0, 0.0)], "explicit search jump must remember its origin");
         assert_eq!(v.goto, None, "the match's point alone: a zoom that frame cannot put a page-top offset off to the next");
         assert_eq!(v.current, 3);
         assert_eq!(v.current_page_label(None), "4");
@@ -513,7 +513,7 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
         assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
-        assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
+        assert_eq!(v.back, vec![(0, 0.0)], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
         assert_eq!(v.current, 0);
         assert!(v.view_history(true));
@@ -521,7 +521,7 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         assert!(v.view_history(false));
         v.go_to_match(2);
         assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
-        assert_eq!(v.back, vec![0]);
+        assert_eq!(v.back, vec![(0, 0.0)]);
     }
 }
 
@@ -572,6 +572,90 @@ fn previous_view_after_a_find_step_lets_go_of_the_match() {
     assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
 }
 
+/// The frame after a jump drew `page` (300 × 400 at 100 %) as current, scrolled so the window's
+/// top edge is `down` points into it (negative: the page starts that far below the gap).
+fn drawn_at(v: &mut DocView, page: usize, down: f32) {
+    v.goto = None;
+    v.current = page;
+    v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+    let top = v.page_gap() - down;
+    v.screen_xforms = vec![(page, PageXform { rect: Rect::from_min_size(pos2(SIDE, top), vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 })];
+}
+
+/// The pending jump goes to `page`, `frac` of the way down it.
+fn assert_goto(v: &DocView, page: usize, frac: f32, what: &str) {
+    let (p, f) = v.goto.expect("a pending jump");
+    assert!(p == page && (f - frac).abs() < 1e-4, "{what}: went to ({p}, {f}), expected ({page}, {frac})");
+}
+
+#[test]
+fn previous_view_comes_back_to_the_place_on_the_page_left() {
+    // Halfway down page 1 when a link goes to page 3 (#6848).
+    let mut v = view(5, PageLayout::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_page(3);
+    drawn_at(&mut v, 3, 0.0);
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 1);
+    assert_goto(&v, 1, 0.5, "Previous view goes back halfway down page 1, not to its top");
+}
+
+#[test]
+fn next_view_comes_back_to_the_place_previous_view_left() {
+    let mut v = view(5, PageLayout::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_page(3);
+    // A quarter of the way down page 3 when the reader goes back.
+    drawn_at(&mut v, 3, 100.0);
+    assert!(v.view_history(false));
+    drawn_at(&mut v, 1, 200.0);
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 3);
+    assert_goto(&v, 3, 0.25, "Next view goes back a quarter of the way down page 3");
+    // And Previous view again round-trips the other place.
+    drawn_at(&mut v, 3, 100.0);
+    assert!(v.view_history(false));
+    assert_goto(&v, 1, 0.5, "Previous view again goes halfway down page 1");
+}
+
+#[test]
+fn a_history_step_not_drawn_yet_records_where_it_goes() {
+    let mut v = view(5, PageLayout::Single, true);
+    v.back = vec![(0, 0.25), (2, 0.75)];
+    drawn_at(&mut v, 4, 0.0);
+    assert!(v.view_history(false));
+    // Back again before a frame has drawn page 2: the screen still shows page 4, and the place
+    // left is the one the first step was going to.
+    assert!(v.view_history(false));
+    assert!(v.view_history(true));
+    assert_goto(&v, 2, 0.75, "Next view goes back three quarters of the way down page 2");
+}
+
+#[test]
+fn previous_view_comes_back_above_a_current_page_that_starts_below_the_window_top() {
+    // Page 2 shows most, so it is current, but the window's top is 100 pt above it, in page 1.
+    let mut v = view(5, PageLayout::Single, true);
+    drawn_at(&mut v, 2, -100.0);
+    v.go_to_page(4);
+    drawn_at(&mut v, 4, 0.0);
+    assert!(v.view_history(false));
+    assert_goto(&v, 2, -0.25, "Previous view goes back to the window's top above page 2, not to page 2's top");
+}
+
+#[test]
+fn a_page_left_from_its_top_comes_back_at_its_top() {
+    // At the page's top, and within a pixel of it either way (rounding).
+    for down in [0.0, 0.5, -0.5] {
+        let mut v = view(5, PageLayout::Single, true);
+        drawn_at(&mut v, 1, down);
+        v.go_to_page(3);
+        assert_eq!(v.back, vec![(1, 0.0)], "window's top {down} pt into the page");
+        drawn_at(&mut v, 3, 0.0);
+        assert!(v.view_history(false));
+        assert_eq!(v.goto, Some((1, 0.0)), "window's top {down} pt into the page");
+    }
+}
+
 #[test]
 fn a_match_with_unbounded_glyphs_falls_back_to_its_page() {
     let mut v = history_search_view();
@@ -590,19 +674,19 @@ fn a_match_with_unbounded_glyphs_falls_back_to_its_page() {
 #[test]
 fn automatic_search_updates_do_not_record_history_or_discard_forward() {
     let mut v = history_search_view();
-    v.forward = vec![4];
+    v.forward = vec![(4, 0.0)];
     v.find = Some(Find { query: "match".into(), ..Default::default() });
     v.rerun_find();
     assert_eq!(v.current, 3);
     assert_eq!((v.goto, v.goto_point.map(|g| g.0)), (None, Some(3)), "the match's point on its page");
     assert!(v.back.is_empty());
-    assert_eq!(v.forward, vec![4]);
+    assert_eq!(v.forward, vec![(4, 0.0)]);
     v.find.as_mut().unwrap().current = None;
     v.texts.insert(1, Arc::new(find_test_text("match")));
     v.refresh_find_page(1);
     assert_eq!(v.current, 1, "an automatic late match still follows its anchor");
     assert!(v.back.is_empty(), "automatic search updates do not record history");
-    assert_eq!(v.forward, vec![4]);
+    assert_eq!(v.forward, vec![(4, 0.0)]);
 }
 
 /// One glyph per character on one line, for the search-order tests below.
@@ -710,7 +794,7 @@ fn a_late_automatic_match_does_not_override_the_readers_navigation() {
             Nav::Page => v.go_to_page(1),
             // View ▸ Page navigation ▸ Previous view writes `current` directly.
             Nav::History => {
-                v.back = vec![1];
+                v.back = vec![(1, 0.0)];
                 assert!(v.view_history(false));
             }
         }
@@ -767,7 +851,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
 
     assert_eq!(v.current, 2, "the keyboard step chose the next match");
     assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");
-    assert_eq!(v.back, vec![1], "an explicit search jump records its origin");
+    assert_eq!(v.back, vec![(1, 0.0)], "an explicit search jump records its origin");
 
     v.texts.insert(0, Arc::new(find_test_text("intro sample")));
     v.refresh_find_page(0);
