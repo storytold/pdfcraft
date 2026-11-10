@@ -11,6 +11,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 use crate::widgets;
@@ -275,29 +276,30 @@ impl MoveBackground {
             return;
         }
         let r = screen_rect(xf, info, page, from);
+        let base = self.settling.map_or(r, |s| screen_rect(xf, info, page, s));
         let to = if let Some((_, grab, start)) = cv.grab {
             let Some(p) = pointer else { return };
-            dragged(r, grab, p - start, self.picture)
-        } else if let Some(to) = self.settling {
-            let to = screen_rect(xf, info, page, to);
+            dragged(base, grab, p - start, self.picture)
+        } else if self.settling.is_some() {
             // A moved text box keeps its top edge (its height follows its lines).
-            if self.picture { to } else { r.translate(to.left_top() - r.left_top()) }
+            if self.picture { base } else { r.translate(base.left_top() - r.left_top()) }
         } else {
             return;
         };
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
         xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
-        // A pixel around the box, so its edges come along.
+        // A pixel around the box, so its edges come along. Clip the source to the page raster so
+        // an item extending past the page border never samples clamped edge texels (#3938, #4477).
         let (r, to) = (r.expand(1.0), to.expand(1.0));
+        let clipped = r.intersect(xf.rect);
+        if !clipped.is_positive() || r.width() <= 0.0 || r.height() <= 0.0 {
+            return;
+        }
+        let map = |p: Pos2| Pos2::new(to.min.x + (p.x - r.min.x) / r.width() * to.width(), to.min.y + (p.y - r.min.y) / r.height() * to.height());
         let mut mesh = egui::Mesh::with_texture(item.id());
-        for (a, b) in [
-            (r.left_top(), to.left_top()),
-            (r.right_top(), to.right_top()),
-            (r.right_bottom(), to.right_bottom()),
-            (r.left_bottom(), to.left_bottom()),
-        ] {
+        for a in [clipped.left_top(), clipped.right_top(), clipped.right_bottom(), clipped.left_bottom()] {
             let (u, v) = xf.screen_to_norm(a);
-            mesh.vertices.push(egui::epaint::Vertex { pos: b, uv: Pos2::new(u, v), color: Color32::WHITE });
+            mesh.vertices.push(egui::epaint::Vertex { pos: map(a), uv: Pos2::new(u, v), color: Color32::WHITE });
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
@@ -344,7 +346,11 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
         Grab::Corner(left, top) => {
             let (mut dx, mut dy) = (if left { -d.x } else { d.x }, if top { -d.y } else { d.y });
             if keep_aspect && r.width() > 0.0 && r.height() > 0.0 {
-                let k = ((r.width() + dx) / r.width()).max((r.height() + dy) / r.height()).max(0.05);
+                // Use the axis with the larger relative pointer change so shrinking along one axis
+                // does not freeze when the other axis has not moved inward (#4477).
+                let (rx, ry) = (dx / r.width(), dy / r.height());
+                let delta = if rx.abs() > ry.abs() { rx } else { ry };
+                let k = (1.0 + delta).max(0.05);
                 dx = r.width() * k - r.width();
                 dy = r.height() * k - r.height();
             }
@@ -373,7 +379,8 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let selected = view.content.selected.filter(|s| s.0 == page).and_then(|(_, si)| items.iter().find(|(i, _)| *i == si));
     if let Some((index, a)) = selected
-        && let Some((_, left, top)) = handles(screen_rect(xf, info, page, a.content.rect())).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
+        && let Some((_, left, top)) =
+            handles(screen_rect(xf, info, page, a.content.rect()).expand(1.0)).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
     {
         let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
         return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, icon));
@@ -626,8 +633,9 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_active: bool) {
+/// Delete removes the selected item; Escape clears the selection. Not while something is over the
+/// pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
@@ -636,7 +644,8 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_act
     {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
+    let esc = keys.pressed(ctx, egui::Key::Escape);
     // Not while a button is down: the press held would then name another item.
     if del
         && !view.content.held
@@ -665,7 +674,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
     let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
@@ -725,7 +734,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
     // the page, so only where the document shows: text scrolled under the mode bar or a side
     // panel must leave them their pointer (#2755).
-    egui::Area::new(egui::Id::unique(("added-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("added-text", view.view_key())))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(at)
@@ -805,7 +814,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
                     || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+                cancel |= keys.pressed(ui.ctx(), egui::Key::Escape);
                 commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
@@ -1595,5 +1604,15 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    /// #4477: dragging a corner handle predominantly inward on one axis must still shrink an image
+    /// proportionally instead of freezing because the other axis did not shrink.
+    #[test]
+    fn corner_resize_shrinks_image_when_dragged_inward_along_one_axis() {
+        let r = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 150.0));
+        let shrunk = dragged(r, Grab::Corner(false, false), egui::vec2(-40.0, 2.0), true);
+        assert!((shrunk.width() - 60.0).abs() < 1e-3, "width shrinks by 40%: {shrunk:?}");
+        assert!((shrunk.height() - 30.0).abs() < 1e-3, "height shrinks proportionally by 40%: {shrunk:?}");
     }
 }

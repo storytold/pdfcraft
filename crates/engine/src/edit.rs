@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use crate::{
-    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit,
-    InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox,
-    Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image,
-    field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted,
-    xfa, xfa_after_data_change,
+    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
+    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
+    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
+    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -160,12 +160,14 @@ pub enum Edit {
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
     /// and centred in it (#4077).
+    /// `line` is a text line under the picture, already filled in ([`Session::stamp_line`](crate::Session::stamp_line)).
     AddCustomStamp {
         page: usize,
         rect: [f64; 4],
         name: String,
         file: MarkFile,
         author: String,
+        line: Option<String>,
     },
     /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
     /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an
@@ -242,6 +244,14 @@ pub enum Edit {
         page: usize,
         index: usize,
         points: Vec<[f64; 2]>,
+    },
+    /// Open, close or move a comment's pop-up window (`rect` in user space; a comment without a
+    /// pop-up gets one).
+    SetAnnotationPopup {
+        page: usize,
+        index: usize,
+        rect: Option<[f64; 4]>,
+        open: Option<bool>,
     },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
@@ -349,6 +359,20 @@ pub enum Edit {
     },
     /// Document Properties ▸ Initial View (and the language and binding).
     SetInitialView(Box<InitialView>),
+    /// Print production ▸ Add printer marks: trim and bleed marks, registration targets, colour
+    /// bars and page information outside the trim box, as a page mark; the page may be widened
+    /// to make room (`settings.make_room`), so the page geometry is read again.
+    AddPrinterMarks {
+        pages: Vec<usize>,
+        settings: PrinterMarks,
+        replace: bool,
+    },
+    /// Print production ▸ Fix hairlines: strokes narrower than `settings.narrower_than` points on
+    /// the page (after every transformation; zero-width lines always) get `settings.width`.
+    FixHairlines {
+        pages: Vec<usize>,
+        settings: Hairlines,
+    },
     /// Edit ▸ Attach a file: a document-level attachment (`/Names /EmbeddedFiles`) under
     /// `name`, made unique; `mime` is the embedded file's `/Subtype` when known.
     AddAttachment {
@@ -360,6 +384,16 @@ pub enum Edit {
     /// Remove the document-level attachment whose name-tree key is `key`.
     DeleteAttachment {
         key: String,
+    },
+    /// Print production ▸ Convert colours: every colour on the pages in grayscale, RGB or CMYK.
+    ConvertColours {
+        pages: Vec<usize>,
+        settings: pdfcraft_edit::ConvertColours,
+    },
+    /// Change or clear only `/Desc` on a document-level attachment's file specification.
+    EditAttachmentDescription {
+        key: String,
+        description: Option<String>,
     },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
@@ -389,6 +423,11 @@ pub enum Edit {
     },
     /// Tags panel ▸ Mark as artifact: retire a leaf tag and mark its content as an artifact.
     MarkTagArtifact {
+        object: pdfcraft_cos::ObjRef,
+    },
+    /// A layout table as plain blocks: the table, its row groups and rows become Div tags and its
+    /// cells P tags (Div when they hold tags), without their Table attributes.
+    LayoutTableToBlocks {
         object: pdfcraft_cos::ObjRef,
     },
     /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
@@ -457,6 +496,12 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Delete mixed existing and added objects together (references from one inventory of
+    /// `page`), as one step: what Delete and Cut do to objects selected together.
+    DeleteObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {
@@ -465,6 +510,10 @@ pub enum Edit {
         text: String,
         /// Formatting changes (font, size, colour, alignment); default keeps the paragraph's.
         style: pdfcraft_edit::BlockStyle,
+    },
+    /// Expose supported grouped source text on one page for direct editing.
+    PrepareText {
+        page: usize,
     },
     /// An explicit open-licensed full font program, completing subsets or selected by a user.
     RegisterTextFont {
@@ -544,6 +593,13 @@ pub enum Edit {
         page: usize,
         content: AddedContent,
         file: Option<(String, Arc<Vec<u8>>)>,
+    },
+    /// Edit ▸ Paste of objects copied together in Edit a PDF ([`Document::copy_objects`](crate::Document::copy_objects)), in this
+    /// document or another: drawn on top of `page` as they were, moved by `offset` (user space).
+    PasteObjects {
+        page: usize,
+        clip: Arc<crate::ObjectClip>,
+        offset: [f64; 2],
     },
     /// Apply redaction marks (all, or those on `pages`): remove what they cover for good.
     ApplyRedactions {
