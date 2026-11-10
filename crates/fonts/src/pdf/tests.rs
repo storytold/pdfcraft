@@ -309,17 +309,27 @@ fn a_fonts_streams_are_paid_for_from_its_allowance() {
 }
 
 /// With nothing left, an empty stream still reads, as the allowance reads one, and is no reason to
-/// call the font read past it; a stream with data is left unread, and is.
+/// call the font read past it; a stream with data is left unread, and is. An empty stream behind a
+/// filter nothing decodes is unread with any allowance, so it isn't either: the font is read past
+/// its allowance exactly when the allowance counts a refusal, which is what callers refuse on.
 #[test]
 fn an_empty_stream_reads_with_nothing_left() {
-    let past = |data: &[u8]| {
+    let past = |filter: Option<&str>, data: &[u8]| {
         let mut doc = Document::new_empty();
-        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.to_vec()))));
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
         let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("ToUnicode", unicode)]);
-        Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(0, 0)).past_allowance
+        let mut budget = DecodeBudget::new(0, 0);
+        let past = Metrics::from_dict_within(&doc, &f, &mut budget).past_allowance;
+        assert_eq!(past, budget.refused() > 0, "{filter:?}");
+        past
     };
-    assert!(!past(b""));
-    assert!(past(b"1 beginbfchar <41> <0058> endbfchar"));
+    assert!(!past(None, b""));
+    assert!(!past(Some("NoSuchFilter"), b""));
+    assert!(past(None, b"1 beginbfchar <41> <0058> endbfchar"));
 }
 
 /// A stream behind one filter past its own limit, with more left than its limit, is left unread as
@@ -967,6 +977,41 @@ fn type3_glyph_boxes_are_paid_for_from_the_allowance() {
     assert_eq!(budget.remaining(), 0);
     let m = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(cost - 1, 0));
     assert!(m.past_allowance, "a byte short, the second description is left unread");
+}
+
+/// A glyph description that fails on its own once the allowance is spent to the byte, an empty one
+/// behind a filter nothing decodes, fails the same with more left: it doesn't make the metrics read
+/// past the allowance, and the descriptions after it are read, or refused by the allowance.
+#[test]
+fn a_type3_description_unread_on_its_own_is_not_past_the_allowance() {
+    let mut doc = Document::new_empty();
+    let procs = ["1 0 0 -20 1 300 d1", "", "1 0 0 0 1 400 d1"];
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unread = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new()))));
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.set(b"g1".to_vec(), unread);
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    with_differences(&mut f, &["g0", "g1", "g2"].map(String::from));
+    let first = procs[0].len();
+    let whole = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(usize::MAX, 0));
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.ascent, whole.descent), (400.0, -20.0));
+    // The first description spends it to the byte; the third, which has data, is refused.
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!(budget.refused(), 1);
+    assert!(m.past_allowance);
+    // Without the third, nothing is refused, and the metrics aren't past the allowance.
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.remove(b"g2");
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!((budget.refused(), budget.remaining()), (0, 0));
+    assert!(!m.past_allowance);
+    assert_eq!((m.ascent, m.descent), (300.0, -20.0));
 }
 
 /// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`

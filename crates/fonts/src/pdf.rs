@@ -70,7 +70,9 @@ pub struct Metrics {
     /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
     /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
     /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
-    /// Type 3 font's height) is a guess.
+    /// Type 3 font's height) is a guess. It is set exactly when the allowance counted a refusal
+    /// during the read ([`DecodeBudget::refused`]), which callers that share it may refuse on; a
+    /// stream that fails on its own data doesn't set it, with or without anything left.
     pub past_allowance: bool,
 }
 
@@ -420,12 +422,16 @@ impl<'a> Reads<'a> {
     /// stage past `max` is unread. When what is left is more than what the stages before that one
     /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
     /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
-    /// with no more left than that total, it spends all of it and counts as refused.
+    /// with no more left than that total, it spends all of it and counts as refused. Only what
+    /// the allowance counts as refused ([`DecodeBudget::refused`]) is: a stream that fails on its
+    /// own data fails the same with more left, even when it spends the last of it or nothing was
+    /// left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        let refused = self.budget.refused();
         match self.budget.decode_stages_within(self.doc, stream, max) {
             Ok(data) => Some(data),
             Err(_) => {
-                self.refused |= self.budget.remaining() == 0;
+                self.refused |= self.budget.refused() > refused;
                 None
             }
         }
@@ -491,10 +497,13 @@ fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option
             break;
         }
         let before = reads.budget.remaining();
+        let refused = reads.budget.refused();
         let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
         left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
         let Ok(data) = read else {
-            if reads.budget.remaining() == 0 {
+            // As in `Reads::decode`, only a refusal the allowance counts: a description that fails
+            // on its own data, spending the last of it, leaves the rest to be refused above.
+            if reads.budget.refused() > refused {
                 // The rest go unread too, for want of the reading's allowance.
                 reads.refused = true;
                 complete = false;
