@@ -255,7 +255,7 @@ impl PrintDraft {
                 area: Some(area),
             });
         }
-        if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
+        if self.cut_and_stack() && matches!(self.chosen_duplex(), Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
@@ -312,6 +312,27 @@ impl PrintDraft {
         self.handling == Handling::Multiple && self.order == PageOrder::CutStack
     }
 
+    /// Whether the chosen printer's driver takes two-sided settings from other programs:
+    /// `Some(false)` for one that keeps its own (no two-sided printing, or only manual two-sided in
+    /// its Properties); `None` when unknown, and for Save as PDF. The printer list says when it
+    /// knows; on Windows it lists the queues without asking their drivers (#3554), and the answer
+    /// for the printer picked arrives in [`PrintDraft::two_sided`].
+    pub fn printer_two_sided(&self) -> Option<bool> {
+        let p = self.printers.iter().find(|p| self.printer.as_ref() == Some(&p.name))?;
+        p.two_sided.or_else(|| self.two_sided.get(&p.name).copied().flatten())
+    }
+
+    /// The Two-sided choice as the chosen printer can take it: long or short edge is left out for
+    /// a printer whose driver doesn't take two-sided settings from other programs, so its own
+    /// setting applies instead of the job being refused (#3208). Off and the printer's default
+    /// stay as chosen: one-sided is accepted by every driver.
+    fn chosen_duplex(&self) -> Option<spool::Duplex> {
+        match self.duplex {
+            Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge) if self.printer_two_sided() == Some(false) => None,
+            chosen => chosen,
+        }
+    }
+
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
@@ -320,16 +341,19 @@ impl PrintDraft {
             copies: self.copies.max(1),
             collate: self.collate,
             // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
-            // decides two-sided itself (#2707), leaving the Two-sided choice as it was.
+            // decides two-sided itself (#2707), as far as the driver takes it (#5772), leaving the
+            // Two-sided choice as it was.
             duplex: if self.cut_and_stack() {
                 Some(spool::Duplex::Off)
             } else if self.handling == Handling::Booklet {
-                Some(print::booklet_duplex(self.booklet_subset))
+                print::booklet_job_duplex(self.booklet_subset, self.printer_two_sided())
             } else {
-                self.duplex
+                self.chosen_duplex()
             },
             scaling: spool::Scaling::Exact,
             grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
+            // Set when the copy sent is made grey (`spooler_copy`, #5806).
+            grey_pages: false,
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {

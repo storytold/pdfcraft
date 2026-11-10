@@ -557,7 +557,7 @@ impl PdfCraftApp {
     /// the progress card counts the sheets as they reach the spooler, and the spooler's answer
     /// arrives as a notice.
     #[cfg(not(target_arch = "wasm32"))]
-    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
+    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
         let spooler = self.spooler.clone();
@@ -567,9 +567,9 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
-            // Large pictures become tiles on Windows (#5131): work on the whole file, kept off the
-            // UI thread with the rest.
-            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
+            // On Windows grayscale makes the pages grey (#5806) and large pictures become tiles
+            // (#5131): work on the whole file, kept off the UI thread with the rest.
+            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
             // The receiver may be gone (the app quit): nothing to report to then.
             let result = match &spooler {
                 Some(submit) => submit(&bytes, &job),
@@ -830,6 +830,65 @@ mod tests {
         assert!(cut.settings(4, &[]).is_ok(), "the printer's default doesn't block cut and stack");
         cut.duplex = Some(spool::Duplex::ShortEdge);
         assert!(cut.settings(4, &[]).is_err());
+    }
+
+    /// #3208: long or short edge goes to a printer whose driver doesn't take two-sided settings
+    /// as no duplex setting at all, so the driver keeps its own instead of refusing the job; Off
+    /// still reaches it, a printer that can or whose support is unknown still gets the choice,
+    /// and a stale long-edge choice doesn't block cut and stack. The printers are listed as the
+    /// dialog lists them (#3554), drivers unasked, with each answer in `two_sided`.
+    #[test]
+    fn duplex_is_not_sent_to_a_printer_without_two_sided() {
+        let draft = |name: &str, duplex| PrintDraft {
+            printers: ["Office", "Duplexer", "Network"]
+                .map(|n| spool::Printer { name: n.into(), default: n == "Office", two_sided: None, description: String::new() })
+                .to_vec(),
+            two_sided: [("Office".to_string(), Some(false)), ("Duplexer".to_string(), Some(true))].into_iter().collect(),
+            printer: Some(name.into()),
+            duplex,
+            ..PrintDraft::default()
+        };
+        for duplex in [spool::Duplex::LongEdge, spool::Duplex::ShortEdge] {
+            assert_eq!(draft("Office", Some(duplex)).job("report.pdf").duplex, None, "{duplex:?} to a printer without two-sided");
+            assert_eq!(draft("Duplexer", Some(duplex)).job("report.pdf").duplex, Some(duplex));
+            assert_eq!(draft("Network", Some(duplex)).job("report.pdf").duplex, Some(duplex), "unknown support keeps the choice");
+        }
+        assert_eq!(draft("Office", Some(spool::Duplex::Off)).job("report.pdf").duplex, Some(spool::Duplex::Off), "Off still reaches it");
+        assert_eq!(draft("Office", None).job("report.pdf").duplex, None);
+        // A long-edge choice left from another printer doesn't block cut and stack on this one.
+        let mut cut = draft("Office", Some(spool::Duplex::LongEdge));
+        (cut.handling, cut.order) = (Handling::Multiple, PageOrder::CutStack);
+        assert!(cut.settings(4, &[]).is_ok());
+        assert_eq!(cut.job("report.pdf").duplex, Some(spool::Duplex::Off));
+        cut.printer = Some("Duplexer".into());
+        assert!(cut.settings(4, &[]).is_err(), "still refused where it would print two-sided");
+    }
+
+    /// #5772: a booklet's both sides ask the printer for the short edge, unless its driver doesn't
+    /// take two-sided settings: it would refuse the job, so its own setting (manual two-sided, say)
+    /// prints it. One side on its own stays one-sided.
+    #[test]
+    fn a_booklet_leaves_two_sided_to_a_driver_that_keeps_its_own() {
+        // Listed as the dialog lists them (#3554), drivers unasked; the answers for the printers
+        // picked arrive in `two_sided`, and the network printer's never came.
+        let printer = |name: &str| spool::Printer { name: name.into(), default: false, two_sided: None, description: String::new() };
+        let mut d = PrintDraft {
+            printers: vec![printer("Epson"), printer("Laser"), printer("Network")],
+            two_sided: [("Epson".to_string(), Some(false)), ("Laser".to_string(), Some(true))].into_iter().collect(),
+            handling: Handling::Booklet,
+            ..PrintDraft::default()
+        };
+        for (name, both) in [("Epson", None), ("Laser", Some(spool::Duplex::ShortEdge)), ("Network", Some(spool::Duplex::ShortEdge))] {
+            d.printer = Some(name.into());
+            d.booklet_subset = BookletSubset::BothSides;
+            assert_eq!(d.job("a.pdf").duplex, both, "{name}");
+            d.booklet_subset = BookletSubset::FrontOnly;
+            assert_eq!(d.job("a.pdf").duplex, Some(spool::Duplex::Off), "{name}");
+        }
+        // Save as PDF has no driver: as before.
+        d.printer = None;
+        d.booklet_subset = BookletSubset::BothSides;
+        assert_eq!(d.job("a.pdf").duplex, Some(spool::Duplex::ShortEdge));
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
