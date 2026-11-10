@@ -740,7 +740,7 @@ impl Gestures<'_> {
 }
 
 /// Delete / Escape handling for comments (only while no text field has focus).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, tool: &mut QuickTool, allowed: bool) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
@@ -756,21 +756,19 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
             *tool = QuickTool::Select;
         }
     }
-    if allowed
-        && cv.selected.is_some()
-        && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-        && let Some(edit) = delete_selected(cv)
-    {
-        view.pending_edit = Some(edit);
+    if allowed && cv.selected.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        view.pending_edit = delete_selected(cv, info);
     }
 }
 
 /// The edit that deletes every selected comment (one undo step for several), and clears the
 /// selection. Later positions go first, so each deletion leaves the earlier ones where they are.
-pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
+pub(crate) fn delete_selected(cv: &mut CommentView, info: &DocInfo) -> Option<Edit> {
     // A group's member picked on the page, with its group the selection alone, goes by itself, as
     // Acrobat deletes the member clicked ([`CommentView::target`]).
-    let mut keys = if cv.also.is_empty() { cv.target().into_iter().collect() } else { cv.selection() };
+    let raw = if cv.also.is_empty() { cv.target().into_iter().collect() } else { cv.selection() };
+    let mut keys: Vec<(usize, usize)> =
+        raw.into_iter().filter(|(page, index)| info.annotations.iter().any(|a| a.page == *page && a.index == *index && !a.locked)).collect();
     cv.clear_selection();
     keys.sort_unstable_by(|a, b| b.cmp(a));
     keys.dedup();

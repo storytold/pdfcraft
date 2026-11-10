@@ -5487,6 +5487,30 @@ fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
     assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
 }
 
+/// Leaving All tools ▸ Edit a PDF for another tool applies the paragraph still open, as leaving
+/// the Edit tab does, rather than dropping what was typed (review on #4605).
+#[test]
+fn another_tool_from_edit_a_pdf_applies_the_open_paragraph() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_ne!(h.state().mode, Mode::Edit, "Edit a PDF from All tools, not the Edit tab");
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    click_at(&mut h, egui::pos2(r.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, r.top() + (300.0 - (b.rect[1] + b.rect[3]) / 2.0) as f32 * k));
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"), "the paragraph is open for typing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Page one".into();
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the typed text was applied");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});
@@ -9587,6 +9611,68 @@ fn test_cropped_image_selection_and_bounding_box() {
     click_at(&mut h, corner);
     h.run_steps(2);
     assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
+}
+
+/// Print production ▸ Add printer marks: the dialog adds removable marks around
+/// the trim box, widening the page to make room; Remove printer marks takes them off.
+#[test]
+fn printer_marks_are_added_from_the_dialog_and_removed() {
+    let mut h = harness(2, |_| {});
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().info.pages[0].width;
+    assert!(h.state_mut().execute("prepress.marks"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::PrinterMarks));
+    h.get_by_label("All marks");
+    h.get_by_label("Add").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Add printer marks"));
+    assert!(doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    // No trim box: the whole page is the trim box, so the page grew 36 pt a side for the marks.
+    assert!((doc.info.pages[0].width - (before + 72.0)).abs() < 0.5, "{} → {}", before, doc.info.pages[0].width);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Printer marks added");
+    assert!(h.state_mut().execute("prepress.marks.remove"));
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert!(!doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    assert_eq!(doc.can_undo(), Some("Remove printer marks"));
+}
+
+/// Print production ▸ Convert colours: the dialog converts the page's colours
+/// and says how many; with nothing to convert it says so and changes nothing.
+#[test]
+fn convert_colours_from_the_dialog() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S",
+    )));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("colours.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::ConvertColours));
+    h.get_by_label("Grayscale");
+    // The mode bar has a "Convert" too: the dialog's button is the last one.
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Converted 2 colours and 0 pictures on 1 pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Convert colours"));
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Nothing on those pages needed converting");
 }
 
 /// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
