@@ -521,8 +521,8 @@ mod order;
 use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]
 use device::{
-    DOUBLES_WORK, MAX_REDRAW_TEXT, MAX_REDRAW_WORK, PAGE_WORK, PANIC_IN_RECOVERY, RECOVERY_DEADLINE, REDRAW_TEXT_BYTES, REDRAW_WALK_STEPS, Replaced,
-    STRICT_MILLIS, TextDevice, ligature_letters,
+    DOUBLES_WORK, MAX_REDRAW_TEXT, MAX_REDRAW_WORK, PAGE_WORK, PANIC_IN_RECOVERY, RECOVERED_GLYPHS, RECOVERY_DEADLINE, REDRAW_TEXT_BYTES,
+    REDRAW_WALK_STEPS, Replaced, STRICT_MILLIS, TextDevice, ligature_letters,
 };
 pub(crate) use device::{extract_page, extract_page_filtered, extract_page_recovering};
 pub use layout::layout;

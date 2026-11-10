@@ -227,7 +227,9 @@ impl TrueTypeFont {
             strict,
             id: None,
         };
-        self.recovery.cache.recover(facts, glyph)
+        self.recovery
+            .cache
+            .recover(FontKind::TrueType, facts, glyph)
     }
 
     pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {

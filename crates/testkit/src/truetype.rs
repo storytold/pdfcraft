@@ -87,9 +87,16 @@ pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: 
     }
     let mut glyf = Vec::new();
     let mut loca = Vec::new();
+    // One lookup per glyph, so a program of tens of thousands of glyphs builds quickly.
+    let mut draws = vec![false; usize::from(num_glyphs)];
+    for &gid in drawn {
+        if let Some(d) = draws.get_mut(usize::from(gid)) {
+            *d = true;
+        }
+    }
     for gid in 0..num_glyphs {
         be32(&mut loca, u32::try_from(glyf.len()).unwrap_or(u32::MAX));
-        if drawn.contains(&gid) {
+        if draws.get(usize::from(gid)).copied().unwrap_or(false) {
             glyf.extend_from_slice(&square);
         }
     }

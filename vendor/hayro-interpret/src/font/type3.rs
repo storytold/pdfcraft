@@ -56,6 +56,10 @@ pub(crate) struct Type3<'a> {
     own_code_names: OnceLock<bool>,
     /// PdfCraft patch (104): what the recovery rules need, and their decisions.
     recovery: FontRecovery,
+    /// PdfCraft patch (104): the font's cache key, its dictionary's hash, worked out once: the
+    /// recovered layer asks for it with every glyph (its budget of fonts per page), and hashing
+    /// the dictionary each time cost a page of Type 3 glyphs a quarter of its text extraction.
+    key: u128,
 }
 
 /// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
@@ -108,6 +112,7 @@ impl<'a> Type3<'a> {
             decoded_procs: RefCell::new(HashMap::new()),
             own_code_names: OnceLock::new(),
             recovery: FontRecovery::new(dict, None),
+            key: dict_key(dict),
         })
     }
 
@@ -279,7 +284,7 @@ impl<'a> Type3<'a> {
             strict,
             id: Some(code),
         };
-        self.recovery.cache.recover(facts, glyph)
+        self.recovery.cache.recover(FontKind::Type3, facts, glyph)
     }
 
     /// PdfCraft patch (104): the font's style for text the recovery rules read, from its
@@ -380,8 +385,14 @@ impl<'a> Type3<'a> {
 
 impl CacheKey for Type3<'_> {
     fn cache_key(&self) -> u128 {
-        self.dict.cache_key()
+        self.key
     }
+}
+
+/// PdfCraft patch (104): a Type 3 font's cache key, its dictionary's hash (counted for tests).
+fn dict_key(dict: &Dict<'_>) -> u128 {
+    crate::font::recovery::count(crate::font::recovery::Counter::Type3KeyHash);
+    dict.cache_key()
 }
 
 struct Type3ShapeGlyphDevice<'a, 'b, T: Device<'a>> {

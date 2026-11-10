@@ -64,6 +64,9 @@ pub(super) struct TextDevice {
     pub(super) recovery_failed: bool,
     /// Fonts whose recovery rules were asked on this page ([`MAX_RECOVERY_FONTS`]).
     recovery_fonts: std::collections::HashSet<u128>,
+    /// The font of the last glyph asked, already in `recovery_fonts`: a run of glyphs of one
+    /// font is counted without hashing each glyph's font again.
+    last_recovery_font: Option<u128>,
     /// What is left of the page's dedupe work ([`MAX_REDRAW_WORK`]).
     pub(super) work_left: usize,
 }
@@ -164,6 +167,8 @@ thread_local! {
     pub(super) static STRICT_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// A smaller dedupe work budget for the pages read on this thread.
     pub(super) static PAGE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// A smaller recovered-glyph budget for the pages read on this thread.
+    pub(super) static RECOVERED_GLYPHS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// Work (cells visited, glyphs compared) of `drop_doubles` on this thread.
     pub(super) static DOUBLES_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Steps of the walk that drops recovered glyphs inside merged redraws, on this thread.
@@ -177,6 +182,15 @@ fn page_work() -> usize {
         return w;
     }
     MAX_REDRAW_WORK
+}
+
+/// The page's recovered-glyph budget: [`MAX_RECOVERED_GLYPHS`], or a test's smaller one.
+fn recovered_glyphs() -> usize {
+    #[cfg(test)]
+    if let Some(n) = RECOVERED_GLYPHS.with(std::cell::Cell::get) {
+        return n;
+    }
+    MAX_RECOVERED_GLYPHS
 }
 
 /// The grid cells a coordinate `v` give or take `tol` falls in, first and last. `cell`
@@ -339,6 +353,7 @@ impl TextDevice {
             overrides: Vec::new(),
             recovery_failed: false,
             recovery_fonts: std::collections::HashSet::new(),
+            last_recovery_font: None,
             work_left: page_work(),
         }
     }
@@ -589,13 +604,18 @@ impl TextDevice {
         &mut self,
         glyph: &Glyph<'_>,
     ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
-        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= MAX_RECOVERED_GLYPHS || {
+        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs() || {
             // Outline and Type 3 fonts count alike: each runs the rules' font-level guards.
             let font = match glyph {
                 Glyph::Outline(g) => g.font_cache_key(),
                 Glyph::Type3(g) => g.font_cache_key(),
             };
-            self.recovery_fonts.insert(font) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS
+            if self.last_recovery_font == Some(font) {
+                false
+            } else {
+                self.last_recovery_font = Some(font);
+                self.recovery_fonts.insert(font) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS
+            }
         };
         if !over_budget {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

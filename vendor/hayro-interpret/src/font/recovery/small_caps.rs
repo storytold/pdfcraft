@@ -68,6 +68,12 @@ pub(crate) fn name_form_base(name: &str) -> Option<char> {
 
 impl Rule for AdobeSmallCaps {
     const RULE: RecoveryRule = RecoveryRule::AdobeSmallCaps;
+    const KINDS: &'static [FontKind] = &[
+        FontKind::Type1,
+        FontKind::Cff,
+        FontKind::TrueType,
+        FontKind::Type3,
+    ];
     type Guard = ();
 
     /// A simple font (Type 1, CFF, TrueType or Type 3) with at least one glyph name that names

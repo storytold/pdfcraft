@@ -1228,6 +1228,13 @@ fn type3_glyphs_reach_the_rules_and_count_toward_the_font_budget() {
     assert!(recovered.is_none(), "past the font budget nothing is recovered");
 }
 
+/// `Hi` in Helvetica, then `text` in a Type 0 font over an embedded CID-keyed CFF program
+/// (`CIDFontType0`, `Identity-H`, no `/ToUnicode`) whose CIDs are the CFF standard strings of
+/// `text`'s characters.
+fn hi_cid_cff_page(text: &str) -> Vec<u8> {
+    cid_cff_page_with(text, 0, false, "Identity", true)
+}
+
 /// A Type 0 font over an embedded CID-keyed CFF program (`CIDFontType0`) goes to the rules as a
 /// font of its own kind, with its charset's CIDs, and keeps its strict text (nothing, without
 /// `/ToUnicode`: ISO 32000-2 §9.10.2). Its CIDs are standard string ids, which rule N reads.
@@ -1235,28 +1242,7 @@ fn type3_glyphs_reach_the_rules_and_count_toward_the_font_budget() {
 fn a_cid_keyed_cff_font_is_asked_of_the_rules_and_keeps_its_strict_text() {
     use hayro::hayro_interpret::font::recovery_rule_calls;
     let text = "Indicated";
-    let cids: Vec<u16> = text.chars().map(pdfcraft_testkit::cff::standard_string_id).collect();
-    let w: String =
-        text.chars().map(|c| format!("{} [{}] ", pdfcraft_testkit::cff::standard_string_id(c), pdfcraft_testkit::cff::helvetica_width(c))).collect();
-    let shown: String = cids.iter().map(|c| format!("{c:04X}")).collect();
-    let page = page_with_font(
-        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
-        &format!("<{shown}>"),
-        true,
-        &[
-            (
-                &format!(
-                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Meta /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
-                ),
-                Vec::new(),
-            ),
-            (
-                "<< /Type /FontDescriptor /FontName /ABCDEF+Meta /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
-                Vec::new(),
-            ),
-            ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
-        ],
-    );
+    let page = hi_cid_cff_page(text);
     let before = recovery_rule_calls();
     let (strict, recovered, plain) = layers(&parse(page));
     assert!(recovery_rule_calls() - before >= text.len(), "its glyphs are asked of the rules");
@@ -1274,6 +1260,11 @@ use pdfcraft_testkit::cff::{helvetica_width, standard_string_id as sid};
 /// gives the character (600 for every glyph when `mono`), in a font of character collection
 /// Adobe-`ordering`.
 fn cid_cff_page(text: &str, shift: i32, mono: bool, ordering: &str) -> Vec<u8> {
+    cid_cff_page_with(text, shift, mono, ordering, false)
+}
+
+/// [`cid_cff_page`], after `Hi` in Helvetica when `hi`.
+fn cid_cff_page_with(text: &str, shift: i32, mono: bool, ordering: &str, hi: bool) -> Vec<u8> {
     let cid = |c: char| u16::try_from(i32::from(sid(c)) + shift).unwrap();
     let mut unique: Vec<char> = text.chars().collect();
     unique.sort_unstable();
@@ -1284,7 +1275,7 @@ fn cid_cff_page(text: &str, shift: i32, mono: bool, ordering: &str) -> Vec<u8> {
     page_with_font(
         "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+MetaNormalLF-Roman-Identity-H /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
         &format!("<{shown}>"),
-        false,
+        hi,
         &[
             (
                 &format!(
@@ -1869,15 +1860,12 @@ fn an_id_the_font_has_no_glyph_for_reads_nothing() {
 /// decision.
 #[test]
 fn a_font_with_a_to_unicode_map_alone_takes_no_rules_time() {
-    use hayro::hayro_interpret::font::recovery_taken_asks;
     let tu = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfrange <20> <7E> <0020> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end".to_vec();
     let page = page_with_font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 7 0 R >>", "(Residence)", false, &[("", tu)]);
-    let pdf = parse(page);
-    let before = recovery_taken_asks();
-    let (strict, recovered, _) = layers(&pdf);
+    let (strict, recovered, _, cost) = recovering_costs(&parse(page));
     assert_eq!(strict.plain_text(), "Residence");
     assert!(recovered.is_none());
-    assert_eq!(recovery_taken_asks() - before, 0);
+    assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (1, 0), "{cost:?}");
 }
 
 /// Review on the rules (N1): a Type 0 font's `/ToUnicode` is checked against the order only for
@@ -1927,4 +1915,230 @@ fn a_space_alone_is_no_reason_for_a_recovered_layer() {
     let (strict, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), Some(&tu))));
     assert_eq!(strict.plain_text().replace(' ', ""), text.replace(' ', ""));
     assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
+
+/// A page of `shown` glyphs, 60 to a line, of a Type 0 font (`Identity-H`, no `/ToUnicode`, an
+/// identity `/CIDSystemInfo`) over an embedded TrueType program of `glyphs` glyphs that all
+/// draw: a dense CJK font, whose glyph ids no rule can read.
+fn dense_cjk_page(glyphs: u16, shown: usize) -> Vec<u8> {
+    let drawn: Vec<u16> = (1..glyphs).collect();
+    let program = subset(glyphs, &drawn, Cmap::None, None);
+    let span = usize::from(glyphs.saturating_sub(1)).max(1);
+    let lines: Vec<String> = (0..shown)
+        .collect::<Vec<_>>()
+        .chunks(60)
+        .map(|line| format!("<{}> Tj T*", line.iter().map(|k| format!("{:04X}", 1 + (k * 7919) % span)).collect::<String>()))
+        .collect();
+    let content = format!("BT /F3 6 Tf 7 TL 20 780 Td {} ET", lines.join(" "));
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F3 5 0 R >> >> >>")
+        .stream("", content)
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+DenseMing /Encoding /Identity-H /DescendantFonts [6 0 R] >>")
+        .obj("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+DenseMing /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 1000 /FontDescriptor 7 0 R >>")
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+DenseMing /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>")
+        .stream("", program)
+        .build()
+}
+
+/// Both layers of `pdf`'s first page, the strict layer as the plain extraction reads it, and
+/// what reading both layers cost the recovery layer.
+fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, hayro::hayro_interpret::font::RecoveryCounters) {
+    use hayro::hayro_interpret::font::{RecoveryCounters, recovery_counters};
+    let settings = InterpreterSettings::default();
+    let before = recovery_counters();
+    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
+    let after = recovery_counters();
+    let cost = RecoveryCounters {
+        rule_calls: after.rule_calls - before.rule_calls,
+        guard_decisions: after.guard_decisions - before.guard_decisions,
+        facts_built: after.facts_built - before.facts_built,
+        glyph_facts_built: after.glyph_facts_built - before.glyph_facts_built,
+        program_walks: after.program_walks - before.program_walks,
+        type3_key_hashes: after.type3_key_hashes - before.type3_key_hashes,
+    };
+    (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
+}
+
+/// A font of a kind no rule reads (a Type 0 font over a CID font that isn't embedded, as a
+/// CJK document's fonts often are) costs the recovered layer one check per glyph and nothing
+/// else: its guards are never decided, its facts never built. A font a rule can read (a Type 1
+/// font, the standard Helvetica too, a Type 3 font) is decided once.
+#[test]
+fn a_font_kind_no_rule_reads_costs_one_check_per_glyph() {
+    let (strict, recovered, plain, cost) = recovering_costs(&parse(type3_fonts_then_names(3)));
+    assert_eq!(strict, plain);
+    assert!(recovered.is_some());
+    // Three Type 3 glyphs and three numbered-names glyphs; each font is decided once (each
+    // Type 3 font's facts built for its guards), and only the numbered-names font's three
+    // glyphs are read (its facts once for the guards, once a glyph).
+    assert_eq!(cost.rule_calls, 6);
+    assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built), (4, 7, 3), "{cost:?}");
+
+    let shown = "<0021002200230024>";
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiMin-W3 /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        shown,
+        true,
+        &[
+            (
+                "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 /FontDescriptor 8 0 R >>",
+                Vec::new(),
+            ),
+            (
+                "<< /Type /FontDescriptor /FontName /HeiseiMin-W3 /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>",
+                Vec::new(),
+            ),
+        ],
+    );
+    let (strict, recovered, plain, cost) = recovering_costs(&parse(page));
+    assert_eq!(strict, plain);
+    assert!(recovered.is_none());
+    assert_eq!(cost.rule_calls, 2 + 4);
+    // Helvetica's `Hi` only.
+    assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built, cost.program_walks), (1, 1, 0, 0), "{cost:?}");
+}
+
+/// What reading `pdf`'s first page cost, after checking that `rule` read some of its glyphs.
+fn cost_of_a_rules_reading(pdf: Vec<u8>, rule: RecoveryRule, what: &str) -> hayro::hayro_interpret::font::RecoveryCounters {
+    let (strict, recovered, plain, cost) = recovering_costs(&parse(pdf));
+    assert_eq!(strict, plain, "{what}");
+    let r = recovered.unwrap_or_else(|| panic!("{what}: nothing recovered ({cost:?})"));
+    assert!(r.recovery.iter().flatten().any(|x| x.rule == rule), "{what}: {:?}", r.text.plain_text());
+    assert!(cost.guard_decisions > 0 && cost.glyph_facts_built > 0, "{what}: {cost:?}");
+    cost
+}
+
+/// Rule N is asked of the font kinds it reads (`StandardStringOrder::KINDS`): a
+/// CID-keyed CFF font and a Type 3 font, each decided once and its glyphs read. A kind left out
+/// of the list would silently read nothing.
+#[test]
+fn rule_n_is_asked_of_cid_keyed_cff_and_type3_fonts() {
+    let text = "Indicated";
+    let cost = cost_of_a_rules_reading(hi_cid_cff_page(text), RecoveryRule::StandardStringOrder, "CID-keyed CFF");
+    // Helvetica's `Hi`, decided and taken by no rule; the CID font, its every glyph read.
+    assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (2, text.len()), "{cost:?}");
+    let text = "The Residence address and ZIP code are indicated";
+    let page = type3_page(text, |c| u8::try_from(sid(c)).unwrap(), "c");
+    let cost = cost_of_a_rules_reading(page, RecoveryRule::StandardStringOrder, "Type 3");
+    assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (1, text.len()), "{cost:?}");
+}
+
+/// The Macintosh-order rule is asked of the kinds this change adds to it: a Type 0 TrueType
+/// font whose `/ToUnicode` names nothing (the K extension) and a CID-keyed CFF font whose CIDs
+/// are Macintosh glyph ids.
+#[test]
+fn the_mac_order_rule_is_asked_of_type0_truetype_and_cid_keyed_cff_fonts() {
+    let text = "Indicadores de estudiantes";
+    let g = gids(text);
+    let page = type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, &mac_widths(text, 0), Some(""));
+    let cost = cost_of_a_rules_reading(page, RecoveryRule::MacGlyphOrder, "Type 0 TrueType");
+    assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (1, text.len()), "{cost:?}");
+    let text = "Form 4 Articles of Amendment, Canada";
+    let cost = cost_of_a_rules_reading(cid_cff_page(text, 2, false, "Identity"), RecoveryRule::MacGlyphOrder, "CID-keyed CFF");
+    assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (1, text.len()), "{cost:?}");
+}
+
+/// Rule M is asked of every simple font kind (`AdobeSmallCaps::KINDS`): a standard Type 1
+/// font, a Type 1 font with a CFF program, a TrueType font and a Type 3 font, each with glyph
+/// names of small capitals.
+#[test]
+fn rule_m_is_asked_of_every_simple_font_kind() {
+    let names = "/Ismall /Nsmall /Tsmall /Rsmall /Osmall";
+    let diffs = format!("/Encoding << /Type /Encoding /Differences [1 {names}] >>");
+    let pages = [
+        ("standard Type 1", page_with_font(&format!("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman {diffs} >>"), "<0102030405>", false, &[])),
+        ("CFF", names_page(names, "ABCDEF+Rpxsc", false)),
+        ("TrueType", page_with_font(&format!("<< /Type /Font /Subtype /TrueType /BaseFont /Arial {diffs} >>"), "<0102030405>", false, &[])),
+        ("Type 3", type3_page_named("INTRO", |c| c as u8, |k| format!("{}small", k as char))),
+    ];
+    for (what, page) in pages {
+        let cost = cost_of_a_rules_reading(page, RecoveryRule::AdobeSmallCaps, what);
+        assert_eq!((cost.guard_decisions, cost.glyph_facts_built), (1, 5), "{what}: {cost:?}");
+    }
+}
+
+/// A Type 3 font's cache key is worked out once per font, however many of its glyphs a page
+/// shows: the recovered layer asks for it with every glyph (its budget of fonts per page).
+#[test]
+fn a_type3_fonts_key_is_hashed_once_however_many_glyphs_it_shows() {
+    let page = |glyphs: usize| {
+        let codes = "41".repeat(glyphs);
+        pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
+            .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /T0 5 0 R >> >> >>")
+            .stream("", format!("BT /T0 1 Tf 20 700 Td <{codes}> Tj ET"))
+            .obj("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 6 0 R >> >>")
+            .stream("", b"500 0 0 0 500 700 d1 0 0 500 700 re f")
+            .build()
+    };
+    let (_, _, _, few) = recovering_costs(&parse(page(10)));
+    let (strict, _, plain, many) = recovering_costs(&parse(page(500)));
+    assert_eq!(strict, plain);
+    assert_eq!(many.rule_calls, 500);
+    assert!(few.type3_key_hashes > 0);
+    assert_eq!(many.type3_key_hashes, few.type3_key_hashes, "the key is hashed per font, not per glyph");
+}
+
+/// A dense CJK page (3,000 glyphs of a Type 0 font over a program of 20,000 glyphs, no
+/// `/ToUnicode`): the font's guards walk its program once, whatever its size (2,000 glyphs
+/// cost the same walks and decisions as 20,000); no rule takes it, so each glyph costs the one
+/// check and no more; and the strict text is the plain extraction's.
+#[test]
+fn a_dense_cjk_page_costs_the_same_per_font_whatever_the_fonts_size() {
+    let shown = 3000;
+    let mut costs = Vec::new();
+    for glyphs in [2000, 20_000] {
+        let (strict, recovered, plain, cost) = recovering_costs(&parse(dense_cjk_page(glyphs, shown)));
+        assert_eq!(strict, plain, "{glyphs} glyphs");
+        // Without `/ToUnicode` the glyphs have no strict text (ISO 32000-2 §9.10.2).
+        assert!(strict.glyphs.is_empty(), "{glyphs} glyphs");
+        assert!(recovered.is_none(), "{glyphs} glyphs");
+        assert_eq!(cost.rule_calls, shown, "one check a glyph");
+        assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built), (1, 1, 0), "{glyphs} glyphs: {cost:?}");
+        costs.push(cost);
+    }
+    assert_eq!(costs.first(), costs.last(), "per-font work grew with the font's glyphs");
+    assert!(costs.first().is_some_and(|c| c.program_walks > 0), "the guard read the program");
+}
+
+/// A dense page past the recovered-glyph budget has no recovered layer, and its strict text as
+/// the plain extraction reads it; past the dedupe budget, recovered doubles stop being dropped
+/// (the recovered text reads them twice) and the work stops at the budget. Neither panics.
+#[test]
+fn dense_pages_stop_at_the_recovery_budgets() {
+    // 1,500 `S` (strict) and 1,500 `o` (rule 1) glyphs, 60 to a line.
+    let line = format!("<{}> Tj T*", "0102".repeat(30));
+    let lines = vec![line; 50].join(" ");
+    let content = format!("BT /F3 6 Tf 7 TL 20 780 Td {lines} ET");
+    let pdf = parse(page_of("/S /C111", &content));
+    let count = |text: Option<RecoveredText>, c: char| text.map(|r| r.text.plain_text().matches(c).count());
+
+    RECOVERED_GLYPHS.with(|n| n.set(Some(1000)));
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layers(&pdf)));
+    RECOVERED_GLYPHS.with(|n| n.set(None));
+    let (strict, recovered, plain) = read.expect("no panic past the recovered-glyph budget");
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text().matches('S').count(), 1500);
+    assert!(recovered.is_none(), "past the recovered-glyph budget the page has no recovered layer");
+    let (_, recovered, _) = layers(&pdf);
+    assert_eq!(count(recovered, 'o'), Some(1500), "within it, every glyph is read");
+
+    // The same lines drawn twice at the same place: 1,500 recovered doubles to drop.
+    let twice = parse(page_of("/S /C111", &format!("{content} {content}")));
+    let budget = 500;
+    PAGE_WORK.with(|w| w.set(Some(budget)));
+    DOUBLES_WORK.with(|c| c.set(0));
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layers(&twice)));
+    PAGE_WORK.with(|w| w.set(None));
+    let (strict, recovered, plain) = read.expect("no panic past the dedupe budget");
+    assert_eq!(strict, plain);
+    let work = DOUBLES_WORK.with(std::cell::Cell::get);
+    assert!(work <= budget, "the dedupe stopped at its budget: {work} steps");
+    let os = count(recovered, 'o');
+    assert!(os.is_some_and(|n| n > 1500), "past the budget the doubles are kept as they are: {os:?}");
+    let (_, recovered, _) = layers(&twice);
+    assert_eq!(count(recovered, 'o'), Some(1500), "within it, the doubles are dropped");
 }

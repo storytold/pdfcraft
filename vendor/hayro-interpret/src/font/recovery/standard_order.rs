@@ -76,6 +76,7 @@ const MAX_IDS: usize = 65_536;
 
 impl Rule for StandardStringOrder {
     const RULE: RecoveryRule = RecoveryRule::StandardStringOrder;
+    const KINDS: &'static [FontKind] = &[FontKind::CidCff, FontKind::Type3];
     type Guard = StandardOrder;
 
     fn guard(font: &FontFacts<'_>) -> Option<StandardOrder> {

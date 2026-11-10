@@ -69,7 +69,7 @@ use crate::util::hash128;
 use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
 #[cfg(feature = "test-counters")]
-pub use recovery::{recovery_rule_calls, recovery_taken_asks, test_hooks};
+pub use recovery::{RecoveryCounters, recovery_counters, recovery_rule_calls, test_hooks};
 pub use recovery::{RecoveredFontStyle, Recovery, RecoveryMode, RecoveryRule, recovery_policy};
 pub use standard_font::StandardFont;
 
