@@ -569,12 +569,10 @@ impl PdfCraftApp {
                 });
             }
             let resp = ui.menu_button(&menu.title, |ui| {
-                ui.set_min_width(220.0);
-                ui.set_max_width(360.0);
+                ui.set_min_width(200.0);
+                ui.set_max_width(280.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                egui::ScrollArea::vertical().max_height(700.0).show(ui, |ui| {
-                    render_nodes(ui, &menu.children, &gate, &mut chosen);
-                });
+                render_nodes(ui, &menu.children, &gate, &mut chosen);
             });
             if is_target {
                 resp.response.request_focus();
@@ -699,12 +697,10 @@ fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu
                 let resp = ui
                     .add_enabled_ui(enabled, |ui| {
                         ui.menu_button(label, |ui| {
-                            ui.set_min_width(220.0);
-                            ui.set_max_width(360.0);
+                            ui.set_min_width(160.0);
+                            ui.set_max_width(240.0);
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                                render_nodes(ui, children, gate, chosen);
-                            });
+                            render_nodes(ui, children, gate, chosen);
                         })
                     })
                     .inner;
