@@ -6299,6 +6299,25 @@ fn printing_through_tools() {
 }
 
 #[test]
+fn printer_papers_through_tools() {
+    let dir = workdir("printer-papers");
+    let mut a = auto(&dir);
+    let none = ok(&mut a, "printer_papers", json!({ "printer": "No_Such_Queue_PdfCraft" }));
+    assert_eq!((none["count"].as_u64(), none["papers"].as_array().map(Vec::len)), (Some(0), Some(0)));
+    assert!(none["default"].is_null());
+    assert!(matches!(a.call("printer_papers", &json!({})), Err(ToolError::InvalidArgs(_))));
+
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "paper": "300x500", "path": "custom-paper.pdf" }));
+    assert_eq!(r["sheets"].as_u64(), Some(1));
+    let opened = ok(&mut a, "doc_open", json!({ "path": "custom-paper.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": opened }));
+    let page = &info["pages"][0];
+    assert!((page["width"].as_f64().unwrap() - 300.0).abs() <= 1.0);
+    assert!((page["height"].as_f64().unwrap() - 500.0).abs() <= 1.0);
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();
@@ -12394,6 +12413,53 @@ fn a_root_less_write_output_is_atomic_too() {
     let e = free.write_output(&dir.join("new").to_string_lossy(), &[4]).unwrap_err();
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `doc_print` prints a selected area (Acrobat's "print selected area"): one page's rectangle,
+/// in points from the top-left, at actual size on its own sheet; several pages, an empty area or
+/// a layout that isn't a size choice are refused.
+#[test]
+fn doc_print_a_selected_area() {
+    let dir = workdir("print-area");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(
+        &mut a,
+        "doc_print",
+        json!({ "doc": doc, "pages": "1", "area": [36, 36, 236, 136], "layout": "actual", "paper": "Letter", "path": "area.pdf" }),
+    );
+    assert_eq!((r["sheets"].as_u64(), r["pages"].as_u64()), (Some(1), Some(1)));
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).unwrap())).unwrap();
+    let pages = pdfcraft_model::pages(&out);
+    assert_eq!(pages.len(), 1);
+    // The sheet is the paper (Letter, turned to suit the wide area); the page inside it is cut to the area: a clip to the
+    // area's rectangle, then the source page drawn through it, and nothing else of the page.
+    let media: Vec<f64> =
+        out.resolve(pages[0].dict.get(b"MediaBox").unwrap()).as_array().unwrap().iter().map(|v| out.resolve(v).as_f64().unwrap()).collect();
+    assert_eq!(media, [0.0, 0.0, 792.0, 612.0], "a landscape area takes a landscape Letter sheet");
+    let contents = out.resolve(pages[0].dict.get(b"Contents").unwrap());
+    let pdfcraft_cos::Object::Stream(stream) = &*contents else { panic!("sheet content") };
+    let content = String::from_utf8(stream.decoded().unwrap()).unwrap();
+    let tokens: Vec<&str> = content.split_whitespace().collect();
+    let at = tokens.iter().position(|t| *t == "re").expect("the sheet clips to a rectangle");
+    let rect: Vec<f64> = tokens[at - 4..at].iter().map(|t| t.parse().unwrap()).collect();
+    assert_eq!(&tokens[at + 1..at + 3], ["W", "n"], "the rectangle is the clip: {content}");
+    assert_eq!(rect, [36.0, 164.0, 164.0, 100.0], "the clip is the area (36..200 wide, 36..136 from the top, cut to the 200 x 300 page): {content}");
+    assert_eq!(tokens.iter().filter(|t| **t == "re").count(), 1, "one clip, nothing drawn outside it: {content}");
+    assert!(tokens.contains(&"Do"), "the page is drawn inside the clip: {content}");
+    for (args, why) in [
+        (json!({ "doc": doc, "pages": "1-2", "area": [36, 36, 236, 136], "path": "x.pdf" }), "one page"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 36.5, 136], "path": "x.pdf" }), "empty"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 36, 136], "path": "x.pdf" }), "empty"),
+        (json!({ "doc": doc, "pages": "1", "area": [5000, 36, 5200, 136], "path": "x.pdf" }), "empty"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 236], "path": "x.pdf" }), "4 numbers"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 236, 136], "layout": "multiple", "per_sheet": 2, "path": "x.pdf" }), "Fit"),
+    ] {
+        match a.call("doc_print", &args) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(why), "{why}: {m}"),
+            other => panic!("{why}: {other:?}"),
+        }
+    }
 }
 
 /// Printer marks through the tools: added around the trim box (the page widened to make room),

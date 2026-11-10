@@ -815,10 +815,26 @@ enum PaintSetup {
     Nothing,
 }
 
-/// PdfCraft patch (27): the largest group, in device pixels, blended in CMYK (2^24, a 4096 ×
-/// 4096 square). Each pixel costs about 20 bytes more than drawing the group as before (two
-/// pass canvases, its tints, their RGB and the result); a larger group is drawn as before.
+/// PdfCraft patch (27): the most device pixels of a group blended in CMYK at once (2^24, a 4096 ×
+/// 4096 square). Each costs about 16 bytes while its band is blended (two pass canvases, its
+/// tints and their RGB); a larger group is blended in bands of whole rows under it, and only
+/// the finished group, 4 bytes a pixel, is kept whole. Before, a larger group was blended in RGB
+/// instead: a page enlarged to 11 x 17 in for Print as image at 600 dpi drew the X's of a print
+/// test file's CMYK blend patches when one group covered most of it.
 const MAX_CMYK_GROUP_PIXELS: u64 = 1 << 24;
+
+thread_local! {
+    /// PdfCraft patch (27): the band size [`MAX_CMYK_GROUP_PIXELS`] sets, on this thread. Only
+    /// PdfCraft's regression test lowers it, to blend a small page's groups in many bands.
+    static CMYK_BAND_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_CMYK_GROUP_PIXELS) };
+}
+
+/// PdfCraft patch (27): exported for its regression test (see [`CMYK_BAND_PIXELS`]); `None`
+/// restores [`MAX_CMYK_GROUP_PIXELS`].
+#[doc(hidden)]
+pub fn set_cmyk_band_pixels(pixels: Option<u64>) {
+    CMYK_BAND_PIXELS.with(|p| p.set(pixels.unwrap_or(MAX_CMYK_GROUP_PIXELS).max(1)));
+}
 
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
@@ -1743,6 +1759,46 @@ impl Renderer {
         Some(pix)
     }
 
+    /// PdfCraft patch (27): rows `offset.1` .. `offset.1 + height` of `group` blended in CMYK, as
+    /// a `width` × `height` premultiplied pixmap whose corner is device point `offset`; `None`
+    /// when the group holds something a pass has no tints for, or its tints can't be converted.
+    fn cmyk_group_band(
+        &self,
+        group: &hayro_interpret::CmykGroup<'_, '_>,
+        offset: (f64, f64),
+        width: u16,
+        height: u16,
+    ) -> Option<Pixmap> {
+        let cmy = self.ink_pass(group, InkPass::Cmy, offset, width, height)?;
+        let k = self.ink_pass(group, InkPass::K, offset, width, height)?;
+
+        // A tint is a pass's premultiplied colour un-premultiplied and complemented.
+        let ink = |premul: u8, alpha: u8| {
+            if alpha == 0 {
+                return 0;
+            }
+            let straight = (u32::from(premul) * 255 + u32::from(alpha) / 2) / u32::from(alpha);
+            255 - straight.min(255) as u8
+        };
+        let pixels = usize::from(width) * usize::from(height);
+        let mut tints = Vec::with_capacity(pixels * 4);
+        for (p, q) in cmy.data().iter().zip(k.data()) {
+            // Both passes draw the same shapes at the same opacities, so they cover the same
+            // pixels by the same amounts; each pass's own alpha un-premultiplies its colour.
+            tints.extend_from_slice(&[ink(p.r, p.a), ink(p.g, p.a), ink(p.b, p.a), ink(q.r, q.a)]);
+        }
+        let mut rgb = vec![0u8; pixels * 3];
+        hayro_interpret::color::cmyk_to_srgb8(&tints, &mut rgb)?;
+
+        let mut result = offscreen_pixmap(width, height, false);
+        for ((px, rgb), coverage) in result.data_mut().iter_mut().zip(rgb.chunks_exact(3)).zip(cmy.data()) {
+            let a = u32::from(coverage.a);
+            let premul = |v: u8| ((u32::from(v) * a + 127) / 255) as u8;
+            *px = PremulRgba8 { r: premul(rgb[0]), g: premul(rgb[1]), b: premul(rgb[2]), a: coverage.a };
+        }
+        Some(result)
+    }
+
     /// PdfCraft patch: remaps a solid paint colour through `color_replacement`, if one is
     /// set. `Paint::Pattern` (images, shadings, tiling patterns) always passes through
     /// untouched.
@@ -2444,42 +2500,26 @@ impl<'a> Device<'a> for Renderer {
         if width == 0 || height == 0 {
             return true;
         }
-        if u64::from(width) * u64::from(height) > MAX_CMYK_GROUP_PIXELS {
-            return false;
-        }
-
-        let Some(cmy) = self.ink_pass(group, InkPass::Cmy, (x0, y0), width, height) else {
-            return false;
-        };
-        let Some(k) = self.ink_pass(group, InkPass::K, (x0, y0), width, height) else {
-            return false;
-        };
-
-        // A tint is a pass's premultiplied colour un-premultiplied and complemented.
-        let ink = |premul: u8, alpha: u8| {
-            if alpha == 0 {
-                return 0;
-            }
-            let straight = (u32::from(premul) * 255 + u32::from(alpha) / 2) / u32::from(alpha);
-            255 - straight.min(255) as u8
-        };
-        let pixels = usize::from(width) * usize::from(height);
-        let mut tints = Vec::with_capacity(pixels * 4);
-        for (p, q) in cmy.data().iter().zip(k.data()) {
-            // Both passes draw the same shapes at the same opacities, so they cover the same
-            // pixels by the same amounts; each pass's own alpha un-premultiplies its colour.
-            tints.extend_from_slice(&[ink(p.r, p.a), ink(p.g, p.a), ink(p.b, p.a), ink(q.r, q.a)]);
-        }
-        let mut rgb = vec![0u8; pixels * 3];
-        if hayro_interpret::color::cmyk_to_srgb8(&tints, &mut rgb).is_none() {
-            return false;
-        }
-
+        // Bands of whole rows, each within the band size: a group of any size blends in CMYK.
+        // Every band is blended before any is drawn, so a group a pass has no tints for in one
+        // band is drawn as before, whole.
+        let band = (CMYK_BAND_PIXELS.with(std::cell::Cell::get) / u64::from(width)).clamp(1, u64::from(height));
+        // At most `height`, so it fits a u16.
+        let band = band as u16;
         let mut result = offscreen_pixmap(width, height, false);
-        for ((px, rgb), coverage) in result.data_mut().iter_mut().zip(rgb.chunks_exact(3)).zip(cmy.data()) {
-            let a = u32::from(coverage.a);
-            let premul = |v: u8| ((u32::from(v) * a + 127) / 255) as u8;
-            *px = PremulRgba8 { r: premul(rgb[0]), g: premul(rgb[1]), b: premul(rgb[2]), a: coverage.a };
+        let row = usize::from(width);
+        let mut top = 0u16;
+        while top < height {
+            let rows = band.min(height - top);
+            let Some(piece) = self.cmyk_group_band(group, (x0, y0 + f64::from(top)), width, rows) else {
+                return false;
+            };
+            let start = usize::from(top) * row;
+            let Some(dest) = result.data_mut().get_mut(start..start + usize::from(rows) * row) else {
+                return false;
+            };
+            dest.copy_from_slice(piece.data());
+            top += rows;
         }
 
         // The group's own soft mask and blend mode are on its layer; what the contents set

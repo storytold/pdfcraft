@@ -64,7 +64,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct an application with the default session, panels, theme and control state.
+    /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
@@ -132,6 +132,8 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            default_paper_source: None,
+            printer_papers_source: None,
             spooler: None,
             two_sided_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -209,6 +211,7 @@ impl PdfCraftApp {
             attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
+            props_session: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
@@ -278,6 +281,7 @@ impl PdfCraftApp {
             object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
+            last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
