@@ -49,6 +49,8 @@ pub enum NotDecoded {
     JpxTooLarge,
     #[error("it has an alpha channel (transparency stored in the JPEG 2000 data), which a JPEG cannot keep")]
     Alpha,
+    #[error("reading it would go past the work allowed for one run")]
+    OverBudget,
     #[error("its data could not be decoded, or is shorter than its size says")]
     Corrupt,
 }
@@ -208,8 +210,9 @@ fn jpx_decode(raw: &[u8], size: (u32, u32), n: usize, named: bool, budget: &mut 
         return Err(NotDecoded::BitDepth(i64::from(image.original_bit_depth())));
     }
     let samples = u64::from(size.0).saturating_mul(u64::from(size.1)).saturating_mul(n as u64);
+    // The run's shared allowance is spent, which says nothing of this image's size.
     if !budget.pay_jpeg(samples, raw) {
-        return Err(NotDecoded::TooLarge);
+        return Err(NotDecoded::OverBudget);
     }
     let data = image.decode().map_err(|_| NotDecoded::Corrupt)?;
     if u64::try_from(data.len()).ok() != Some(samples) {
@@ -285,9 +288,11 @@ fn jpx_head(raw: &[u8]) -> Option<JpxHead> {
                 most = Some((tiles.max(t), components.max(c), depth.max(d)));
             }
             b"jp2h" => {
+                // The decoder goes by the last header box and, in it, the first colour box. A
+                // palette in any header is refused all the same.
+                colour = None;
                 for (kind, body) in jp2_boxes(body) {
                     palette |= kind == b"pclr";
-                    // The first colour box is the one the decoder goes by.
                     if kind == b"colr" && colour.is_none() {
                         colour = Some(body);
                     }
@@ -587,7 +592,7 @@ mod tests {
         assert_eq!(jpx_head(&[&[0u8][..], &tiled].concat()), None, "a bare codestream starts with its markers");
         // Out of budget.
         let one = [("Filter", Object::name("JPXDecode")), ("Width", Object::Int(1)), ("Height", Object::Int(1))];
-        assert_eq!(decode_samples(&doc(), &image(&one, jpx_codestream(1)), &mut ImageBudget::with_work(0)), Err(NotDecoded::TooLarge));
+        assert_eq!(decode_samples(&doc(), &image(&one, jpx_codestream(1)), &mut ImageBudget::with_work(0)), Err(NotDecoded::OverBudget));
         // The size is the dictionary's: without it the rewritten image would have none.
         assert_eq!(decode_samples(&doc(), &image(&one[..2], jpx_codestream(1)), &mut budget()), Err(NotDecoded::Corrupt));
         // More than 40 million pixels is refused from the dictionary, before the decoder is asked.
@@ -667,5 +672,16 @@ mod tests {
         assert_eq!(read(&d, 18), Err(NotDecoded::ColourSpace));
         assert_eq!(read(&d, 16).map(|s| s.components), Ok(3));
         assert_eq!(read(&d[..3], 18).map(|s| s.components), Ok(3));
+        // With two header boxes the decoder goes by the last: an sRGB one in front does not hide
+        // the sYCC one it reads, and an sYCC one in front does not count.
+        let colr = |space: u8| jp2_box(b"jp2h", &jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, space]));
+        let two = |first: u8, last: u8| {
+            let ends = [jp2_box(b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]), jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 ")].concat();
+            [ends, colr(first), colr(last), jp2_box(b"jp2c", &jpx_codestream(3))].concat()
+        };
+        let read = |raw: Vec<u8>| decode_samples(&doc(), &image(&d, raw), &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(jpx_head(&two(16, 18)).and_then(|h| h.enumerated), Some(18));
+        assert_eq!(read(two(16, 18)), Err(NotDecoded::ColourSpace));
+        assert_eq!(read(two(18, 16)).map(|s| s.components), Ok(3));
     }
 }
