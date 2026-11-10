@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector-print appearance transforms retain small coefficients; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M7 #2964 / #3185: grouped source text and Thai font/style preservation, with reported deep or unsafe groups and a per-glyph check of the Thai map repair; estimates unchanged)
@@ -302,6 +303,9 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
+**2026-10-27 · minor:** M10: vector printing retains small appearance placement coefficients.
+Synthetic rendering and save/reopen regressions cover the change.
+Estimates unchanged.
 **2026-10-31 · minor:** M3/M4 #5330: direct quick-toolbar Crop pages action reuses command permissions and the existing crop tool. Estimates unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
