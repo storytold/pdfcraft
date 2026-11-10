@@ -298,8 +298,9 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
 ///
 /// A word takes its `ink` box when the run's words and boxes pair up, else the run's box spans all
 /// its words. Within a word the stand-in's proportions are kept; spaces fill the gaps between
-/// words. A row with a character this can't place, or with boxes out of reading order, is left as
-/// laid out.
+/// words. Bidirectional rows keep their shaped geometry: logical character order is not their
+/// left-to-right order. A row with a character this can't place, or with boxes out of reading
+/// order, is also left as laid out.
 fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBlock, lines: &[pdfcraft_engine::TextLine], text: &str, scale: f32) {
     let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
     let chars: Vec<char> = text.chars().collect();
@@ -361,6 +362,11 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
         let row = Arc::make_mut(&mut placed.row);
         let range = first..first.saturating_add(row.glyphs.len());
         first = range.end.saturating_add(usize::from(placed.ends_with_newline));
+        // The placement below assigns increasing x positions in logical order. In a bidi row
+        // that destroys the shaper's visual order and sends a click to a different character.
+        if row.rtl_paragraph || row.glyphs.iter().any(|glyph| glyph.is_rtl()) {
+            continue;
+        }
         let Some(mut spots) = target.get(range.clone()).map(<[_]>::to_vec) else { continue };
         let row_chars = chars.get(range).unwrap_or_default();
         // Spaces between two placed characters share the gap between them; at the row's ends

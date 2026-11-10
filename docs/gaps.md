@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-10 | **Last updated:** 2026-11-10 | **Change:** patch (gap 3, #2101 partial: unchanged bidi rows keep shaped caret positions; estimates unchanged)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -85,6 +87,12 @@ update the numbers.
   **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 3. Editing existing text is fragile on real files
+
+- **Caret correction (2026-11-10, #2101 partial):** unchanged inline bidi rows retain the
+  shaper's logical-to-visual positions instead of being placed left to right across source
+  word boxes. Synthetic TextEdit coverage checks Hebrew click/insert, Backspace, Delete and
+  visual Right with digits and Latin. This does not qualify every RTL selection/IME workflow
+  or add PDF font/shaping support; plain left-to-right source-word placement is unchanged.
 
 - **Fork progress (2026-10-11):** compatible words and subset-font spaces form lines;
   source fonts lacking a space glyph remain reusable; inline editing previews remove source
@@ -419,6 +427,9 @@ update the numbers.
 - **Estimate:** 4–8 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ## Revision history
+
+**2026-11-10 · patch:** Gap 3/#2101 partial: preserve shaped caret positions in unchanged bidi rows.
+Broader RTL selection, IME and font-substitution coverage remains incomplete; estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
