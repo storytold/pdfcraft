@@ -150,6 +150,9 @@ pub(crate) fn run_here(
     // The document's fields, for `event.target.getField(…)`: the form object model's own field
     // objects, writing through to the XFA form.
     ctx.insert_data(RefCell::new(crate::host::Host {
+        // The XFA activity (`initialize`, `click`, …): never AcroForm's "Format", so field
+        // objects reached through `event.target` keep `buttonSetCaption`.
+        event_name: event.activity.clone(),
         fields: std::sync::Arc::clone(&doc.fields),
         changed: Default::default(),
         formatted: Default::default(),

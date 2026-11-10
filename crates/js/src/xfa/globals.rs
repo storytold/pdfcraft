@@ -259,6 +259,8 @@ pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after
         ("textColor", before.text_color != after.text_color),
         ("fillColor", before.fill_color != after.fill_color),
         ("rect", before.rect != after.rect),
+        // `buttonSetCaption`: a push button's caption is its XFA caption, not written here.
+        ("caption", before.caption != after.caption || before.caption_was_set != after.caption_was_set),
     ];
     for (property, changed) in others {
         if changed {

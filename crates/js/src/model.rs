@@ -88,6 +88,10 @@ pub struct FieldState {
     pub fill_color: Option<Vec<String>>,
     /// Signature fields: whether the field is signed, and how its signature checks.
     pub signature: SignatureState,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// `buttonSetCaption` was called, even when it set the current text again.
+    pub caption_was_set: bool,
     /// Rectangle of the first widget, in PDF user space.
     pub rect: Option<[f64; 4]>,
 }
@@ -107,6 +111,8 @@ impl FieldState {
             text_color: None,
             fill_color: None,
             signature: SignatureState::Unsigned,
+            caption: None,
+            caption_was_set: false,
             rect: None,
         }
     }

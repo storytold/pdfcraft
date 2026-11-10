@@ -189,6 +189,40 @@ fn scripts_change_other_fields_and_their_properties() {
 }
 
 #[test]
+fn push_button_caption_methods_read_write_and_reject_other_faces() {
+    let mut button = FieldState::new("go", FieldType::Button, vec![]);
+    button.caption = Some("Old".into());
+    let fields = vec![button, FieldState::new("blank", FieldType::Button, vec![]), FieldState::new("text", FieldType::Text, vec![])];
+    let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
+    let got = run("event.value = getField('go').buttonGetCaption();");
+    assert_eq!(got.value, "Old");
+    let set = run("getField('go').buttonSetCaption('New'); event.value = getField('go').buttonGetCaption();");
+    assert_eq!(set.value, "New");
+    assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
+    let same = run("getField('go').buttonSetCaption('Old');");
+    assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
+    assert!(run("getField('go').buttonSetCaption();").error.is_some());
+    let long_caption = "x".repeat(crate::xfa::MAX_LINE + 10);
+    let capped = run(&format!("getField('go').buttonSetCaption('{long_caption}');"));
+    assert_eq!(capped.error, None);
+    let caption = capped.changed[0].caption.as_deref().unwrap_or_default();
+    assert_eq!(caption.chars().count(), crate::xfa::MAX_LINE + 1);
+    assert!(caption.ends_with('…'));
+    let explicit = run("event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(explicit.value, "Old");
+    let format =
+        super::run("getField('go').buttonSetCaption('Discarded');", &Event::field("Format", "go", "Old"), &doc(), &fields, &[], Limits::default());
+    assert!(format.error.as_deref().is_some_and(|e| e.contains("buttonSetCaption is not available in a Format event")));
+    assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
+    assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
+    let empty = run("event.value = getField('blank').buttonGetCaption();");
+    assert_eq!(empty.error, None);
+    assert_eq!(empty.value, "");
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
+}
+
+#[test]
 fn widget_rect_reads_and_writes_a_four_number_array() {
     let o = go(
         "var t = getField('total'); t.rect = [10, 20, 110, 50]; event.value = getField('total').rect.join(',');",
@@ -486,6 +520,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        event_name: "Open".into(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         formatted: BTreeSet::new(),
@@ -1250,6 +1285,29 @@ mod xfa_model {
         assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() }]);
         assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: readonly")), "{:?}", o.notes);
         assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: rect")), "{:?}", o.notes);
+    }
+
+    /// A push button's caption set through `event.target.getField(…).buttonSetCaption` is noted
+    /// and not applied, like the other properties besides the value, and reads as it was.
+    #[test]
+    fn a_caption_set_through_get_field_is_noted_and_not_applied() {
+        let mut fields = doc_fields().as_ref().clone();
+        let mut go = crate::FieldState::new("form1[0].page1[0].go[0]", crate::FieldType::Button, Vec::new());
+        go.caption = Some("Go".into());
+        fields.push(go);
+        let ev = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, fields: std::sync::Arc::new(fields), ..Default::default() };
+        let o = run_xfa(
+            "var f = event.target.getField('form1[0].page1[0].go[0]'); f.buttonSetCaption('Send'); f.buttonGetCaption()",
+            &ev,
+            &doc,
+            &form(),
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("Go"));
+        assert!(o.effects.is_empty(), "{:?}", o.effects);
+        assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].go[0]: caption")), "{:?}", o.notes);
     }
 
     /// `event.target.resetForm` resets the fields it names (one name, or an array whose missing
