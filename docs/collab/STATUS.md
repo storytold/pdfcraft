@@ -7,14 +7,17 @@
   replayed with **four conflict stops in three files**
   (`crates/ui-egui/src/app.rs` twice, `crates/ui-egui/src/canvas.rs`,
   `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
-  them. `origin/main` has moved since: at this pass's start it was
-  `ca66667f3` ("fix: cap print dialog height to the screen…", 9 commits past the
-  base) and while the slice was built it advanced two more, to `a71b5124b`
-  ("M10 #5130: resolve Windows printer-default duplex before spooling
-  (#5180)"). The branch is **11 behind** `a71b5124b` and
-  `git merge-tree --write-tree origin/main HEAD` exits 0 at `0c57e2271`; no
-  rebase was done in this pass, so the base stays `ba28458ad`.
-- Local head before this STATUS commit: `0c57e2271` (feat: open, close and move
+  them. `origin/main` has moved since, faster than any pass followed it: at the
+  presence-selection pass its tip was `a71b5124b` (11 behind), and at this
+  pass's start it was `274b7a042` ("Merge pull request #6800 from
+  storytold/merge/fonts-budget-6239"), so the branch is now **48 behind**
+  `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exited 0 at
+  `0c57e2271`; it was not re-run at this pass's head, and no rebase was done in
+  this pass, so the base stays `ba28458ad`.
+- Local head before this STATUS commit: `5bad54c40` (feat: share several
+  selections, per-line quads and the caret) on `38d0bf56d` (docs(collab):
+  record the pop-up window operation and reconcile the STATUS head) on
+  `0c57e2271` (feat: open, close and move
   a comment's pop-up window as one operation) on `199076765` (docs(collab):
   record the parts, move and geometry operations) on `22d29d070` (feat: share a
   comment's parts, a move and its geometry) on `be5ac3570` (docs(collab):
@@ -30,37 +33,41 @@
   on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
   `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
   `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
-  clippy complexity limit) — **86 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD` at `0c57e2271`), **11 behind** and
-  **6 ahead** of the PR head; this STATUS commit makes 87. The numbers the
-  brief named — 85 commits, 9 behind, 5 ahead — were right for `199076765`
-  against `ca66667f3`; `origin/main` then advanced two commits and the slice
-  added one. Commits named below and
+  clippy complexity limit) — **88 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD` at `5bad54c40`), **48 behind** and
+  **8 ahead** of the PR head; this STATUS commit makes 89. The numbers the
+  earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
+  86/11/6 at `0c57e2271` — were right when they were measured; `origin/main`
+  kept moving (`ba28458ad` → `a71b5124b` → `274b7a042`) and each slice added
+  its commits. Commits named below and
   in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
 - PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
   2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the seven local commits above it are in it
+  through the Split/Combine record; the eight local commits above it are in it
   only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
   and their record (`3f3bbedb0`), the parts/move/geometry operation
-  (`22d29d070`) and its record (`199076765`), and this pass's pop-up operation
-  (`0c57e2271`) and its record (this STATUS commit). `UNSTABLE` is
+  (`22d29d070`) and its record (`199076765`), the pop-up operation
+  (`0c57e2271`) and its record (`38d0bf56d`), and this pass's selection
+  operation (`5bad54c40`) and its record (this STATUS commit). `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `0c57e2271` (the HS256 crates' gates were run
-  at `157f4d239`; the parts/move/geometry operations' gates at `22d29d070`;
-  the pop-up window's at `0c57e2271`, §4).
+  §4 are green at the local head `5bad54c40` for the crates this pass touched
+  (proto, client, ws, server, hub, `ui-egui` with `collab`, and the wasm shell);
+  the whole-suite gates named earlier were run at their own heads (`157f4d239`,
+  `22d29d070`, `0c57e2271`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
   (`999da5ec`), the commit publication outside the hub lock (`a47641fb`),
   restyle and status replies (`ce5c38798`), the publication queue
-  (`a639f30c0`), presence selections (`b4e9179d8`), the conflict-resolution
+  (`a639f30c0`), presence selections (`b4e9179d8`) and their second slice —
+several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-resolution
   endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
   replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
   page split/combine (`362f9c72b`), the Split/Combine dialogs sending them
@@ -71,7 +78,9 @@
   (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4). The
   whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
-  (§4, first table).
+  (§4, first table). The one presence item still outside this repository is the
+  host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
+  `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. The one this
   pass leaves explicitly open: a kill between the base write and the `CURRENT`
   rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
@@ -884,6 +893,73 @@ position is not shared; and selection rendering was not checked in a browser
 The full `ui-egui` suite was not re-run: clippy with the feature compiles it and
 the collab module's tests pass, but the page-painting path has no new test that
 drives a real frame.
+
+### Presence selections, second slice — several `/NM`, per-line quads and a caret (2026-11-10, local; not pushed)
+
+`5bad54c40` on `38d0bf56d`. The first slice (`b4e9179d8`, above) sent one comment
+name or one bounding box. This closes the three gaps it named and keeps the wire
+compatible:
+
+- **Several selected comments are one list.** `Selection::Annotation` gained an
+  optional `also: Vec<String>`: `nm` is the comment the sender acts on (the one
+  the handles belong to) and `also` the others selected with it, both taken from
+  `CommentView::selection()` and only for the page in view (a presence frame
+  names one page). A peer that predates the field still draws the primary one.
+- **A text range is one rectangle per line piece.** `Selection::Text` gained
+  `quads: Vec<[i64; 4]>` (reading order, empty when the sender only knows the
+  box) and `caret: Option<[i64; 2]>` (`DocView::selection_caret`: the active end
+  of the run, or the dragged corner of a column select, in user space). `rect`
+  stays the bounding box, so an old peer draws the range as before. The canvas
+  fills each quad separately; the box between lines no longer covers text the
+  sender did not select, and the caret is a thin line in the actor's colour.
+- **Bounds instead of a broken frame.** `MAX_SELECTION_NAMES = 32`,
+  `MAX_SELECTION_QUADS = 48` (`collab-proto`). Over 48 pieces the client sends the
+  box alone; the protocol refuses more names/pieces (`TooMany`) and any frame
+  over `MAX_PRESENCE_BYTES` (2 KiB) as before. The server validates the selection
+  in `Presence::validate`, so a refused frame reaches nobody and the connection
+  stays (e2e `an_oversized_selection_is_refused_and_the_room_keeps_going`).
+- **The app's state carries it to the host page — as far as the pinned contract
+  allows.** `CollabParticipant` now has `selection: Option<ParticipantSelection>`
+  (`Annotations(Vec<String>)` or `Text { page, rects, caret }`, `page` 1-based)
+  next to `page`, `active`; the presence report is coalesced on that change.
+  **The wire does not carry it yet:** `craft-web-host` at
+  `7666e2b100d8cf12998f9b57d3b036964cc3189c` describes a `Participant` as
+  `clientId`/`role`/`color` only, so `apps/pdfcraft-web`'s `participants()` cannot
+  pass `page`/`selection`; its contract says new optional fields keep version 1,
+  so adding them there is the one change left (a foreign crate, ADR-0016 — not
+  edited here). The shell's `presence_fn` says so in place.
+- **Never an operation.** Unchanged: presence is not journaled, does not bump
+  `version`, and a viewer may share any selection.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-proto` | `the_plain_selection_form_still_parses` (a frame with only `nm`/`rect` parses and re-encodes unchanged), `a_selection_lists_names_quads_and_a_caret`, `selection_limits_are_enforced` (33 names, 49 quads, empty name, off-page), `presence_over_the_limit_is_refused` (within the counts, large coordinates still overflow 2 KiB) |
+| `collab-client` | `a_presence_frame_carries_a_selection_and_no_document_content` (keys at every depth, `quads` and `caret` present, `contents`/`text`/`jwt`/`token`/`bytes`/`password`/`author` absent), `a_presence_frame_lists_selected_comments` |
+| `collab-ws` e2e | `two_clients_share_a_selection_without_an_operation` (now a two-line range with a caret and a viewer's three-name list; versions stay 0, the tail stays empty), `an_oversized_selection_is_refused_and_the_room_keeps_going` (49 quads → `invalid`, then a valid selection and a rotation are accepted) |
+| `ui-egui` | `several_selected_comments_travel_as_a_list`, `a_text_range_travels_as_one_rect_per_line` (the caret too), `a_text_selection_from_another_epoch_is_not_drawn`, `a_text_selection_is_sent_as_quads_and_a_caret` (and the box fallback over 48), `the_local_selection_lists_comments_and_per_line_quads` (a real `DocView`: two selected comments, an off-page comment and a two-line range), `the_host_report_carries_a_participants_selection` (page/selection, and neither past the TTL) |
+
+Gates at `5bad54c40` (host `agents`, rustc 1.99.1, warm `target/`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, proto + client + transport + server + hub + UI | `cargo clippy -p pdfcraft-collab-proto -p pdfcraft-collab-client -p pdfcraft-collab-ws -p pdfcraft-collab-server -p pdfcraft-collab-hub -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --all-targets -- -D warnings` | pass |
+| Tests, proto / client / server / hub | `cargo test -p <crate>` | pass — proto **15**, client **14**, server **29**, hub **5**; 0 failed, 0 ignored each |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **28/28** |
+| UI, the collab module | `cargo test -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --lib collab::` | pass — **16** (955 filtered out) |
+| Web shell (wasm) | `cargo check -p pdfcraft-web --target wasm32-unknown-unknown --features collab` | pass |
+
+What this does **not** cover: the caret is the active end of the current text
+selection, not the caret inside a form field being typed into (`forms_ui` owns
+that editor and has no page-space caret to hand over yet); only comments on the
+page in view are named, so a multi-page selection falls back to the primary
+comment's rectangle; and the host page still receives no selection until
+`craft-web-host` gains the two optional fields above. Selection painting has no
+test that drives a real frame: the collab module's tests cover the projection
+into `RemoteSelection` and the state, and clippy compiles the canvas path.
+
 
 ### The publication queue — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
 
@@ -2241,10 +2317,17 @@ Ordered by the risk they pose to production.
    rectangle in user space (a text range's bounding box, a column select), under
    the cursor's 30 s TTL, drawn in the actor's colour for every participant
    including viewers, and it never becomes an operation or moves `version`.
-   What is still open: several selected comments share only the primary one, a
-   multi-line text range is one bounding box rather than per-line quads, a
-   caret/typing position is not shared, and the host page's `pdfcraft:presence`
-   report still carries only the participant list's page, not a selection.
+   The rest of it is closed in `5bad54c40` (§4): several selected comments travel
+   as a list (primary `/NM` plus `also`), a text range as one rectangle per line
+   piece with the caret at its active end, and the canvas draws each quad.
+   What is still open: the caret is the range's active end, not the caret inside
+   a form field being typed into; a selection spanning several pages names only
+   the comments on the page in view; and the host page's `pdfcraft:presence`
+   report still cannot carry the participants' page/selection, because
+   `craft-web-host` (`7666e2b`, a foreign crate) describes a `Participant` as
+   `clientId`/`role`/`color` only — its contract allows the two optional fields,
+   but adding them is a change outside this repository. The app-side state
+   (`CollabState.participants[].page`/`.selection`) already carries them.
 5. **Undo of a deletion is best effort.** A comment the room added comes back
    exactly; a comment that came from the file has no wire body, so its delete
    carries no copy and cannot be undone. A page comes back while its one-page
