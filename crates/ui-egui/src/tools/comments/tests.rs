@@ -204,6 +204,8 @@ fn a_hidden_comment_type_is_not_selectable() {
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
     let info = DocInfo { pages: vec![page], annotations: vec![mark("Square", 0), mark("Circle", 1)], ..Default::default() };
