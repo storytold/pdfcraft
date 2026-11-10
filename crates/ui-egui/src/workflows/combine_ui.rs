@@ -28,13 +28,13 @@ pub(crate) use files::Incoming;
 pub use files::{Columns, CombineFile, CombineView, ConflictPreview, Lock, SortBy, SortKey};
 pub(crate) use files::{Preview, RowAction};
 use files::{Snapshot, UnlockPrompt};
-pub(crate) use parts::range_of;
 #[cfg(test)]
 pub(crate) use parts::{Part, moved_order, moved_pages, removed_pages, step_to};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use parts::{ago, real_folder};
+pub(crate) use parts::{folder_shown, range_of};
 #[cfg(test)]
-use parts::{title_of, utc_stamp};
+use parts::{title_of, unprefixed, utc_stamp};
 pub(crate) use view::page;
 
 /// Same reds and ambers as the signature status (`sign_ui`).

@@ -1854,6 +1854,18 @@ fn sort_by_folder_groups_files_by_their_folder_and_files_from_no_folder_go_last(
 /// A folder chosen with Add folder and subfolders, holding `files`: each a path inside it and how
 /// many pages it has. The list opens in Grid view with those files and no others, and the folder
 /// comes back as the system spells it.
+/// `folder` as the interface shows it: on Windows, without the prefix `canonicalize` gives a
+/// drive path.
+fn shown(folder: &std::path::Path) -> String {
+    let text = folder.display().to_string();
+    if cfg!(windows)
+        && let Some(plain) = text.strip_prefix(r"\\?\").filter(|path| path.as_bytes().get(1) == Some(&b':'))
+    {
+        return plain.to_owned();
+    }
+    text
+}
+
 fn combine_folder(test: &str, files: &[(&str, usize)]) -> (Harness<'static, PdfCraftApp>, std::path::PathBuf) {
     let dir = temp_path(test);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1990,7 +2002,7 @@ fn a_linked_folder_sorts_with_the_folder_it_leads_to() {
 fn cards_of_files_called_alike_tell_a_screen_reader_their_folders() {
     let (h, dir) = combine_folder("combine-card-folders", &[("a.pdf", 1), ("sub/a.pdf", 1)]);
     let said: Vec<String> = h.get_all_by_label("a.pdf").map(|card| card.accesskit_node().description().unwrap_or_default().to_string()).collect();
-    let (top, inner) = (dir.display().to_string(), dir.join("sub").display().to_string());
+    let (top, inner) = (shown(&dir), shown(&dir.join("sub")));
     assert_eq!(said.len(), 2, "{said:?}");
     assert!(said.contains(&format!("1 page. {top}")), "{said:?}");
     assert!(said.contains(&format!("1 page. {inner}")), "{said:?}");
@@ -2006,8 +2018,8 @@ fn list_rows_of_files_called_alike_tell_a_screen_reader_their_folders() {
     h.run_steps(2);
     let said: Vec<String> = h.get_all_by_label("a.pdf").map(|name| name.accesskit_node().description().unwrap_or_default().to_string()).collect();
     assert_eq!(said.len(), 2, "{said:?}");
-    assert!(said.contains(&dir.display().to_string()), "{said:?}");
-    assert!(said.contains(&dir.join("sub").display().to_string()), "{said:?}");
+    assert!(said.contains(&shown(&dir)), "{said:?}");
+    assert!(said.contains(&shown(&dir.join("sub"))), "{said:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

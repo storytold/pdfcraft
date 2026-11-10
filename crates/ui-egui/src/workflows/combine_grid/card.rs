@@ -100,7 +100,7 @@ impl Card {
         }
         // For screen readers: the pages, why no page is shown and the folder (otherwise only in
         // the tooltip), which tells apart files called alike.
-        let folder = f.folder.as_ref().map(|folder| folder.display().to_string());
+        let folder = f.folder.as_deref().map(crate::combine_ui::folder_shown);
         let reason = why.as_ref().map(|(_, _, reason)| reason.as_str());
         let description = [Some(pages.as_str()), reason, folder.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(". ");
         ui.ctx().accesskit_node_builder(id, |node| {
@@ -242,7 +242,7 @@ impl Card {
         };
         if let Some(folder) = &f.folder {
             tip.push('\n');
-            tip.push_str(&folder.display().to_string());
+            tip.push_str(&crate::combine_ui::folder_shown(folder));
         }
         for line in why.into_iter().chain(f.notes.iter().map(String::as_str)) {
             tip.push('\n');

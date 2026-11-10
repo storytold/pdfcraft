@@ -1,5 +1,5 @@
 use super::files::{Columns, Lock, RowAction, SortBy, SortKey};
-use super::parts::{ago, utc_stamp};
+use super::parts::{ago, folder_shown, utc_stamp};
 use super::{
     Align, Color32, Column, CornerRadius, ERROR, Layout, Modifiers, PdfCraftApp, Rect, Sense, Stroke, TableBuilder, Tokens, WARNING, icons, theme,
     vec2,
@@ -230,7 +230,7 @@ fn table_body(ui: &mut egui::Ui, context: TableBody<'_>) {
                                 // A file name is file/path chrome: explicitly LTR, extension last.
                                 let name = crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
                                 if let Some(folder) = &f.folder {
-                                    name.on_hover_text(folder.display().to_string());
+                                    name.on_hover_text(folder_shown(folder));
                                 }
                             }
                             // The range field and how many pages it takes.

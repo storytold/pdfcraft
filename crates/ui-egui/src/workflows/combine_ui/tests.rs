@@ -212,6 +212,16 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
 }
 
 #[test]
+fn a_folder_is_shown_without_the_prefix_windows_resolves_it_to() {
+    assert_eq!(unprefixed(r"\\?\C:\Users\me\scans"), r"C:\Users\me\scans");
+    assert_eq!(unprefixed(r"\\?\UNC\server\share\scans"), r"\\server\share\scans");
+    // A path with no such prefix, or with one that names no drive or share, stays as it is.
+    for path in [r"C:\Users\me", r"\\server\share", "/home/me/scans", r"\\?\Volume{1b2c}\scans", r"\\?\", ""] {
+        assert_eq!(unprefixed(path), path);
+    }
+}
+
+#[test]
 fn the_web_offers_no_sort_on_what_a_browser_does_not_give() {
     assert_eq!(SortBy::offered(false).collect::<Vec<_>>(), SortBy::MENU);
     let name_pages_size = [SortKey::Name, SortKey::Pages, SortKey::Size].map(SortBy::Column);

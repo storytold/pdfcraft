@@ -38,6 +38,25 @@ pub(crate) fn real_folder(path: &std::path::Path) -> Option<std::path::PathBuf> 
     pdfcraft_engine::in_real_folder(path).parent().filter(|folder| !folder.as_os_str().is_empty()).map(std::path::Path::to_path_buf)
 }
 
+/// `folder` as people are shown it: on Windows, without the `\\?\` prefix the system resolves a
+/// drive or share path to.
+pub(crate) fn folder_shown(folder: &std::path::Path) -> String {
+    let text = folder.display().to_string();
+    if cfg!(windows) { unprefixed(&text) } else { text }
+}
+
+/// A Windows path as people write it: `\\?\C:\…` as `C:\…` and `\\?\UNC\server\…` as
+/// `\\server\…`. Any other text as it is.
+pub(super) fn unprefixed(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_owned(),
+        _ => path.to_owned(),
+    }
+}
+
 /// Whether a file with extension `ext` can join the list: a PDF, or an image or text file that
 /// becomes one.
 fn combinable(ext: &str) -> bool {
