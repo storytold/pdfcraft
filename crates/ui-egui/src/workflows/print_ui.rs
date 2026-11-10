@@ -228,6 +228,7 @@ impl PdfCraftApp {
             selected,
             which,
             area: None,
+            custom_new: None,
             ..keep
         };
         if changed {

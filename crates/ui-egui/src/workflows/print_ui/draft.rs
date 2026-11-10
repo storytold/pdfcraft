@@ -1,5 +1,5 @@
 use super::setups::{self, PrinterSetup};
-use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
+use super::{Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -75,7 +75,12 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
+    /// Paper sizes added with Custom…, kept with the settings.
+    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
+    /// The custom paper being added: name, width and height as typed (the preferences' unit).
+    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -147,6 +152,8 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_papers: Vec::new(),
+            custom_new: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -192,24 +199,27 @@ impl PrintDraft {
         let Some(printer) = self.printer.clone() else { return };
         // Label's stock is that job's; the printer keeps the paper Label replaced.
         let paper = if self.handling == Handling::Label { self.paper_before_label.unwrap_or(self.paper) } else { self.paper };
-        let setup = PrinterSetup { paper, size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
+        // By name, so a custom paper is found again however the list changes.
+        let setup = PrinterSetup { paper: self.paper_name_at(paper), size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
         setups::record(&mut self.setups, &printer, setup);
     }
 
     /// Bring back what the chosen printer was last printed with, when it has been printed to
     /// (#2001); a printer never printed to keeps the dialog's choices. While Label holds the
-    /// label stock, the printer's paper is what leaving Label gives back.
+    /// label stock, the printer's paper is what leaving Label gives back. A custom paper taken
+    /// off the list since leaves the paper as it is.
     pub fn apply_setup(&mut self) {
         let Some(printer) = self.printer.as_deref() else { return };
-        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| *s) else { return };
+        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| s.clone()) else { return };
         self.size = setup.size;
         self.custom_scale = setup.custom_scale;
         self.duplex = setup.duplex;
-        let paper = setup.paper.min(PAPERS.len() - 1);
-        if self.handling == Handling::Label {
-            self.paper_before_label = Some(paper);
-        } else {
-            self.paper = paper;
+        if let Some(paper) = self.paper_index(&setup.paper) {
+            if self.handling == Handling::Label {
+                self.paper_before_label = Some(paper);
+            } else {
+                self.paper = paper;
+            }
         }
         self.sheet = 0;
     }
@@ -226,7 +236,7 @@ impl PrintDraft {
             SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
             m => m,
         });
-        let paper = PAPERS[self.paper.min(PAPERS.len() - 1)].1;
+        let paper = self.paper_size();
         let raster = self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale });
         // A selected area prints alone, its one page sized like a page of its own: Size is its
         // only handling (the dialog offers no other while it is chosen).
