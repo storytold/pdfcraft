@@ -111,6 +111,13 @@ fn no_comments_make_one_sheet_saying_so() {
     let shown = sheets(&doc);
     assert_eq!(shown.len(), 1);
     assert!(shown[0].contains("(This document has no comments.)") && !shown[0].contains("lost"), "{}", shown[0]);
+    // Asking for pages without comments doesn't turn that into the pages beside nothing.
+    for layout in [PageLayout::LinesOnSinglePages, PageLayout::NumbersOnSeparatePages] {
+        let doc = summary_with_pages(&src, &[], &SummaryOptions { pages_without_comments: true, ..opts("S", layout) }).unwrap();
+        let shown = sheets(&doc);
+        assert_eq!(shown.len(), 1, "{layout:?}");
+        assert!(shown[0].contains("(This document has no comments.)"), "{layout:?}: {}", shown[0]);
+    }
 }
 
 #[test]

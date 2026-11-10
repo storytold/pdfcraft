@@ -5259,8 +5259,16 @@ fn the_summary_paper_matches_the_document() {
     assert_eq!(summary_paper(Some((841.89, 595.28))), ("A4", PAPERS_A4));
     assert_eq!(summary_paper(Some((200.0, 300.0))).0, "US Letter");
     assert_eq!(summary_paper(None).0, "US Letter");
-    let (s, id) = session_with(1);
+    // Papers not offered for summaries: a poster or a label gets US Letter.
+    assert_eq!(summary_paper(Some((2383.94, 3370.39))).0, "US Letter");
+    assert_eq!(summary_paper(Some((288.0, 432.0))).0, "US Letter");
+    let (mut s, id) = session_with(1);
     assert_eq!(s.summary_paper(id).0, "US Letter");
+    // A paper of no usable size is the document's, for comments only as for the page layouts.
+    let pdf = s.summarize_comments(id, &SummarizeOptions { paper: Some((f64::NAN, -1.0)), ..Default::default() }).unwrap();
+    let n = s.open_new("summary.pdf", pdf).unwrap();
+    let p = &s.get(n).unwrap().info.pages[0];
+    assert_eq!((p.width, p.height), (612.0, 792.0));
     assert!(SUMMARY_PAPERS.iter().all(|name| pdfcraft_print::PAPERS.iter().any(|(p, _)| p == name)), "every offered paper is one printing knows");
 }
 

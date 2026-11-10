@@ -157,10 +157,15 @@ impl Default for SummarizeOptions {
 }
 
 /// The paper a summary of a document whose first page is `first` (display size, points) is made
-/// on when none is chosen: the standard paper that page is (A4 for an A4 page, either way round),
-/// or US Letter for a page of no standard size.
+/// on when none is chosen: the offered paper ([`SUMMARY_PAPERS`]) that page is (A4 for an A4
+/// page, either way round), or US Letter for any other page: a poster's A0 or a label's 4 × 6 in
+/// would make the comments' text too small or their column too narrow.
 pub fn summary_paper(first: Option<(f64, f64)>) -> (&'static str, (f64, f64)) {
-    first.and_then(pdfcraft_print::matching_paper).and_then(|i| pdfcraft_print::PAPERS.get(i).copied()).unwrap_or(("US Letter", (612.0, 792.0)))
+    first
+        .and_then(pdfcraft_print::matching_paper)
+        .and_then(|i| pdfcraft_print::PAPERS.get(i).copied())
+        .filter(|(name, _)| SUMMARY_PAPERS.contains(name))
+        .unwrap_or(("US Letter", (612.0, 792.0)))
 }
 
 /// One comment of a summary: its number on its page, and its replies (each with its depth,

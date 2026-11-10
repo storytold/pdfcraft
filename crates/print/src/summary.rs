@@ -75,8 +75,8 @@ const GREY: [f64; 3] = [0.45, 0.45, 0.45];
 
 /// A summary of `comments` with their pages, as a new unencrypted document whose pages are the
 /// sheets. The pages come in document order; each page's comments in the order given. Comments
-/// on pages `src` doesn't have are left out. With no page to show the summary is one sheet saying
-/// the document has no comments.
+/// on pages `src` doesn't have are left out. Without comments the summary is one sheet saying the
+/// document has none, whether or not pages without comments are asked for.
 ///
 /// The pages are drawn as they print ([`Content::DocumentAndMarkups`]): with the comments that
 /// have the Print flag, without pop-ups and links. A comment that doesn't print still gets its
@@ -104,7 +104,8 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
     for (c, lines) in comments.iter().zip(&texts).filter(|(c, _)| c.page < pages.len()) {
         by_page.entry(c.page).or_default().push((c, lines));
     }
-    if opts.pages_without_comments {
+    // A document without comments says so, rather than showing its pages beside nothing.
+    if opts.pages_without_comments && !by_page.is_empty() {
         for page in 0..pages.len() {
             by_page.entry(page).or_default();
         }
