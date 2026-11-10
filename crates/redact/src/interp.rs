@@ -571,6 +571,11 @@ impl Walk {
                 Some(op)
             }
             b"cs" | b"CS" => {
+                // A Pattern space is told by the name `/Pattern` alone: one named through the
+                // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
+                // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
+                // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
+                // document to keep is parsed again at each read.
                 if op.last_name() != Some(b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;

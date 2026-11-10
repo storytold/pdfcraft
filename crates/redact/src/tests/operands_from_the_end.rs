@@ -190,6 +190,19 @@ fn a_paths_points_after_a_surplus_number_are_where_the_renderer_draws_them() {
         mark(&mut doc, 0, &[[0.0, 0.0, 20.0, 20.0]], "");
         assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1, "{}", String::from_utf8_lossy(curve));
     }
+    // A line, and curves, from a point beside the mark whose points, after a surplus, stay beside
+    // it: read from the front, the surplus was a point under it.
+    for curve in [
+        &b"100 100 500 m 510 510 l S"[..],
+        b"500 500 m 100 100 510 l S",
+        b"100 500 m 100 100 500 110 500 120 500 c f",
+        b"100 500 m 100 110 500 120 500 v f",
+        b"100 500 m 100 110 500 120 500 y f",
+    ] {
+        let mut doc = one_page(curve, "", vec![]);
+        mark(&mut doc, 0, &[[90.0, 90.0, 150.0, 150.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 0, "{}", String::from_utf8_lossy(curve));
+    }
 }
 
 /// An `MCID` given by reference: in a named property list, and in a structure element's `/MCR`.
@@ -235,4 +248,93 @@ fn an_mcid_given_by_reference_loses_what_redaction_removed() {
     apply(&mut doc, None).unwrap();
     let other = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
     assert!(other.get(b"ActualText").is_some(), "{other:?}");
+}
+
+/// The resources of page `page`, resolved.
+fn resources_of(doc: &Document, page: usize) -> Dict {
+    let page = pdfcraft_model::pages(doc).swap_remove(page);
+    page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default()
+}
+
+/// `dict`'s dictionary `key`, resolved.
+fn dict_in(doc: &Document, dict: &Dict, key: &[u8]) -> Dict {
+    dict.get(key).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default()
+}
+
+/// A property list a second page sharing the resources names after a surplus operand, once the
+/// first page's block that named it was redacted: read from the front, the second page's name went
+/// unseen and the list was retired from under it.
+#[test]
+fn a_property_list_another_page_names_after_a_surplus_operand_is_kept() {
+    use pdfcraft_cos::Stream;
+    let mut doc = one_page(
+        b"/Span /P0 BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC",
+        "/Properties << /P0 7 0 R >>",
+        vec![b"<< /ActualText (SECRET) >>".to_vec()],
+    );
+    let shared = doc.add(Object::Dict(resources_of(&doc, 0)));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Resources".to_vec(), Object::Ref(shared))).unwrap();
+    let mut second = doc.get(ObjRef::new(3, 0)).as_dict().cloned().unwrap();
+    let contents = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"(x) /Span /P0 BDC BT /F1 10 Tf 10 100 Td (Other) Tj ET EMC".to_vec())));
+    second.set(b"Contents".to_vec(), Object::Ref(contents));
+    let second = doc.add(Object::Dict(second));
+    doc.update_dict(ObjRef::new(2, 0), |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(3, 0)), Object::Ref(second)]));
+        d.set(b"Count".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]], "");
+    apply(&mut doc, Some(&[0])).unwrap();
+    let properties = dict_in(&doc, &resources_of(&doc, 1), b"Properties");
+    assert!(properties.contains(b"P0"), "the second page's property list stays: {properties:?}");
+}
+
+/// A Type 3 font set only by an ExtGState's `/Font`, selected after a surplus operand: read from the
+/// front, the cleanups took it for undrawn, dropped it from the page and unlinked its glyph.
+#[test]
+fn a_type3_font_an_extgstate_selects_after_a_surplus_operand_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /T3 7 0 R >> /ExtGState << /GS1 << /Font [7 0 R 12] >> >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 20 260 Td (SECRET) Tj ET BT (x) /GS1 gs 20 20 Td (a) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R /b 9 0 R >> \
+           /Encoding << /Differences [97 /a /b] >> /FirstChar 97 /LastChar 98 /Widths [10 10] >>"
+            .to_vec(),
+        stream("", b"10 0 d0 0 0 10 10 re f"),
+        stream("", b"10 0 d0 0 0 5 5 re f"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+    let fonts = dict_in(&doc, &resources_of(&doc, 0), b"Font");
+    assert!(fonts.contains(b"T3"), "the page still lists the font: {fonts:?}");
+    let font = doc.get(ObjRef::new(7, 0)).as_dict().cloned().unwrap_or_default();
+    let procs = dict_in(&doc, &font, b"CharProcs");
+    assert!(procs.contains(b"a"), "the glyph the page draws stays: {procs:?}");
+}
+
+/// A Type 3 font without resources of its own, set by an ExtGState selected after a surplus operand:
+/// its glyph paints through the page's resources, so it may paint with the page's pattern, which
+/// stays once the page's own fill with it was redacted (the text itself fills with grey). Read from the front, the font was taken
+/// for one with resources, and the pattern was pruned.
+#[test]
+fn a_type3_font_without_resources_an_extgstate_selects_after_a_surplus_operand_keeps_the_pattern() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Pattern << /P0 9 0 R >> /ExtGState << /GS1 << /Font [7 0 R 12] >> >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 10 260 20 20 re f 0 g BT (x) /GS1 gs 150 20 Td (a) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+            .to_vec(),
+        stream("", b"10 0 d0 /Pattern cs /P0 scn 0 0 10 10 re f"),
+        stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >>", b"0 0 5 5 re f"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 250.0, 40.0, 290.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.patterns_removed), (1, 0));
 }

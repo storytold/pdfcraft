@@ -77,13 +77,14 @@ fn about_as_long(many: Duration, one: Duration) -> bool {
 }
 
 /// Written when the tags cleanup resolved the page's `/Properties` at every named `BDC`: 20,000 of
-/// them with 5,000 entries took 28 s against 0.07 s with one entry (optimized).
+/// them with 5,000 entries took 28 s against 0.07 s with one entry (optimized). Each `BDC` here
+/// names another entry, so that it is the lists, not each name's answer, that are read once.
 #[test]
 fn named_property_lists_are_read_once_for_a_page() {
     let _serial = one_at_a_time();
-    let ops = b"/P /M0 BDC EMC ".repeat(5_000);
-    let (one, many) = (redaction(|| properties(1, &ops)), redaction(|| properties(2_000, &ops)));
-    assert!(about_as_long(many, one), "2,000 entries {many:?}, one {one:?}");
+    let ops: Vec<u8> = (0..5_000).map(|i| format!("/P /M{i} BDC EMC ")).collect::<String>().into_bytes();
+    let (one, many) = (redaction(|| properties(1, &ops)), redaction(|| properties(5_000, &ops)));
+    assert!(about_as_long(many, one), "5,000 entries {many:?}, one {one:?}");
 }
 
 /// Written when the tags cleanup read a named property list's `MCID` by reference at each `BDC`: a
