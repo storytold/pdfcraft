@@ -710,37 +710,75 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
     ui.add_space(6.0);
 
-    let defaults = &mut app.view_defaults;
+    let mut layout_choice = app.view_defaults.layout;
+    let mut continuous = app.view_defaults.continuous;
+    let mut layout_changed = false;
+    let mut continuous_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default page display"), t);
-        let mut layout_choice = defaults.layout;
         if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
-            defaults.layout = layout_choice;
+            app.view_defaults.layout = layout_choice;
+            layout_changed = true;
         }
-        let mut continuous = defaults.continuous;
         if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
-            defaults.continuous = continuous;
+            app.view_defaults.continuous = continuous;
+            continuous_changed = true;
         }
     });
-    ctx.checkbox(ui, &mut defaults.show_page_gaps, tl!("Show gaps between pages"), t);
+    let mut show_page_gaps = app.view_defaults.show_page_gaps;
+    let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
+    if gaps_changed {
+        app.view_defaults.show_page_gaps = show_page_gaps;
+    }
     ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
     ui.add_space(6.0);
 
+    let mut fit_changed = false;
+    let mut zoom_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default zoom"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut defaults.fit,
-            &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))],
-        );
-        let mut percent = defaults.zoom * 100.0;
+        let mut fit = app.view_defaults.fit;
+        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
+        {
+            app.view_defaults.fit = fit;
+            fit_changed = true;
+        }
+        let mut percent = app.view_defaults.zoom * 100.0;
         if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
+            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
+            zoom_changed = true;
         }
     });
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
-    ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t);
+    let always_changed = ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t).changed();
+
+    if app.always_default_view && (always_changed || layout_changed || continuous_changed || gaps_changed || fit_changed || zoom_changed) {
+        let defaults = app.view_defaults;
+        for view in &mut app.views {
+            view.set_display(defaults.layout, defaults.continuous);
+            view.show_page_gaps = defaults.show_page_gaps;
+            match defaults.fit {
+                Fit::None => view.set_zoom(defaults.zoom),
+                fit => view.set_fit(fit),
+            }
+        }
+    } else if let Some(i) = app.active {
+        if layout_changed {
+            app.views[i].set_layout(layout_choice);
+        }
+        if continuous_changed {
+            app.views[i].set_continuous(continuous);
+        }
+        if gaps_changed {
+            app.views[i].show_page_gaps = show_page_gaps;
+        }
+        if fit_changed {
+            app.views[i].set_fit(app.view_defaults.fit);
+        }
+        if zoom_changed {
+            app.views[i].set_zoom(app.view_defaults.zoom);
+        }
+    }
     ctx.checkbox(ui, &mut app.text_links, tl!("Open web and email addresses written in the page text"), t);
     ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
     ui.add_space(6.0);

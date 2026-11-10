@@ -1256,6 +1256,39 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
 }
 
 #[test]
+fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_documents() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[("continuous", "off"), ("zoom", "50")]);
+    assert!(!h.state().views[0].continuous());
+    assert_ne!(h.state().views[0].fit, pdfcraft_ui_egui::canvas::Fit::Width);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Always use my default zoom and page layout").click();
+    h.run_steps(2);
+    assert!(h.state().always_default_view);
+    assert!(h.state().views[0].continuous(), "continuous scrolling is applied");
+    assert_eq!(h.state().views[0].fit, pdfcraft_ui_egui::canvas::Fit::Width, "default fit width is applied");
+}
+
+#[test]
+fn preferences_toggle_continuous_scrolling_updates_active_document() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[("default-continuous", "off"), ("continuous", "off")]);
+    assert!(!h.state().view_defaults.continuous);
+    assert!(!h.state().views[0].continuous());
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Continuous scrolling").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Continuous scrolling").click();
+    h.run_steps(2);
+    assert!(h.state().view_defaults.continuous, "defaults are updated");
+    assert!(h.state().views[0].continuous(), "active document view is updated");
+}
+
+#[test]
 fn preferences_set_the_default_zoom() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
