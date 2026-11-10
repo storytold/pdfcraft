@@ -700,7 +700,11 @@ fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu
                             ui.set_min_width(160.0);
                             ui.set_max_width(240.0);
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            render_nodes(ui, children, gate, chosen);
+                            let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                            ui.spacing_mut().scroll.floating = false;
+                            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                                render_nodes(ui, children, gate, chosen);
+                            });
                         })
                     })
                     .inner;
