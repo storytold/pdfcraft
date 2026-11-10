@@ -32,6 +32,7 @@ pub(super) mod page_cursor;
 mod page_input;
 pub(super) mod page_pointer;
 pub(super) mod page_router;
+mod presenter;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
@@ -101,39 +102,15 @@ impl PainterExt for egui::Painter {
     }
 }
 
-/// User-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// this is the mathematical intersection of the full CTM-derived rect and the clipping path's rect.
+/// User-space editing frame: explicit PDF/editor crops apply, but the page edge does not
+/// truncate a selected image's handles. Body hit testing still respects page visibility.
 pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
-    if let Some(clip) = im.clip_rect {
-        let r = [im.rect[0].max(clip[0]), im.rect[1].max(clip[1]), im.rect[2].min(clip[2]), im.rect[3].min(clip[3])];
-        if r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1] {
-            return r;
-        }
-    }
-    im.visible_rect.unwrap_or(im.rect)
+    im.frame_rect().unwrap_or(im.rect)
 }
 
-/// Screen-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// the final selectable `egui::Rect` is the mathematical intersection of the image's
-/// full CTM-derived rect and the clipping path's rect.
+/// Screen-space editing frame, including selected handles outside the page.
 pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
-    let full = xf.user_rect_f64(info, page, im.rect);
-    if let Some(clip) = im.clip_rect {
-        let clip_r = xf.user_rect_f64(info, page, clip);
-        let inter = full.intersect(clip_r);
-        if inter.is_positive() {
-            return inter;
-        }
-    }
-    if let Some(vr) = im.visible_rect {
-        let r = xf.user_rect_f64(info, page, vr);
-        if r.is_positive() {
-            return r;
-        }
-    }
-    full
+    xf.user_rect_f64(info, page, image_selectable_bounds(im))
 }
 
 /// An Oriented Bounding Box (OBB) representing a rotated rectangle in screen space,
@@ -506,6 +483,9 @@ pub struct DocView {
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
+    /// The document and attached file this tab was opened from, when a form or the Attachments
+    /// panel opened it: asking for that attachment again comes back to this tab.
+    pub from_attachment: Option<(DocId, String)>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -562,9 +542,14 @@ pub struct DocView {
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
+    /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
+    /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
+    pub interface: crate::viewer_prefs::TabInterface,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
+    /// Full screen's transitions, display times and pointer (see [`presenter`]).
+    pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
@@ -640,6 +625,11 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The match a find step just went to: its page and its centre as fractions of the displayed
+    /// page. A zoom before the step has been laid out, or the rest of an eased ⌘-wheel zoom
+    /// still arriving, keeps it at the window's centre instead of the point under the pointer
+    /// (#3530). Let go in the first frame without a zoom gesture once the step is laid out.
+    find_hold: Option<(usize, f32, f32)>,
     /// The page view has been shown, so its scroll offset in egui's memory is this document's.
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
@@ -755,6 +745,9 @@ pub struct DocView {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
+    /// again (#2149).
+    pub(crate) lock_offer_dismissed: bool,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
@@ -861,6 +854,8 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// Lock now, on the notice shown after a signature is placed (#2149).
+    LockSignatures,
 }
 
 /// Default page right-click menu actions.
@@ -1020,6 +1015,7 @@ impl DocView {
         Self {
             pane: Default::default(),
             id,
+            from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,
@@ -1048,7 +1044,9 @@ impl DocView {
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
+            interface: Default::default(),
             presentation: None,
+            presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
             cut_pages: Default::default(),
@@ -1089,6 +1087,7 @@ impl DocView {
             screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            find_hold: None,
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
@@ -1139,7 +1138,7 @@ impl DocView {
             page_widget: None,
             pan_hold_until: 0.0,
             slow_pages: HashSet::new(),
-            comments: Default::default(),
+            comments: crate::comments::CommentView::from_info(info),
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
@@ -1163,6 +1162,7 @@ impl DocView {
             marquee_done: None,
             fill_text: None,
             fill_signature_page: None,
+            lock_offer_dismissed: false,
             signature_drag: Default::default(),
             cursor: Default::default(),
             router: Default::default(),
@@ -1191,10 +1191,12 @@ impl DocView {
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;
+        self.find_hold = None;
         self.flash = None;
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        self.comments.document_changed(info);
         self.reset_coarse_state();
     }
 
@@ -1224,8 +1226,12 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        // What the document asked to hide, and what is hidden now (F8), belong to the tab.
+        fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
+        // A new document: none of the old one's transition, page or timer carries over.
+        fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
@@ -1334,6 +1340,8 @@ struct PageEnv<'a> {
     glide: Vec2,
     hand: bool,
     info: &'a DocInfo,
+    /// The Animation effects preference as it applies now (full screen's transitions follow it).
+    animates: bool,
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
     key_side: f32,
@@ -1392,6 +1400,9 @@ struct PageOut {
     page_action: Option<PageMenuAction>,
     paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
+    /// The pointer is over a link, comment, field or what is placed on the page: a click there is
+    /// for it, and turns no page in full screen.
+    on_object: bool,
     refused: Option<String>,
     /// The current page or spread where it is drawn, every page of it: one off screen (the second
     /// page of a zoomed spread) has no screen transform, but still decides where the row ends.
@@ -1729,9 +1740,12 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
-    // where a right-click is.
-    let input = if view.press_cancelled {
-        if let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
+    // where a right-click is. A page full screen doesn't show yet takes nothing at all. (A press
+    // there gives nothing on the page an owner, so its release, once the page is in, takes nothing
+    // either.)
+    let veiled = page_input::veiled(view);
+    let input = if view.press_cancelled || veiled {
+        if !veiled && let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
             comments::anchor(&pcx, p, view);
         }
         PageInput {
@@ -1809,6 +1823,7 @@ fn draw_pages(
         y_shift,
         ..
     } = *env;
+    let animates = env.animates;
     // egui's drag responses accept every pointer button. Keep a wheel gesture from also
     // selecting text, drawing a mark, or panning with the Hand tool.
     if middle_gesture {
@@ -1826,7 +1841,12 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // A resized handle can sit in the window beside a page that does not fill it. The
+    // response has to cover that visible area or the next press never starts: the pointer
+    // is reported only inside this rectangle once the previous drag has been released.
+    // Page positions stay on `content_w`/`content_h`; the extra area is not a new page.
+    let response_size = vec2(content_w.max(viewport.width()), content_h.max(viewport.height()));
+    let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {
@@ -1934,6 +1954,7 @@ fn draw_pages(
         open_table,
         page_action: _,
         primary_down: _,
+        on_object: _,
         refused,
         row_on_screen: _,
         stamp_placed,
@@ -1946,8 +1967,20 @@ fn draw_pages(
         let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
         crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
     }
+    // Full screen plays transitions over the page just drawn, and keeps time (#379).
+    let mut hide_pointer = false;
+    if view.presentation.is_some() {
+        let now = ui.input(|i| i.time);
+        hide_pointer = presenter::frame(view, info, painter, ui.ctx(), now, animates, pointer);
+    }
+    // Read before the claims are spent below, and before the pointer hides, which claims the top layer.
+    let on_object = view.cursor.over_object(tool);
+    // A still pointer hides over a link too, and its tip with it: the top layer, which every tool reaches.
+    if hide_pointer {
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::None);
+    }
     // The pages' one cursor, from the claim on the highest layer the tool reaches, and the tip.
-    let hover_text = pointer.filter(|_| unobstructed).zip(view.cursor.resolve(ui.ctx(), tool));
+    let hover_text = pointer.filter(|_| unobstructed && !hide_pointer).zip(view.cursor.resolve(ui.ctx(), tool));
     // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
     // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
     // pointer leaves the selection's page for the gap or the next page; over the whole
@@ -2004,7 +2037,8 @@ fn draw_pages(
     // The row as it is now: in continuous view the current page may have changed above.
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
-    resp.context_menu(|ui| {
+    let presenting = view.presentation.is_some();
+    page_context_menu(&resp, presenting, |ui| {
         // Crop mode has no menu: a right-click on the picture being cropped, its box or its grips is
         // the crop's (#5835).
         if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(_), .. })) {
@@ -2173,6 +2207,7 @@ fn draw_pages(
         page_action,
         paste_comments_at,
         primary_down: ptr.primary_down,
+        on_object,
         refused,
         row_on_screen,
         stamp_placed,
@@ -2180,8 +2215,10 @@ fn draw_pages(
     (wanted, visible_now)
 }
 
-/// A zoom the fit mode changed keeps the page at the top of the view in place.
-fn anchor_zoom_change(view: &mut DocView, avail_width: f32, old_zoom: f32) {
+/// A zoom the fit mode changed keeps the page at the top of the view in place, or, just after a
+/// find step, the match in the middle of the view (`avail` is the view's size).
+fn anchor_zoom_change(view: &mut DocView, avail: Vec2, old_zoom: f32) {
+    let avail_width = avail.x;
     if view.shown && view.zoom_anchor.is_none() && view.goto.is_none() && view.goto_point.is_none() && (view.zoom - old_zoom).abs() > 1e-4 {
         let prev_viewport = view.viewport_screen;
         let top_y = prev_viewport.min.y;
@@ -2195,7 +2232,10 @@ fn anchor_zoom_change(view: &mut DocView, avail_width: f32, old_zoom: f32) {
             })
             .or_else(|| view.screen_rects.iter().find(|(_, r)| r.min.y >= top_y).map(|(p, r)| (*p, 0.0f32, (r.min.y - top_y).max(0.0))))
             .or_else(|| view.screen_rects.last().map(|(p, r)| (*p, 1.0f32, (r.max.y - top_y).max(0.0))));
-        if let Some((page, fy, rel_y)) = anchor {
+        if let Some((page, fx, fy)) = view.find_hold {
+            // A fit zoom that changes just after a find step keeps the match in the middle too.
+            view.zoom_anchor = Some((page, fx, fy, avail / 2.0));
+        } else if let Some((page, fy, rel_y)) = anchor {
             view.zoom_anchor = Some((page, 0.5, fy, vec2(avail_width / 2.0, rel_y)));
         } else {
             view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, MARGIN)));
@@ -2564,6 +2604,12 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
+        // Handled by the app with the other view actions (`ViewAction`).
+        Some(Notice::LockSignatures) => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.pending_action = Some(ViewAction::LockSignatures);
+            }
+        }
         None => {}
     }
 }
@@ -2611,6 +2657,11 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);
+    // A document that hides the window's interface (`HideWindowUI`) hides the scroll bars too;
+    // the wheel, keys and Hand tool still scroll.
+    if view.interface.hidden.window_ui {
+        scroll = scroll.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    }
     // A newly opened document starts at the top. eframe saves egui's memory with the settings
     // and document ids start again at 1 every launch, so the offset stored under this id can be
     // where an earlier session left another document.
@@ -2790,12 +2841,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
 /// Full screen: the click turns the page unless it did something else first. It waits out the
 /// double-click time: turning on the first click's release sent a double-click's second click,
 /// meant to select a word, to the next page (review on #2070). A selection cancels it, and so do a
-/// link followed meanwhile and leaving full screen; a double-click elsewhere still turns once.
+/// click on a link, field or comment (`clicked_object`) and leaving full screen: the pointer stays
+/// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65), and
+/// fields to fill. A double-click elsewhere still turns once.
 /// `click` is `Some(back)` on the frame of a click, `back` when it was a shift-click.
-fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, link_followed: bool) {
+fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, clicked_object: bool) {
     let now = ui.input(|i| i.time);
     if let Some(back) = click
-        && !link_followed
+        && !clicked_object
         && view.selection.is_none()
         && view.clicks < 2
     {
@@ -2803,7 +2856,7 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
         view.present_turn = Some((now + delay, !back));
     }
     if let Some((due, forward)) = view.present_turn {
-        if link_followed || view.selection.is_some() || view.presentation.is_none() {
+        if clicked_object || view.selection.is_some() || view.presentation.is_none() {
             view.present_turn = None;
         } else if now >= due {
             view.present_turn = None;
@@ -2884,11 +2937,25 @@ fn shown_row(view: &DocView, rects: &[Rect]) -> Vec<usize> {
     }
 }
 
+/// The pages' context menu, except in full screen, where a right-click turns back a page instead
+/// ([`presentation_click_state`]).
+fn page_context_menu(resp: &egui::Response, presenting: bool, add: impl FnOnce(&mut egui::Ui)) {
+    if !presenting {
+        resp.context_menu(add);
+    }
+}
+
 /// Full screen: a click on the document goes forward a page and a shift-click back, as in
 /// Acrobat, unless the click did something else (a link, a word selected). Decided once the pages
 /// have had the click. `Some(back)` on the frame of a click, `back` when it was a shift-click.
 fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect, enabled: bool) -> Option<bool> {
-    let clicked = view.presentation.is_some() && enabled && presentation_click(ui, navigation_rect);
+    let presenting = view.presentation.is_some() && enabled;
+    // A right-click goes back a page, as a left click goes forward (*Adobe Acrobat Help*, 2019,
+    // "Full Screen preferences", p. 69).
+    if presenting && ui.rect_contains_pointer(navigation_rect) && ui.input(|i| i.pointer.secondary_clicked()) {
+        return Some(true);
+    }
+    let clicked = presenting && presentation_click(ui, navigation_rect);
     // Shift as held now, or as the click's own event carried it (a synthetic click).
     clicked.then(|| {
         ui.input(|i| {
@@ -2908,6 +2975,12 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
+    } else if view.goto_point.is_none() && zoom_delta == 1.0 {
+        // The find step has been laid out and no zoom is easing on: zoom at the pointer again.
+        // egui spreads a ⌘/Ctrl-wheel notch over about a quarter of a second; while the pointer
+        // is off the page view that zoom waits, and the hold must outlast it, or the rest of it
+        // anchors on the pointer once it is back and the match drifts off the middle.
+        view.find_hold = None;
     }
 }
 
@@ -3113,13 +3186,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
+    // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
+    // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&app.views[index].id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    let notice = notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t);
+    let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui, &t);
     apply_notice(app, index, notice);
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
@@ -3142,15 +3221,17 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_h = avail.height();
     let old_zoom = view.zoom;
     view.fit_zoom(info);
-    anchor_zoom_change(view, avail.width(), old_zoom);
+    anchor_zoom_change(view, avail.size(), old_zoom);
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
     let zoom_delta = crate::motion::zoom_delta(ui.ctx());
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
-    let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
+    // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
+    let zoom_enabled = unobstructed && ui.is_enabled();
+    let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
-    pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
+    pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
@@ -3252,6 +3333,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let env = PageEnv {
         added: &added,
         allowed,
+        animates,
         author: &author,
         auto_delta,
         avail,
@@ -3343,6 +3425,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         page_action,
         paste_comments_at,
         primary_down,
+        on_object,
         mut refused,
         row_on_screen,
         stamp_placed,
@@ -3387,7 +3470,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), view, info, &mut tool, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), view);
     }
@@ -3431,7 +3514,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
-    schedule_presentation_turn(ui, view, present, clicked_link.is_some());
+    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
     let remote_open = follow_link(app, index, clicked_link);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
@@ -3721,7 +3804,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
-    if app.mode != crate::Mode::Read && !app.full_screen {
+    // A document that hides the toolbars (`HideToolbar`) hides this one too.
+    if app.mode != crate::Mode::Read && !app.full_screen && !app.views.get(index).is_some_and(|v| v.interface.hidden.toolbar) {
         // The page nearest the left edge, whose margin the bar sits in.
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
         quick_bar(app, avail, page_left, ui);

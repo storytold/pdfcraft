@@ -8,6 +8,7 @@ use egui::epaint::text::{Fonts, TextOptions};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::{PdfCraftApp, i18n, theme};
 
+pub mod fixtures;
 pub mod input;
 
 /// Step frames until `ready` holds or 30 seconds pass, and say whether it held. For background work
