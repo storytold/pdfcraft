@@ -1614,6 +1614,14 @@ fn only_fonts_something_draws_with_must_be_embedded() {
     assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
     // Named through a reference to it, it is still the font something draws with.
     assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // Inline font dictionaries in `/Resources /Font` (such as `/PCFHelvetica` and `/PCFHelveticaBold`
+    // added by `page_add_text`) are checked too (#6843).
+    assert_eq!(
+        fonts(&form(
+            "/Font << /PCFHelvetica << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /PCFHelveticaBold << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> >>"
+        )),
+        ["The font Helvetica isn't embedded", "The font Helvetica-Bold isn't embedded"]
+    );
     // A page's own font is checked as before.
     assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
 }
