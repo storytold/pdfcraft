@@ -192,5 +192,8 @@ real_name = "Valentin Klein"
 display_name = "vangel76"
 sync_github_name = false
 
+[people.enriquemelzer-bit]
+sync_github_name = true
+
 [people.ashokram-si]
 real_name = "Ashok Ram"
