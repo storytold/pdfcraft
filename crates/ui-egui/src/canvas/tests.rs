@@ -763,7 +763,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
     ctx.input_mut(|i| {
         i.events.push(egui::Event::Key { key: egui::Key::G, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     });
-    shortcuts(&mut v, &ctx, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
 
     assert_eq!(v.current, 2, "the keyboard step chose the next match");
     assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");
@@ -2757,10 +2757,10 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
             modifiers: egui::Modifiers::NONE,
         });
     });
-    shortcuts(&mut v, &ctx, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
     assert!(v.all_text, "the selection stays while the field takes Esc");
     v.forms.focus = None;
-    shortcuts(&mut v, &ctx, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
     assert!(!v.all_text, "with no field being filled, Esc clears the selection");
 }
 
