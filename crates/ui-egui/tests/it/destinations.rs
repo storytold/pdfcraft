@@ -132,3 +132,23 @@ fn a_second_new_destination_is_untitled_2() {
     }
     assert_eq!(destinations(&h), [("Untitled".into(), Some(0)), ("Untitled 2".into(), Some(0))]);
 }
+
+#[test]
+fn a_rename_ends_when_its_destination_is_deleted_under_it() {
+    use pdfcraft_ui_egui::DestAction;
+    let mut h = harness();
+    add(&mut h, "Results");
+    menu(&mut h, "Results", "Rename");
+    assert!(h.state().destinations.rename.is_some());
+    // Deleted while its rename field is open, as an undo or a tool would: the rename is over.
+    h.state_mut().destination_action(DestAction::Delete("Results".into()));
+    h.run_steps(3);
+    assert!(destinations(&h).is_empty());
+    assert!(h.state().destinations.rename.is_none(), "the rename outlived its destination");
+    // Back by undo, it is a row again, not a rename field waiting for the name to return.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(destinations(&h), [("Results".into(), Some(0))]);
+    assert!(h.state().destinations.rename.is_none());
+    h.get_by_label("Results");
+}

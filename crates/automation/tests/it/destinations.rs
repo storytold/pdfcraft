@@ -86,9 +86,10 @@ fn destination_tools_refuse_what_they_cannot_do_and_change_nothing() {
             .contains("a destination named Summary already exists")
     );
     assert!(refused(&mut a, "destination_delete", json!({ "doc": doc, "name": "Nothing" })).contains("there is no destination named Nothing"));
-    // Over the length limit, and missing arguments, are refused by the schema checks.
+    // A name over the length limit is refused by the name check, a missing argument by the
+    // argument check.
     let long = "x".repeat(pdfcraft_organize::MAX_DESTINATION_NAME + 1);
-    assert!(a.call("destination_add", &json!({ "doc": doc, "name": long, "page": 1 })).is_err());
-    assert!(a.call("destination_rename", &json!({ "doc": doc, "name": "Intro" })).is_err());
+    assert!(refused(&mut a, "destination_add", json!({ "doc": doc, "name": long, "page": 1 })).contains("at most 1024 characters"));
+    assert!(refused(&mut a, "destination_rename", json!({ "doc": doc, "name": "Intro" })).contains("missing argument new_name"));
     assert_eq!(list(&mut a, doc), before);
 }

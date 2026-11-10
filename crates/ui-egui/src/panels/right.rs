@@ -319,6 +319,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui,
                         DestinationsPanel {
                             theme: &t,
+                            id,
                             info,
                             rows: &dest_rows,
                             state: destinations,

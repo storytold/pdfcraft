@@ -34,8 +34,8 @@ pub enum DestAction {
 pub struct DestinationsView {
     /// Sorted by page (Acrobat: click the Page label) instead of by name.
     pub by_page: bool,
-    /// A destination being renamed: (its name, the text so far).
-    pub rename: Option<(String, String)>,
+    /// A destination being renamed: (its document, its name, the text so far).
+    pub rename: Option<(DocId, String, String)>,
     /// The list, for a document at an edit generation.
     rows: Option<(DocId, u64, Arc<Vec<DestinationRow>>)>,
 }
@@ -55,6 +55,16 @@ impl DestinationsView {
         self.rows = Some((id, generation, rows.clone()));
         rows
     }
+
+    /// End a rename whose destination is gone: `rows` are the destinations of document `id`, and
+    /// the rename was started in another document, or for a name none of them has any more (an
+    /// undo, a tool or another tab took it away). Left alone, the field would open again on a
+    /// destination given that name later, or on one of that name in another document.
+    fn drop_stale_rename(&mut self, id: DocId, rows: &[DestinationRow]) {
+        if self.rename.as_ref().is_some_and(|(doc, name, _)| *doc != id || !rows.iter().any(|r| r.name == *name)) {
+            self.rename = None;
+        }
+    }
 }
 
 /// The rows in the order the panel shows them: by name, or by page (then name), with those that
@@ -70,6 +80,8 @@ fn sorted(rows: &[DestinationRow], by_page: bool) -> Vec<&DestinationRow> {
 /// What [`panel`] draws from and writes to.
 pub(super) struct DestinationsPanel<'a> {
     pub(super) theme: &'a Tokens,
+    /// The document `rows` are the destinations of.
+    pub(super) id: DocId,
     pub(super) info: &'a DocInfo,
     pub(super) rows: &'a [DestinationRow],
     pub(super) state: &'a mut DestinationsView,
@@ -81,7 +93,8 @@ pub(super) struct DestinationsPanel<'a> {
 /// Draw the panel's list: the Name and Page labels (each sorts by itself), then a row per
 /// destination.
 pub(super) fn panel(ui: &mut egui::Ui, p: DestinationsPanel<'_>) {
-    let DestinationsPanel { theme: t, info, rows, state, editable, nav, action } = p;
+    let DestinationsPanel { theme: t, id: doc, info, rows, state, editable, nav, action } = p;
+    state.drop_stale_rename(doc, rows);
     if rows.is_empty() {
         super::right::empty(ui, t, "navigation", "This document has no named destinations.");
         return;
@@ -118,7 +131,7 @@ pub(super) fn panel(ui: &mut egui::Ui, p: DestinationsPanel<'_>) {
     }
     for row in sorted(rows, state.by_page) {
         let id = ui.scope_id().with(("destination", &row.name));
-        if let Some((old, text)) = state.rename.as_mut()
+        if let Some((_, old, text)) = state.rename.as_mut()
             && *old == row.name
         {
             // Inline rename: Enter (or clicking away) commits, Escape cancels.
@@ -236,10 +249,10 @@ impl PdfCraftApp {
                 let (page, left, top) = here(self);
                 if self.apply_edit(Edit::AddDestination { name: name.clone(), page, left, top }) {
                     // Like Acrobat: the new destination is named at once.
-                    self.destinations.rename = Some((name.clone(), name));
+                    self.destinations.rename = Some((id, name.clone(), name));
                 }
             }
-            DestAction::StartRename(name) => self.destinations.rename = Some((name.clone(), name)),
+            DestAction::StartRename(name) => self.destinations.rename = Some((id, name.clone(), name)),
             DestAction::Rename(name, new_name) => {
                 self.apply_edit(Edit::RenameDestination { name, new_name });
             }
@@ -256,7 +269,7 @@ impl PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{DestinationRow, sorted, untitled};
+    use super::{DestinationRow, DestinationsView, DocId, sorted, untitled};
     use pdfcraft_render::DestView;
 
     fn row(name: &str, page: Option<usize>) -> DestinationRow {
@@ -270,6 +283,23 @@ mod tests {
         assert_eq!(names(true), ["c", "a2", "b", "a"]);
         // By name is the order the engine lists them in.
         assert_eq!(names(false), ["b", "a", "c", "a2"]);
+    }
+
+    #[test]
+    fn a_rename_ends_when_its_destination_or_its_document_is_gone() {
+        let renaming = || DestinationsView { rename: Some((DocId(1), "a".into(), "a2".into())), ..Default::default() };
+        // Still there, among others: the rename goes on with the text typed so far.
+        let mut view = renaming();
+        view.drop_stale_rename(DocId(1), &[row("b", None), row("a", Some(0))]);
+        assert_eq!(view.rename, Some((DocId(1), "a".into(), "a2".into())));
+        // Deleted, or renamed by something else: no row has the name.
+        let mut view = renaming();
+        view.drop_stale_rename(DocId(1), &[row("b", None)]);
+        assert_eq!(view.rename, None);
+        // Another document with a destination of the same name does not take the rename over.
+        let mut view = renaming();
+        view.drop_stale_rename(DocId(2), &[row("a", Some(0))]);
+        assert_eq!(view.rename, None);
     }
 
     #[test]
