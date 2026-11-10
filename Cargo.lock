@@ -1187,17 +1187,17 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 
 [[package]]
 name = "craft-i18n"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "fixed_decimal",
  "icu_decimal",
@@ -1220,7 +1220,7 @@ dependencies = [
 [[package]]
 name = "craft-keymap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "egui",
  "serde",
@@ -1230,7 +1230,7 @@ dependencies = [
 [[package]]
 name = "craft-menu"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "craft-keymap",
  "craft-quit",
@@ -1243,7 +1243,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=0e4943cb5e7b50bd4eb01e8c580b97603c8f9e3d#0e4943cb5e7b50bd4eb01e8c580b97603c8f9e3d"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -1257,7 +1257,7 @@ dependencies = [
 [[package]]
 name = "craft-quit"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "dispatch2",
  "egui",
@@ -1268,7 +1268,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "craft-fonts-build",
  "craft-i18n",
@@ -1289,7 +1289,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
+source = "git+https://github.com/storytold/craft-libs?rev=dc53e98eb1f3c048a76c3753623ace2c278a6ac7#dc53e98eb1f3c048a76c3753623ace2c278a6ac7"
 dependencies = [
  "chrono",
  "dunce",
