@@ -60,8 +60,8 @@ mod hotbar;
 mod panels;
 pub mod panes;
 pub use print_ui::{
-    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
-    system_two_sided,
+    DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
+    TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -72,6 +72,8 @@ mod widgets;
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
+#[doc(hidden)]
+pub use editing::download_mime_type;
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
@@ -433,6 +435,10 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// Where a printer's configured default paper comes from: DEVMODE / driver settings unless a test stands in.
+    pub default_paper_source: Option<DefaultPaperSource>,
+    /// Where a printer's supported paper sizes come from: driver capabilities unless a test stands in.
+    pub printer_papers_source: Option<PrinterPapersSource>,
     /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
     pub spooler: Option<Spooler>,
     /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
@@ -704,6 +710,8 @@ pub struct PdfCraftApp {
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
     /// system clipboard (tests turn that off).
     pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
+    /// What `last_snapshot` was taken of: (document, page, rectangle in page view points).
+    last_snapshot_of: Option<(DocId, usize, [f32; 4])>,
     /// The last image copied with Copy Image (width, height, straight RGBA), also put on the
     /// system clipboard when `system_clipboard` is on.
     pub last_copied_image: Option<(u32, u32, Vec<u8>)>,
