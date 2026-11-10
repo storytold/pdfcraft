@@ -256,31 +256,43 @@ fn codestream_head(cs: &[u8]) -> Option<(u64, u16, u8)> {
 
 /// The boxes of JP2 data, as (type, contents), read as the decoder reads them. A length of 0 is
 /// "to the end of the data" and of 1 "in the next eight bytes"; a box that does not fit ends it.
-fn jp2_boxes(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+/// A `None` item is a box of 4 GiB or more, which the decoder misreads: it casts the length to
+/// `usize`, so on a 32-bit build the length wraps and it reads on from inside the box.
+fn jp2_boxes(data: &[u8]) -> impl Iterator<Item = Option<(&[u8], &[u8])>> {
     let mut at = 0usize;
     std::iter::from_fn(move || {
         let head = data.get(at..at.checked_add(8)?)?;
-        let (start, end) = match u32::from_be_bytes(head.get(..4)?.try_into().ok()?) {
-            0 => (at + 8, data.len()),
-            1 => (at.checked_add(16)?, at.checked_add(usize::try_from(u64::from_be_bytes(data.get(at + 8..at + 16)?.try_into().ok()?)).ok()?)?),
-            n => (at + 8, at.checked_add(usize::try_from(n).ok()?)?),
+        let (start, len) = match u32::from_be_bytes(head.get(..4)?.try_into().ok()?) {
+            0 => (at + 8, None),
+            1 => (at.checked_add(16)?, Some(u64::from_be_bytes(data.get(at + 8..at + 16)?.try_into().ok()?))),
+            n => (at + 8, Some(u64::from(n))),
+        };
+        let end = match len.map(|n| usize::try_from(n).ok().filter(|_| n < 1 << 32)) {
+            None => data.len(),
+            Some(Some(n)) => at.checked_add(n)?,
+            Some(None) => {
+                at = data.len();
+                return Some(None);
+            }
         };
         let body = data.get(start..end)?;
         at = end;
-        Some((head.get(4..)?, body))
+        Some(Some((head.get(4..)?, body)))
     })
 }
 
 /// [`JpxHead`] of the JPEG 2000 data `raw`: `raw` itself when it is a bare codestream, else every
 /// `jp2c` box of the JP2 file (the decoder reads each one), found by walking its boxes, not by
-/// looking for the markers, which other boxes may hold. `None` when there is no codestream.
+/// looking for the markers, which other boxes may hold. `None` when there is no codestream, or a
+/// box is one the decoder misreads.
 fn jpx_head(raw: &[u8]) -> Option<JpxHead> {
     if raw.starts_with(&JPX_CODESTREAM) {
         let (tiles, components, depth) = codestream_head(raw)?;
         return Some(JpxHead { tiles, components, depth, palette: false, enumerated: None });
     }
     let (mut most, mut palette, mut colour) = (None, false, None);
-    for (kind, body) in jp2_boxes(raw) {
+    for item in jp2_boxes(raw) {
+        let (kind, body) = item?;
         match kind {
             b"jp2c" => {
                 let (tiles, components, depth) = codestream_head(body)?;
@@ -291,7 +303,8 @@ fn jpx_head(raw: &[u8]) -> Option<JpxHead> {
                 // The decoder goes by the last header box and, in it, the first colour box. A
                 // palette in any header is refused all the same.
                 colour = None;
-                for (kind, body) in jp2_boxes(body) {
+                for item in jp2_boxes(body) {
+                    let (kind, body) = item?;
                     palette |= kind == b"pclr";
                     if kind == b"colr" && colour.is_none() {
                         colour = Some(body);
@@ -629,11 +642,17 @@ mod tests {
         // channels and the colour box for their meaning, and they disagree.
         let grey = jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
         let palette = jp2_box(b"pclr", &[&[1u8, 0, 3, 7, 7, 7][..], &[9u8; 256 * 3]].concat());
-        let hostile = jp2(&[grey.clone(), palette], &jpx_codestream(1));
+        let hostile = jp2(&[grey.clone(), palette.clone()], &jpx_codestream(1));
         assert_eq!(jpx_head(&hostile), Some(JpxHead { tiles: 1, components: 1, depth: 8, palette: true, enumerated: Some(17) }));
         assert_eq!(read(hostile), Err(NotDecoded::ColourSpace));
         // The same file without the palette is an ordinary grey image.
-        assert_eq!(read(jp2(&[grey], &jpx_codestream(1))).map(|s| s.data), Ok(vec![128]));
+        assert_eq!(read(jp2(std::slice::from_ref(&grey), &jpx_codestream(1))).map(|s| s.data), Ok(vec![128]));
+        // A box of 4 GiB that is empty on a 32-bit build, where the decoder's length wraps to 0
+        // and it reads the palette after it, is refused on every build.
+        let wraps = [&1u32.to_be_bytes()[..], b"free", &((1u64 << 32) + 16).to_be_bytes()].concat();
+        let hidden = jp2(&[grey, wraps, palette], &jpx_codestream(1));
+        assert_eq!(jpx_head(&hidden), None);
+        assert_eq!(read(hidden), Err(NotDecoded::Corrupt));
         // An alpha channel says so; a component count no grey or RGB image has is no such image,
         // however few tiles it has (the decoder allocates for every component of every tile).
         assert_eq!(read(jpx_codestream(2)), Err(NotDecoded::Alpha));
