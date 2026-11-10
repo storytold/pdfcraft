@@ -102,39 +102,15 @@ impl PainterExt for egui::Painter {
     }
 }
 
-/// User-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// this is the mathematical intersection of the full CTM-derived rect and the clipping path's rect.
+/// User-space editing frame: explicit PDF/editor crops apply, but the page edge does not
+/// truncate a selected image's handles. Body hit testing still respects page visibility.
 pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
-    if let Some(clip) = im.clip_rect {
-        let r = [im.rect[0].max(clip[0]), im.rect[1].max(clip[1]), im.rect[2].min(clip[2]), im.rect[3].min(clip[3])];
-        if r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1] {
-            return r;
-        }
-    }
-    im.visible_rect.unwrap_or(im.rect)
+    im.frame_rect().unwrap_or(im.rect)
 }
 
-/// Screen-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// the final selectable `egui::Rect` is the mathematical intersection of the image's
-/// full CTM-derived rect and the clipping path's rect.
+/// Screen-space editing frame, including selected handles outside the page.
 pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
-    let full = xf.user_rect_f64(info, page, im.rect);
-    if let Some(clip) = im.clip_rect {
-        let clip_r = xf.user_rect_f64(info, page, clip);
-        let inter = full.intersect(clip_r);
-        if inter.is_positive() {
-            return inter;
-        }
-    }
-    if let Some(vr) = im.visible_rect {
-        let r = xf.user_rect_f64(info, page, vr);
-        if r.is_positive() {
-            return r;
-        }
-    }
-    full
+    xf.user_rect_f64(info, page, image_selectable_bounds(im))
 }
 
 /// An Oriented Bounding Box (OBB) representing a rotated rectangle in screen space,
@@ -1162,7 +1138,7 @@ impl DocView {
             page_widget: None,
             pan_hold_until: 0.0,
             slow_pages: HashSet::new(),
-            comments: Default::default(),
+            comments: crate::comments::CommentView::from_info(info),
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
@@ -1220,6 +1196,7 @@ impl DocView {
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        self.comments.document_changed(info);
         self.reset_coarse_state();
     }
 
@@ -1864,7 +1841,12 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // A resized handle can sit in the window beside a page that does not fill it. The
+    // response has to cover that visible area or the next press never starts: the pointer
+    // is reported only inside this rectangle once the previous drag has been released.
+    // Page positions stay on `content_w`/`content_h`; the extra area is not a new page.
+    let response_size = vec2(content_w.max(viewport.width()), content_h.max(viewport.height()));
+    let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {
@@ -3488,7 +3470,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), view, info, &mut tool, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), view);
     }
