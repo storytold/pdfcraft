@@ -41,6 +41,10 @@ pub struct ScanCleanRun {
     pub doc: DocId,
     /// The pages (0-based) the run was asked for; none means all.
     pub pages: Vec<usize>,
+    /// The run repeats one that was undone for it (the result window's sliders), which left the
+    /// document at this edit generation: if the run ends without a result and the document is
+    /// still there, that enhancement is put back.
+    pub retune: Option<u64>,
     pub progress: Arc<Mutex<ScanCleanProgress>>,
 }
 
@@ -315,7 +319,7 @@ impl PdfCraftApp {
             OcrPages::Current => self.views.get(vi).map(|v| vec![v.current]).unwrap_or_default(),
             OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
-        self.start_scan_clean_on(pages, Vec::new());
+        self.start_scan_clean_on(pages, Vec::new(), None);
     }
 
     /// Enhance again the pages of the last run (the result dialog's sliders): its enhancement is
@@ -324,6 +328,10 @@ impl PdfCraftApp {
         let Some(o) = self.scan_clean_result.as_ref() else { return };
         let (doc, pages, generation, tunings) = (o.doc, o.requested.clone(), o.generation, o.tunings.clone());
         if self.scan_clean_run.is_some() || self.active_ids().map(|(_, id)| id) != Some(doc) {
+            return;
+        }
+        // What's typed in a form field goes in first: after the undo it would take the redo step away.
+        if !self.commit_form_typing() {
             return;
         }
         if self.session.get(doc).map(|d| d.edit_generation()) != Some(generation) {
@@ -336,11 +344,18 @@ impl PdfCraftApp {
         for v in self.views.iter_mut().filter(|v| v.id == doc) {
             v.invalidate_content();
         }
-        if self.start_scan_clean_on(pages, tunings) {
-            return;
+        let Some(undone) = self.session.get(doc).map(|d| d.edit_generation()) else { return };
+        if !self.start_scan_clean_on(pages, tunings, Some(undone)) {
+            self.put_back_scan_clean(doc, undone);
         }
-        // No new run: the enhancement that was undone for it comes back, and the sliders stay usable.
-        if self.session.redo(doc).is_ok() {
+    }
+
+    /// A retune that did not happen (it could not start, was cancelled or failed): the enhancement
+    /// that was undone for it comes back, and the sliders stay usable.
+    /// Only while the document is as the retune's undo left it (`undone`): after anything else,
+    /// Redo would bring back some other step.
+    fn put_back_scan_clean(&mut self, doc: DocId, undone: u64) {
+        if self.session.get(doc).map(|d| d.edit_generation()) == Some(undone) && self.session.redo(doc).is_ok() {
             for v in self.views.iter_mut().filter(|v| v.id == doc) {
                 v.invalidate_content();
             }
@@ -352,7 +367,7 @@ impl PdfCraftApp {
     }
 
     /// Whether a run started.
-    fn start_scan_clean_on(&mut self, pages: Vec<usize>, tunings: Vec<(usize, HalftoneTuning)>) -> bool {
+    fn start_scan_clean_on(&mut self, pages: Vec<usize>, tunings: Vec<(usize, HalftoneTuning)>, retune: Option<u64>) -> bool {
         let Some((_, id)) = self.active_ids() else { return false };
         if self.scan_clean_run.is_some() {
             self.notify_tr("Scanned pages are already being enhanced");
@@ -398,7 +413,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.scan_clean_run = Some(ScanCleanRun { doc: id, pages, progress });
+        self.scan_clean_run = Some(ScanCleanRun { doc: id, pages, retune, progress });
         self.poll_scan_clean();
         true
     }
@@ -415,7 +430,7 @@ impl PdfCraftApp {
     /// Show progress; apply the result once the worker is done.
     pub(crate) fn poll_scan_clean(&mut self) {
         let Some(run) = self.scan_clean_run.as_ref() else { return };
-        let (doc, requested, progress) = (run.doc, run.pages.clone(), run.progress.clone());
+        let (doc, requested, retune, progress) = (run.doc, run.pages.clone(), run.retune, run.progress.clone());
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.scan_clean_run = None;
@@ -477,8 +492,15 @@ impl PdfCraftApp {
                     }
                 }
             }
-            Err(EditError::Cancelled) => self.notify_tr("Enhancing the scanned pages was cancelled"),
-            Err(e) => self.notify(e.to_string()),
+            Err(e) => {
+                match e {
+                    EditError::Cancelled => self.notify_tr("Enhancing the scanned pages was cancelled"),
+                    e => self.notify(e.to_string()),
+                }
+                if let Some(undone) = retune {
+                    self.put_back_scan_clean(doc, undone);
+                }
+            }
         }
     }
 }
@@ -487,6 +509,68 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use pdfcraft_engine::scan_clean::SkippedImage;
+
+    /// A slider's run undoes the enhancement first: one that is then cancelled puts it back.
+    #[test]
+    fn a_cancelled_retune_puts_the_enhancement_back() {
+        // 64 x 64 grey paper with a dark edge, drawn over the whole page.
+        let px: Vec<u8> = (0..64 * 64).map(|i| if i % 64 < 4 { 30 } else { 198 }).collect();
+        let mut pdf = b"%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+            3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 64 64] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>
+endobj
+            4 0 obj
+<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4096 >>
+stream
+"
+        .to_vec();
+        pdf.extend_from_slice(&px);
+        pdf.extend_from_slice(
+            b"
+endstream
+endobj
+5 0 obj
+<< /Length 28 >>
+stream
+q 64 0 0 64 0 0 cm /Im0 Do Q
+endstream
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF
+",
+        );
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, pdf).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.session.enhance_scanned_pages(doc, &[], ScanCleanSettings::at(50)).unwrap();
+        let enhanced = app.session.save_bytes(doc).unwrap().to_vec();
+        app.session.undo(doc).unwrap();
+        let undone = app.session.get(doc).unwrap().edit_generation();
+        let run = |retune| {
+            let cancelled = ScanCleanProgress { result: Some(Err(EditError::Cancelled)), ..Default::default() };
+            ScanCleanRun { doc, pages: Vec::new(), retune, progress: Arc::new(Mutex::new(cancelled)) }
+        };
+        // An ordinary run that is cancelled changes nothing.
+        app.scan_clean_run = Some(run(None));
+        app.poll_scan_clean();
+        assert_eq!(app.session.get(doc).unwrap().undo_depth(), 0);
+        // Nor does a retune whose document has moved on since its undo: Redo is not its to use.
+        app.scan_clean_run = Some(run(Some(undone + 1)));
+        app.poll_scan_clean();
+        assert_eq!(app.session.get(doc).unwrap().undo_depth(), 0);
+        app.scan_clean_run = Some(run(Some(undone)));
+        app.poll_scan_clean();
+        assert!(app.scan_clean_run.is_none());
+        assert_eq!(app.session.get(doc).unwrap().undo_depth(), 1, "the enhancement is back");
+        assert_eq!(app.session.save_bytes(doc).unwrap().to_vec(), enhanced);
+    }
 
     #[test]
     fn the_summary_says_what_was_done_and_what_was_left() {

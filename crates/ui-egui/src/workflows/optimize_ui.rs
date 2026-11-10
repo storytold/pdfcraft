@@ -558,7 +558,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, pages: Vec::new(), progress: Arc::default() });
+        app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, pages: Vec::new(), retune: None, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Scanned pages are already being enhanced"));
         assert!(app.optimize_run.is_none());
