@@ -2396,20 +2396,21 @@ fn a_startxref_pushed_past_the_tail_by_trailing_data_is_still_read() {
     assert!(matches!(reopened.get(ObjRef::new(1, 0)).as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))));
 }
 
-/// The last `startxref` in the file still wins, wherever it is. One inside the trailing data
-/// that no offset follows is a bad startxref, and the file is rebuilt from object headers as
-/// before: an earlier keyword is never taken instead, since it could belong to a superseded
-/// revision.
+/// A `startxref` keyword in the trailing data that no offset and `%%EOF` follow is text, not a
+/// footer. It is passed over, and the file's own footer before it is read: nothing is rebuilt.
 #[test]
-fn a_startxref_keyword_inside_trailing_data_does_not_pick_an_earlier_one() {
+fn a_startxref_keyword_inside_trailing_data_is_passed_over() {
     let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
     let mut bytes = base.clone();
     bytes.extend_from_slice(b"\n<html><pre>");
     bytes.extend(std::iter::repeat_n(b' ', 5000));
     bytes.extend_from_slice(b"startxref is a PDF keyword</pre></html>\n");
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
     let doc = Document::open(Arc::new(bytes)).unwrap();
-    assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 1);
     assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+    assert_compact_matches_materialized(&doc);
 }
 
 /// Objects after the final `startxref` are an update that never got its cross-reference section
@@ -2440,7 +2441,8 @@ fn an_object_between_the_last_startxref_and_its_eof_still_rebuilds_the_table() {
 
 /// A `startxref` before the tail is taken only as a whole footer: the keyword, an offset and
 /// `%%EOF`. Text in the trailing data that names a valid but older offset after the keyword would
-/// otherwise read that older table and drop the newer revision without a note.
+/// otherwise read that older table and drop the newer revision without a note. It is passed
+/// over, and the footer of the newest revision is read.
 #[test]
 fn a_startxref_in_trailing_text_without_its_eof_does_not_read_an_older_table() {
     let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
@@ -2453,8 +2455,78 @@ fn a_startxref_in_trailing_text_without_its_eof_does_not_read_an_older_table() {
     bytes.extend(std::iter::repeat_n(b' ', 5000));
     bytes.extend_from_slice(b"</pre></html>\n");
     let doc = Document::open(Arc::new(bytes)).unwrap();
-    assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 2);
     assert!(matches!(doc.get(ObjRef::new(1, 0)).as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))), "the newer revision is kept");
+    assert_compact_matches_materialized(&doc);
+}
+
+/// Trailing data can bring a whole footer of its own (a second file glued on, a polyglot). Its
+/// offset is checked before it is used: one that is not where a cross-reference section starts
+/// in this file is refused, and no earlier footer is read in its place. The file is rebuilt
+/// from object headers and the note says why.
+#[test]
+fn a_whole_footer_in_trailing_data_must_point_at_a_cross_reference_section() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    // Offset 3 is inside the header line, the next is past the end of the file, and the last fits no position.
+    for offset in ["3", "99999999", "99999999999999999999999999"] {
+        let mut bytes = base.clone();
+        bytes.extend(std::iter::repeat_n(b' ', 100));
+        bytes.extend_from_slice(format!("startxref\n{offset}\n%%EOF\n").as_bytes());
+        bytes.extend(std::iter::repeat_n(b' ', 5000));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert!(doc.revisions().is_empty(), "{offset}: rebuilt: {:?}", doc.repair_log());
+        assert!(doc.repair_log().iter().any(|l| l.contains("not where a cross-reference section starts")), "{offset}: {:?}", doc.repair_log());
+        assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+    }
+}
+
+/// A newer revision whose own footer is damaged must not be dropped for the revision before it.
+/// Its footer is passed over as text, but its objects follow the footer that is found instead,
+/// so the file is rebuilt and the newer object is the one read.
+#[test]
+fn a_damaged_last_footer_does_not_fall_back_to_a_superseded_revision() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let mut edited = Document::open(Arc::new(base)).unwrap();
+    edited.set(ObjRef::new(3, 0), Object::String(crate::PdfString::literal("newer")));
+    let mut bytes = crate::write_incremental(&edited, &crate::SaveOptions::default()).unwrap();
+    let eof = bytes.windows(5).rposition(|w| w == b"%%EOF").unwrap();
+    bytes.truncate(eof);
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.revisions().is_empty(), "rebuilt: {:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("objects follow it")), "{:?}", doc.repair_log());
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(s) if s.bytes == b"newer"));
+}
+
+/// The search before the tail is bounded: trailing text may mention the keyword a few times,
+/// but past the limit the file is rebuilt from object headers rather than searched again and again.
+#[test]
+fn the_search_for_a_footer_before_the_tail_is_bounded() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    for (mentions, rebuilt) in [(64 - 1, false), (64, true)] {
+        let mut bytes = base.clone();
+        bytes.extend_from_slice("\nstartxref is a keyword".repeat(mentions).as_bytes());
+        bytes.extend(std::iter::repeat_n(b' ', 5000));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(doc.revisions().is_empty(), rebuilt, "{mentions}: {:?}", doc.repair_log());
+        assert_eq!(doc.repair_log().iter().any(|l| l.contains("object headers")), rebuilt, "{mentions}: {:?}", doc.repair_log());
+        assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+    }
+}
+
+/// A file with bytes before its header gives offsets from the header. A footer before the tail
+/// whose offset is right read that way is taken, as one in the tail is.
+#[test]
+fn a_header_relative_footer_before_the_tail_is_still_read() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let mut bytes = b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\n\r\n".to_vec();
+    bytes.extend_from_slice(&base);
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(doc.revisions().len(), 1, "{:?}", doc.repair_log());
+    assert!(!doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
 }
 
 /// Comments may stand between the parts of a footer, and the readers skip them when they read
