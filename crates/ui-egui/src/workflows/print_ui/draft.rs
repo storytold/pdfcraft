@@ -421,6 +421,9 @@ impl PrintDraft {
             } else {
                 self.paper = paper;
             }
+            // The paper this printer was last printed on is a choice, as one made in the dialog:
+            // the driver's default paper, read in the background (#5861), must not replace it.
+            self.paper_overridden = true;
         }
         self.sheet = 0;
     }
