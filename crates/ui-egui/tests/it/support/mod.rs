@@ -57,12 +57,18 @@ pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
     let menu_title_matches = |l: &str| l == title || l.starts_with(title);
     if h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| menu_title_matches(&l))).is_none() {
+        let lang = pdfcraft_ui_egui::i18n::Lang::from_pref(&h.state().language);
+        let tr_menu = pdfcraft_ui_egui::i18n::tr(lang, "Menu");
         let menu_label = pdfcraft_ui_egui::i18n::t("Menu");
         let menu_btn = h
             .query_by(|n| {
                 (n.role() == egui::accesskit::Role::Button || n.role() == egui::accesskit::Role::MenuItem)
-                    && n.label().is_some_and(|l| l == "Menu" || l == menu_label || l.starts_with(menu_label))
+                    && (n.has_popup() == Some(egui::accesskit::HasPopup::Menu)
+                        || n.label().as_deref() == Some("Menu")
+                        || n.label().as_deref() == Some(tr_menu)
+                        || n.label().as_deref() == Some(menu_label))
             })
+            .or_else(|| h.query_by(|n| n.has_popup() == Some(egui::accesskit::HasPopup::Menu)))
             .or_else(|| h.query_by(|n| n.label().as_deref() == Some("Menu")));
         if let Some(menu) = menu_btn {
             menu.click();

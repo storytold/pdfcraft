@@ -34,7 +34,7 @@ impl PdfCraftApp {
         // The menu holds the keys while one of its menus is open or it has the
         // keyboard (Alt, F10); a command shortcut has left it already (`logic`) and runs. The
         // chords wait meanwhile: the registered commands', Select all and the view's.
-        let chords = !self.over_pages(ctx);
+        let chords = !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx);
         // The pages' own chords (Select all, the view's) don't reach pages something covers: the
         // full-screen and update prompts, or the OCR Verify screen in their place (a dialog has
         // returned above, and the palette holds the keyboard).
