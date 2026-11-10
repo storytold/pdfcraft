@@ -61,6 +61,68 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// A word drawn as outlines names itself in /ActualText. A mark over part of it removes the
+/// outlines (a shading painting them is clipped instead), and the name, which would still read the
+/// whole word, goes with them. A word the mark misses keeps its own.
+#[test]
+fn redacted_paint_loses_the_actual_text_that_names_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (SECRET)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f EMC /Span <</ActualText (KEPT)>> BDC 100 200 60 20 re f EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_clipped, r.paths_removed), (0, 1));
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("KEPT"), "{c}");
+
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(b"/Span <</ActualText (SHADED)>> BDC /Sh0 sh EMC", "/Shading << /Sh0 7 0 R >>", vec![shading.as_bytes().to_vec()]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    apply(&mut doc, None).unwrap();
+    let c = content(&doc, 0);
+    // Drawn after a clip that cuts the region out.
+    assert!(!c.contains("SHADED") && c.find("W*").zip(c.find(" sh")).is_some_and(|(w, s)| w < s), "{c}");
+
+    // A path that clips as it paints.
+    let mut doc = one_page(b"q /Span <</ActualText (CLIPS)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h W f EMC Q", "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("CLIPS"), "{c}");
+}
+
+/// Nested names around redacted paint all go, the innermost too, whichever scope was cut first.
+#[test]
+fn redacted_paint_loses_every_name_around_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (OUTER)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f /Span <</ActualText (INNER)>> BDC 100 130 m 160 130 l 160 150 l 100 150 l h f EMC EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 155.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2);
+    let c = content(&doc, 0);
+    assert!(!c.contains("OUTER") && !c.contains("INNER"), "{c}");
+}
+
+/// Removing hidden text clips nothing, so a shading on the same page keeps the words that name it.
+#[test]
+fn removing_hidden_text_keeps_the_alt_text_of_a_shading() {
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 3 Tr 10 200 Td (SECRET) Tj ET /Figure <</Alt (chart)>> BDC /Sh0 sh EMC",
+        "/Shading << /Sh0 7 0 R >>",
+        vec![shading.as_bytes().to_vec()],
+    );
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("(chart)"), "{c}");
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.
@@ -79,6 +141,91 @@ fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     assert!(c.contains("0 0 0 rg") && c.contains("20 95 20 15 re f"), "{c}");
     let doc = reopen(&doc);
     assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// `content` behind a PNG Up predictor whose `/DecodeParms` is an indirect object added to `doc`,
+/// in a stream with `dict`'s entries too.
+fn predicted(doc: &mut Document, dict: pdfcraft_cos::Dict, content: &[u8]) -> pdfcraft_cos::Stream {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    // One column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let parms = doc.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+    let mut s = Stream::flate(Dict::new(), &rows);
+    for (k, v) in dict.iter() {
+        s.dict.set(k.to_vec(), v.clone());
+    }
+    s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    s
+}
+
+/// Content whose `/DecodeParms` is given by reference is read through the reference, on the page
+/// and in a form: the text under a mark goes. Read with the predictor's tag bytes left in, no glyph
+/// was found under the mark, and the redaction left the text in the file and said it was done.
+#[test]
+fn content_with_parameters_given_by_reference_is_redacted() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let secret = b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET";
+    let marked = [[5.0, 90.0, 120.0, 115.0]];
+    let mut page = one_page(b"", "", vec![]);
+    let s = predicted(&mut page, Dict::new(), secret);
+    page.set(ObjRef::new(4, 0), s);
+    // The parameters take object 7 and the form 8.
+    let mut form = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![]);
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].into_iter().map(Object::Int).collect()));
+    dict.set(
+        b"Resources".to_vec(),
+        Object::Dict(
+            [(b"Font".to_vec(), Object::Dict([(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)))].into_iter().collect()))].into_iter().collect(),
+        ),
+    );
+    let s = predicted(&mut form, dict, secret);
+    form.set(ObjRef::new(8, 0), s);
+    for (mut doc, what) in [(page, "page"), (form, "form")] {
+        assert_eq!(under(&mut doc, 0, &marked), 6, "{what}");
+        mark(&mut doc, 0, &marked, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 6), "{what}");
+        let mut saved = reopen(&doc);
+        assert_eq!(under(&mut saved, 0, &marked), 0, "{what}");
+        // Nor is the text left in a stream the page no longer draws, read with its parameters.
+        for (r, o) in saved.scan_objects() {
+            let Object::Stream(s) = &*o else { continue };
+            let data = pdfcraft_cos::DecodeBudget::new(usize::MAX, 0).decode_with_damage(&saved, s, usize::MAX).map(|(d, _)| d).unwrap_or_default();
+            assert!(!data.windows(6).any(|w| w == b"SECRET"), "{what}: {r:?}");
+        }
+    }
+}
+
+/// An image removed under a mark stays in the page's resources while another of its content
+/// streams, with `/DecodeParms` given by reference, still draws it. Read without the parameters,
+/// that stream seemed not to draw it, and the page lost the image there.
+#[test]
+fn an_image_drawn_again_in_content_with_parameters_by_reference_stays() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let img = stream("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", [255, 255, 255, 255]);
+    let mut doc = one_page(b"q 10 0 0 10 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let again = predicted(&mut doc, Dict::new(), b"q 10 0 0 10 200 200 cm /Im1 Do Q");
+    let again = doc.add(Object::Stream(again));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(again)])))
+        .unwrap();
+    mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let doc = reopen(&doc);
+    assert!(content(&doc, 0).contains("200 200 cm /Im1 Do"), "{}", content(&doc, 0));
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    // The save numbers objects afresh: the image is told by what it is.
+    let Some(Object::Stream(image)) = xo.reference(b"Im1").map(|r| (*doc.get(r)).clone()) else { panic!("no /Im1: {xo:?}") };
+    assert_eq!((image.dict.name(b"Subtype"), image.decoded().ok()), (Some(&b"Image"[..]), Some(vec![255; 4])));
 }
 
 /// #2130: a font with no /Widths is drawn with its embedded program's advances. Measured with a
@@ -103,6 +250,406 @@ fn a_whole_line_under_a_mark_goes_even_without_widths() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!(r.glyphs, text.len(), "every glyph of the line goes");
     assert_eq!(under(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]]), 0, "{}", content(&doc, 0));
+}
+
+/// Issue #2448: the redacted words are often in the document information dictionary and the XMP
+/// metadata too. Applying removes the entries and streams that repeat them, and keeps the rest.
+#[test]
+fn redacted_text_does_not_survive_in_info_or_xmp() {
+    let xmp = |body: &str| {
+        stream(
+            "/Type /Metadata /Subtype /XML",
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{body}</rdf:RDF></x:xmpmeta>"#
+            )
+            .as_bytes(),
+        )
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Metadata 9 0 R >>".to_vec(),
+        // "BLUEFIN" spans x 55-90.
+        stream("", b"BT /F1 10 Tf 10 100 Td (Codename BLUEFIN report) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        // 7: the document's XMP names it in an attribute, through a character reference.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" pdf:Keywords="tuna, Blue&#x46;in"/>"#),
+        // 8: the information dictionary.
+        b"<< /Title (Codename BLUEFIN report) /Keywords (tuna, bluefin) /Author (Ada Lovelace) /Producer (Test) >>".to_vec(),
+        // 9: the page's XMP doesn't mention it.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#),
+    ];
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 8 0 R").build())).unwrap();
+    mark(&mut doc, 0, &[[55.0, 95.0, 90.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.metadata), (7, 3), "{r:?}");
+    // Without object streams, so the byte search below can see the `/Info` dictionary.
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle));
+    assert!(has(b"Ada Lovelace"), "the kept /Info entry is visible to the search");
+    assert!(!has(b"bluefin") && !has(b"Blue&#x46;in"), "the redacted word survived in the metadata");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let info = saved.trailer().get(b"Info").and_then(|i| saved.resolve(i).as_dict().cloned()).unwrap();
+    let text = |k: &[u8]| info.get(k).and_then(|v| saved.resolve(v).as_string().map(|s| s.to_text()));
+    assert_eq!((text(b"Title"), text(b"Keywords")), (None, None));
+    assert_eq!((text(b"Author").as_deref(), text(b"Producer").as_deref()), (Some("Ada Lovelace"), Some("Test")));
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(!catalog.contains(b"Metadata"), "the document XMP named the redacted word");
+    assert!(pdfcraft_model::pages(&saved)[0].dict.contains(b"Metadata"), "the page XMP didn't, and stays");
+}
+
+/// An `/Info` value that is itself part of the removed text goes, though its words are too short
+/// to be terms ("J. Li"); a value with fewer than three letters or digits stays.
+#[test]
+fn an_info_value_inside_the_redacted_text_goes() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (Prepared by J. Li) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Author (J.  li) /Subject (by) /Producer (Test) >>".to_vec(),
+    ];
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 7 0 R").build())).unwrap();
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 1, "{r:?}");
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(!info.contains(b"Author"), "the author's name was redacted from the page");
+    assert!(info.contains(b"Subject") && info.contains(b"Producer"));
+}
+
+/// Removed glyphs whose text isn't known (no `/ToUnicode`, glyph names outside the glyph list)
+/// leave nothing to search the metadata for, so every `/Info` string goes, as when the collected
+/// text was cut short (review on #2539). Glyphs whose text is known keep the targeted check.
+#[test]
+fn removed_glyphs_with_no_known_text_clear_the_metadata() {
+    let page = |codes: &[u8], font: &str| -> Document {
+        let content = [&b"BT /F1 10 Tf 10 100 Td ("[..], codes, b") Tj ET"].concat();
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            stream("", &content),
+            font.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+            b"<< /Title (Project Nightjar) /Producer (Test) >>".to_vec(),
+        ];
+        Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 7 0 R").build())).unwrap()
+    };
+    let unnamed = FONT.replace(" /Widths", " /Encoding << /Differences [65 /g17 /g18 /g19] >> /Widths");
+    let mut doc = page(b"ABC", &unnamed);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(!info.contains(b"Title") && !info.contains(b"Producer"), "fail closed: {r:?}");
+    // Control: the same glyphs with known text don't touch unrelated metadata.
+    let mut doc = page(b"ABC", FONT);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(info.contains(b"Title") && info.contains(b"Producer"));
+}
+
+/// One page showing `content`, with `/Info` `info` and catalog XMP whose `rdf:RDF` holds
+/// `xmp_body`.
+fn with_metadata(content: &[u8], info: &str, xmp_body: &str) -> Document {
+    let xmp = format!(
+        r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{xmp_body}</rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#
+    );
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("/Type /Metadata /Subtype /XML", xmp.as_bytes()),
+        info.as_bytes().to_vec(),
+    ];
+    Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 8 0 R").build())).unwrap()
+}
+
+fn info_keys(doc: &Document) -> Vec<String> {
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    info.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect()
+}
+
+fn has_xmp(doc: &Document) -> bool {
+    doc.get(doc.root().unwrap()).as_dict().is_some_and(|c| c.contains(b"Metadata"))
+}
+
+/// Letter-spaced text (character spacing wider than a word gap between plain glyphs) is still
+/// one word, so `/Title (Bluefin)` goes when "B L U E F I N" is redacted (#2539 review).
+#[test]
+fn letter_spaced_redacted_text_still_matches_metadata() {
+    let body = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bluefin</dc:title></rdf:Description>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 3 Tc 10 100 Td (BLUEFIN) Tj ET", "<< /Title (Bluefin) /Producer (Test) >>", body);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 2, "{r:?}");
+    assert_eq!(info_keys(&doc), ["Producer"]);
+    assert!(!has_xmp(&doc));
+}
+
+/// An XMP value that is part of the removed text goes, as an `/Info` value does, though its
+/// words are too short to be terms ("J. Li"). Values are compared as whole words, so "True"
+/// doesn't go with "untrue", and namespace URIs and the `xpacket` wrapper aren't searched, so
+/// redacting "Adobe … end" keeps a packet declared under `adobe:ns:meta/` and closed by
+/// `<?xpacket end="w"?>`.
+#[test]
+fn xmp_values_inside_the_redacted_text_go_as_whole_words() {
+    let creator = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>J. Li</dc:creator></rdf:Description>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (Prepared by J. Li) Tj ET", "<< /Producer (Test) >>", creator);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 1, "{r:?}");
+    assert!(!has_xmp(&doc), "the packet named J. Li");
+
+    let trapped = r#"<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" pdf:Trapped="True"/>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (Adobe said untrue at the end) Tj ET", "<< /Subject (True) /Producer (Test) >>", trapped);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 0, "{r:?}");
+    assert!(has_xmp(&doc));
+    assert_eq!(info_keys(&doc), ["Subject", "Producer"]);
+}
+
+/// When the removed text was too much to collect, what wasn't collected can't be searched for:
+/// every `/Info` string and the XMP go (fail-closed), even though the runs that were kept match
+/// nothing.
+#[test]
+fn metadata_is_cleared_when_the_removed_text_was_cut_short() {
+    // More separate runs of one letter than are kept: each `A` is too far from the last to join.
+    let mut content = b"BT /F1 10 Tf 10 100 Td".to_vec();
+    for _ in 0..50_001 {
+        content.extend_from_slice(b" (A) Tj 30 0 Td (A) Tj -30 0 Td");
+    }
+    content.extend_from_slice(b" ET");
+    let body = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#;
+    let mut doc = with_metadata(&content, "<< /Title (Annual figures) /Producer (Test) /Trapped /False >>", body);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 3, "{r:?}");
+    assert_eq!(info_keys(&doc), ["Trapped"], "strings go, the name stays");
+    assert!(!has_xmp(&doc));
+}
+
+/// #2539 review: the removed text kept for the metadata check is bounded for the whole document,
+/// not per page. One glyph code can stand for 256 UTF-16 units of `/ToUnicode` text (768 bytes of
+/// UTF-8), so here each page makes 150 runs of 80 such glyphs (9.2 MB, under the page's run and
+/// byte limits); two pages pass `MAX_REMOVED_BYTES`, so the rest isn't kept and the check fails
+/// closed.
+#[test]
+fn removed_text_kept_for_the_metadata_check_is_bounded_per_document() {
+    let long = "4E00".repeat(256);
+    let to_unicode = format!("/CIDInit /ProcSet findresource begin 1 beginbfchar <41> <{long}> endbfchar end");
+    let run = "A".repeat(80);
+    let mut content = b"BT /F1 1 Tf 10 100 Td".to_vec();
+    for _ in 0..75 {
+        content.extend_from_slice(format!(" ({run}) Tj 30 0 Td ({run}) Tj -30 0 Td").as_bytes());
+    }
+    content.extend_from_slice(b" ET");
+    let page = "/Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >>";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+        format!("<< {page} >>").into_bytes(),
+        stream("", &content),
+        FONT.replace("95 0 R", "6 0 R").replace(" /Widths", " /ToUnicode 7 0 R /Widths").into_bytes(),
+        widths(),
+        stream("", to_unicode.as_bytes()),
+        format!("<< {page} >>").into_bytes(),
+    ];
+    let mut doc = pdf(objs);
+    let mut applying = Applying {
+        report: Report::default(),
+        doomed_fields: Vec::new(),
+        doomed_xobjects: Vec::new(),
+        retired_properties: Vec::new(),
+        widget_owner: Vec::new(),
+        removed_text: Vec::new(),
+        removed_cut: false,
+        removed_room: interp::MAX_REMOVED_BYTES,
+        removed_everywhere: HashSet::new(),
+        images: pdfcraft_cos::ImageBudget::new(&doc),
+        removed_appearances: HashSet::new(),
+        appearance_scan_limit: false,
+        pruned_patterns: Vec::new(),
+    };
+    let rects = [[5.0, 99.0, 200.0, 102.0]];
+    let kept = |a: &Applying| a.removed_text.iter().map(String::len).sum::<usize>();
+    let first = pdfcraft_model::pages(&doc).swap_remove(0);
+    redact_page_content(&mut doc, &mut applying, 0, &first, &rects).unwrap();
+    assert_eq!((kept(&applying), applying.removed_cut), (9_216_000, false), "one page fits");
+    let second = pdfcraft_model::pages(&doc).swap_remove(1);
+    redact_page_content(&mut doc, &mut applying, 1, &second, &rects).unwrap();
+    assert!(applying.removed_cut, "the second page passes the document's limit");
+    assert!(kept(&applying) <= interp::MAX_REMOVED_BYTES, "kept {} bytes", kept(&applying));
+}
+
+/// #2539 review: the searching a scrub may do is one budget for all of it, not a check per
+/// value: very many small `/Info` values each fit, but together they don't, and past the budget
+/// the rest counts as matching (fail-closed). With room to search, nothing that doesn't mention
+/// the removed text goes.
+#[test]
+fn metadata_search_has_one_budget_for_every_value() {
+    let entries: String = (0..50).map(|i| format!("/K{i} (an unrelated value number {i:02} in the list) ")).collect();
+    let info = format!("<< {entries}/Producer (Test) >>");
+    let fresh = || with_metadata(b"BT /F1 10 Tf 10 100 Td (Bluefin) Tj ET", &info, "");
+    let mut doc = fresh();
+    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap().removed, 0, "room to search: nothing goes");
+    let mut doc = fresh();
+    // Each value costs about 40; fifty of them don't fit in 1000.
+    let n = metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1000).unwrap().removed;
+    assert!(n > 20, "past the budget the rest goes ({n} went)");
+}
+
+/// #2539 review: an entity is looked for only in the 12 bytes after its `&`, so a packet of bare
+/// `&` characters is read in linear time, and decoding is unchanged.
+#[test]
+fn xml_entities_are_found_near_their_ampersand_only() {
+    assert_eq!(metadata::xml_values("<a>R&#233;sum&eacute; &amp; &#x41;&#65; &#1234567890123;</a>"), ["Résum&eacute; & AA &#1234567890123;"]);
+    // #2539 review: a character reference with many leading zeros still decodes, so it can't
+    // hide a redacted word from the search; a reference that never ends stays as written.
+    assert_eq!(metadata::xml_values("<a>&#00000000000066;LUEFIN &#x000000000000000042;LUEFIN &#0000000000;</a>"), ["BLUEFIN BLUEFIN &#0000000000;"]);
+    let bare = "&".repeat(200_000);
+    let started = std::time::Instant::now();
+    let values = metadata::xml_values(&format!("<a>{bare}</a>"));
+    assert_eq!(values.concat().len(), bare.len());
+    let zeros = format!("&#{}", "0".repeat(10)).repeat(20_000);
+    assert_eq!(metadata::xml_values(&format!("<a>{zeros}</a>")).concat().len(), zeros.len());
+    eprintln!("200000 bare ampersands, 20000 unended references: {:?}", started.elapsed());
+}
+
+/// #2539 review: Apply removes a form XObject whole when it is nested past the depth limit (or
+/// its stream can't be decoded), without reading its text, so what it held is unknown: the
+/// metadata check fails closed.
+#[test]
+fn a_form_removed_unread_clears_the_metadata() {
+    // Forms 5, 6, ... each draw the next, one more than the depth limit deep, and the last one
+    // paints. The page draws form 5.
+    let last = 5 + crate::interp::MAX_DEPTH;
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>".to_vec(),
+        stream("", b"q /Fm Do Q"),
+    ];
+    for n in 5..=last {
+        objs.push(stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Fm {} 0 R >> >>", n + 1),
+            b"q /Fm Do Q",
+        ));
+    }
+    objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 g 10 10 50 50 re f"));
+    objs.push(b"<< /Title (Annual figures) /Producer (Test) >>".to_vec());
+    let info = objs.len();
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry(&format!("/Info {info} 0 R")).build())).unwrap();
+    mark(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert!(r.forms_removed >= 1, "{r:?}");
+    assert!(!info_keys(&doc).contains(&"Title".to_string()), "the deep form's text was never read: {:?}", info_keys(&doc));
+}
+
+/// A value shorter than the redacted sentence goes from XMP too, in a custom schema's element or
+/// attribute, as from `/Info` (the regression #2598 suggested keeping): the packets holding it are
+/// removed, one that doesn't stays.
+#[test]
+fn a_shorter_value_in_custom_xmp_goes() {
+    let xmp = |body: &str| {
+        stream(
+            "/Type /Metadata /Subtype /XML",
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{body}</rdf:RDF></x:xmpmeta>"#
+            )
+            .as_bytes(),
+        )
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Metadata 8 0 R >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (JAMES BOND IS A SPY) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        // 7: an element of a custom schema.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:acme="https://example.org/acme/"><acme:Agent>James Bond</acme:Agent></rdf:Description>"#),
+        // 8: an attribute of a custom schema.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:acme="https://example.org/acme/" acme:code="James Bond"/>"#),
+        // 9: a third packet, on no holder yet; swapped onto the page below to show a clean one stays.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#),
+        b"<< /Author (James Bond) /Subject (Annual figures) >>".to_vec(),
+    ];
+    for (holder_of_8, expected) in [("8 0 R", 3), ("9 0 R", 2)] {
+        let objs: Vec<Vec<u8>> =
+            objs.iter().map(|o| String::from_utf8_lossy(o).replace("/Metadata 8 0 R", &format!("/Metadata {holder_of_8}")).into_bytes()).collect();
+        let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 10 0 R").build())).unwrap();
+        mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.metadata, expected, "{holder_of_8}: {r:?}");
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        assert!(!catalog.contains(b"Metadata"), "the custom element named him");
+        let page_keeps = pdfcraft_model::pages(&doc)[0].dict.contains(b"Metadata");
+        assert_eq!(page_keeps, holder_of_8 == "9 0 R", "the attribute packet goes, a clean one stays");
+        let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+        assert!(!info.contains(b"Author") && info.contains(b"Subject"), "the author goes, the unrelated subject stays");
+    }
+}
+
+/// The removed text is collected in runs by position, not by operator: glyphs shown one operator
+/// at a time still make one word, a gap makes a space, and separate marks make separate runs.
+#[test]
+fn removed_text_is_collected_in_runs() {
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 10 100 Td (BLU) Tj 15 0 Td (E) Tj 5 0 Td [(F) -300 (IN)] TJ ( 7) Tj ET BT /F1 10 Tf 10 200 Td (Gary) Tj ET",
+        "",
+        vec![],
+    );
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let (_, data) = page_streams(&doc, &page.dict, 0).unwrap();
+    let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let mut rep = Report::default();
+    let rects = [[10.0, 95.0, 300.0, 110.0], [10.0, 195.0, 30.0, 210.0]];
+    let mut images = pdfcraft_cos::ImageBudget::new(&doc);
+    let mut scope = Scope::new(&rects, Mode::Apply, &mut rep, pdfcraft_cos::DecodeBudget::page(), &mut images);
+    process(&mut doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY);
+    scope.flush();
+    assert_eq!(scope.removed_text, ["BLUEF IN 7", "Gary"]);
+}
+
+#[test]
+fn metadata_terms_and_xmp_text() {
+    // Runs of two letters or digits or more are matched whole, and by their words of three or
+    // more, ignoring case and spacing.
+    let t = metadata::terms(&["John  Smith".into(), "7".into(), "of".into(), "A-12".into()]);
+    assert_eq!(t.as_deref(), Some(&["john smith", "john", "smith", "of", "a-12"].map(String::from)[..]));
+    // A run too long to search for whole can't be matched: the caller clears everything.
+    assert_eq!(metadata::terms(&["x".repeat(5000)]), None);
+    // XMP values: element content, attribute values, CDATA, comments and processing instructions,
+    // entities decoded; not names, and not namespace declarations.
+    let x = metadata::xml_values(
+        r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><?audit James Bond?><?xpacketAudit SECRET?><x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns="http://example.org/" xmlns:y = "adobe:ns:y/" b = "spaced"><dc:title a="x &amp; y"><!-- hidden --><rdf:li>R&#233;sum&eacute; <![CDATA[<raw>]]></rdf:li></dc:title></x:xmpmeta>"#,
+    );
+    // Only the `xpacket` wrapper itself is skipped, and a declaration is one with spaces around
+    // `=` too.
+    assert_eq!(x, ["audit James Bond", "xpacketAudit SECRET", "spaced", "x & y", " hidden ", "Résum&eacute; ", "<raw>"]);
+}
+
+/// XMP is decoded from UTF-8 or UTF-16, the latter also without a byte-order mark at the start
+/// (a packet's mark sits inside `<?xpacket begin="…"`); anything that isn't valid is not read.
+#[test]
+fn xmp_packets_decode_or_fail_closed() {
+    let text = "<?xpacket begin=\"\u{feff}\"?><a>Bond</a>";
+    let utf16 = |be: bool| text.encode_utf16().flat_map(|u| if be { u.to_be_bytes() } else { u.to_le_bytes() }).collect::<Vec<u8>>();
+    assert_eq!(metadata::decode_xmp(text.as_bytes()).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&utf16(true)).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&utf16(false)).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&[[0xFF, 0xFE].as_slice(), &utf16(false)].concat()).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(b"<a>Bond \xE9</a>"), None, "Latin-1 isn't searched lossily");
+    assert_eq!(metadata::decode_xmp(&utf16(false)[1..]), None, "odd length");
 }
 
 #[test]
@@ -821,6 +1368,25 @@ fn a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
             vec![b"1".to_vec()],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
+        // Through a reference to a reference: the array, its first number, and a colour space.
+        (
+            format!("{image} /ImageMask true /Decode 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"[1 0]".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ImageMask true /Decode [8 0 R 0] /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"1".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ColorSpace 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"/DeviceGray".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
     ] {
         let mut objs = vec![stream(&dict, data)];
         objs.extend(extra);
@@ -1504,15 +2070,1076 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
-    // Storing the second page's image again decodes it, within what is left of the run's
-    // allowance: with nothing left the redaction is refused as one past the allowance, not
-    // reported as an image that can't be read.
+    // Reading the dictionary to know copies of it, and storing the second page's image again,
+    // decode within what is left of the run's allowance: past it the redaction is refused as one
+    // past the allowance, not reported as an image that can't be read. The first page's image
+    // leaves (its page no longer lists it).
     let mut doc = build(&image);
-    let first_image = [ObjRef::new(7, 0)];
-    let refused = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    let before = crate::globals::kept(&doc).unwrap();
+    let first = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(first, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));
     assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
-    let restored = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    // Enough to read the dictionary, and nothing left for the image.
+    let mut reading = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    crate::globals::content(&mut crate::globals::Run::new(crate::globals::RUN_BUDGET), &doc, 9, &mut reading).unwrap();
+    let read = u64::MAX - reading.work_left();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(read));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "the image: {refused:?}");
+    // Removing hidden information chose no pages, so fewer of them is no way out: it is refused as
+    // finding what shares the dictionary is.
+    let refused = crate::sanitize::unshare_unmarked(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Budget)), "{refused:?}");
+    let restored = crate::globals::unshare(&mut doc, &before, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
     assert_eq!(restored.ok(), Some(1));
+}
+
+/// A scan's parts when it keeps its symbols in `/JBIG2Globals`: the dictionary, moved out as segment
+/// data belonging to no page, and the page information and regions that are left.
+struct SharedScan {
+    bits: Vec<u8>,
+    symbols: Vec<u8>,
+    page: Vec<u8>,
+}
+
+fn shared_scan() -> SharedScan {
+    const LETTERS: [[&str; 7]; 3] = [
+        ["#####", "#....", "####.", "#....", "#....", "#....", "#####"],
+        [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        ["#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#"],
+    ];
+    let (w, h) = (400usize, 40usize);
+    let stride = w / 8;
+    let mut bits = vec![0xFFu8; stride * h];
+    for (line, top) in [2usize, 12, 22, 32].into_iter().enumerate() {
+        for (k, x) in (3..w - 6).step_by(7).enumerate() {
+            for (dy, row) in LETTERS[(k + line) % 3].iter().enumerate() {
+                for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                    bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                }
+            }
+        }
+    }
+    let coded = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    // The end of the segment at `at`, and where its page association is (7.2.2 to 7.2.7).
+    let end = |at: usize| {
+        let page = at + 6 + usize::from(coded[at + 5] >> 5);
+        let length = u32::from_be_bytes(coded[page + 1..page + 5].try_into().unwrap());
+        (page + 5 + length as usize, page)
+    };
+    let (dictionary, _) = end(0);
+    assert_eq!(coded[dictionary + 4], 0, "the second segment is the symbol dictionary");
+    let (rest, page) = end(dictionary);
+    let mut symbols = coded[dictionary..rest].to_vec();
+    symbols[page - dictionary] = 0;
+    SharedScan { page: [&coded[..dictionary], &coded[rest..]].concat(), symbols, bits }
+}
+
+/// An image of [`SharedScan`]'s size that uses the dictionary, object 9, by `parms`.
+fn shared_image(parms: &str) -> String {
+    format!("/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode {parms}")
+}
+
+/// Two pages of a scan sharing object 9: its symbols, and `LEAK_GLOBALS`, for the shape of a mark found
+/// only under the area. The first page draws image 7 unless told otherwise; the second draws image 8.
+/// `extra` are objects 10 on.
+struct SharedPages {
+    /// What the first page draws, its `/Resources` entries and anything else in its dictionary.
+    content: Vec<u8>,
+    resources: String,
+    page: String,
+    /// Image 7's dictionary and data; image 8's.
+    first: String,
+    first_data: Vec<u8>,
+    other: String,
+    other_data: Vec<u8>,
+    extra: Vec<Vec<u8>>,
+}
+
+const DRAWS: &[u8] = b"q 200 0 0 20 0 100 cm /Im Do Q";
+
+impl SharedPages {
+    fn new(scan: &SharedScan) -> Self {
+        let image = shared_image(SHARED);
+        Self {
+            content: DRAWS.to_vec(),
+            resources: "/XObject << /Im 7 0 R >>".into(),
+            page: String::new(),
+            first: image.clone(),
+            first_data: scan.page.clone(),
+            other: image,
+            other_data: scan.page.clone(),
+            extra: vec![],
+        }
+    }
+
+    fn build(self, scan: &SharedScan) -> Document {
+        let Self { content, resources, page, first, first_data, other, other_data, extra } = self;
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << {resources} >> {page} >>").into_bytes(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+            stream("", content),
+            stream("", DRAWS),
+            stream(&first, first_data),
+            stream(&other, other_data),
+            stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat()),
+        ];
+        objs.extend(extra);
+        pdf(objs)
+    }
+}
+
+/// The samples of the image the page draws as `/Im`.
+fn drawn_samples(doc: &Document, page: usize) -> Vec<u8> {
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    match &*doc.get(xo.get(b"Im").unwrap().as_ref().unwrap()) {
+        Object::Stream(s) => decoded_image(doc, s).unwrap(),
+        other => panic!("not an image: {other:?}"),
+    }
+}
+
+const SHARED: &str = "/DecodeParms << /JBIG2Globals 9 0 R >>";
+const CLEARS: [f64; 4] = [0.25, 113.75, 49.75, 120.0];
+const COVERS: [f64; 4] = [0.0, 100.0, 200.0, 120.0];
+
+/// The ways image 7 can leave the document while taking the dictionary's only reason to stay with it.
+fn ways_out(scan: &SharedScan) -> Vec<(&'static str, [f64; 4], SharedPages)> {
+    let base = || SharedPages::new(scan);
+    let in_form = |filter: &str, data: &[u8]| {
+        stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >> {filter}"), data)
+    };
+    let plain = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray";
+    let through_form = |filter: &str, data: &[u8]| SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![in_form(filter, data)],
+        ..base()
+    };
+    let annotated = |subtype: &str| SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![
+            format!("<< /Type /Annot /Subtype /{subtype} /T (Field) /FT /Tx /Rect [0 100 200 120] /AP << /N 11 0 R >> >>").into_bytes(),
+            in_form("", DRAWS),
+        ],
+        ..base()
+    };
+    let glyph = SharedPages {
+        content: b"BT /T3 200 Tf 0 100 Td (a) Tj ET".to_vec(),
+        resources: "/Font << /T3 10 0 R >>".into(),
+        extra: vec![
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 11 0 R >> \
+              /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /Im 7 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"1000 0 d0 q 1000 0 0 100 0 0 cm /Im Do Q"),
+        ],
+        ..base()
+    };
+    vec![
+        ("cleared", CLEARS, base()),
+        ("removed", COVERS, base()),
+        ("in a form", COVERS, through_form("", DRAWS)),
+        ("in a form that can't be read", COVERS, through_form("/Filter /FlateDecode", b"not Flate")),
+        ("a stamp's appearance", COVERS, annotated("Stamp")),
+        ("a widget's appearance", COVERS, annotated("Widget")),
+        ("a Type 3 glyph", COVERS, glyph),
+        (
+            "a mask",
+            COVERS,
+            SharedPages { first: format!("{plain} /SMask 10 0 R"), extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..base() },
+        ),
+        (
+            "a stencil mask",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Mask 10 0 R"),
+                extra: vec![stream(
+                    &shared_image(SHARED).replace("/BitsPerComponent 1 /ColorSpace /DeviceGray", "/ImageMask true"),
+                    scan.page.clone(),
+                )],
+                ..base()
+            },
+        ),
+        (
+            "parameters for data in another file",
+            COVERS,
+            SharedPages { first: shared_image("/F (scan.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"), ..base() },
+        ),
+        (
+            "an alternate",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Alternates [<< /Image 10 0 R >>]"),
+                extra: vec![stream(&shared_image(SHARED), scan.page.clone())],
+                ..base()
+            },
+        ),
+        (
+            "/Filter by reference",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter 10 0 R"),
+                extra: vec![b"[/ASCIIHexDecode /JBIG2Decode]".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "a reference to it",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), extra: vec![b"9 0 R".to_vec()], ..base() },
+        ),
+        (
+            "parameters through a reference to them",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an entry through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [10 0 R]"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an array of them through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"[<< /JBIG2Globals 9 0 R >>]".to_vec()],
+                ..base()
+            },
+        ),
+        ("/DP", COVERS, SharedPages { first: shared_image("/DP << /JBIG2Globals 9 0 R >>"), ..base() }),
+        // Cleared, the copy keeps no parameters of the old data, so none names the dictionary.
+        ("/DP, cleared", CLEARS, SharedPages { first: format!("{} /DP << /JBIG2Globals 9 0 R >>", shared_image(SHARED)), ..base() }),
+        (
+            "parameters for data in another file, with none, cleared",
+            CLEARS,
+            SharedPages { first: format!("{} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED)), ..base() },
+        ),
+        ("another generation", COVERS, SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 9 1 R >>"), ..base() }),
+        // Cos reads a reference of another generation as null (#1143); a reader that doesn't compare
+        // generations draws with what it names. Read first, it mustn't hide what the other names.
+        (
+            "parameters through another generation, then their own",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [10 1 R 10 0 R]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]"),
+                extra: vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "parameters through another generation",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms 10 1 R"), extra: vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()], ..base() },
+        ),
+        (
+            "a reference to it of another generation",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 10 1 R >>"), extra: vec![b"9 0 R".to_vec()], ..base() },
+        ),
+    ]
+}
+
+/// Scanners and `jbig2enc -s` share one symbol dictionary across a scan's pages, and it holds the
+/// shape of every distinct mark, one found only under a redaction included: a signature, a stamp.
+/// The dictionary stayed in the file while any other image used it. Now the image left on the second
+/// page is stored again without it, whichever way the first one left the document.
+#[test]
+fn a_redacted_scans_shared_jbig2_dictionary_leaves_the_file() {
+    let scan = shared_scan();
+    for (way, rect, pages) in ways_out(&scan) {
+        let mut doc = pages.build(&scan);
+        assert_eq!(drawn_samples(&doc, 1), scan.bits, "{way}: the second page reads through the dictionary");
+        mark(&mut doc, 0, &[rect], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{way}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_gone(&doc, b"JBIG2Globals");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{way}: its pixels are unchanged");
+    }
+}
+
+/// A size given through a reference of another generation is null, as cos reads it (#1143), whatever
+/// another image read through the reference of that number's own: the image can't be stored again, so
+/// the redaction refuses, rather than storing it with the size the other reference read.
+#[test]
+fn a_size_through_another_generation_isnt_the_one_its_own_reference_reads() {
+    let scan = shared_scan();
+    let stale = shared_image(SHARED).replace("/Width 400", "/Width 11 1 R");
+    let mut doc = SharedPages {
+        content: [DRAWS, b" q 200 0 0 20 0 200 cm /Stale Do Q".as_slice()].concat(),
+        resources: "/XObject << /Im 7 0 R /Stale 12 0 R >>".into(),
+        other: shared_image(SHARED).replace("/Width 400", "/Width 11 0 R"),
+        extra: vec![b"null".to_vec(), b"400".to_vec(), stream(&stale, scan.page.clone())],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    mark(&mut doc, 0, &[COVERS], "");
+    let result = apply(&mut doc, None);
+    assert!(matches!(result, Err(RedactError::SharedJbig2Globals(1))), "{result:?}");
+}
+
+/// An image whose cross-reference row and object header give different generations is read through
+/// either (#1143), and page 2 names it by the header's. Stored again without the dictionary, it keeps
+/// both, so that page still draws it, in the document and in a full save.
+#[test]
+fn an_image_stored_again_keeps_the_generation_its_header_gives() {
+    let scan = shared_scan();
+    let bytes = SharedPages::new(&scan).build(&scan).bytes().to_vec();
+    let patch = |bytes: Vec<u8>, from: &[u8], to: &[u8]| {
+        let at = bytes.windows(from.len()).position(|w| w == from).unwrap();
+        assert_eq!(bytes.windows(from.len()).filter(|w| *w == from).count(), 1);
+        [&bytes[..at], to, &bytes[at + from.len()..]].concat()
+    };
+    let bytes = patch(patch(bytes, b"\n8 0 obj", b"\n8 1 obj"), b"/Im 8 0 R", b"/Im 8 1 R");
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(drawn_samples(&doc, 1), scan.bits, "the second page reads its image through the header's generation");
+    mark(&mut doc, 0, &[COVERS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1);
+    assert_eq!(drawn_samples(&doc, 1), scan.bits, "the image stored again is still drawn");
+    let full = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!full.windows(12).any(|w| w == b"LEAK_GLOBALS"), "the dictionary left the full save");
+    assert_eq!(drawn_samples(&Document::open(Arc::new(full)).unwrap(), 1), scan.bits, "and is drawn after it");
+    assert_gone(&doc, b"LEAK_GLOBALS");
+}
+
+/// However the image that stays names the dictionary, it comes out without it: its parameters by
+/// reference, behind another filter, or a copy of the dictionary, as a file put back together from
+/// pages split apart has, each page with its own. It is also read when its size or filter is given
+/// by reference, which `decoded_image` alone refuses.
+#[test]
+fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let copy = stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat());
+    let image = shared_image(SHARED);
+    for (other, data, extra) in [
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]"),
+            hex.clone(),
+            vec![],
+        ),
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![copy]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray ", ""), scan.page.clone(), vec![]),
+        (
+            image.replace("/ColorSpace /DeviceGray", "/ColorSpace [/DeviceN [/Black] /DeviceGray 10 0 R]"),
+            scan.page.clone(),
+            vec![b"<< /FunctionType 2 /Domain [0 1] /N 1 >>".to_vec()],
+        ),
+        // Parameters no filter reads, on a picture that needs no dictionary.
+        (shared_image("/DP << /JBIG2Globals 9 0 R >>"), pdfcraft_filters::encode_jbig2_generic(&scan.bits, 400, 40).unwrap(), vec![]),
+        // Those for data in another file, with none: beside the parameters it reads, and alone.
+        (format!("{image} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"), scan.page.clone(), vec![]),
+        (
+            shared_image("/FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"),
+            pdfcraft_filters::encode_jbig2_generic(&scan.bits, 400, 40).unwrap(),
+            vec![],
+        ),
+        // A `/F` that is null, directly, by reference, or as a reference to no object, is none.
+        (format!("{image} /F null"), scan.page.clone(), vec![]),
+        (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"null".to_vec()]),
+        (format!("{image} /F 99 0 R"), scan.page.clone(), vec![]),
+        // Through a reference to a reference: /F to null, the size, the filter, the colour space.
+        (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"null".to_vec()]),
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceGray".to_vec()]),
+        // An ICC profile of one component is one.
+        (format!("{} /ColorSpace [/ICCBased 10 0 R]", image.replace("/ColorSpace /DeviceGray ", "")), scan.page.clone(), vec![stream("/N 1", b"")]),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{other}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{other}: its pixels are unchanged");
+    }
+}
+
+/// JBIG2 is drawn as one bit of one component whatever the dictionary says, so the Flate copy has to
+/// say so too: a stream with no `/BitsPerComponent`, or 8, shows the same picture stored again.
+#[test]
+fn a_stored_jbig2_image_is_one_bit_whatever_its_dictionary_said() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let chained =
+        shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]");
+    let lone = shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter [/JBIG2Decode]");
+    for (other, other_data, bits) in [
+        (shared_image(SHARED), scan.page.clone(), ""),
+        (shared_image(SHARED), scan.page.clone(), "/BitsPerComponent 8"),
+        (chained, hex, ""),
+        (lone, scan.page.clone(), ""),
+    ] {
+        let other = other.replace("/BitsPerComponent 1", bits);
+        let mut doc = SharedPages { other, other_data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        apply(&mut doc, None).unwrap();
+        let saved = reopen(&doc);
+        assert_eq!(drawn_samples(&saved, 1), scan.bits, "{bits}");
+        let p = pdfcraft_model::pages(&saved).swap_remove(1);
+        let res = saved.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = saved.get(xo.get(b"Im").unwrap().as_ref().unwrap());
+        let Object::Stream(s) = &*image else { panic!("not an image") };
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{bits}");
+    }
+}
+
+/// A mark that takes nothing using the dictionary leaves it, and what uses it, alone: here it covers
+/// text in a form that also draws the scan, away from the scan. A stream nothing reaches isn't decoded
+/// for nothing either: this one can't be, and it uses the dictionary.
+#[test]
+fn a_dictionary_stays_when_nothing_using_it_left() {
+    let scan = shared_scan();
+    let text = b"BT /F1 10 Tf 10 250 Td (SECRET) Tj ET q 200 0 0 20 0 100 cm /Im Do Q";
+    let pages = SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> /XObject << /Im 7 0 R >> >>",
+                text,
+            ),
+            stream(&shared_image(SHARED), b"not JBIG2"),
+        ],
+        ..SharedPages::new(&scan)
+    };
+    let mut doc = pages.build(&scan);
+    mark(&mut doc, 0, &[[0.0, 240.0, 200.0, 270.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared, report.images_restored), (0, 0, 0));
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// A dictionary of other bytes is another dictionary: the scan using it keeps it and isn't stored again.
+#[test]
+fn another_jbig2_dictionary_is_left_alone() {
+    let scan = shared_scan();
+    let own = stream("", [jbig2_globals(b"OWN_GLOBALS"), scan.symbols.clone()].concat());
+    let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+    let mut doc = SharedPages { other, extra: vec![own], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 0);
+    let saved = reopen(&doc);
+    let holds = |secret: &[u8]| {
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.decoded().is_ok_and(|d| d.windows(secret.len()).any(|w| w == secret))))
+    };
+    assert!(!holds(b"LEAK_GLOBALS") && holds(b"OWN_GLOBALS"));
+    assert_eq!(drawn_samples(&saved, 1), scan.bits);
+}
+
+/// An image that can't be stored without the dictionary may still be drawn: the renderer draws a
+/// JBIG2 page of another size than its image, which `decoded_image` refuses, and draws three components
+/// of one bit as grey. Removing it would lose a page no mark reached, and keeping the dictionary would
+/// keep what the mark covered, so the redaction refuses and the document stays as it was. So it does
+/// for anything else that refers to the dictionary, a reference that holds a reference to it among them.
+#[test]
+fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
+    let scan = shared_scan();
+    let image = shared_image(SHARED);
+    let elsewhere = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    let not_jbig2 = image.replace("/Filter /JBIG2Decode", "/Filter /FlateDecode");
+    for (other, data, extra) in [
+        (image.replace("/Height 40", "/Height 41"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceRGB"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceCMYK"), scan.page.clone(), vec![]),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceRGB".to_vec()]),
+        (
+            format!("{image} /ColorSpace [/ICCBased 10 0 R]").replace("/ColorSpace /DeviceGray ", ""),
+            scan.page.clone(),
+            vec![b"11 0 R".to_vec(), stream("/N 3", b"")],
+        ),
+        // Through a reference to a reference, which now reads as what it names (#5548): stored again
+        // without the dictionary, or refused (see below).
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![b"9 0 R".to_vec()]),
+        (elsewhere.to_string(), vec![0], vec![]),
+        (not_jbig2, pdfcraft_filters::encode_flate(&scan.bits), vec![]),
+        // A copy with its filter by reference is known for a copy, and the decoder doesn't read it.
+        (
+            shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"),
+            scan.page.clone(),
+            vec![
+                stream("/Filter 11 0 R", pdfcraft_filters::encode_flate(&[jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat())),
+                b"/FlateDecode".to_vec(),
+            ],
+        ),
+    ] {
+        let through_reference = other.contains("/JBIG2Globals 10 0 R");
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let before = doc.clone();
+        match apply(&mut doc, None) {
+            Err(RedactError::SharedJbig2Globals(_)) => assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted"),
+            Ok(_) if through_reference => {
+                // Object 10 too, the copy or the reference to the dictionary: `assert_gone` can't
+                // decode the copy, its `/Filter` given by reference, nor see its bytes, which are Flate.
+                let kept = pdfcraft_cos::reachable_objects(&doc).unwrap();
+                assert!(!kept.contains(&9) && !kept.contains(&10), "{other}: the dictionary or its copy stays");
+                assert_gone(&doc, b"LEAK_GLOBALS");
+            }
+            result => panic!("{other}: {result:?}"),
+        }
+    }
+}
+
+/// What is stored again is bounded as what is cleared is: an image of [`image::MAX_PIXELS`] is, and one
+/// past it, which decodes, refuses the redaction.
+#[test]
+fn an_image_past_the_size_redaction_clears_refuses_it() {
+    let scan = shared_scan();
+    let h = 8192u32;
+    for (w, stored) in [(8192u32, true), (8200, false)] {
+        let blank = vec![0xFFu8; (w as usize).div_ceil(8) * h as usize];
+        let other = shared_image(SHARED).replace("/Width 400", &format!("/Width {w}")).replace("/Height 40", &format!("/Height {h}"));
+        let data = pdfcraft_filters::encode_jbig2_generic(&blank, w, h).unwrap();
+        let mut doc = SharedPages { other, other_data: data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let run = apply(&mut doc, None);
+        assert_eq!(run.as_ref().is_ok_and(|r| r.images_restored == 1), stored, "{w}");
+        assert_eq!(matches!(run, Err(RedactError::SharedJbig2Globals(1))), !stored, "{w}");
+    }
+}
+
+/// An alternate of an image stored again stays with it, stored without the dictionary in turn: a page
+/// no mark reached keeps what it had.
+#[test]
+fn an_alternate_of_what_stays_stays() {
+    let scan = shared_scan();
+    let other = format!("{} /Alternates [<< /Image 10 0 R >>]", shared_image(SHARED));
+    let mut doc = SharedPages { other, extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 2);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    let saved = reopen(&doc);
+    let kept = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if s.dict.contains(b"Alternates"))).count();
+    assert_eq!(kept, 1);
+}
+
+/// The refusal counts the images that can't be stored, and says so; when only something else refers
+/// to the dictionary, it counts none and says that instead, however many such references there are.
+#[test]
+fn a_refused_redaction_counts_what_cant_be_stored() {
+    let scan = shared_scan();
+    let wrong = shared_image(SHARED).replace("/Height 40", "/Height 41");
+    let other = format!("{wrong} /SMask 10 0 R");
+    let mut doc = SharedPages { other, extra: vec![stream(&wrong, scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    let refused = apply(&mut doc, None);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(2))));
+    assert!(refused.unwrap_err().to_string().starts_with("2 item(s) share JBIG2 symbol data with something being removed and can't be stored"));
+    let note = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    for (other, extra, stuck) in [
+        (note.to_string(), vec![], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(note, vec![0])], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(&wrong, scan.page.clone())], 1),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: vec![0], extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let refused = apply(&mut doc, None);
+        assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(n)) if n == stuck), "{other}");
+        let text = refused.unwrap_err().to_string();
+        assert_eq!(text.starts_with("something else in the file refers to JBIG2 symbol data"), stuck == 0, "{other}: {text}");
+        assert_eq!(text.contains("can't be stored"), stuck > 0, "{other}: {text}");
+    }
+    // An image whose data is in another file can't be stored here, though what is here decodes: readers
+    // draw the other file, with the dictionary its own parameters name.
+    let elsewhere = format!("{} /F (page2.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED));
+    let mut doc = SharedPages { other: elsewhere, ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// A dictionary that names itself as its own globals (malformed) can't be stored without them, but
+/// leaves with what used it, so the run goes on; it isn't counted as stored, nor, when the run is
+/// refused, as something that uses the dictionary.
+#[test]
+fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
+    let scan = shared_scan();
+    let names_itself = |pages: SharedPages| {
+        let mut doc = pages.build(&scan);
+        let dictionary = pdfcraft_cos::ObjRef::new(9, 0);
+        let Object::Stream(mut s) = (*doc.get(dictionary)).clone() else { panic!("object 9 is the dictionary") };
+        let mut parms = pdfcraft_cos::Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(dictionary));
+        s.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        doc.set(dictionary, Object::Stream(s));
+        mark(&mut doc, 0, &[CLEARS], "");
+        doc
+    };
+    let mut doc = names_itself(SharedPages::new(&scan));
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+    // The second page's image has its data in another file, so it can't be stored: one item.
+    let mut doc = names_itself(SharedPages { other: format!("{} /F (p.jb2)", shared_image(SHARED)), ..SharedPages::new(&scan) });
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// What a stream's size, filters and parameters are made direct to is small, however often they
+/// refer to a large object: only numbers, names and the parameters decoders read are copied.
+#[test]
+fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
+    let big = format!("[{}]", "1 ".repeat(100_000));
+    let keys: String = (0..50).map(|k| format!(" /K{k} 2 0 R")).collect();
+    // Three filters, and parameters for 2,001: the entries past the filters are dropped. Two name
+    // object 6, whose `/JBIG2Globals` is the large array given directly, which no decoder reads.
+    let (filters, entries) = (" 2 0 R".repeat(2), format!(" 6 0 R 6 0 R{}", " 2 0 R".repeat(1998)));
+    let dict =
+        format!("/Width 2 0 R /Height 2 0 R /Filter [/FlateDecode{filters}] /DecodeParms [<< /Predictor 3 0 R /Columns 2 0 R{keys} >>{entries}]");
+    let globals = format!("<< /JBIG2Globals {big} >>");
+    // A chain of more filters than any decoder takes is no filter, and its parameters aren't read:
+    // ten here, against eight and a `/Crypt`.
+    let long = format!("/Filter [{}] /DecodeParms 2 0 R", "/FlateDecode ".repeat(10));
+    let doc = pdf(vec![
+        b"<< /Type /Catalog >>".to_vec(),
+        big.into_bytes(),
+        b"4 0 R".to_vec(),
+        b"12".to_vec(),
+        stream(&dict, b""),
+        globals.into_bytes(),
+        stream(&long, b""),
+        stream(&format!("/Filter [{}]", "/FlateDecode ".repeat(9)), b""),
+        // A name no decoder knows, long or short, is no filter, and isn't copied however often.
+        format!("/{}", "A".repeat(2000)).into_bytes(),
+        format!("[{} /Foo]", " 9 0 R".repeat(8)).into_bytes(),
+        stream("/Filter 10 0 R", b""),
+    ]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Dict(made.dict.clone()), &mut bytes);
+    assert!(bytes.len() < 4096, "{} bytes made direct", bytes.len());
+    let parms = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
+    assert_eq!(parms.first().and_then(Object::as_dict).and_then(|d| d.get(b"Predictor")), Some(&Object::Int(12)));
+    assert_eq!(parms.len(), 3, "an entry for each filter");
+    assert!(parms[1].as_dict().is_some_and(|d| !d.contains(b"JBIG2Globals")), "{:?}", parms[1]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Null));
+    assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(0));
+    // Eight filters and a `/Crypt` are as many as a decoder takes: those are read.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(8, 0)) else { panic!("object 8 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
+    let Object::Stream(s) = &*doc.get(ObjRef::new(11, 0)) else { panic!("object 11 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Array(vec![Object::Null; 9])));
+}
+
+/// A `/JBIG2Globals` reference in parameters given directly is fetched once a run, however many
+/// entries and streams name it, and what it leads to is held once.
+#[test]
+fn a_dictionary_named_in_direct_entries_is_fetched_once() {
+    let entries = " << /JBIG2Globals 2 0 R >>".repeat(9);
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec(), stream("", b"symbols")];
+    objects.extend((0..50).map(|_| stream(&format!("/Filter /JBIG2Decode /DecodeParms [{entries}]"), b"")));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 3..53 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = run.names_of(&doc, s).unwrap();
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![2]]);
+    }
+    assert_eq!((run.fetched, run.spent), (1, 2), "one fetch, and the one number held");
+}
+
+/// A `/JBIG2Globals` reference leading through a chain names each reference on the way, up to the
+/// limit of 33, whether the chain is met first part way or from its start.
+#[test]
+fn a_chain_of_references_is_named_to_the_limit() {
+    // Objects 2 to 41 each refer to the next, and 42 is the dictionary; 43 names the chain from 20,
+    // and 44 from its start.
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec()];
+    objects.extend((3..=42).map(|n| format!("{n} 0 R").into_bytes()));
+    objects.push(stream("", b"symbols"));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 20 0 R >>", b""));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>", b""));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let named = |run: &mut crate::globals::Run, n: u32| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).unwrap().iter().flat_map(|(list, _)| list.to_vec()).collect::<Vec<_>>()
+    };
+    assert_eq!(named(&mut run, 43), (20..=42).collect::<Vec<u32>>());
+    assert_eq!(named(&mut run, 44), (2..=34).collect::<Vec<u32>>());
+}
+
+/// An image is charged the decoded size of each dictionary it names, as decoding it may undo that
+/// dictionary's filters again.
+#[test]
+fn an_image_is_charged_the_dictionaries_it_names() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("", vec![0u8; 40_000]), stream(image, b"not JBIG2")]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
+    assert_eq!(run.spent, 10, "40,000 bytes: a unit and nine whole 4 KiB");
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run, &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(None)));
+    // The chain to 2 (a fetch and the number held), the dictionary's 10, the image's allowance 2.
+    assert_eq!(run.spent, 24);
+}
+
+/// A dictionary pays the run's image allowance for what every stage of its filters reads and makes,
+/// not for what the last one makes: two Flates inflate a MiB of zero bytes, which hex skips as white
+/// space, so it decodes to nothing. Past the allowance the run is refused, through `unshare` too.
+#[test]
+fn a_dictionary_pays_for_every_stage_of_its_filters() {
+    let hollow = pdfcraft_filters::encode_flate(&pdfcraft_filters::encode_flate(&vec![0u8; 1 << 20]));
+    let dict = || stream("/Filter [/FlateDecode /FlateDecode /ASCIIHexDecode]", hollow.clone());
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), dict()]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run, &doc, 2, &mut images).unwrap().is_some());
+    assert_eq!(run.spent, 1, "it decodes to nothing: a unit");
+    let paid = u64::MAX - images.work_left();
+    assert!(paid > 1 << 20, "the MiB the second Flate made is paid for: {paid} steps");
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let refused = crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+
+    // An image naming it leaves its page: finding copies of the dictionary reads it.
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 8 0 R >>";
+    let mut doc = one_page(b"q 8 0 0 8 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(image, b""), dict()]);
+    let before = crate::globals::kept(&doc).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+    assert_eq!(crate::globals::unshare(&mut doc, &before, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(0));
+}
+
+/// What can't be decoded is charged as much as it was allowed to decode, so going past a limit
+/// costs as much as reaching it: a dictionary `MAX_JBIG2_GLOBALS` (here one behind a filter that
+/// isn't decoded here), an image its allowance.
+#[test]
+fn a_decode_that_fails_is_charged_what_it_was_allowed() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("/Filter /DCTDecode", b"not a JPEG"), stream(image, b"not JBIG2")]);
+    let units = pdfcraft_cos::MAX_JBIG2_GLOBALS / 4096 + 1;
+    let run = |budget| crate::globals::Run::new(budget);
+    let images = || pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run(units), &doc, 2, &mut images()).is_ok());
+    assert_eq!(crate::globals::content(&mut run(units - 1), &doc, 2, &mut images()), Err(RedactError::SharedJbig2Budget));
+    // The image's allowance: (one byte a row of 8, and a byte a row) × 3 a byte, and 4096: 4144
+    // bytes, two units.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run(2), &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(None)));
+    assert!(matches!(
+        crate::globals::without_dictionary(&mut run(1), &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)),
+        Err(RedactError::SharedJbig2Budget)
+    ));
+}
+
+/// What streams share by reference is read once a run, however many share it and however they
+/// refer to it: a parameters array of 5,000 entries named by 100 streams, directly, each through an
+/// object of its own that refers to it, or through a chain of two, costs the array and its one
+/// entry, once.
+#[test]
+fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
+    let entries = " 4 0 R".repeat(5000);
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), format!("[{entries}]").into_bytes(), stream("", b"symbols"), b"<< /JBIG2Globals 3 0 R >>".to_vec()];
+    // Objects 5 to 54 refer to the array, and 55 to 5.
+    objects.extend((0..50).map(|_| b"2 0 R".to_vec()));
+    objects.push(b"5 0 R".to_vec());
+    // Streams 56 to 155: fifty name the array directly, forty-nine through objects 5 to 53, one
+    // through the chain from 55.
+    objects.extend((0..50).map(|_| stream("/Filter /JBIG2Decode /DecodeParms 2 0 R", b"")));
+    objects.extend((5..54).map(|n| stream(&format!("/Filter /JBIG2Decode /DecodeParms {n} 0 R"), b"")));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms 55 0 R", b""));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 56..156 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = run.names_of(&doc, s).unwrap();
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
+    }
+    assert_eq!(run.read, 2);
+    // Each object once: the array, its entry, the dictionary it names, each of the 49 objects that
+    // refer to the array, and 55.
+    assert_eq!(run.fetched, 53);
+    // A run whose budget that is past is refused.
+    let mut run = crate::globals::Run::new(20);
+    let refused = (56..156).try_for_each(|n| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).map(|_| ())
+    });
+    assert_eq!(refused, Err(RedactError::SharedJbig2Budget));
+}
+
+/// A run's budget is spent to the unit: a run may spend all of it, and is refused past it. What is
+/// decoded spends a unit, and one more for each whole 4 KiB.
+#[test]
+fn a_runs_budget_is_spent_to_the_unit() {
+    let mut run = crate::globals::Run::new(10);
+    assert_eq!(run.decoded(4095), Ok(()));
+    assert_eq!(run.decoded(8 * 4096), Ok(()));
+    assert_eq!(run.decoded(0), Err(RedactError::SharedJbig2Budget));
+}
+
+/// What a stream's size, filters and parameters lead to is fetched once a run, however many streams
+/// share them by reference: fifty images naming the same objects fetch each once for each way it is
+/// read.
+#[test]
+fn what_streams_share_is_fetched_once_a_run() {
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), b"/FlateDecode".to_vec(), b"<< /Predictor 4 0 R /Columns 4 0 R >>".to_vec(), b"1".to_vec()];
+    objects.extend(
+        (0..50).map(|_| stream("/Width 4 0 R /Height 4 0 R /Filter [2 0 R 2 0 R] /DecodeParms [3 0 R 3 0 R] /ColorSpace 2 0 R /F 4 0 R", b"")),
+    );
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 5..55 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let made = run.readable(&doc, s).unwrap();
+        assert_eq!(made.dict.get(b"Width"), Some(&Object::Int(1)));
+        assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(2));
+    }
+    // Object 4 as a size and as a parameter, 2 as a filter, 3 as an entry.
+    assert_eq!(run.fetched, 4);
+}
+
+/// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,
+/// through a chain of references among them, as a reader that follows them decodes it. Through a
+/// chain the run either stores the image again with the copy's symbols, now that a reference to a
+/// reference reads as what it names (#5548), or is refused; it never goes on with the copy left in
+/// the file.
+#[test]
+fn a_copy_is_found_however_its_parameters_are_given() {
+    let scan = shared_scan();
+    let globals = [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat();
+    // PNG rows of one byte, each with no prediction: a byte for the row's tag, then the byte.
+    let predicted: Vec<u8> = globals.iter().flat_map(|b| [0u8, *b]).collect();
+    let flate = pdfcraft_filters::encode_flate(&predicted);
+    let parms = b"<< /Predictor 12 /Columns 1 >>".to_vec();
+    for (spelling, extra, stored) in [
+        ("/DecodeParms << /Predictor 12 /Columns 1 >>", vec![], true),
+        ("/DecodeParms 11 0 R", vec![parms.clone()], true),
+        ("/DecodeParms 11 0 R", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms [11 0 R]", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms << /Predictor 11 0 R /Columns 1 >>", vec![b"12 0 R".to_vec(), b"12".to_vec()], false),
+        // `false` above: stored again or refused, either is safe (see the doc).
+    ] {
+        let mut objects = vec![stream(&format!("/Filter /FlateDecode {spelling}"), flate.clone())];
+        objects.extend(extra.clone());
+        let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+        let mut doc = SharedPages { other, extra: objects, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let at = format!("{spelling} {}", extra.len());
+        match apply(&mut doc, None) {
+            Ok(report) => {
+                assert_eq!(report.images_restored, 1, "{at}");
+                let kept = pdfcraft_cos::reachable_objects(&doc).unwrap();
+                assert!(!kept.contains(&10) && !kept.contains(&9), "{at}: the copy or the dictionary stays");
+                assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{at}");
+            }
+            Err(e) => assert!(!stored && matches!(e, RedactError::SharedJbig2Globals(1)), "{at}: {e:?}"),
+        }
+    }
+}
+
+/// An image that names the dictionary and another one is stored again without both, but the other
+/// was shared with nothing that left: an image that uses only it stays as it was, whichever of the
+/// two comes first in the file, and so does that dictionary.
+#[test]
+fn another_dictionary_named_beside_it_stays_whatever_the_order() {
+    let scan = shared_scan();
+    let other_dictionary = stream("", [jbig2_globals(b"OTHER_GLOBALS"), scan.symbols.clone()].concat());
+    let only_other = shared_image("/DecodeParms << /JBIG2Globals 11 0 R >>");
+    let chained = "/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter [/FlateDecode /JBIG2Decode] /DecodeParms [<< /JBIG2Globals 11 0 R >> << /JBIG2Globals 9 0 R >>]";
+    let both_spellings = [
+        (chained.to_string(), pdfcraft_filters::encode_flate(&scan.page)),
+        (format!("{} /DP << /JBIG2Globals 11 0 R >>", shared_image(SHARED)), scan.page.clone()),
+    ];
+    let other_stays = |doc: &Document| {
+        let saved = reopen(doc);
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.raw.windows(13).any(|w| w == b"OTHER_GLOBALS")))
+    };
+    for (both, data) in both_spellings {
+        // Image 8 is drawn on the second page, and image 10 is its alternate.
+        let only_other_first = SharedPages {
+            other: format!("{only_other} /Alternates [<< /Image 10 0 R >>]"),
+            extra: vec![stream(&both, data.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        let both_first = SharedPages {
+            other: format!("{both} /Alternates [<< /Image 10 0 R >>]"),
+            other_data: data.clone(),
+            extra: vec![stream(&only_other, scan.page.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        for (pages, only_other_at) in [(only_other_first, 8), (both_first, 10)] {
+            let mut doc = pages.build(&scan);
+            let untouched = doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0));
+            mark(&mut doc, 0, &[CLEARS], "");
+            assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1, "{both}");
+            assert_gone(&doc, b"LEAK_GLOBALS");
+            assert!(other_stays(&doc), "{both}");
+            assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0)), untouched, "{both}");
+        }
+    }
+}
+
+/// Remove Hidden Information leaves the same way: comments go, with what their appearances drew.
+#[test]
+fn removing_hidden_information_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]).unwrap();
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// Remove Hidden Information refuses as a redaction does when the dictionary can't leave, but it has
+/// changed the document by then, so the refusal doesn't say nothing was changed.
+#[test]
+fn a_refused_removal_of_hidden_information_doesnt_say_nothing_changed() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        other: shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter /FlateDecode"),
+        other_data: pdfcraft_filters::encode_flate(&scan.bits),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    let annotations = |doc: &Document| crate::annots_of(doc, &pdfcraft_model::pages(doc)[0].dict).len();
+    assert_eq!(annotations(&doc), 1);
+    let refused = crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(1))));
+    assert_eq!(annotations(&doc), 0, "the comment went before the refusal");
+    let text = refused.unwrap_err().to_string();
+    assert!(text.ends_with("this was refused") && !text.contains("nothing was changed"), "{text}");
+}
+
+/// Remove Hidden Information also unlinks an image its page lists but no longer draws (left there by
+/// Delete Image, say): that is a way out too, so the dictionary goes with it.
+#[test]
+fn an_undrawn_image_unlinked_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let mut doc = SharedPages { content: Vec::new(), ..SharedPages::new(&scan) }.build(&scan);
+    crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]).unwrap();
+    assert!(!crate::globals::kept(&doc).unwrap().contains(&7), "the image nothing drew is unlinked");
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// A redaction also removes the catalog's XMP when it repeats the removed text (#2448): an image
+/// only that packet still refers to leaves the file then, and the dictionary with it.
+#[test]
+fn an_image_only_the_scrubbed_metadata_refers_to_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let mut doc = SharedPages {
+        content: [DRAWS, b" BT /F1 10 Tf 10 105 Td (Bluefin) Tj ET".as_slice()].concat(),
+        resources: "/XObject << /Im 7 0 R >> /Font << /F1 11 0 R >>".into(),
+        extra: vec![
+            stream("/Type /Metadata /Subtype /XML /Thumb 7 0 R", b"<x:xmpmeta><dc:title>Bluefin</dc:title></x:xmpmeta>"),
+            FONT.replace("95 0 R", "12 0 R").into_bytes(),
+            widths(),
+        ],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Metadata".to_vec(), Object::Ref(ObjRef::new(10, 0)))).unwrap();
+    mark(&mut doc, 0, &[COVERS], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.metadata, report.images_restored), (1, 1), "the packet went, and the image on page 2 was stored again");
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// A redaction that leaves a pattern unpainted unlinks it from a `/Pages` node no page inherits
+/// from any more, here one the page's own parent shadowed: an image its cell drew leaves the file
+/// then, and the dictionary with it.
+#[test]
+fn an_image_a_pruned_patterns_cell_drew_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let cell = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /XObject << /Im 7 0 R >> >>";
+    let image = shared_image(SHARED);
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [11 0 R 4 0 R] /Count 2 /Resources << /Pattern << /P0 10 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 11 0 R /MediaBox [0 0 300 300] /Contents 5 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 0 100 200 20 re f"),
+        stream("", DRAWS),
+        stream(&image, &scan.page),
+        stream(&image, &scan.page),
+        stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat()),
+        stream(cell, DRAWS),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /Resources << /Pattern << /P0 10 0 R >> >> >>".to_vec(),
+    ]);
+    mark(&mut doc, 0, &[[-5.0, 95.0, 205.0, 125.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.patterns_removed, report.images_restored), (1, 1));
+    assert!(!crate::globals::kept(&doc).unwrap().contains(&10), "the cell is unlinked");
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// [`assert_no_secret`] for a file that may hold JBIG2 streams, which `decoded` doesn't read: a stream
+/// stored again can be coded alone.
+fn assert_gone(doc: &Document, secret: &[u8]) {
+    for (r, object) in reopen(doc).scan_objects() {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&object, &mut bytes);
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "secret remains in object {r:?}");
+        if let Object::Stream(s) = &*object
+            && let Ok(data) = s.decoded()
+        {
+            assert!(!data.windows(secret.len()).any(|w| w == secret), "secret remains in stream {r:?}");
+        }
+    }
 }
 
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
@@ -1568,6 +3195,479 @@ fn an_image_a_form_drew_through_the_pages_resources_does_not_survive() {
     assert_eq!(r.images_removed, 1, "{r:?}");
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "the image the form drew survived the save");
+}
+
+/// How a form can have no resources of its own: no /Resources, a null one, or a reference to an
+/// object that isn't there (which is null too).
+const NO_RESOURCES: [&str; 3] = ["", "/Resources null", "/Resources 99 0 R"];
+
+/// The page draws an image under the mark and, outside it, a form without /Resources of its own
+/// that draws the same image through the page's: the page keeps the name, whether the form lies
+/// wholly outside the mark or is entered and left as it was.
+#[test]
+fn an_image_a_form_draws_again_through_the_pages_resources_is_kept() {
+    for bbox in ["[0 0 100 100]", "[0 0 300 300]"] {
+        for none in NO_RESOURCES {
+            let mut doc = one_page(
+                b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+                "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+                vec![
+                    stream(&format!("/Type /XObject /Subtype /Form /BBox {bbox} {none}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+                    stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+                ],
+            );
+            mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+            let r = apply(&mut doc, None).unwrap();
+            assert_eq!((r.images_removed, r.forms_rewritten), (1, 0), "{bbox} {none}: {r:?}");
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert!(content(&saved, 0).contains("/FmBare Do"), "{bbox} {none}");
+            assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "{bbox} {none}: the form still draws it");
+        }
+    }
+}
+
+/// The same one level down: a form with resources of its own draws the image under the mark and,
+/// outside it, a form without any that draws it again through the first form's.
+#[test]
+fn an_image_a_nested_form_draws_again_through_its_callers_resources_is_kept() {
+    for none in NO_RESOURCES {
+        let mut doc = one_page(
+            b"/FmOwn Do",
+            "/XObject << /FmOwn 7 0 R >>",
+            vec![
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /FmBare 8 0 R /Im1 9 0 R >> >>",
+                    b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+                ),
+                stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 100 100] {none}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{none}: {r:?}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(content(&saved, 0).contains("/PCRedacted1 Do"), "{none}");
+        let form = named_stream(&saved, 0, b"PCRedacted1").expect("the rewritten form");
+        assert!(form.decoded().unwrap().windows(10).any(|w| w == b"/FmBare Do"), "{none}");
+        let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = xo.get(b"Im1").and_then(Object::as_ref).unwrap_or_else(|| panic!("{none}: the rewritten form still names /Im1"));
+        let Object::Stream(image) = &*saved.get(image) else { panic!("/Im1 is a stream") };
+        assert_eq!(decoded_image(&saved, image).unwrap(), b"PUBIMGSHOWNAGAIN", "{none}");
+    }
+}
+
+/// A form without /Resources that won't decode may draw the image under the mark through the
+/// page's: the redaction is refused. A page with fonts or properties to clean up refused it
+/// already; this one has neither.
+#[test]
+fn a_form_that_cannot_be_read_refuses_the_redaction_of_an_image_it_may_draw() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /FmBroken 5 0 R /Im1 6 0 R >> >> >>"
+            .to_vec(),
+        stream("", b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBroken Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Filter /DCTDecode", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+        stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+    ]);
+    let Object::Stream(broken) = &*doc.get(ObjRef::new(5, 0)) else { panic!("the form is a stream") };
+    assert!(broken.decoded().is_err(), "the fixture's form must not decode");
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(_)))));
+}
+
+/// A page of two content streams, with no fonts or properties: the first draws an image at
+/// (20, 230), 50 pt square, named `image` in the page's resources; the second is `tail`, which
+/// draws nothing. `catalog` goes in the catalog, and `image_dict` in the image's dictionary.
+fn image_and_a_tail(catalog: &str, image: &str, image_dict: &str, tail: &[u8]) -> Document {
+    pdf(vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 5 0 R] /Resources << /XObject << /{image} 6 0 R >> >> >>")
+            .into_bytes(),
+        stream("", format!("q 50 0 0 50 20 230 cm /{image} Do Q").as_bytes()),
+        stream("", tail),
+        stream(
+            &format!("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {image_dict}"),
+            b"REDIMGONECOVERED",
+        ),
+        b"<< /Type /OCG /Name (Secret layer) >>".to_vec(),
+    ])
+}
+
+/// The refusal of the check of what content still draws through its resources (`resource_ops`).
+fn unread_content_refusal<T: std::fmt::Debug>(result: &Result<T, RedactError>) -> bool {
+    matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. }))
+        if detail == "redaction could not fully read the content that uses these resources")
+}
+
+/// What the page draws can't be told when a content stream the redaction leaves as it was holds
+/// bytes the parser can't read: the redaction of an image is refused, as it was already on a page
+/// with fonts or properties to clean up.
+#[test]
+fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image() {
+    for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
+        let mut doc = image_and_a_tail("", "Im1", "", tail);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let result = apply(&mut doc, None);
+        if refused {
+            assert!(unread_content_refusal(&result), "{result:?}");
+        } else {
+            assert_eq!(result.map(|r| r.images_removed).ok(), Some(1));
+        }
+    }
+}
+
+/// Remove Hidden Information makes the same check: removing an off layer's image is refused on a
+/// page whose drawing can't be told.
+#[test]
+fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
+        let mut doc = image_and_a_tail("/OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >>", "ImOC", "/OC 7 0 R", tail);
+        let result = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
+        if refused {
+            assert!(unread_content_refusal(&result), "{result:?}");
+        } else {
+            assert!(result.unwrap().iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0));
+        }
+    }
+}
+
+/// Remove Hidden Information keeps a name that a form without resources still draws, too. Hidden
+/// text includes text wholly off the page, so what it removes from a form depends on where it is
+/// drawn: the page's /Fm, drawn off the page, is rewritten, while /G draws /Fm again on the page,
+/// where its text shows, and stays as it was. The page still names /Fm, with its text.
+#[test]
+fn removing_hidden_text_keeps_a_form_a_form_without_resources_still_draws() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for none in NO_RESOURCES {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R /G 6 0 R >> >> >>".to_vec(),
+            stream("", b"q 1 0 0 1 1000 0 cm /Fm Do Q /G Do"),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 7 0 R >> >>",
+                b"BT /F1 10 Tf 20 20 Td (KEEPTEXT) Tj ET",
+            ),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {none}"), b"/Fm Do"),
+            FONT.replace("95 0 R", "8 0 R").into_bytes(),
+            widths(),
+        ]);
+        let removed = remove_hidden(&mut doc, &[Hidden::HiddenText]).unwrap();
+        assert!(removed.iter().any(|(h, n)| *h == Hidden::HiddenText && *n > 0), "{none:?}: nothing was removed");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(content(&saved, 0).contains("/G Do"), "{none:?}: /G was rewritten");
+        let fm = named_stream(&saved, 0, b"Fm").and_then(|s| s.decoded().ok());
+        assert!(fm.is_some_and(|d| d.windows(8).any(|w| w == b"KEEPTEXT")), "{none:?}: the page lost /Fm, which /G still draws");
+    }
+}
+
+/// The page's own check follows only forms without resources of their own: a form that names a
+/// different image /Im1 in resources of its own doesn't keep the page's redacted /Im1.
+#[test]
+fn the_pages_check_does_not_follow_a_form_with_resources_of_its_own() {
+    let image = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im1 4 0 R >> >>", b"/Im1 Do"),
+        stream(image, b"o"),
+        stream(image, b"p"),
+    ]);
+    let mut xo = Dict::from_iter([(b"FmOwn".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Im1".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
+    crate::interp::prune(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
+    assert!(!xo.contains(b"Im1") && xo.contains(b"FmOwn"), "{xo:?}");
+}
+
+/// What content draws through its resources is read up to 2,000,000 operators, those of the forms
+/// it draws without resources of their own included; past that it is refused.
+#[test]
+fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators() {
+    let doc = Document::new_empty();
+    for (ops, read) in [(2_000_000, true), (2_000_001, false)] {
+        let content = b"n ".repeat(ops);
+        assert_eq!(
+            crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &Dict::new(), &[content]).is_ok(),
+            read,
+            "{ops} operators"
+        );
+    }
+    // The content's own `/Fm Do` is one of them.
+    for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
+        let doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"n ".repeat(ops)),
+        ]);
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(ObjRef::new(3, 0)))])))]);
+        assert_eq!(
+            crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Fm Do".to_vec()]).is_ok(),
+            read,
+            "a form of {ops} operators"
+        );
+    }
+}
+
+/// `content` behind a PNG predictor (Up, one column) whose `/DecodeParms` are given by reference,
+/// in a stream with `entries` too: read without the parameters, its bytes are the predictor's tags
+/// and differences, not the operators.
+fn behind_parms_by_reference(doc: &mut Document, entries: &[(&str, Object)], content: &[u8]) -> Stream {
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12))])));
+    let mut s = Stream::flate(Dict::new(), &rows);
+    for (key, value) in entries {
+        s.dict.set(key.as_bytes().to_vec(), value.clone());
+    }
+    s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    s
+}
+
+/// A form's entries: `/Subtype /Form` and `bbox`.
+fn form_entries(bbox: [i64; 4]) -> Vec<(&'static str, Object)> {
+    vec![("Subtype", Object::name("Form")), ("BBox", Object::Array(bbox.into_iter().map(Object::Int).collect()))]
+}
+
+/// A form outside the mark draws the image again through the page's resources, its content behind
+/// a predictor whose `/DecodeParms` are given by reference. Both checks of whether the page still
+/// draws it read the form through them, the page's (`resource_ops`) and the unlinking one at the
+/// end (`names_content_draws`): the page keeps the image for the form.
+#[test]
+fn an_image_a_form_with_parameters_by_reference_draws_again_is_kept() {
+    let mut doc = one_page(
+        b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+        "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+        vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b""),
+            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+        ],
+    );
+    let form = behind_parms_by_reference(&mut doc, &form_entries([0, 0, 100, 100]), b"q 50 0 0 50 20 20 cm /Im1 Do Q");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "the form still draws it");
+}
+
+/// A surviving form outside the mark shares the page's resources and draws the image itself, its
+/// content behind a predictor whose `/DecodeParms` are given by reference: unlinking the redacted
+/// image from the forms' resources reads it through them, and keeps the image the form draws.
+#[test]
+fn an_image_a_surviving_form_with_parameters_by_reference_draws_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"q 100 0 0 100 0 0 cm /Im Do Q /Fm Do"),
+        b"<< /XObject << /Im 6 0 R /Fm 7 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"IMAGESECRET"),
+        stream("/Type /XObject /Subtype /Form /BBox [150 150 300 300]", b""),
+    ]);
+    let mut entries = form_entries([150, 150, 300, 300]);
+    entries.push(("Resources", Object::Ref(ObjRef::new(5, 0))));
+    let form = behind_parms_by_reference(&mut doc, &entries, b"q 50 0 0 50 200 200 cm /Im Do Q");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(surviving_references::full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
+}
+
+/// A form without resources of its own crosses the mark and draws an image, or text, under it,
+/// its content behind a predictor whose `/DecodeParms` are given by reference. The walk reads it
+/// through them and removes what lies under the mark: the image, whether the page draws it under
+/// the mark too or only the form does, and the text's glyphs. Read without them, the form looked
+/// empty and was left as it was, still drawing them, and the page's check, which reads it with
+/// them, kept the image's name for it.
+#[test]
+fn what_a_form_with_parameters_by_reference_draws_under_the_mark_is_removed() {
+    let mut doc = one_page(b"/FmBare Do", "/XObject << /FmBare 7 0 R >>", vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"")]);
+    let mut entries = form_entries([0, 0, 100, 100]);
+    // Its drawing moved up by 210: the text lands at y 250, under the mark.
+    entries.push(("Matrix", Object::Array([1, 0, 0, 1, 0, 210].into_iter().map(Object::Int).collect())));
+    let form = behind_parms_by_reference(&mut doc, &entries, b"BT /F1 10 Tf 20 40 Td (SECRETVALUE) Tj ET");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.forms_rewritten), (11, 1), "the text the form draws under the mark: {r:?}");
+    for page in [&b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do"[..], b"/FmBare Do"] {
+        let mut doc = one_page(
+            page,
+            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b""),
+                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"REDIMGONECOVERED"),
+            ],
+        );
+        let mut entries = form_entries([0, 0, 100, 100]);
+        // Its drawing moved up by 210: the image lands at y 230 to 280, under the mark.
+        entries.push(("Matrix", Object::Array([1, 0, 0, 1, 0, 210].into_iter().map(Object::Int).collect())));
+        let form = behind_parms_by_reference(&mut doc, &entries, b"q 50 0 0 50 20 20 cm /Im1 Do Q");
+        doc.set(ObjRef::new(7, 0), form);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_rewritten, 1, "{}: {r:?}", String::from_utf8_lossy(page));
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "{}: the image the form drew under the mark", String::from_utf8_lossy(page));
+    }
+}
+
+/// A form without resources of its own that the redaction rewrites gets a new name. It keeps none
+/// of its own either when its copy of the page's loses nothing, which takes a form drawing itself
+/// (here off the page, so outside the mark), and then goes on drawing through the page's: itself
+/// and, through a form it draws unchanged, the image under the mark again outside it. The page's
+/// check of what it still draws follows the rewritten form under its new name, so the page keeps
+/// both names for it.
+#[test]
+fn an_image_a_rewritten_form_draws_again_through_the_pages_resources_is_kept() {
+    let mut doc = one_page(
+        b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+        "/XObject << /FmBare 7 0 R /Inner 8 0 R /Im1 9 0 R >>",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300]",
+                b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Inner Do q 1 0 0 1 0 -1000 cm /FmBare Do Q",
+            ),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{r:?}");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let page = content(&saved, 0);
+    let drawn: Vec<Vec<u8>> =
+        pdfcraft_content::parse(page.as_bytes()).ops.iter().filter(|op| op.is("Do")).filter_map(|op| op.last_name().map(<[u8]>::to_vec)).collect();
+    assert!(drawn.len() == 1 && drawn[0] != b"FmBare", "the form is drawn under its new name: {page}");
+    let rewritten = named_stream(&saved, 0, &drawn[0]).unwrap();
+    assert!(!rewritten.dict.contains(b"Resources"), "the rewritten form keeps no resources of its own");
+    assert!(named_stream(&saved, 0, b"FmBare").is_some(), "the rewritten form still draws the original");
+    assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "the unchanged form still draws it");
+}
+
+/// The walk of what content draws through its resources charges the forms it reads to the
+/// allowance it is given: a form decoding to more than is left is refused, one within it read.
+#[test]
+fn what_content_draws_through_its_resources_is_read_within_its_allowance() {
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"n ".repeat(1000)),
+    ]);
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(ObjRef::new(3, 0)))])))]);
+    for (allowance, read) in [(2000, true), (1999, false)] {
+        let mut budget = pdfcraft_cos::DecodeBudget::new(allowance, 0);
+        assert_eq!(crate::interp::resource_ops(&doc, &mut budget, &res, &[b"/Fm Do".to_vec()]).is_ok(), read, "{allowance} bytes");
+    }
+}
+
+/// The cleanups after the content walk spend what the walk left of the page's allowance, one
+/// allowance between them. A form without resources of its own that crosses the mark is read by
+/// the walk, then again by the check of what the page still draws and by the font cleanup: at
+/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at
+/// 50 MiB it goes on.
+#[test]
+fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance() {
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+    }
+}
+
+/// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
+/// form has resources of its own, so the page's cleanups don't follow it, and draws through them a
+/// form without any that crosses the mark: the walk reads that form, then the check of what the
+/// rewritten form still draws and its font cleanup read it again. At 100 MiB, three reads are more
+/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on.
+#[test]
+fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"/FmText Do",
+            "/XObject << /FmText 7 0 R >>",
+            vec![
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /FmBare 8 0 R >> >>",
+                    b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /FmBare Do",
+                ),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+    }
+}
+
+/// Removing hidden text spends what its content walk left of the page's allowance too. The page
+/// draws a form holding hidden text, which is rewritten, and a form without resources of its own:
+/// the walk reads the second, then the check of what the page still draws and the font cleanup
+/// read it again. At 100 MiB, three reads are more than the page's 256 MiB, and the removal is
+/// refused; at 50 MiB it goes on.
+#[test]
+fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"/FmHidden Do /FmBare Do",
+            "/XObject << /FmHidden 7 0 R /FmBare 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 3 Tr 20 250 Td (HIDDEN) Tj ET"),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+            ],
+        );
+        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB");
+    }
+}
+
+/// A form with resources of its own draws through those, not its caller's: one on another page
+/// that names a different image /Im1 doesn't keep the redacted /Im1 in the dictionary both pages
+/// inherit.
+#[test]
+fn a_form_with_resources_of_its_own_does_not_keep_its_callers_image() {
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /Resources << /XObject << /Im1 7 0 R /FmOwn 8 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 230 cm /Im1 Do Q"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R >>".to_vec(),
+        stream("", b"/FmOwn Do"),
+        stream(image, b"REDIMGONECOVERED"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im1 9 0 R >> >>", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+        stream(image, b"PUBIMGSHOWNAGAIN"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "the redacted image survived the save");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let form = named_stream(&saved, 1, b"FmOwn").expect("page 2 still draws its form");
+    let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(own) = &*saved.get(xo.get(b"Im1").and_then(Object::as_ref).unwrap()) else { panic!("/Im1 is a stream") };
+    assert_eq!(decoded_image(&saved, own).unwrap(), b"PUBIMGSHOWNAGAIN", "the form's own image stays");
 }
 
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
@@ -2172,6 +4272,45 @@ fn clearing_marks_leaves_the_annotation_list_as_it_was() {
     assert_eq!((doc.get(page), doc.get(list)), before, "the page points at its array, which lists the link alone");
 }
 
+/// A group subordinate (`/RT /Group`) of a mark stays when the marks are cleared, as one stays
+/// when its primary comment is deleted, and loses its `/IRT`: nothing then refers to the mark,
+/// so a full save leaves the mark's text out.
+#[test]
+fn clearing_marks_releases_a_group_member_of_a_mark() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    let m = marks(&doc)[0].obj;
+    doc.update_dict(m, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("MARK_SECRET_TEXT"))).unwrap();
+    let mut member = Dict::new();
+    member.set(b"Type".to_vec(), Object::name("Annot"));
+    member.set(b"Subtype".to_vec(), Object::name("Square"));
+    member.set(b"Rect".to_vec(), Object::Array([60, 60, 90, 90].map(Object::Int).to_vec()));
+    member.set(b"IRT".to_vec(), Object::Ref(m));
+    member.set(b"RT".to_vec(), Object::name("Group"));
+    let member = doc.add(Object::Dict(member));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let mut listed = annots_of(&doc, doc.get(page).as_dict().unwrap());
+    listed.push(Object::Ref(member));
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(listed))).unwrap();
+    assert_eq!(clear_marks(&mut doc, None), Ok(1));
+    assert_eq!(annots_of(&doc, doc.get(page).as_dict().unwrap()), [Object::Ref(member)], "the member stays");
+    let d = doc.get(member).as_dict().cloned().unwrap();
+    assert!(d.get(b"IRT").is_none() && d.name(b"RT") == Some(b"Group".as_slice()), "{d:?}");
+    let full = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!full.windows(16).any(|w| w == b"MARK_SECRET_TEXT"), "the cleared mark is not in a full save");
+}
+
+#[test]
+fn redacted_copies_are_named_with_redacted_before_the_extension() {
+    assert_eq!(redacted_file_name("contract.pdf"), "contract_Redacted.pdf");
+    assert_eq!(redacted_file_name("SCAN.PDF"), "SCAN_Redacted.pdf");
+    assert_eq!(redacted_file_name("Report.Pdf"), "Report_Redacted.pdf");
+    // A document without the extension (opened from bytes) gets it.
+    assert_eq!(redacted_file_name("Untitled"), "Untitled_Redacted.pdf");
+    // Redacting a redacted copy again does not add a second suffix.
+    assert_eq!(redacted_file_name("contract_Redacted.pdf"), "contract_Redacted.pdf");
+}
+
 #[test]
 fn unreadable_content_fails_closed() {
     let mut doc = one_page(b"", "", vec![]);
@@ -2256,6 +4395,165 @@ fn an_unreadable_mark_on_another_page_does_not_stop_the_selected_page() {
     assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
     assert_eq!(apply(&mut doc, Some(&[0])).map(|r| r.glyphs), Ok(4));
     assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// The quad over "1234" in `AB1234CD` (x 20–40) and the one over "CD" (x 40–50).
+const OVER_1234: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+const OVER_CD: [f64; 8] = [40.0, 110.0, 50.0, 110.0, 40.0, 95.0, 50.0, 95.0];
+
+/// `AB1234CD` with one mark whose `/QuadPoints` is `quads`, whose `/Rect` is `rect` (removed when
+/// `None`) and which has a fill (`/IC`) only when `fill` is set.
+fn quad_mark(quads: Vec<Object>, rect: Option<[i64; 4]>, fill: bool) -> (Document, ObjRef) {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+        if let Some(r) = rect {
+            d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Int(*v)).collect()));
+        } else {
+            d.remove(b"Rect");
+        }
+        if !fill {
+            d.remove(b"IC");
+        }
+    })
+    .unwrap();
+    (doc, m.obj)
+}
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// An all-NaN quad folded to `[MAX, MAX, MIN, MIN]`: a finite, inverted box that passed as a
+/// readable area. Without a fill the mark was applied and removed nothing; with one the overlay
+/// failed. With no `/Rect` either, the mark has no area and apply refuses it.
+#[test]
+fn an_all_nan_quad_without_a_rect_is_refused_not_applied_as_nothing() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), None, fill);
+        assert!(marks(&doc).is_empty(), "fill {fill}: the NaN quad is no area");
+        assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)), "fill {fill}");
+        assert!(content(&doc, 0).contains("(AB1234CD) Tj"), "fill {fill}: nothing changed");
+    }
+}
+
+/// With a usable `/Rect`, an all-NaN mark redacts exactly the `/Rect`.
+#[test]
+fn an_all_nan_quad_falls_back_to_the_rect() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), Some([20, 95, 40, 110]), fill);
+        assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]], "fill {fill}");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 4), "fill {fill}");
+        assert!(!content(&doc, 0).contains("1234"), "fill {fill}");
+    }
+}
+
+/// One NaN among finite entries made `f64::min`/`max` ignore it and fold the other three corners:
+/// a quad the document never described. Such a quad is unusable.
+#[test]
+fn a_quad_with_one_nan_entry_is_unusable() {
+    let mut q = OVER_1234;
+    q[0] = f64::NAN;
+    let (mut doc, _) = quad_mark(reals(&q), None, false);
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    // Next to a usable quad, only that one applies.
+    let (mut doc, _) = quad_mark(reals(&[q, OVER_CD].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// A name in the middle of `/QuadPoints` was dropped, which moved every later coordinate into the
+/// wrong slot and folded the first quad to a box over most of the page.
+#[test]
+fn a_non_number_entry_drops_its_quad_without_shifting_the_rest() {
+    let mut quads = reals(&[OVER_1234, OVER_CD].concat());
+    quads[2] = Object::name("oops");
+    let (mut doc, _) = quad_mark(quads, None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// Twelve entries are one quad and half of another: only the whole one applies.
+#[test]
+fn a_trailing_partial_quad_is_ignored() {
+    let (mut doc, _) = quad_mark(reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(4));
+}
+
+/// Finite quads redact what they always did, one box each, and the `/Rect` is not consulted.
+#[test]
+fn finite_quads_redact_their_areas_as_before() {
+    let (mut doc, _) = quad_mark(reals(&[OVER_1234, OVER_CD].concat()), Some([0, 0, 1, 1]), true);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0], [40.0, 95.0, 50.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 6));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// The boxes a reader's quads outline, or its `/Rect` when it has none (as the comment outlines
+/// fall back to it).
+fn outline(quads: &[[f32; 8]], rect: [f32; 4]) -> Vec<[f32; 4]> {
+    if quads.is_empty() {
+        return vec![rect];
+    }
+    quads
+        .iter()
+        .map(|q| {
+            let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+            let (lo, hi) = (|v: [f32; 4]| v.into_iter().fold(f32::MAX, f32::min), |v: [f32; 4]| v.into_iter().fold(f32::MIN, f32::max));
+            [lo(xs), lo(ys), hi(xs), hi(ys)]
+        })
+        .collect()
+}
+
+/// The outline the comment list draws (`pdfcraft_annot::summaries`, and the inspector's listing
+/// of the saved file) is the area apply removes, for malformed `/QuadPoints` too. The readers
+/// used to disagree: the summaries and the inspector read non-numbers as zeros, apply dropped
+/// them.
+#[test]
+fn the_outline_shown_is_the_area_apply_removes() {
+    // (entries, whether a saved file can say them: PDF syntax has no NaN). `forty` is an indirect
+    // number, which every reader follows.
+    let cases = |forty: ObjRef| -> Vec<(Vec<Object>, bool)> {
+        let mut name_inside = reals(&[OVER_1234, OVER_CD].concat());
+        name_inside[2] = Object::name("oops");
+        let mut by_reference = reals(&OVER_1234);
+        by_reference[2] = Object::Ref(forty);
+        let mut one_nan = OVER_1234;
+        one_nan[5] = f64::NAN;
+        let mut one_huge = OVER_1234;
+        one_huge[5] = 4e38;
+        vec![
+            (reals(&[OVER_1234, OVER_CD].concat()), true),
+            (name_inside, true),
+            (reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), true),
+            (by_reference, true),
+            (vec![Object::name("oops"); 8], true),
+            (reals(&[one_nan, OVER_CD].concat()), false),
+            (reals(&[one_huge, OVER_CD].concat()), true),
+            (reals(&[f64::NAN; 8]), false),
+        ]
+    };
+    for i in 0.. {
+        let (mut doc, obj) = quad_mark(Vec::new(), Some([20, 95, 40, 110]), true);
+        let forty = doc.add(Object::Int(40));
+        let Some((quads, saved)) = cases(forty).into_iter().nth(i) else { break };
+        doc.update_dict(obj, |d| d.set(b"QuadPoints".to_vec(), Object::Array(quads))).unwrap();
+        let applied: Vec<[f32; 4]> = marks(&doc)[0].rects.iter().map(|r| r.map(|v| v as f32)).collect();
+        let summary = pdfcraft_annot::summaries(&doc).into_iter().find(|s| s.subtype == "Redact").unwrap();
+        assert_eq!(outline(&summary.quads, summary.rect), applied, "case {i}: comment summaries");
+        if saved {
+            let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let info = pdfcraft_render::inspect(Arc::new(bytes), None).unwrap();
+            let listed = info.annotations.iter().find(|a| a.subtype == "Redact").unwrap();
+            assert_eq!(outline(&listed.quads, listed.rect), applied, "case {i}: inspector");
+        }
+    }
 }
 
 /// A document with something in every hidden-information category.
@@ -2545,6 +4843,73 @@ fn a_remove_hidden_copy_gets_a_new_identifier() {
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], vec![0x11; 16], "the copy keeps the source's first identifier string");
     assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
+}
+
+/// Links, actions and JavaScripts takes the scripts out of bookmarks that stay: an item that runs
+/// JavaScript loses its action, a jump with a script chained after it keeps only the jump, and a
+/// plain jump is left alone.
+#[test]
+fn bookmarks_that_stay_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>".to_vec(),
+        // 6 runs a script, 7 jumps and then runs one, 8 only jumps; 9 the script
+        b"<< /Title (Runs) /Parent 5 0 R /Next 7 0 R /A 9 0 R >>".to_vec(),
+        b"<< /Title (Jumps then runs) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [3 0 R /Fit] /Next 9 0 R >> >>".to_vec(),
+        b"<< /Title (Jumps) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 2)]);
+    let item = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    assert!(!item(6).contains(b"A"), "{:?}", item(6));
+    let jump = |n: u32| item(n).get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    assert_eq!((jump(7).name(b"S"), jump(7).contains(b"D"), jump(7).contains(b"Next")), (Some(&b"GoTo"[..]), true, false));
+    assert_eq!(jump(8).name(b"S"), Some(&b"GoTo"[..]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(7).any(|w| w == b"(Jumps)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
+}
+
+/// A damaged outline may reach an item only backwards (`/Last`, `/Prev`, `/Parent`). The full save
+/// keeps that item all the same, so its script goes too.
+#[test]
+fn bookmarks_reached_only_backwards_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    // /First and /Next reach only 6; 7, 8 and 9 hang off its /Last, /Prev and /Parent and share script 10
+    let mut doc = outlined_document(vec![
+        b"<< /Title (Reached) /Last 7 0 R /Prev 8 0 R /Parent 9 0 R >>".to_vec(),
+        b"<< /Title (Last) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Prev) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Parent) /A 10 0 R >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 3)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 3)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"(Parent)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
+}
+
+/// Outline items written in place count towards the outline budget too: 60,000 items with an inline
+/// child each are 120,000 items, so the outline is refused rather than walked past the budget.
+#[test]
+fn an_outline_past_the_budget_with_inline_items_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let mut doc = outlined_document(items);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 1)));
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
 }
 
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
@@ -3557,6 +5922,43 @@ fn untouched_replacement_descriptions_survive_redaction_and_hidden_text_cleanup(
     }
 }
 
+/// An image drawn through an ICC profile has as many components as the profile's `/N` says, and
+/// is cleared in place like any other, the profile given through a chain of references too.
+#[test]
+fn an_icc_based_image_is_cleared_in_place_through_any_references() {
+    for (n, chained) in [(1, false), (3, false), (1, true), (3, true)] {
+        let img = stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace [/ICCBased 8 0 R] /BitsPerComponent 8", vec![255u8; 2 * n]);
+        let icc = stream(&format!("/N {n}"), b"");
+        let objects = if chained { vec![img, b"9 0 R".to_vec(), icc] } else { vec![img, icc] };
+        let mut doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        // The left pixel.
+        mark(&mut doc, 0, &[[95.0, 95.0, 109.0, 115.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.images_cleared), (0, 1), "/N {n}, chained {chained}: {r:?}");
+        let samples = [vec![0u8; n], vec![255u8; n]].concat();
+        assert_eq!(named_image(&doc, 0, b"PCRedacted1"), Some(samples), "/N {n}, chained {chained}");
+    }
+}
+
+/// A cleared copy keeps the parameters for data in another file only while it has one: `/FFilter`
+/// and `/FDecodeParms` mean nothing without a `/F` that isn't null, and may name a JBIG2
+/// dictionary that would then stay.
+#[test]
+fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
+    for (f, kept) in [("/F (scan.jb2)", true), ("/F 9 0 R", true), ("/F null", false), ("/F 8 0 R", false), ("/F 99 0 R", false), ("", false)] {
+        let dict = format!(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {f} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 10 0 R >>"
+        );
+        let objects = vec![stream(&dict, [255u8, 255]), b"null".to_vec(), b"(scan.jb2)".to_vec()];
+        let doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
+        let left = [[0.0, 0.0, 0.4, 1.0]];
+        let copy = crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+        let Ok(Some(copy)) = copy else { panic!("{f}: cleared in a copy") };
+        assert_eq!((copy.dict.contains(b"FFilter"), copy.dict.contains(b"FDecodeParms")), (kept, kept), "{f}");
+    }
+}
+
 #[test]
 fn a_hostile_icc_component_count_is_refused_not_multiplied_into_a_crash() {
     // /N comes from the file. 2^60 × 8 bpc × width 2 overflows the row size; a negative /N wrapped
@@ -3740,8 +6142,13 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod descriptions;
+mod elsewhere;
+mod hidden_scope;
+mod identification;
 mod inline_images;
 mod limits;
+mod metadata_fail_closed;
+mod metadata_matching;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
@@ -4206,4 +6613,255 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// Private data takes an image's prepress data too: its OPI link to the original file and its
+/// alternate images, which can be the unedited original.
+#[test]
+fn private_data_takes_opi_links_and_alternate_images() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q /Fm Do"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Alternates [<< /Image 7 0 R /DefaultForPrinting true >>]",
+            b"SHOWNIMAGE!",
+        ),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /OPI << /1.3 << /Type /OPI /Version 1.3 /F (OPISERVERPATH.tif) >> >>", b""),
+        stream("/Type /XObject /Subtype /Image /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"ALTERNATEORIGINAL"),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::PrivateData), Some((Hidden::PrivateData, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 2)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"SHOWNIMAGE!"), "the image the page shows stays");
+    assert!(!has(b"ALTERNATEORIGINAL"), "the alternate image survived the save");
+    assert!(!has(b"OPISERVERPATH"), "the OPI link survived the save");
+}
+
+/// The full rewrite of the document made of `objs` after Remove Hidden Information, run for its
+/// metadata so it has something to do.
+fn hidden_information_removed(objs: Vec<Vec<u8>>) -> Vec<u8> {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(objs);
+    let info = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Title".to_vec(), pdfcraft_cos::PdfString::text("Plan"));
+        d
+    }));
+    doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
+    remove_hidden(&mut doc, &[Hidden::Metadata]).unwrap();
+    write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()
+}
+
+fn gray_image(data: &[u8]) -> Vec<u8> {
+    stream(&format!("/Type /XObject /Subtype /Image /Width {} /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", data.len()), data)
+}
+
+/// An image Delete Image took off the page is still listed in its resources: Remove Hidden
+/// Information unlinks it, so the full rewrite leaves it out, as it does one only an unused form
+/// draws. Images a page still draws stay, directly, through a form without /Resources, or on
+/// another page sharing the dictionary, its name and `Do` in two content streams.
+#[test]
+fn images_no_page_draws_leave_with_hidden_information() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [6 0 R 15 0 R] /Resources 7 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Shown Do Q /Fm Do"),
+        stream("", b"q 50 0 0 50 20 20 cm /Other"),
+        b"<< /XObject << /Shown 8 0 R /Deleted 9 0 R /Nested 10 0 R /Other 11 0 R /Fm 12 0 R /Unused 13 0 R /Orphan 14 0 R >> >>".to_vec(),
+        gray_image(b"SHOWNIMAGEBYTES"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        gray_image(b"NESTEDIMAGEBYTES"),
+        gray_image(b"OTHERPAGEIMAGE"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"q 10 0 0 10 200 200 cm /Nested Do Q"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Orphan Do"),
+        gray_image(b"ORPHANIMAGEBYTES"),
+        stream("", b"Do Q"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    assert!(!has(b"ORPHANIMAGEBYTES"), "an image only an unused form draws survived the save");
+    for kept in [&b"SHOWNIMAGEBYTES"[..], b"NESTEDIMAGEBYTES", b"OTHERPAGEIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// A page listed under two /Pages nodes draws through either one's resources, whichever a reader
+/// comes to it from: neither loses the image it draws.
+#[test]
+fn a_page_listed_twice_keeps_both_parents_images() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 7 0 R >> >> >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 3 0 R /MediaBox [0 0 300 300] /Contents 6 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q"),
+        gray_image(b"FIRSTPARENTIMAGE"),
+        gray_image(b"SECONDPARENTIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    for kept in [&b"FIRSTPARENTIMAGE"[..], b"SECONDPARENTIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// Unlinking an image nothing draws is a removal of its own: with nothing else to remove, it is
+/// still applied, not reported as nothing to do.
+#[test]
+fn unlinking_alone_still_applies() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted 4 0 R >> >> >>".to_vec(),
+        gray_image(b"DELETEDIMAGEBYTES"),
+    ]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(17).any(|w| w == b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+}
+
+/// A name a pattern, a form, an appearance or a soft mask doesn't define is looked up in the
+/// page's resources, /Resources of its own or not: an image drawn only that way is still shown,
+/// so it stays, as one drawn by a form named through an object that holds only a reference. One
+/// no content names goes.
+#[test]
+fn images_drawn_through_the_page_resources_stay() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [6 0 R] >>".to_vec(),
+        stream("", b"q /Pattern cs /Pt scn 0 0 10 10 re f Q /Own Do /Loop Do q /Gs gs 0 0 5 5 re f Q /Chained Do"),
+        b"<< /XObject << /ByPattern 7 0 R /ByOwnForm 8 0 R /ByAppearance 9 0 R /ByMask 10 0 R /Deleted 11 0 R /Own 12 0 R /Loop 16 0 R \
+           /Chained 17 0 R /ByChain 19 0 R >> /Pattern << /Pt 13 0 R >> /ExtGState << /Gs << /SMask << /S /Luminosity /G 14 0 R >> >> >> >>"
+            .to_vec(),
+        b"<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 15 0 R >> >>".to_vec(),
+        gray_image(b"BYPATTERNIMAGE"),
+        gray_image(b"BYOWNFORMIMAGE"),
+        gray_image(b"BYAPPEARANCEIMAGE"),
+        gray_image(b"BYMASKIMAGE"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ProcSet [/PDF] >>", b"/ByOwnForm Do"),
+        stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10", b"/ByPattern Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S /Transparency /CS /DeviceGray >>", b"/ByMask Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 50 50]", b"/ByAppearance Do"),
+        // Draws itself: read once.
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /Loop 16 0 R >> >>", b"/Loop Do"),
+        b"18 0 R".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByChain Do"),
+        gray_image(b"BYCHAINIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    for kept in [&b"BYPATTERNIMAGE"[..], b"BYOWNFORMIMAGE", b"BYAPPEARANCEIMAGE", b"BYMASKIMAGE", b"BYCHAINIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// A Type 3 glyph draws through the page's resources too, as does a form in the font's own
+/// resources: their images stay, and the dictionary is still cleaned of what nothing draws.
+#[test]
+fn images_drawn_by_type3_glyphs_stay() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 12 Tf (a) Tj ET"),
+        b"<< /XObject << /ByGlyph 7 0 R /Deleted 8 0 R /ByFontForm 11 0 R >> /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 9 0 R >> \
+           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /Fx 10 0 R >> >> >>"
+            .to_vec(),
+        gray_image(b"BYGLYPHIMAGE"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        stream("", b"10 0 d0 /ByGlyph Do /Fx Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByFontForm Do"),
+        gray_image(b"BYFONTFORMIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    assert!(has(b"BYGLYPHIMAGE"), "the glyph's image is drawn and must stay");
+    assert!(has(b"BYFONTFORMIMAGE"), "the image a form in the font's resources draws must stay");
+}
+
+/// Layer lists that name one array many times, through arrays that do the same, are cleaned once
+/// where each array is, not copied once per path: the file stays as small as it was.
+#[test]
+fn a_shared_layer_list_is_cleaned_once() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [9 0 R 9 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        widths(),
+    ];
+    // Objects 9 to 22 each name the next one twice; 23 names both layers.
+    objs.extend((10..24).map(|n| format!("[{n} 0 R {n} 0 R]").into_bytes()));
+    objs.push(b"[6 0 R 7 0 R]".to_vec());
+    let mut doc = pdf(objs);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && !has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(bytes.len() < 32 * 1024, "the shared lists were copied once per path: {} bytes", bytes.len());
+}
+
+/// A removed off layer leaves every list that names it, or its dictionary, name included, stays in
+/// the file: a sub-list of the default `/Order` (its heading too, once it names no layer), a
+/// radio-button group (a group left empty goes), a usage rule (one that names it directly too), and
+/// the alternate configurations in `/Configs`.
+#[test]
+fn a_removed_layer_leaves_every_configuration() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [7 0 R [(Group) 6 0 R]] /RBGroups [[6 0 R 7 0 R] [6 0 R]] /AS [<< /Event /Print /OCGs [6 0 R] /Category [/Print] >> << /Event /View /OCGs 6 0 R /Category [/View] >>] >> /Configs [8 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (Gone) Tj ET EMC BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "9 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        b"<< /Name (Other view) /OFF [7 0 R] /ON [6 0 R] /Order [6 0 R 7 0 R] >>".to_vec(),
+        widths(),
+    ]);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && has(b"(Other view)"), "the layer that stays and the configuration stay");
+    assert!(!has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(!has(b"(Group)"), "the heading of a sub-list left with no layer stayed");
+    let catalog = doc.get(doc.root().unwrap());
+    let config = catalog.as_dict().and_then(|c| c.get(b"OCProperties")).and_then(Object::as_dict).and_then(|p| p.get(b"D")).and_then(Object::as_dict);
+    let group = Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]);
+    assert_eq!(config.and_then(|d| d.get(b"RBGroups")), Some(&Object::Array(vec![group])), "a radio-button group left empty stayed");
+}
+
+/// A layer the default configuration lists on but a View usage rule turns off is hidden on screen
+/// (ISO 32000-2, 8.11.4.4): Hidden layers removes it. A Print rule leaves its layer as it is.
+#[test]
+fn a_layer_a_view_rule_turns_off_is_hidden() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /AS [<< /Event /View /OCGs [6 0 R] /Category [/View] >> << /Event /Print /OCGs [7 0 R] /Category [/Print] >>] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R /L2 7 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (ScreenOff) Tj ET EMC /OC /L2 BDC BT /F1 10 Tf 10 100 Td (PrintOff) Tj ET EMC"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (Screen) /Usage << /View << /ViewState /OFF >> >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Print) /Usage << /Print << /PrintState /OFF >> >> >>".to_vec(),
+        widths(),
+    ]);
+    assert!(scan(&doc).into_iter().any(|(h, n)| h == Hidden::HiddenLayers && n > 0));
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
 }
