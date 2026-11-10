@@ -35,6 +35,7 @@ pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
+mod structure;
 
 #[cfg(test)]
 use blocks::wrap;
@@ -112,6 +113,9 @@ pub struct TextLine {
     origin: Origin,
     /// Explicit marked-content scope (when present); distinct scopes must not be guessed into one paragraph.
     scope: Option<usize>,
+    /// The paragraph element of a tagged PDF's logical structure the line's first run is in
+    /// (an object number), when the page says: separate elements are separate paragraphs.
+    structure: Option<u32>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi

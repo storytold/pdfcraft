@@ -481,6 +481,8 @@ pub(super) struct Shown {
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
+    /// The paragraph element of the logical structure it is in (see [`Carry::paragraphs`]).
+    pub(super) structure: Option<u32>,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -702,6 +704,10 @@ pub(super) struct Carry {
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
+    /// The paragraph element of the page's logical structure that each marked-content id belongs
+    /// to (see [`super::structure`]), and for each open marked-content sequence, the one it is in.
+    pub(super) paragraphs: std::rc::Rc<HashMap<i64, u32>>,
+    pub(super) structure: Vec<Option<u32>>,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -733,7 +739,16 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry {
+            ts,
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: MAX_PAGE_TEXT,
+            gap_space: false,
+            paragraphs: std::rc::Rc::default(),
+            structure: Vec::new(),
+        }
     }
 }
 
@@ -756,6 +771,9 @@ struct MarkedContent {
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
+    /// For each open sequence, the structure paragraph it is in (see [`Carry::paragraphs`]).
+    structure: Vec<Option<u32>>,
+    paragraphs: std::rc::Rc<HashMap<i64, u32>>,
 }
 
 impl MarkedContent {
@@ -764,6 +782,15 @@ impl MarkedContent {
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
         self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
+        // A sequence with an `/MCID` is a leaf of the logical structure: it belongs to the
+        // paragraph element above it (Word marks each run as a `/Span` of its `P`).
+        let mcid = match op.operands.get(1) {
+            Some(Object::Name(name)) => logical_text.and_then(|properties| properties.get(name)).and_then(|object| doc.dict(object)),
+            other => other.and_then(Object::as_dict).cloned(),
+        }
+        .and_then(|list| list.get(b"MCID").and_then(Object::as_int));
+        let paragraph = mcid.and_then(|mcid| self.paragraphs.get(&mcid).copied());
+        self.structure.push(paragraph.or_else(|| self.structure.last().copied().flatten()));
         // A layer named in the resources is told apart by its name, an inline one by where it opens.
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
@@ -782,6 +809,7 @@ impl MarkedContent {
 
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
+        self.structure.pop();
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
@@ -1052,6 +1080,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
+        structure: marked.structure.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
@@ -1083,8 +1112,13 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked =
-        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let mut marked = MarkedContent {
+        regions: std::mem::take(&mut carry.marked),
+        layers: std::mem::take(&mut carry.layers),
+        structure: std::mem::take(&mut carry.structure),
+        paragraphs: carry.paragraphs.clone(),
+        ..MarkedContent::default()
+    };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
     // before the next line. Neither name is a paragraph region, so it does not change scope.
     let mut soft_break = false;
@@ -1319,6 +1353,7 @@ pub(super) fn interpret(
     carry.stack = stack;
     carry.marked = marked.regions;
     carry.layers = marked.layers;
+    carry.structure = marked.structure;
     out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
     Ok(out)

@@ -455,6 +455,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
+    carry.paragraphs = std::rc::Rc::new(super::structure::paragraph_of_mcids(doc, &p.dict));
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
     let pieces = joined(&content_streams(doc, &p.dict)?);
@@ -568,6 +569,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 face: s.face.clone(),
                 stream: si,
                 scope: s.scope,
+                structure: s.structure,
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
@@ -871,6 +873,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             face: s.face.clone(),
             stream,
             scope: s.scope,
+            structure: s.structure,
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
@@ -1091,6 +1094,10 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             layers: Vec::new(),
             text_left: *text_left,
             gap_space: false,
+            // A form's own marked content isn't in the page's structure (it has its own
+            // /StructParents, not followed here).
+            paragraphs: std::rc::Rc::default(),
+            structure: Vec::new(),
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);

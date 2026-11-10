@@ -8368,6 +8368,85 @@ fn a_space_beside_a_superscript_stays_on_the_body_row() {
     assert!(texts.contains(&"30"), "the superscript is a line of its own, without the space: {texts:?}");
 }
 
+/// Word tags every paragraph as a `P` of the logical structure and marks each run as a `/Span`
+/// with an `/MCID`; with only 6 pt after each paragraph, closer than the spacing that otherwise
+/// breaks paragraphs, a heading, its body and the next paragraph read as one, and after the
+/// right-to-left runs were read whole a Word page could be a single paragraph.
+#[test]
+fn paragraphs_tagged_apart_in_the_structure_stay_apart() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    // A 16 pt heading, two 12 pt rows 14 pt apart, then another paragraph 19 pt below.
+    let content = "/Span <</MCID 0>> BDC BT /F1 16 Tf 1 0 0 1 300 700 Tm (BA) Tj ET EMC                    /Span <</MCID 1>> BDC BT /F1 12 Tf 1 0 0 1 308 681 Tm (AB) Tj ET EMC                    /Span <</MCID 2>> BDC BT /F1 12 Tf 1 0 0 1 308 667 Tm (AB) Tj ET EMC                    /Span <</MCID 3>> BDC BT /F1 12 Tf 1 0 0 1 308 648 Tm (BB) Tj ET EMC";
+    let tagged = |tags: bool| {
+        build(&[
+            if tags { "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>" } else { "<< /Type /Catalog /Pages 2 0 R >>" },
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>",
+            &stream("", content),
+            &format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+                widths.join(" ")
+            ),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [9 0 R 10 0 R 11 0 R] /ParentTree 8 0 R >>",
+            "<< /Nums [0 [9 0 R 10 0 R 12 0 R 11 0 R]] >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K [1 12 0 R] >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 3 >>",
+            "<< /Type /StructElem /S /Span /P 10 0 R /Pg 3 0 R /K 2 >>",
+        ])
+    };
+    let doc = tagged(true);
+    for doc in [&doc, &reopen(&doc)] {
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        assert_eq!(
+            blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(),
+            [
+                "سم",
+                "مس
+مس",
+                "مم"
+            ]
+        );
+    }
+    // Untagged, the same page keeps the spacing rules' reading (one paragraph here).
+    let untagged = text::text_blocks(&tagged(false), 0).unwrap();
+    assert!(untagged.len() < 3, "{:?}", untagged.iter().map(|b| &b.editor_text).collect::<Vec<_>>());
+}
+
+/// Word sets a word in another language (한국어, हिन्दी) as a run of its own, in another subset of
+/// the font, touching the rest of the row. Touching runs of separate text objects are kept apart as
+/// labels (#594), so the word was split from its paragraph; tagged as one paragraph, they join.
+#[test]
+fn touching_runs_tagged_as_one_paragraph_are_one_row() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let font = |name: &str| {
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 7 0 R >>", widths.join(" "))
+    };
+    // The second run is set with its own letter spacing, as Word sets a run in another language.
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 1 0 0 1 300 700 Tm (BA) Tj ET EMC                    /Span <</MCID 1>> BDC BT /F1 12 Tf 0.5 Tc 1 0 0 1 312 700 Tm (AB) Tj ET EMC";
+    let page = |tags: bool| {
+        build(&[
+            if tags { "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R >>" } else { "<< /Type /Catalog /Pages 2 0 R >>" },
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+            &stream("", content),
+            &font("BCDEEE+FakeArabic"),
+            &font("BCDFEE+FakeArabic"),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [10 0 R] /ParentTree 9 0 R >>",
+            "<< /Nums [0 [11 0 R 10 0 R]] >>",
+            "<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K [11 0 R 1] >>",
+            "<< /Type /StructElem /S /Span /P 10 0 R /Pg 3 0 R /K 0 >>",
+        ])
+    };
+    assert_eq!(text::text_blocks(&page(true), 0).unwrap().len(), 1);
+    // Untagged, two labels that touch stay apart (#594).
+    assert_eq!(text::text_blocks(&page(false), 0).unwrap().len(), 2);
+}
+
 #[test]
 fn multi_glyph_rtl_actual_text_keeps_its_own_reading_order() {
     // Two encoded glyphs are a logical span, even if their replacement looks like a ligature.
