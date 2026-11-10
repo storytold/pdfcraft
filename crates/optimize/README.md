@@ -32,7 +32,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   damaged partway, which may draw an image larger past the damage), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
-  stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
+  stencil `/Mask` has its own resolution, so the picture changes under it and it keeps its size and
+  its bits (stored again as a picture's mask, below).
   An image is replaced only if the result is smaller. Images over 80 million pixels are left
   alone by the image steps, here and below, whatever their settings (memory); Clean Up may still
   Flate an unfiltered or LZW one. Left alone by these colour and grey
@@ -108,10 +109,18 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   - Apart from the downsampling it is lossless: the samples keep their meaning, so the colour
     space, decode array and `/Mask` stay, but for packed RGB, which becomes grey with one decode
     pair. Group 4 wins on scans, whose ragged edges defeat Flate; on clean computer-drawn 1-bit
-    art Flate can be smaller. Not yet: inline images, an image's own `/SMask` or `/Mask`
-    image (only images drawn on a page are visited), Group 4 for rows wider than 32,767
-    samples, and JBIG2 past 65,535 samples on a side, where the decoder stops (its 2^28 in all
-    is past the 80 million pixels above).
+    art Flate can be smaller.
+  - **A picture's masks:** after the pictures, each picture's stencil `/Mask` and one-bit
+    `/SMask` (a picture's own images, which the pages don't draw by name), once however many
+    pictures name it, is stored again as the compression asks when that is smaller, at its size:
+    its bits stay as they are, so it masks as it did. A stencil the pages also draw by name is one
+    of the images above; a soft mask they draw is still stored as a mask. It isn't resampled, as its resolution isn't measured (the walk measures the
+    picture's), and it shares no JBIG2 dictionary, as only images named directly do. A soft mask of
+    more bits stays as it is, to be resampled with its picture, which wants it at eight. The report
+    counts masks as images.
+  - Not yet: inline images, a picture's mask resampled, or packed to one bit from more, Group 4
+    for rows wider than 32,767 samples, and JBIG2 past 65,535 samples on a side, where the decoder
+    stops (its 2^28 in all is past the 80 million pixels above).
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller, a dictionary shared by up to 16 images when that is smaller still. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
