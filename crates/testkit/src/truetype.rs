@@ -67,6 +67,12 @@ fn format4(pairs: &[(u16, u16)]) -> Vec<u8> {
 /// `Some(version)`, a `post` table of that version: `0x0002_0000` names every glyph `glyph`;
 /// the others carry no names.
 pub fn subset(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>) -> Vec<u8> {
+    subset_with_widths(num_glyphs, drawn, cmap, post, None)
+}
+
+/// [`subset`] whose glyphs have their own advance widths, `widths(gid)` in units of 1000 per em
+/// (`None`: every glyph 600 wide, one metric for all, as [`subset`]).
+pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>, widths: Option<&dyn Fn(u16) -> u16>) -> Vec<u8> {
     let num_glyphs = num_glyphs.max(1);
     // One square: one contour of four on-curve points, two-byte coordinates.
     let mut square = Vec::new();
@@ -99,12 +105,23 @@ pub fn subset(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>)
     let mut hhea = vec![0; 36];
     hhea[0..4].copy_from_slice(&[0, 1, 0, 0]);
     hhea[4..6].copy_from_slice(&800i16.to_be_bytes());
-    hhea[34..36].copy_from_slice(&1u16.to_be_bytes());
     let mut hmtx = Vec::new();
-    be16(&mut hmtx, 600);
-    be16(&mut hmtx, 0);
-    for _ in 1..num_glyphs {
-        be16(&mut hmtx, 0);
+    match widths {
+        Some(width) => {
+            hhea[34..36].copy_from_slice(&num_glyphs.to_be_bytes());
+            for gid in 0..num_glyphs {
+                be16(&mut hmtx, width(gid));
+                be16(&mut hmtx, 0);
+            }
+        }
+        None => {
+            hhea[34..36].copy_from_slice(&1u16.to_be_bytes());
+            be16(&mut hmtx, 600);
+            be16(&mut hmtx, 0);
+            for _ in 1..num_glyphs {
+                be16(&mut hmtx, 0);
+            }
+        }
     }
     let mut maxp = vec![0, 1, 0, 0];
     be16(&mut maxp, num_glyphs);

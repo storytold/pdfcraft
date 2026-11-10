@@ -202,6 +202,79 @@ fn a_recovered_layout_out_of_time_is_discarded_and_the_strict_layer_kept() {
     assert!(recovered.is_none(), "a recovered layout out of time is discarded");
 }
 
+/// Glyph-order drift: fonts made for Windows keep the standard Macintosh order only so far
+/// (past about glyph 171 a glyph is often its neighbour's: Times New Roman's right quote where
+/// the order has the left one), so rule K reads glyph ids up to 171 and nothing past them.
+/// `Straße – it’s`: `ß` is glyph 137 and reads; the en dash (178) and the right quote (183) don't.
+#[test]
+fn the_macintosh_order_is_read_up_to_glyph_171_only() {
+    let mut ids = gids("Stra");
+    ids.push(137);
+    ids.extend(gids("e "));
+    ids.push(178);
+    ids.extend(gids(" it"));
+    ids.push(183);
+    ids.extend(gids("s and some more words"));
+    let page = type0_page(subset(300, &ids, Cmap::None, None), &ids, "TimesNewRomanPSMT", false);
+    let (_, recovered, _) = layers(&parse(page));
+    let text = recovered.map(|r| r.text.plain_text()).unwrap_or_default();
+    assert!(text.contains("Stra\u{df}e") && text.contains("some more words"), "{text:?}");
+    assert!(!text.contains('\u{2013}') && !text.contains('\u{2019}') && !text.contains('\u{201c}'), "{text:?}");
+}
+
+/// Glyph-order drift: an accented letter is as wide as its base letter in a Latin typeface, so a
+/// font whose glyphs read as accented letters in the Macintosh order have other widths than the
+/// glyphs read as their base letters doesn't follow that order (an Apple font such as Skia
+/// numbers its glyphs from further on: its glyph 104, the order's `Udieresis`, is an `h`) and
+/// reads nothing. With the widths of their `e` the accents read, `ï` uncompared (accented `i`
+/// letters are often wider than the `i`).
+#[test]
+fn accented_letters_wider_than_their_base_letters_reject_the_font() {
+    let mut ids = gids("caf");
+    ids.push(112);
+    ids.extend(gids(" cr"));
+    ids.push(113);
+    ids.extend(gids("me na"));
+    ids.push(119);
+    ids.extend(gids("ve plus"));
+    let program = |accented: u16| {
+        let width = move |gid: u16| if gid == 112 || gid == 113 { accented } else { 500 };
+        pdfcraft_testkit::truetype::subset_with_widths(300, &ids, Cmap::None, None, Some(&width))
+    };
+    let read = |accented: u16| layers(&parse(type0_page(program(accented), &ids, "ArialMT", false))).1.map(|r| r.text.plain_text());
+    let same = read(500);
+    assert!(same.as_deref().is_some_and(|t| t.contains("caf\u{e9}") && t.contains("cr\u{e8}me") && t.contains("na\u{ef}ve")), "{same:?}");
+    assert_eq!(read(800), None, "accents wider than their `e`: not the Macintosh order");
+}
+
+/// The two thresholds of the drift checks, at every value around them: a glyph id beside a text
+/// reads one more character exactly when it is 171 or less (172, a no-break space, is blank) and
+/// not one of the ids where some Windows fonts differ from the order (≠, π, Ω, ∆), and an accent
+/// reads exactly when its width is within 1% of its base letter's (500).
+#[test]
+fn the_drift_thresholds_hold_at_every_value_around_them() {
+    let letters = gids("some more words here");
+    let visible = |ids: &[u16], program: Vec<u8>| {
+        layers(&parse(type0_page(program, ids, "ArialMT", false))).1.map_or(0, |r| r.text.plain_text().chars().filter(|c| !c.is_whitespace()).count())
+    };
+    let base = visible(&letters, subset(300, &letters, Cmap::None, None));
+    assert_eq!(base, 17);
+    for id in (140..=185).filter(|id| *id != 172) {
+        let mut ids = letters.clone();
+        ids.push(id);
+        let read = visible(&ids, subset(300, &ids, Cmap::None, None));
+        assert_eq!(read, base + usize::from(id <= 171 && ![143, 155, 159, 168].contains(&id)), "glyph {id}");
+    }
+    let mut ids = letters.clone();
+    ids.push(112);
+    for accented in 490..=510u16 {
+        let width = move |gid: u16| if gid == 112 { accented } else { 500 };
+        let read = visible(&ids, pdfcraft_testkit::truetype::subset_with_widths(300, &ids, Cmap::None, None, Some(&width)));
+        let within = f32::from(accented.abs_diff(500)) <= f32::from(accented.max(500)) * 0.01;
+        assert_eq!(read, if within { base + 1 } else { 0 }, "an accent {accented} wide");
+    }
+}
+
 /// A CFF INDEX of `items` (offsets one byte wide when they fit, else two).
 fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
     let count = u16::try_from(items.len()).unwrap();

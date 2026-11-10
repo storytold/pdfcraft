@@ -664,6 +664,82 @@ pub(crate) enum MacSource {
 const WINANSI_GUESS: &str = "the strict text is the code read as WinAnsi, a last resort for a font without /Encoding, \
      /ToUnicode or a Unicode cmap";
 
+/// The last glyph id [`MacGlyphOrder`] reads. Fonts made for Windows (Arial, Times New Roman,
+/// Tahoma, Verdana, the `TTE…t00` subsets of their printer drivers) keep the standard Macintosh
+/// order through the ellipsis (171) and leave it at 172, where they have `Agrave` and the order
+/// the no-break space: from there on a glyph is its neighbour's (the en dash where the order has
+/// `oe`, the right quote where it has the left one, the euro sign where it has `fraction`), so
+/// those ids read as nothing.
+const MAC_ORDER_HOLDS: u32 = 171;
+
+/// Glyph ids up to [`MAC_ORDER_HOLDS`] where fonts of those families put another glyph than the
+/// order: `notequal` (143, Courier's `AE`), `pi` (155, a private-use glyph in Franklin Gothic),
+/// `Omega` (159, Arial Narrow) and `Delta` (168, Trebuchet). They read as nothing.
+const MAC_ORDER_DIFFERS: [u32; 4] = [143, 155, 159, 168];
+
+/// Whether [`MacGlyphOrder`] reads glyph id `gid`: up to [`MAC_ORDER_HOLDS`], but not the ids of
+/// [`MAC_ORDER_DIFFERS`].
+fn mac_order_reads(gid: u32) -> bool {
+    gid <= MAC_ORDER_HOLDS && !MAC_ORDER_DIFFERS.contains(&gid)
+}
+
+/// Accented letters of the standard Macintosh order and their base letters (glyph ids): in a
+/// Latin typeface an accented letter is as wide as its base letter (`Ä` as `A`, `é` as `e`). The
+/// accented `i` letters are left out: they are often wider than the `i`.
+const ACCENTED_BASES: [(u16, u16); 28] = [
+    (98, 36),  // Adieresis, A
+    (99, 36),  // Aring
+    (100, 38), // Ccedilla, C
+    (101, 40), // Eacute, E
+    (102, 49), // Ntilde, N
+    (103, 50), // Odieresis, O
+    (104, 56), // Udieresis, U
+    (105, 68), // aacute, a
+    (106, 68), // agrave
+    (107, 68), // acircumflex
+    (108, 68), // adieresis
+    (109, 68), // atilde
+    (110, 68), // aring
+    (111, 70), // ccedilla, c
+    (112, 72), // eacute, e
+    (113, 72), // egrave
+    (114, 72), // ecircumflex
+    (115, 72), // edieresis
+    (120, 81), // ntilde, n
+    (121, 82), // oacute, o
+    (122, 82), // ograve
+    (123, 82), // ocircumflex
+    (124, 82), // odieresis
+    (125, 82), // otilde
+    (126, 88), // uacute, u
+    (127, 88), // ugrave
+    (128, 88), // ucircumflex
+    (129, 88), // udieresis
+];
+
+/// Whether the glyphs `drawn` that the standard Macintosh order reads as accented letters are
+/// as wide as the glyphs it reads as their base letters (to 1% of the wider), wherever the
+/// program gives both a width. A font whose own order is the Macintosh one shifted (an Apple
+/// font with glyphs of its own first: Skia's `h` is glyph 104, the order's `Udieresis`) puts
+/// other letters there, of other widths, and fails.
+fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
+    use skrifa::MetadataProvider;
+    use skrifa::instance::{LocationRef, Size};
+    let metrics = program.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let width = |gid: u16| {
+        metrics
+            .advance_width(GlyphId::new(u32::from(gid)))
+            .filter(|w| w.is_finite() && *w > 0.0)
+    };
+    ACCENTED_BASES
+        .iter()
+        .filter(|(accented, _)| drawn.contains(&u32::from(*accented)))
+        .all(|&(accented, base)| match (width(accented), width(base)) {
+            (Some(a), Some(b)) => (a - b).abs() <= a.max(b) * 0.01,
+            _ => true,
+        })
+}
+
 /// The glyph id a name that only numbers it gives (`g55` is 55): `g` and one to five decimal
 /// digits.
 fn g_name_number(name: &str) -> Option<u32> {
@@ -1017,7 +1093,8 @@ impl Rule for MacGlyphOrder {
                 return None;
             }
         }
-        let reads = !renumbered_block(&drawn) && plausible(&drawn);
+        let reads =
+            !renumbered_block(&drawn) && plausible(&drawn) && accents_match_bases(program, &drawn);
         reads.then_some(MacSource::Program {
             override_strict: simple && !codes_read_as_winansi(font),
             below: if relaxed {
@@ -1035,7 +1112,10 @@ impl Rule for MacGlyphOrder {
     ) -> Option<(BfString, RecoveryMode)> {
         match guard {
             MacSource::Names => {
-                let c = mac_glyph_char(g_name_number(glyph.name?)?)?;
+                let id = g_name_number(glyph.name?)?;
+                let c = Some(id)
+                    .filter(|id| mac_order_reads(*id))
+                    .and_then(mac_glyph_char)?;
                 Some((BfString::Char(c), RecoveryMode::Fill))
             }
             MacSource::Cids => {
@@ -1046,8 +1126,9 @@ impl Rule for MacGlyphOrder {
                 override_strict,
                 below,
             } => {
-                let c =
-                    mac_glyph_char(glyph.gid.to_u32()).filter(|_| glyph.gid.to_u32() < *below)?;
+                let c = Some(glyph.gid.to_u32())
+                    .filter(|id| *id < *below && mac_order_reads(*id))
+                    .and_then(mac_glyph_char)?;
                 let mode = if *override_strict {
                     RecoveryMode::Override {
                         reason: WINANSI_GUESS,
