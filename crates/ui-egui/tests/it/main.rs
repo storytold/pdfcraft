@@ -80,7 +80,6 @@ mod scroll_prefetch;
 mod search_position;
 mod side_panels;
 mod signing;
-mod snapshot_area_tabs;
 mod snapshot_tabs;
 mod split_view;
 mod split_view_edits;

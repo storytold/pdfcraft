@@ -1,54 +1,22 @@
-//! Snapshot's area menu (Print area…, Save as image…) with several tabs: each tab keeps its own
-//! area, so what it does must be about that tab's area.
+//! Snapshot with several tabs: each tab keeps its own area and its menu (Print area…, Save as
+//! image…), so what the menu does is about that tab's area; leaving Snapshot puts away the area in
+//! every tab, not only the one on screen.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
-
-/// `n` pages of 200×300, each saying "Page i+1".
-fn fixture(n: usize) -> Vec<u8> {
-    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
-    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
-    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
-    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
-    for i in 0..n {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
-        let body = format!("BT /F1 18 Tf 20 150 Td (Page {}) Tj ET", i + 1);
-        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
-    }
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offs = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offs.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let x = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offs {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
-}
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 /// Two tabs, a.pdf (0) and b.pdf (1), with Snapshot chosen and the system clipboard left alone.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("a.pdf", None, fixture(2)).unwrap();
-        app.open_bytes("b.pdf", None, fixture(2)).unwrap();
+        app.open_bytes("a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+        app.open_bytes("b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         app.system_clipboard = false;
         app
     });
-    // Background rendering can take seconds on a loaded CI runner.
-    for _ in 0..3000 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert!(h.state_mut().execute("edit.snapshot"));
     h.run_steps(2);
     h
@@ -103,4 +71,35 @@ fn the_area_stays_after_print_area() {
     h.run_steps(4);
     assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
     assert_eq!(h.state().views[0].area_pick, Some((0, area)));
+}
+
+/// An area is picked in each of two tabs while Snapshot is on; choosing another tool puts both
+/// away, including the tab that is not on screen.
+#[test]
+fn leaving_snapshot_clears_every_tab() {
+    let mut h = harness();
+    assert_eq!(h.state().quick_tool, QuickTool::Snapshot);
+    for index in 0..2 {
+        h.state_mut().active = Some(index);
+        h.run_steps(2);
+        h.state_mut().views[index].area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
+        h.run_steps(2);
+        // Still Snapshot: the area stays outlined.
+        assert!(h.state().views[index].area_pick.is_some(), "tab {index} keeps its area under Snapshot");
+    }
+    // Tab B is on screen; choose another tool.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(3);
+    assert!(h.state().views[1].area_pick.is_none(), "the tab on screen");
+    assert!(h.state().views[0].area_pick.is_none(), "the other tab");
+}
+
+/// A change to the page list leaves no area behind: its page index would name another page.
+#[test]
+fn a_document_change_puts_the_area_away() {
+    let mut h = harness();
+    h.state_mut().views[0].area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
+    let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
+    h.state_mut().views[0].document_changed(&info);
+    assert!(h.state().views[0].area_pick.is_none());
 }
