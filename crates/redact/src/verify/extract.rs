@@ -396,13 +396,18 @@ pub(super) fn push_squashed(into: &mut String, s: &str) {
     into.extend(s.chars().filter(|c| !c.is_whitespace() && *c != '\u{feff}'));
 }
 
-/// A form's or pattern's `/Matrix`: absent is the identity, present but malformed is an error
-/// (guessing the identity would put its content in the wrong place).
-pub(super) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
+/// A form's or pattern's `/Matrix`, the array and each entry direct or by reference: absent or null
+/// is the identity, present but malformed is an error (guessing the identity would put its content in the
+/// wrong place). The redaction walk reads a form's with it too.
+pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
     match dict.get(b"Matrix") {
         None => Ok(Matrix::IDENTITY),
         Some(m) => {
             let m = doc.resolve(m);
+            // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
+            if matches!(*m, Object::Null) {
+                return Ok(Matrix::IDENTITY);
+            }
             let items: Vec<Object> = m.as_array().ok_or(())?.iter().map(|x| (*doc.resolve(x)).clone()).collect();
             Matrix::from_operands(&items).filter(|m| m.0.iter().all(|v| v.is_finite())).ok_or(())
         }
