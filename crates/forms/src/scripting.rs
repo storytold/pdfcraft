@@ -112,8 +112,9 @@ impl Scripts for NoScripts {
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<String, FormError> {
+pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<(String, bool), FormError> {
     let mut v = value.to_string();
+    let mut refresh_field = false;
     for (event, script, default) in [
         (FieldEvent::Keystroke, &f.actions.scripts.keystroke, "The value entered does not match the format of the field"),
         (FieldEvent::Validate, &f.actions.scripts.validate, "The value entered is not valid for the field"),
@@ -121,13 +122,14 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all, doc);
+        refresh_field |= r.changes.iter().any(|change| change.name == f.name && change.object.is_none_or(|id| id == f.obj));
         apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
         v = r.value;
     }
-    Ok(v)
+    Ok((v, refresh_field))
 }
 
 /// The text a custom Format script shows for `value`, if the field has one.
@@ -191,10 +193,7 @@ pub(crate) fn apply_changes(
     }
     // Validate every colour before applying any part of the script's changes.
     for c in changes {
-        if let Some(color) = &c.text_color {
-            js_rgb(color)?;
-        }
-        for color in [&c.fill_color, &c.stroke_color].into_iter().flatten() {
+        for color in [&c.text_color, &c.fill_color, &c.stroke_color].into_iter().flatten() {
             js_color(color)?;
         }
     }
@@ -264,7 +263,7 @@ pub(crate) fn apply_changes(
             protect_other_mk_owners(doc, f, &mk_owners)?;
         }
         let appearance = crate::LookPatch {
-            text: c.text_color.as_deref().map(js_rgb).transpose()?,
+            text: c.text_color.as_deref().map(js_color).transpose()?.flatten(),
             fill: c.fill_color.as_deref().map(js_color).transpose()?,
             border: c.stroke_color.as_deref().map(js_color).transpose()?,
             width: c.line_width,
@@ -348,28 +347,34 @@ pub(crate) fn apply_changes(
     Ok(())
 }
 
-/// Validate bounded Acrobat colour components and convert gray/RGB/CMYK or transparency to the editor representation.
+/// An Acrobat colour array as the RGB the look model stores, `None` for transparent (`["T"]`).
+/// Gray and CMYK convert as Acrobat's `color.convert` does. Anything else (an unknown colour
+/// space, the wrong number of components, or a component that is not a finite number between
+/// 0 and 1) is refused, and with it the script's changes.
 fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
-    let invalid = || FormError::Invalid("JavaScript colours require T, G, RGB or CMYK with finite components between 0 and 1".into());
+    let invalid = || FormError::Invalid("JavaScript field colours must be T, G, RGB or CMYK arrays with finite components between 0 and 1".into());
     let (space, parts) = values.split_first().ok_or_else(invalid)?;
-    let numbers = parts
-        .iter()
-        .map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid))
-        .collect::<Result<Vec<_>, _>>()?;
-    match (space.as_str(), numbers.as_slice()) {
-        ("T", []) => Ok(None),
-        ("G", [g]) => Ok(Some([*g; 3])),
-        ("RGB", [r, g, b]) => Ok(Some([*r, *g, *b])),
-        ("CMYK", [c, m, y, k]) => Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)])),
+    let mut numbers = [0.0; 4];
+    if parts.len() > numbers.len() {
+        return Err(invalid());
+    }
+    for (slot, part) in numbers.iter_mut().zip(parts) {
+        *slot = part.trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid)?;
+    }
+    match (space.as_str(), parts.len()) {
+        ("T", 0) => Ok(None),
+        ("G", 1) => Ok(Some([numbers[0]; 3])),
+        ("RGB", 3) => Ok(Some([numbers[0], numbers[1], numbers[2]])),
+        ("CMYK", 4) => {
+            let [c, m, y, k] = numbers;
+            Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)]))
+        }
         _ => Err(invalid()),
     }
 }
-/// Require an opaque validated colour for text, which cannot use the transparent colour space.
-fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
-    js_color(values)?.ok_or_else(|| FormError::Invalid("textColor cannot be transparent".into()))
-}
 
-/// Apply button/console field and appearance changes, recalculating after value writes.
+/// Apply what a button or console script changed (values, read-only, required, visibility),
+/// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     apply_changes(doc, changes, "", None, scripts)?;
     // Acrobat's automatic calculation is driven by value changes. A keypad caption,

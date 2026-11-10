@@ -104,12 +104,20 @@ document edits continue through the existing automation/engine boundary.
 
 ## Related contributions
 
-The synchronous calculation bridge is based on PR #5304, page boxes on #5501, partial colour
-writeback on #5499, and normal captions on #5505. The bounded menu parser was adapted from
-#2081. The combined per-document runtime, property/icon bridge and native button interaction
-integration are developed here, with related state/icon work also tracked in #344 and #4751.
-Those contributors' branches are not modified by this contribution. See the PR description
-for the exact imported heads and validation actually performed on the combined source.
+The persistent runtime uses the upstream work from #5304 for synchronous calculations,
+#5501 for page boxes, #5499 for colour parsing and writeback, and #5505 for normal captions.
+The integration supplies the live document state, exact field identity, and grouped field
+selection needed by the persistent context.
+
+The bounded `popUpMenuEx` parser in `crates/js/src/interaction.rs` was adapted from #2081.
+The prompt channel and default menu renderer support interactive form scripts. #2081 can
+supply an anchored renderer through the UI menu callback when it adds link actions. Once
+the shared parser lands upstream, this integration can use it directly.
+
+`ScriptSession::run_host_task` gives future timer and page actions (#4751) access to the
+retained realm on its own worker. `DocumentScriptEvent` and `run_document_script_event`
+provide explicit entry points for catalog OpenAction, WillSave and WillPrint (#344).
+The callers for those document actions are part of #344.
 
 The lexical preflight recognizes unambiguous top-level and block-body ASI boundaries before identifiers, including declarations and assignments separated by line breaks or comments. It preserves counters after operators and member access, and across binary keyword operators. It distinguishes control-statement parentheses for regexp literals; inside expression parentheses, array/object literals and template interpolations it remains conservative; this is not a complete ECMAScript parser or ASI implementation.
 

@@ -282,7 +282,8 @@ fn recalculate_values(
             if let Some(pending) = deferred.as_deref_mut() {
                 pending.insert(obj);
             } else {
-                redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+                let current = all.iter().find(|field| field.obj == obj).unwrap_or(&f);
+                redraw(doc, current, std::slice::from_ref(&v), scripts)?;
             }
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
@@ -331,18 +332,21 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = if resetting { t.clone() } else { scripting::accept(doc, f, t, scripts)? };
-            let t = &t;
+            let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
-            if resetting { Ok(()) } else { redraw(doc, f, std::slice::from_ref(t), scripts) }
+            if resetting {
+                return Ok(());
+            }
+            let current = refresh_field.then(|| fields(doc).into_iter().find(|current| current.obj == f.obj)).flatten();
+            redraw(doc, current.as_ref().unwrap_or(f), std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.

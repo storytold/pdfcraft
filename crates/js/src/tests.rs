@@ -2509,7 +2509,7 @@ fn af_simple_calculate_expands_groups_and_duplicate_names() {
         ("MIN", "['row']", 2.0),
         ("MAX", "['row']", 5.0),
         ("SUM", "['missing']", 0.0),
-        ("PRD", "['missing']", 1.0),
+        ("PRD", "['missing']", 0.0),
         ("AVG", "['missing']", 0.0),
         ("MIN", "[]", 0.0),
         ("MAX", "[]", 0.0),

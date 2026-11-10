@@ -377,6 +377,26 @@ fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() 
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/2");
 }
+
+/// A nested menu exposes only enabled leaves as valid replies to the waiting script.
+#[test]
+fn native_popup_submenu_keeps_disabled_items_unselectable() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let script = "var calls=typeof calls==='number'?calls:0; calls++; \
+                  var choice=app.popUpMenuEx({cName:'Group',oSubMenu:[{cName:'Disabled',bEnabled:false}, \
+                  {cName:'Enabled',cReturn:'chosen'}]}); getField('greeting').value=choice+'/'+calls;";
+    h.state_mut().run_button_script(id, "hello", script);
+    wait_for(&mut h, "Group");
+    h.get_by_label("Group").click();
+    wait_for(&mut h, "Enabled");
+    // The modal recentres while the submenu expands. Settle the layout before sending pointer input.
+    h.run_steps(30);
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Disabled") && node.is_disabled()).is_some());
+    h.get_by_label("Enabled").click();
+    wait_value(&mut h, "greeting", "chosen/1");
+}
+
 #[test]
 /// An intervening document edit prevents an older pending script result from replacing current values.
 fn native_popup_completion_is_discarded_after_the_document_is_edited() {
