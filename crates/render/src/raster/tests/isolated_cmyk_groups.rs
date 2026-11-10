@@ -320,6 +320,8 @@ trailer << /Root 1 0 R >>
     let at = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec();
     for page in [&whole, &banded] {
         let rgb = at(page, 100, 340);
-        assert!(rgb[1] > 100 && rgb[0] < 60 && rgb[2] < 60, "blended in CMYK, green: {rgb:?}");
+        // CMYK's 1 0 1 0 through the CMYK profile is (0, 166, 81); blended in RGB it would be
+        // magenta, red and blue high and green low.
+        assert!(rgb[1] > 120 && rgb[0] < 60 && rgb[2] < 120, "blended in CMYK, green: {rgb:?}");
     }
 }
