@@ -187,7 +187,8 @@ pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
                 right = g.rect[2];
             }
         } else {
-            sc.cluster_gap.push((w > 0).then_some(g.rect[0] - right));
+            // No gap before the first cluster, even when marks drawn for its letter come first.
+            sc.cluster_gap.push((w > 0 && right.is_finite()).then_some(g.rect[0] - right));
             right = g.rect[2];
         }
     }

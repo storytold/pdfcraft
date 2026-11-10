@@ -3656,3 +3656,26 @@ fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
     let text = layout(v).plain_text();
     assert_eq!(text, "שלום\u{345}ab");
 }
+
+/// Word draws a haraka or a Hebrew point just before the letter it sits on, its ink over that
+/// letter: placed by its own start, after the letter, every such mark read one letter on once the
+/// line was turned into reading order (تُعَدُّ copied as تُعَُّد, and Find missed the word).
+#[test]
+fn a_right_to_left_mark_drawn_before_its_letter_stays_on_that_letter() {
+    // Drawn left to right: م, then the damma over س, then س.
+    let v = vec![g("م", 10.0, 10.0, 16.0), g("\u{64F}", 16.5, 10.0, 19.0), g("س", 16.0, 10.0, 22.0)];
+    assert_eq!(layout(v).plain_text(), "سُم");
+    // Two marks on the first letter drawn (shadda and damma over د), and a fatha on ع.
+    let v = vec![
+        g("\u{651}", 10.8, 10.0, 13.0),
+        g("\u{64F}", 11.0, 10.0, 13.5),
+        g("د", 10.0, 10.0, 14.0),
+        g("\u{64E}", 15.0, 10.0, 17.0),
+        g("ع", 14.0, 10.0, 19.0),
+        g("ت", 19.0, 10.0, 22.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "تعَدُّ");
+    // Niqqud the same way: a qamats under ה drawn before it.
+    let v = vec![g("ל", 10.0, 10.0, 16.0), g("\u{5B8}", 17.0, 10.0, 19.0), g("ה", 16.0, 10.0, 22.0)];
+    assert_eq!(layout(v).plain_text(), "הָל");
+}

@@ -154,6 +154,30 @@ fn attach_mark(glyphs: &[&TextGlyph], anchor: &mut [usize], i: usize) {
     }
 }
 
+/// Glyph `i` is a right-to-left letter: the combining marks drawn right before it, in its segment, whose ink is
+/// centred over it are its own. Word draws a haraka or a Hebrew point that way, the mark first; placed by its own
+/// box, after the letter, each mark read one letter on once the line was turned into reading order (تُعَدُّ copied
+/// as تُعَُّد). In its letter's cluster it is placed right before it, and so follows it in reading order.
+fn attach_marks_drawn_first(glyphs: &[&TextGlyph], anchor: &mut [usize], i: usize, start: usize) {
+    let Some(letter) = glyphs.get(i) else { return };
+    let rtl_mark = |t: &str| !t.is_empty() && t.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM && is_rtl(c));
+    if !letter.text.chars().any(|c| is_rtl(c) && unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM) {
+        return;
+    }
+    let mut m = i;
+    while m > start {
+        m -= 1;
+        let Some(mark) = glyphs.get(m) else { return };
+        let centre = (mark.rect[0] + mark.rect[2]) / 2.0;
+        if !rtl_mark(&mark.text) || anchor.get(m) != Some(&m) || centre < letter.rect[0] || centre >= letter.rect[2] {
+            return;
+        }
+        if let Some(slot) = anchor.get_mut(m) {
+            *slot = i;
+        }
+    }
+}
+
 fn is_cjk(c: char) -> bool {
     matches!(c as u32, 0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3134F | 0x1100..=0x11FF)
 }
@@ -261,6 +285,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             && let Some(s) = segs.last_mut()
         {
             attach_mark(&glyphs, &mut anchor, i);
+            attach_marks_drawn_first(&glyphs, &mut anchor, i, s.first.start);
             s.first.end = i + 1;
             s.extend_box(&g, hi);
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
