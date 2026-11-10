@@ -16,8 +16,9 @@ fn n(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
-/// The page's content streams decoded against `budget` and joined; streams that don't decode
-/// are left out. `None` when the budget ran out, so part of the content is missing.
+/// The page's content streams decoded against `budget` and joined with a space as the renderer
+/// joins them; streams that don't decode are left out. `None` when the budget ran out, so part of
+/// the content is missing.
 pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     let Some(contents) = page.get(b"Contents") else { return Some(Vec::new()) };
     let mut out = Vec::new();
@@ -25,7 +26,7 @@ pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeB
         match data {
             Ok(data) => {
                 out.extend_from_slice(&data);
-                out.push(b'\n');
+                out.push(b' ');
             }
             Err(_) if budget.remaining() == 0 => return None,
             Err(_) => {}
@@ -99,7 +100,9 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     let subtype = subtype_obj.as_deref().and_then(Object::as_name).unwrap_or(b"");
     match subtype {
         b"Widget" => true,
-        b"Link" | b"Popup" => false,
+        // Existing Link appearances are part of the document, not markup or fields.
+        b"Link" => content != Content::FormFieldsOnly,
+        b"Popup" => false,
         b"Stamp" => content != Content::Document && content != Content::FormFieldsOnly,
         // ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard (Table
         // 171) is not printed even with its Print flag set.
@@ -229,14 +232,22 @@ pub(crate) fn page_form(
         );
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
-    if !xobjects.is_empty() {
-        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
-    }
+    // With no appearance added the form keeps the page's own Resources, shared by reference,
+    // rather than a deep copy per printed page.
+    let resources = match page.dict.get(b"Resources") {
+        Some(r) if k == 0 && doc.resolve(r).as_dict().is_some() => r.clone(),
+        _ => {
+            if !xobjects.is_empty() {
+                res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            }
+            Object::Dict(res)
+        }
+    };
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array(crop.iter().map(|v| Object::Real(*v)).collect()));
-    d.set(b"Resources".to_vec(), Object::Dict(res));
+    d.set(b"Resources".to_vec(), resources);
     if let Some(g) = page.dict.get(b"Group") {
         d.set(b"Group".to_vec(), g.clone());
     }

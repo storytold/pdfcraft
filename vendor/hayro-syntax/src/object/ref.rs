@@ -39,10 +39,11 @@ impl From<ObjectIdentifier> for ObjRef {
 
 impl Skippable for ObjRef {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
+        // PdfCraft patch: (hayro-syntax (33)) a comment counts as white space, here too.
         r.skip::<i32>(false)?;
-        r.skip_white_spaces();
+        r.skip_white_spaces_and_comments();
         r.skip::<i32>(false)?;
-        r.skip_white_spaces();
+        r.skip_white_spaces_and_comments();
         r.forward_tag(b"R")?;
 
         Some(())
@@ -52,9 +53,9 @@ impl Skippable for ObjRef {
 impl Readable<'_> for ObjRef {
     fn read(r: &mut Reader<'_>, _: &ReaderContext<'_>) -> Option<Self> {
         let obj_ref = r.read_without_context::<i32>()?;
-        r.skip_white_spaces();
+        r.skip_white_spaces_and_comments();
         let gen_num = r.read_without_context::<i32>()?;
-        r.skip_white_spaces();
+        r.skip_white_spaces_and_comments();
         r.forward_tag(b"R")?;
 
         Some(Self::new(obj_ref, gen_num))
