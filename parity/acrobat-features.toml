@@ -4842,8 +4842,8 @@ milestone = "M6"
 status = "shipped"
 commands = []
 tools = ["form_fill"]
-evidence = ["crates/ui-egui/tests/it/forms.rs::date_fields_offer_a_calendar", "crates/ui-egui/tests/it/forms.rs::the_calendar_follows_a_complete_date_typed_while_it_is_open", "crates/ui-egui/tests/it/forms.rs::the_calendar_picks_today_in_the_fields_format_from_any_month"]
-notes = "a month calendar under date fields; the pick is written in the field's own date format; it opens on the field's date and moves to a whole date typed while it is open, staying on the month its arrows turned to otherwise; a Today button under the days picks today from whichever month it shows, as a click on its day would (#4274)"
+evidence = ["crates/ui-egui/tests/it/forms.rs::date_fields_offer_a_calendar", "crates/ui-egui/tests/it/forms.rs::the_calendar_follows_a_complete_date_typed_while_it_is_open", "crates/ui-egui/tests/it/forms.rs::the_calendar_picks_today_in_the_fields_format_from_any_month", "crates/ui-egui/tests/it/forms.rs::yearless_date_calendars_use_the_current_year_and_keep_month_navigation", "crates/ui-egui/tests/it/forms.rs::yearless_date_calendars_validate_leap_days_in_the_current_year"]
+notes = "a month calendar under date fields; the pick is written in the field's own date format; it opens on the field's date and moves to a whole date typed while it is open, staying on the month its arrows turned to otherwise; yearless formats use the session's current year, while explicit years (including 2000) stay unchanged; February 29 is not selected in a non-leap year (#6902); a Today button under the days picks today from whichever month it shows, as a click on its day would (#4274)"
 
 [[feature]]
 id = "form.auto-complete"

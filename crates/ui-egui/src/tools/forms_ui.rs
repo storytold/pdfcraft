@@ -680,7 +680,15 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &str, today: (i64, u32, u32)) -> Option<String> {
     use pdfcraft_engine::form_scripts::{DateTime, format_date, parse_date};
     let fx = view.forms.focus.as_mut()?;
-    let current = parse_date(&fx.text, fmt);
+    let current = parse_date(&fx.text, fmt).and_then(|mut date| {
+        if !fmt.contains('y') {
+            // AF parsing uses 2000 for yearless formats. The picker needs this year's
+            // weekdays instead, and must not select February 29 in a non-leap year.
+            date.y = i32::try_from(today.0).ok()?;
+            chrono::NaiveDate::from_ymd_opt(date.y, date.m, date.d)?;
+        }
+        Some(date)
+    });
     // A whole date typed since the last frame moves the calendar to it; half a date, or text
     // that hasn't changed, leaves it on the month it shows (the one the arrows turned to).
     let changed = fx.calendar_text.as_deref() != Some(fx.text.as_str());
