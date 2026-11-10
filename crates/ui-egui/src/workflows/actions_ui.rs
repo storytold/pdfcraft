@@ -138,11 +138,11 @@ impl PdfCraftApp {
             });
             // A panic in the action must still write the result, or `poll_action`
             // would wait for a message that never comes (#3919).
-            if let Err(e) = pdfcraft_engine::guard(work) {
-                if let Ok(mut s) = p.lock() {
-                    s.done = s.total;
-                    s.message = Some(format!("{}: failed: {}", action_name, e));
-                }
+            if let Err(e) = pdfcraft_engine::guard(work)
+                && let Ok(mut s) = p.lock()
+            {
+                s.done = s.total;
+                s.message = Some(format!("{}: failed: {}", action_name, e));
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
