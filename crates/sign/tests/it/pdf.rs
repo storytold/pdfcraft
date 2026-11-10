@@ -539,6 +539,37 @@ fn later_changes_are_classified_under_a_signature_field_locks_level() {
     }
 }
 
+/// Two fields of the signed revision can hold one signature. The lock that counts for a field is
+/// its own: another field listed before it, with no lock or a weaker one, does not lend its level
+/// (#6865). Here "Second" locks the document with `/P 1` and "Approval", listed first, does not.
+#[test]
+fn a_lock_level_is_read_from_the_field_being_validated() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let base = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] >> >>",
+        &[b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Second) /Rect [0 0 0 0] /P 3 0 R /F 4 /Lock << /Type /SigFieldLock /Action /All /P 1 >> >>"],
+    );
+    let sign_approval = |doc: &Document| pdfcraft_sign::sign(doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    // The object the signature dictionary becomes, learnt from a first run: "Second" names it as
+    // its value before signing, so the signed revision has it in both fields.
+    let trial = sign_approval(&open(&base));
+    let value = open(&trial).get(ObjRef { num: 6, generation: 0 }).as_dict().and_then(|f| f.get(b"V")).and_then(Object::as_ref).unwrap();
+    let mut doc = open(&base);
+    doc.update_dict(ObjRef { num: 7, generation: 0 }, |f| f.set(b"V".to_vec(), Object::Ref(value))).unwrap();
+    let signed = sign_approval(&doc);
+    let of = |bytes: &[u8], field: &str| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == field).unwrap();
+    for field in ["Approval", "Second"] {
+        let s = of(&signed, field);
+        assert!(s.signed && s.status == Status::Valid, "{field}: {:?} {:?}", s.status, s.details);
+    }
+    let commented = edit_after(&signed, add_comment);
+    let s = of(&commented, "Second");
+    assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])), "Second: {:?}", s.details);
+    let s = of(&commented, "Approval");
+    assert_eq!((s.status, s.modification.clone()), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])), "Approval: {:?}", s.details);
+}
+
 /// Certify `fixture` with "no changes allowed" (DocMDP P=1).
 fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();

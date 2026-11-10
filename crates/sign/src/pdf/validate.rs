@@ -313,19 +313,32 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         // revision that holds no such signature does not say which permissions apply, so what
         // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        let signed = old.as_ref().and_then(|old| {
-            sig_fields(old)
-                .into_iter()
-                .filter_map(|f| f.signature(old).map(|v| (f, v)))
-                .find(|(_, v)| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        });
-        match (old, signed) {
-            (Some(old), Some((field, v))) => {
-                set_certification(&old, &v, info);
+        // Every field of the signed revision whose signature ends it: usually one.
+        let ending: Vec<_> = old
+            .as_ref()
+            .map(|old| {
+                sig_fields(old)
+                    .into_iter()
+                    .filter_map(|f| {
+                        let v = f.signature(old)?;
+                        nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        match (old, ending.first()) {
+            (Some(old), Some((_, v))) => {
+                set_certification(&old, v, info);
                 // A signature that locked the document set a level too (#6865); the stricter of
                 // it and the certification's decides. `info.certify` stays the certification's:
-                // a lock does not make an approval signature a certification.
-                let level = [info.certify, lock_level(&old, &field.dict, &v)].into_iter().flatten().min();
+                // a lock does not make an approval signature a certification. The lock is the
+                // one of the field this signature is listed under: another field holding the
+                // same signature, with no lock or a weaker one, does not lend its level. Where
+                // that field is not among those ending the revision, any of them could be it,
+                // and the strictest of their levels counts.
+                let own = ending.iter().any(|(f, _)| f.name == info.field);
+                let lock = ending.iter().filter(|(f, _)| !own || f.name == info.field).filter_map(|(f, v)| lock_level(&old, &f.dict, v)).min();
+                let level = [info.certify, lock].into_iter().flatten().min();
                 classify_changes(doc, Some(old), level)
             }
             _ => classify_changes(doc, None, info.certify),
