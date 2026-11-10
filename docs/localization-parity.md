@@ -91,7 +91,7 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Catalan | `ca` | 2,849 (98.3%) | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,849 (98.3%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,758 (95.2%) | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
-| Georgian | `ka` | catalog in craft-i18n (`locales/ka/pdfcraft.tsv`) | partial; reviewed by a native speaker | no |
+| Georgian | `ka` | all (2,898 entries in craft-i18n `locales/ka/pdfcraft.tsv`, 2026-11-10) | partial; reviewed by a native speaker | no |
 | Persian | `fa` | 2,801 (96.7%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
 | Thai | `th` | 2,751 (95.0%) | partial | no |
