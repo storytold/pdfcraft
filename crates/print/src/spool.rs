@@ -2,8 +2,8 @@
 //! stay in PdfCraft; these adapters retain the application's print-error surface.
 
 pub use craft_print::{
-    Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
+    AUTO_SELECT, Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, apply_queue_defaults, lp_args,
+    lpstat_command, parse_lpoptions, parse_lpstat, parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
 
 #[cfg(any(windows, test))]
@@ -243,13 +243,10 @@ pub(crate) fn printer_options_via_within(
     if let Some(b) = &ppd {
         localize(&mut options, b, lang);
     }
-    for (key, value) in current {
-        if let Some(o) = options.iter_mut().find(|o| o.key == key)
-            && o.choices.iter().any(|(c, _)| *c == value)
-        {
-            o.default = value;
-        }
-    }
+    // The queue's current choices become the defaults (names matched as CUPS matches them). On
+    // macOS the paper tray also starts on Auto Select, which is what a job naming no tray asks
+    // for, so the printer isn't held on an empty default tray (#3752, storytold/craft-libs#232).
+    apply_queue_defaults(&mut options, &current);
     options
 }
 

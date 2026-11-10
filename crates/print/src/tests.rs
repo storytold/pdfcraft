@@ -3,6 +3,12 @@ use std::sync::Arc;
 use super::*;
 use crate::spool::{Duplex, Job, Printer, lp_args, parse_lpstat, parse_windows_printers};
 
+/// What `lp_args` adds on macOS for a job that names no paper tray: Auto Select, as the system
+/// Print dialog asks (#3752, storytold/craft-libs#232). Nothing elsewhere.
+fn macos_auto_tray() -> &'static str {
+    if cfg!(target_os = "macos") { " -o AP_D_InputSlot=" } else { "" }
+}
+
 /// `n` pages of 200×300 (page 3 is landscape 300×200 when n ≥ 3); page i shows "(Page i+1)".
 /// Page 1 carries a printable square comment, a non-printing note, and a stamp.
 fn fixture(n: usize) -> Document {
@@ -423,7 +429,10 @@ fn spooler_arguments_and_printer_list() {
     };
     assert_eq!(
         lp_args(&job).join(" "),
-        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
+        format!(
+            "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false{}",
+            macos_auto_tray()
+        )
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
@@ -766,7 +775,7 @@ fn landscape_sheets_ask_cups_to_turn_the_page() {
     assert_eq!(cups_orientation(&[]), None);
     // `lp` is given it, among the job's other options.
     let job = Job { options: ask.into_iter().collect(), ..Job::default() };
-    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+    assert!(lp_args(&job).join(" ").ends_with(&format!("-o fit-to-page=false -o orientation-requested=4{}", macos_auto_tray())));
 }
 
 /// Both submission paths add the orientation through `add_cups_orientation`: after the job's
