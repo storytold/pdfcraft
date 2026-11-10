@@ -1429,3 +1429,20 @@ fn small_capital_code_points_outside_simple_text_fonts_read_nothing() {
     assert!(strict.plain_text().starts_with('\u{F734}'), "{:?}", strict.plain_text());
     assert!(recovered.as_ref().is_none_or(|r| !r.text.plain_text().contains('4')), "{:?}", recovered.map(|r| r.text.plain_text()));
 }
+
+/// A font whose own order is the Macintosh one shifted (an Apple font with glyphs of its own
+/// first: Skia's glyph ids are the order's plus 29) is not read in the order by the paths that
+/// rest on the widths: a CID-keyed CFF font whose CIDs are shifted so, and a Type 0 TrueType
+/// font with an empty `/ToUnicode` whose glyphs are, both with the widths of the letters they
+/// really draw.
+#[test]
+fn an_order_shifted_like_skias_is_not_read_in_the_mac_order() {
+    let text = "Indicadores de estudiantes";
+    // Standard strings plus two is the Macintosh order; plus 29 more is Skia's.
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 31, false, "Identity")));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+    let shifted: Vec<u16> = gids(text).iter().map(|g| g + 29).collect();
+    let program = subset(300, &shifted, Cmap::None, None);
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &shifted, &mac_widths(text, 29), Some(""))));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
