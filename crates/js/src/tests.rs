@@ -222,11 +222,13 @@ fn reset_form_and_field_setters_take_arrays_up_to_the_limit() {
 #[test]
 fn escaped_array_text_is_measured_by_its_width() {
     use crate::host::escaped_len;
-    assert_eq!(escaped_len(&JsString::from("abc")), 3);
-    assert_eq!(escaped_len(&JsString::from("é")), 2);
-    assert_eq!(escaped_len(&JsString::from("界")), 3);
+    assert_eq!(escaped_len(&JsString::from("abc"), usize::MAX), 3);
+    assert_eq!(escaped_len(&JsString::from("é"), usize::MAX), 2);
+    assert_eq!(escaped_len(&JsString::from("界"), usize::MAX), 3);
     let text = "a".repeat(6 << 20);
-    assert_eq!(escaped_len(&JsString::from(text.as_str())), 6 << 20);
+    assert_eq!(escaped_len(&JsString::from(text.as_str()), usize::MAX), 6 << 20);
+    assert_eq!(escaped_len(&JsString::from(&[0xd800u16][..]), usize::MAX), 6, "an unpaired surrogate escapes to six bytes");
+    assert!(escaped_len(&JsString::from(text.as_str()), 10) < 6 << 20, "counting stops past the cap");
 }
 
 #[test]

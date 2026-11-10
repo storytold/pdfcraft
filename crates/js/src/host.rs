@@ -129,9 +129,21 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
 }
 
 /// Bytes `s` takes once escaped by [`JsString::to_std_string_escaped`]: a valid scalar its UTF-8
-/// length, an unpaired surrogate the six bytes of its `\uXXXX` escape.
-pub(crate) fn escaped_len(s: &JsString) -> usize {
-    s.to_std_string_with_surrogates().fold(0usize, |n, seg| n.saturating_add(seg.map_or(6, |t| t.len())))
+/// length, an unpaired surrogate the six bytes of its `\uXXXX` escape. Counted without a copy,
+/// and stopped once the count passes `cap`.
+pub(crate) fn escaped_len(s: &JsString, cap: usize) -> usize {
+    use boa_engine::string::CodePoint;
+    let mut n = 0usize;
+    for cp in s.code_points() {
+        n = n.saturating_add(match cp {
+            CodePoint::Unicode(c) => c.len_utf8(),
+            CodePoint::UnpairedSurrogate(_) => 6,
+        });
+        if n > cap {
+            break;
+        }
+    }
+    n
 }
 
 pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
@@ -154,7 +166,7 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
                 // Measured before the copy: a valid scalar takes its UTF-8 length, an unpaired
                 // surrogate the six bytes of its `\uXXXX` escape. A worst case per UTF-16 unit
                 // would refuse text that fits.
-                if bytes.saturating_add(escaped_len(&js)) > xfa::MAX_PAYLOAD {
+                if bytes.saturating_add(escaped_len(&js, xfa::MAX_PAYLOAD - bytes)) > xfa::MAX_PAYLOAD {
                     return Err(error(format!("the array holds more than {} bytes of text", xfa::MAX_PAYLOAD)));
                 }
                 js.to_std_string_escaped()
