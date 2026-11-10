@@ -288,8 +288,9 @@ fn tamil_candidates() -> Vec<PathBuf> {
     }
 }
 
-/// Well-known locations of Khmer faces, best first. Khmer UI ships with Windows 8 and later;
-/// DaunPenh and MoolBoran are the older Windows Khmer faces. On macOS 26 both Apple families
+/// Well-known locations of Khmer faces, best first. On Windows 10 and 11, Khmer UI, DaunPenh and
+/// MoolBoran are the optional "Khmer Supplemental Fonts" feature, so a machine without it (or a
+/// Khmer language) has none of them and Khmer stays boxes there. On macOS 26 both Apple families
 /// are in `Supplemental/`. Neither Nirmala UI nor the general fallback has Khmer.
 fn khmer_candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
