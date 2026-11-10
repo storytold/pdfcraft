@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b6b8a55b2c52bb83d0580216cbecb532af01970d#b6b8a55b2c52bb83d0580216cbecb532af01970d"
+source = "git+https://github.com/storytold/craft-libs?rev=0e4943cb5e7b50bd4eb01e8c580b97603c8f9e3d#0e4943cb5e7b50bd4eb01e8c580b97603c8f9e3d"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -4754,6 +4754,7 @@ dependencies = [
  "sha2 0.11.1",
  "stringprep",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -5138,6 +5139,7 @@ dependencies = [
  "sha2 0.11.1",
  "sha3",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -5199,6 +5201,7 @@ dependencies = [
  "web-time",
  "winsafe",
  "xattr",
+ "zeroize",
 ]
 
 [[package]]
@@ -9067,7 +9070,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=51934db382f225454cf152a8657eb03789be63c4#51934db382f225454cf152a8657eb03789be63c4"
+source = "git+https://github.com/storytold/winprint.rs?rev=3c978dfcf3d460577fabd87aeea7a84ffdcfb396#3c978dfcf3d460577fabd87aeea7a84ffdcfb396"
 dependencies = [
  "flate2",
  "fmt-derive",
@@ -9082,6 +9085,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-implement",
+ "windows-numerics",
  "xml",
 ]
 

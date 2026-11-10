@@ -1125,6 +1125,10 @@ fn a_booklet_decides_two_sided_itself() {
     let d = &h.state().print_draft;
     assert_eq!(d.duplex, Some(Duplex::LongEdge), "the Two-sided choice is kept");
     assert_eq!(d.job("x").duplex, Some(Duplex::ShortEdge), "both sides flip on the short edge");
+    assert!(h.query_all_by_label("Creep:").next().is_some(), "a Creep field beside Binding");
+    h.state_mut().print_draft.creep = 1.5;
+    let layout = h.state().print_draft.settings(4, &[]).map(|s| s.layout);
+    assert!(matches!(layout, Ok(pdfcraft_engine::print::Layout::Booklet { creep, .. }) if creep == 1.5), "the creep reaches the booklet (#6777)");
     for subset in [BookletSubset::FrontOnly, BookletSubset::BackOnly] {
         h.state_mut().print_draft.booklet_subset = subset;
         assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "{subset:?} is one pass of a manual duplex");
@@ -1133,6 +1137,29 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// Creep the field allows can still move a thick booklet's innermost pages too far; the preview
+/// says to reduce it rather than showing no sheets without a reason (#6777).
+#[test]
+fn too_much_creep_for_a_thick_booklet_is_explained_in_the_preview() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("thick.pdf", None, crate::support::fixtures::pdf_pages(400)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Booklet").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.creep = 5.0;
+    h.run_steps(2);
+    h.get_by_label_contains("Reduce Creep");
+    h.state_mut().print_draft.creep = 0.5;
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Reduce Creep").is_none(), "a creep that fits lays the booklet out");
 }
 
 /// An app restored from `saved` settings (if any), with a form open and its Print dialog shown.

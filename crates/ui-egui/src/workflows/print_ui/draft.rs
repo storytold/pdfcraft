@@ -61,6 +61,8 @@ pub struct PrintDraft {
     pub auto_rotate: bool,
     pub booklet_subset: BookletSubset,
     pub binding: Binding,
+    /// Booklet creep compensation, points per sheet.
+    pub creep: f64,
     pub poster_scale: f64,
     pub overlap: f64,
     pub cut_marks: bool,
@@ -131,6 +133,7 @@ impl Default for PrintDraft {
             auto_rotate: true,
             booklet_subset: BookletSubset::BothSides,
             binding: Binding::Left,
+            creep: 0.0,
             poster_scale: 200.0,
             overlap: 18.0,
             cut_marks: true,
@@ -249,7 +252,7 @@ impl PrintDraft {
                     other => other,
                 }
             }
-            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
+            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding, creep: self.creep },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };

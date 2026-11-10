@@ -384,6 +384,26 @@ impl Stream {
         self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
     }
 
+    /// [`Stream::decoded_within_counted`] with every filter stage also held to `each`, as
+    /// [`Stream::decoded_within`] holds it, while `max` bounds the stages together
+    /// ([`pdfcraft_filters::decode_tolerant_counted_each`]). Without filters the data is held to
+    /// both.
+    pub(crate) fn decoded_within_each_counted(
+        &self,
+        each: usize,
+        max: usize,
+    ) -> Result<(Vec<u8>, bool, usize), (pdfcraft_filters::FilterError, usize)> {
+        let mut damaged = false;
+        let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
+            pdfcraft_filters::decode_tolerant_counted_each(chain, data, each.min(MAX_DECODED), max).map(|(v, partial, spent)| {
+                damaged = partial;
+                (v, spent)
+            })
+        };
+        let max = if self.readable_filters().is_ok_and(|chain| chain.is_empty()) { max.min(each) } else { max };
+        self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
+    }
+
     /// [`Stream::decoded_within`] spending from `work`, what an operation may still do across a
     /// document's images ([`pdfcraft_filters::decode_tolerant_within`]).
     pub(crate) fn decoded_spending(&self, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {

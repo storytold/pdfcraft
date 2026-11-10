@@ -19,15 +19,35 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   inside;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
-  the last filter, decoded through `Document::decoded_image_within`, a JBIG2 image with its
+  the last filter, decoded through `ImageBudget::decode`, a JBIG2 image with its
   `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
   is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
   when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
   no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
-  those of marks under the area included, so every other image that uses the globals of a removed
-  or replaced image is decoded and stored again in place without them, as a copy is (Flate,
-  Group 4 or JBIG2, whichever is smallest; `Report::images_restored`), and they leave the file on the full rewrite; one that can't be
-  decoded for certain refuses the redaction (`RedactError::SharedJbig2Globals`). Codecs redaction doesn't decode (DCT, JPX) are
+  those of marks under the area included, so whatever left the document, by any route, takes its
+  globals with it on the full rewrite: anything else the save would keep that names them, or a
+  copy of them (the same bytes once decoded), is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
+  whichever is smallest; `Report::images_restored`). When one can't be (it isn't JBIG2, its colour
+  space is known to have more than one component, it has no size or one past what redaction
+  clears, its data is in another file, or it can't be decoded), or something else refers to them, `apply`
+  refuses and changes nothing (`RedactError::SharedJbig2Globals`). `remove_hidden` takes them out
+  the same way, but it has changed the document by the time it refuses: a caller passes a copy it
+  can drop. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
+  nothing names, and an image that hasn't left keeps its globals with its pixels: one another page
+  still draws, or one something that doesn't draw it still refers to. What an image names as
+  globals is read by object number, whatever generation a reference gives, as a reader that doesn't
+  compare generations draws it (cos reads such a reference as null); what one is stored again with,
+  its size, filters and parameters, is read as cos reads it. Finding what to store again
+  reads each object at most once for each way it is read (a `/JBIG2Globals` chain named part way,
+  a ring of references or a chain of more than 33, or a value read through a reference of another
+  generation, may be read again), and what it fetches, remembers and decodes (a decode that
+  fails counting as much as it was allowed, and an image the dictionaries it names) counts against
+  one budget for the run; past it the redaction is refused (`RedactError::SharedJbig2Budget`). The
+  images stored again, and the dictionaries read to know copies of them, are decoded within the
+  run's image allowance, every filter stage and the JBIG2 decoder's own work included, after what
+  clearing spent: past it `apply` is refused as one clearing too many images is
+  (`RedactError::ImagesPastAllowance`), and `remove_hidden`, which chose no pages, as one past the
+  run's budget. Codecs redaction doesn't decode (DCT, JPX) are
   removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
@@ -148,8 +168,10 @@ used by surviving pages or forms are kept.
 A redacted page that inherits `/Resources` from the page tree gets them pinned (by reference;
 a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's
 `/Resources` is then retired unless another page still inherits it, so it cannot keep a removed
-XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects their own
-content doesn't draw, for the same reason. Pages that aren't redacted are left untouched.
+XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects that
+neither their own content nor a form without resources of its own drawn through them still draws,
+for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
+redacted are left untouched.
 
 ## Remove hidden information / Sanitize
 

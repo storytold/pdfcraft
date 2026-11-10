@@ -32,6 +32,7 @@ mod error;
 pub mod export;
 pub mod field_table;
 mod fill_sign;
+pub mod find_replace;
 mod history;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hot_folder;
@@ -53,6 +54,7 @@ mod object_clip;
 pub mod ocr;
 mod ocr_pdf;
 mod open;
+pub mod open_parameters;
 pub mod optimizer;
 mod page_filter;
 mod pictures;
