@@ -1683,12 +1683,24 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.
+/// #5772: on a printer whose driver doesn't take two-sided settings, both sides leave it to the
+/// driver's own setting, and the dialog says so.
 #[test]
 fn a_booklet_decides_two_sided_itself() {
-    use pdfcraft_engine::print::{BookletSubset, spool::Duplex};
+    use pdfcraft_engine::print::{BookletSubset, spool::Duplex, spool::Printer};
     let mut h = harness();
+    // Printers of its own, listed as the dialog lists them (drivers unasked, #3554), with what each
+    // driver said about two-sided: the machine's would decide what a booklet asks for, and on a
+    // machine with none the list that loads would take these away.
+    h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
+        let printer = |name: &str| Printer { name: name.into(), default: name == "Laser", two_sided: None, description: String::new() };
+        vec![printer("Laser"), printer("Inkjet")]
+    }));
+    h.state_mut().two_sided_source = None;
+    h.state_mut().print_draft.two_sided = [("Laser".to_string(), Some(true)), ("Inkjet".to_string(), Some(false))].into_iter().collect();
     assert!(h.state_mut().execute("print.dialog"));
-    h.run_steps(3);
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Laser"));
     h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
     h.run_steps(1);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
@@ -1706,6 +1718,18 @@ fn a_booklet_decides_two_sided_itself() {
         h.state_mut().print_draft.booklet_subset = subset;
         assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "{subset:?} is one pass of a manual duplex");
     }
+    let keeps_its_own =
+        "This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…";
+    assert!(h.query_by_label(keeps_its_own).is_none());
+    h.state_mut().print_draft.printer = Some("Inkjet".into());
+    h.state_mut().print_draft.booklet_subset = BookletSubset::BothSides;
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.job("x").duplex, None, "the inkjet's own two-sided setting prints both sides");
+    assert!(h.query_by_label(keeps_its_own).is_some(), "the dialog says so");
+    h.state_mut().print_draft.booklet_subset = BookletSubset::FrontOnly;
+    assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "one side stays one-sided");
+    h.state_mut().print_draft.printer = Some("Laser".into());
+    h.run_steps(1);
     h.get_by_label("Size").click();
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
