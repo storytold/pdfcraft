@@ -7732,6 +7732,19 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
         assert!(text.contains("Page 1") && text.contains("Sticky Note  Ada") && text.contains("Sticky"), "{layout}: {text}");
         ok(&mut a, "doc_close", json!({ "doc": pages }));
     }
+    // Asked for explicitly, the defaults keep every page: each page's sheet, plus page 1's comments.
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len();
+    assert!(n > 1, "a.pdf has pages without comments");
+    for (layout, sheets) in [("document_and_comments_with_lines", n), ("document_and_comments_with_numbers", n + 1)] {
+        ok(
+            &mut a,
+            "comments_summarize",
+            json!({ "doc": doc, "layout": layout, "pages_without_comments": true, "paper": "document", "out": "all.pdf" }),
+        );
+        let all = ok(&mut a, "doc_open", json!({ "path": "all.pdf" }))["doc"].as_u64().unwrap();
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": all }))["pages"].as_array().unwrap().len(), sheets, "{layout}");
+        ok(&mut a, "doc_close", json!({ "doc": all }));
+    }
     match a.call("comments_summarize", &json!({ "doc": doc, "paper": "napkin" })) {
         Err(ToolError::InvalidArgs(e)) => assert!(e.contains("A4") && e.contains("document"), "says what is allowed: {e}"),
         other => panic!("{other:?}"),

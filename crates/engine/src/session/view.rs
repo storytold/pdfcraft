@@ -351,7 +351,8 @@ impl Session {
         // The summary copies the comments' text out into a new document.
         doc.check_copying()?;
         let title = format!("Summary of Comments on {}", doc.name);
-        // A size outside 2 in to 200 in on a side (or not a number) is taken as US Letter.
+        // A size outside 2 in to 200 in on a side (or not a number) falls back to the paper matching
+        // the document, as "Match the document" does.
         let usable = |v: f64| v.is_finite() && (144.0..=14_400.0).contains(&v);
         let paper = opts.paper.filter(|p| usable(p.0) && usable(p.1)).unwrap_or_else(|| self.summary_paper(id).1);
         let layout = match opts.layout {
