@@ -60,6 +60,22 @@ fn names_certification(doc: &Document, v: &Dict) -> bool {
     named.as_dict() == Some(v)
 }
 
+/// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
+/// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
+/// so a DocMDP reference in any other signature dictionary does not choose the permissions later
+/// changes are judged by. Such a signature is checked as an approval signature, with a note.
+fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
+    let asked = docmdp_reference(doc, v);
+    info.certify = asked.filter(|_| names_certification(doc, v));
+    let note = Detail::plain(
+        "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
+    );
+    info.details.retain(|d| *d != note);
+    if asked.is_some() && info.certify.is_none() {
+        info.details.push(note);
+    }
+}
+
 /// The permission level (1 to 3, with the meaning of a DocMDP level) that a signature set for the
 /// document by locking it, or `None` when it set none. Two places carry it, and the stricter one
 /// counts: `/P` of the `/Lock` of `field`, the signature's field (ISO 32000-2 §12.7.5.5), and `/P`
@@ -98,22 +114,6 @@ fn lock_level(doc: &Document, field: &Dict, v: &Dict) -> Option<u8> {
         })
         .min();
     [of_field, of_value].into_iter().flatten().min()
-}
-
-/// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
-/// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
-/// so a DocMDP reference in any other signature dictionary does not choose the permissions later
-/// changes are judged by. Such a signature is checked as an approval signature, with a note.
-fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
-    let asked = docmdp_reference(doc, v);
-    info.certify = asked.filter(|_| names_certification(doc, v));
-    let note = Detail::plain(
-        "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
-    );
-    info.details.retain(|d| *d != note);
-    if asked.is_some() && info.certify.is_none() {
-        info.details.push(note);
-    }
 }
 
 pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
