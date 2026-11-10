@@ -2475,10 +2475,36 @@ fn radio_buttons_keep_their_own_marks() {
     let one = |wi, s| FieldProps { check_style: Some(s), check_style_widget: Some(wi), ..FieldProps::default() };
     set_props(&mut doc, "pick", &one(1, CheckStyle::Star)).unwrap();
     assert_eq!(styles(&reopen(&doc)), [CheckStyle::Circle, CheckStyle::Star], "only the second button changes");
-    assert!(set_props(&mut doc, "pick", &one(2, CheckStyle::Cross)).is_err(), "there is no third button");
-    assert_eq!(styles(&doc), [CheckStyle::Circle, CheckStyle::Star], "a rejected change writes nothing");
+    let third = FieldProps { tooltip: Some("Pick one".into()), ..one(2, CheckStyle::Cross) };
+    let err = set_props(&mut doc, "pick", &third).unwrap_err().to_string();
+    assert!(err.contains("no widget 3; it has 2"), "the error names the missing button: {err}");
+    let doc2 = reopen(&doc);
+    assert_eq!(styles(&doc2), [CheckStyle::Circle, CheckStyle::Star], "a rejected change writes nothing");
+    assert_eq!(field(&fields(&doc2), "pick").tooltip, None, "not even its other properties");
     set_props(&mut doc, "pick", &FieldProps { check_style: Some(CheckStyle::Square), ..FieldProps::default() }).unwrap();
     assert_eq!(styles(&reopen(&doc)), [CheckStyle::Square, CheckStyle::Square], "without a widget, every button changes");
+}
+
+#[test]
+fn check_box_widgets_read_their_own_marks_from_the_file() {
+    // #6682 review: a file can arrive with mixed marks. Each widget's /MK /CA is read, an
+    // indirect /MK as well, and a widget can change alone.
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /FT /Btn /T (agree) /Kids [5 0 R 6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 300 36 316] /P 3 0 R /F 4 /AS /Off /MK << /CA (4) >> /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [50 300 66 316] /P 3 0 R /F 4 /AS /Off /MK 7 0 R /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /CA (H) >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ]);
+    let styles = |doc: &Document| check_styles(doc, field(&fields(doc), "agree"));
+    assert_eq!(field(&fields(&doc), "agree").kind, FieldKind::CheckBox);
+    assert_eq!(styles(&doc), [CheckStyle::Check, CheckStyle::Star], "the second widget's /MK is indirect");
+    let first = FieldProps { check_style: Some(CheckStyle::Cross), check_style_widget: Some(0), ..FieldProps::default() };
+    set_props(&mut doc, "agree", &first).unwrap();
+    assert_eq!(styles(&reopen(&doc)), [CheckStyle::Cross, CheckStyle::Star], "only the first widget changes");
 }
 
 #[test]

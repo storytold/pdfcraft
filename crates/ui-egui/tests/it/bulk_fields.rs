@@ -341,6 +341,9 @@ fn shared_button_style_sees_every_buttons_mark() {
     h.run_steps(4);
     let d = h.state_mut().bulk_field_props.as_mut().unwrap();
     assert!(d.check_style.mixed, "the group's second button is a star");
+    let untouched = d.clone();
+    assert!(untouched.edits(doc(&h)).unwrap().is_empty(), "without apply, every mark stays");
+    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
     (d.check_style.apply, d.check_style.value) = (true, CheckStyle::Circle);
     h.get_by_label("OK").click();
     h.run_steps(4);
@@ -369,6 +372,10 @@ fn a_button_field_without_widgets_has_no_mark_to_compare() {
     assert_eq!((d.check_style.value, d.check_style.mixed), (CheckStyle::Circle, false));
     d.check_style.apply = true;
     assert!(d.edits(doc).unwrap().is_empty(), "every widget already has a circle");
+    d.check_style.value = CheckStyle::Square;
+    let edits = d.edits(doc).unwrap();
+    assert_eq!(edits.len(), 1, "only the field with a widget changes: {edits:?}");
+    assert!(matches!(&edits[0], Edit::SetFieldProps { name, .. } if name == "pick"), "{edits:?}");
 }
 
 #[test]
