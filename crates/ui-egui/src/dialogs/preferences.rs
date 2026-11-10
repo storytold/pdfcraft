@@ -4,7 +4,7 @@
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
 
 use crate::PdfCraftApp;
-use crate::canvas::{Fit, PageLayout};
+use crate::canvas::{Fit, PageLayout, ViewDefaults};
 use crate::motion::AnimationEffects;
 use crate::scroll_speed::ScrollSpeed;
 use crate::side_panels::ToolsSide;
@@ -690,6 +690,61 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     reading_colours_section(ui, app, t, ctx);
 }
 
+#[derive(Clone, Copy, Default)]
+struct ViewPrefChanges {
+    always_reset: bool,
+    layout: bool,
+    continuous: bool,
+    gaps: bool,
+    fit: bool,
+    zoom: bool,
+}
+
+fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, changes: ViewPrefChanges) {
+    if changes.always_reset || changes.gaps {
+        view.set_page_gaps(defaults.show_page_gaps);
+    }
+    if let Some(saved) = view.saved_display_mut() {
+        if changes.always_reset || changes.layout {
+            saved.layout = defaults.layout;
+        }
+        if changes.always_reset || changes.continuous {
+            saved.continuous = defaults.continuous;
+        }
+        if changes.always_reset || changes.fit {
+            saved.fit = defaults.fit;
+            if defaults.fit == Fit::None {
+                saved.zoom = defaults.zoom;
+            }
+        }
+        if changes.zoom {
+            saved.fit = Fit::None;
+            saved.zoom = defaults.zoom;
+        }
+    } else {
+        if changes.always_reset || (changes.layout && changes.continuous) {
+            view.set_display(defaults.layout, defaults.continuous);
+        } else {
+            if changes.layout {
+                view.set_layout(defaults.layout);
+            }
+            if changes.continuous {
+                view.set_continuous(defaults.continuous);
+            }
+        }
+        if changes.always_reset || changes.fit {
+            match defaults.fit {
+                Fit::None => view.set_zoom(defaults.zoom),
+                fit if view.fit != fit => view.set_fit(fit),
+                _ => {}
+            }
+        }
+        if changes.zoom {
+            view.set_zoom(defaults.zoom);
+        }
+    }
+}
+
 /// Content for Card 3: Documents and View
 fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     ui.horizontal(|ui| {
@@ -710,37 +765,67 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
     ui.add_space(6.0);
 
-    let defaults = &mut app.view_defaults;
+    let mut layout_choice = app.view_defaults.layout;
+    let mut continuous = app.view_defaults.continuous;
+    let mut layout_changed = false;
+    let mut continuous_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default page display"), t);
-        let mut layout_choice = defaults.layout;
         if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
-            defaults.layout = layout_choice;
+            app.view_defaults.layout = layout_choice;
+            layout_changed = true;
         }
-        let mut continuous = defaults.continuous;
         if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
-            defaults.continuous = continuous;
+            app.view_defaults.continuous = continuous;
+            continuous_changed = true;
         }
     });
-    ctx.checkbox(ui, &mut defaults.show_page_gaps, tl!("Show gaps between pages"), t);
+    let mut show_page_gaps = app.view_defaults.show_page_gaps;
+    let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
+    if gaps_changed {
+        app.view_defaults.show_page_gaps = show_page_gaps;
+    }
     ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
     ui.add_space(6.0);
 
+    let mut fit_changed = false;
+    let mut zoom_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default zoom"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut defaults.fit,
-            &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))],
-        );
-        let mut percent = defaults.zoom * 100.0;
+        let mut fit = app.view_defaults.fit;
+        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
+        {
+            app.view_defaults.fit = fit;
+            fit_changed = true;
+        }
+        let mut percent = app.view_defaults.zoom * 100.0;
         if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
+            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
+            zoom_changed = true;
         }
     });
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
-    ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t);
+    let always_changed = ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t).changed();
+
+    let changes = ViewPrefChanges {
+        always_reset: always_changed,
+        layout: layout_changed,
+        continuous: continuous_changed,
+        gaps: gaps_changed,
+        fit: fit_changed,
+        zoom: zoom_changed,
+    };
+    if app.always_default_view && (always_changed || layout_changed || continuous_changed || gaps_changed || fit_changed || zoom_changed) {
+        let defaults = app.view_defaults;
+        for view in &mut app.views {
+            apply_view_pref_changes(view, &defaults, changes);
+        }
+    } else if let Some(i) = app.active {
+        let defaults = app.view_defaults;
+        apply_view_pref_changes(&mut app.views[i], &defaults, ViewPrefChanges { always_reset: false, ..changes });
+    }
+    ctx.checkbox(ui, &mut app.text_links, tl!("Open web and email addresses written in the page text"), t);
+    ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
     ui.add_space(6.0);
 
     ui.horizontal(|ui| {
@@ -794,6 +879,9 @@ fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut
 /// Content for Card 5: Fill & Sign
 fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     ctx.checkbox(ui, &mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"), t);
+    ui.add_enabled_ui(!app.flatten_fill_sign_on_save, |ui| {
+        ctx.checkbox(ui, &mut app.ask_to_lock_signatures, tl!("Otherwise, ask on the first save after a signature is placed"), t);
+    });
     ctx.label_secondary(ui, tl!("Text, marks and signatures become part of the page. Other comments stay editable."), t);
     ui.add_space(8.0);
     date_format(ui, app, t, ctx);

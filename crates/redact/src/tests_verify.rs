@@ -115,6 +115,37 @@ pub(super) fn run(doc: &mut Document) -> (Result<Report, RedactError>, Proof) {
     (result, proof)
 }
 
+/// Metadata a redaction that missed it would have left: applying removes the metadata holding
+/// the removed text (#2448), so a proof test of those surfaces puts it back afterwards.
+enum Left<'a> {
+    Info(&'a [u8]),
+    Xmp(&'a [u8]),
+}
+
+/// Capture, apply, put `left` back, prove.
+fn run_leaving(doc: &mut Document, left: Left<'_>) -> (Result<Report, RedactError>, Proof) {
+    let mut snap = Snapshot::capture(doc, None).unwrap();
+    let result = applied(doc, &mut snap);
+    match left {
+        Left::Info(title) => {
+            let mut info = Dict::new();
+            info.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(title.to_vec())));
+            let info = doc.add(Object::Dict(info));
+            doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
+        }
+        Left::Xmp(packet) => {
+            let mut dict = Dict::new();
+            dict.set(b"Type".to_vec(), Object::Name(b"Metadata".to_vec()));
+            dict.set(b"Subtype".to_vec(), Object::Name(b"XML".to_vec()));
+            let xmp = doc.add(Object::Stream(Stream::from_raw(dict, packet.to_vec())));
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| c.set(b"Metadata".to_vec(), Object::Ref(xmp))).unwrap();
+        }
+    }
+    let proof = snap.prove(doc, None, &ProofOptions::default());
+    (result, proof)
+}
+
 /// Prove a document the redaction was never applied to (as a full save would write it).
 pub(super) fn prove_unapplied(doc: &mut Document) -> Proof {
     let snap = Snapshot::capture(doc, None).unwrap();
@@ -207,7 +238,7 @@ fn the_manifest_has_digests_and_counts_but_no_plaintext() {
 #[test]
 fn survivors_do_not_echo_the_text_either() {
     let mut doc = marked(Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (SECRETVALUE) >>".to_vec()], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let (_, proof) = run_leaving(&mut doc, Left::Info(b"SECRETVALUE"));
     assert!(!proof.passed());
     for shown in [proof.to_text(), format!("{proof:?}")] {
         assert!(!shown.contains(SECRET), "{shown}");
@@ -224,7 +255,7 @@ fn numeric_only_tj_is_not_glyph_carrying() {
 fn a_survivor_in_the_info_dictionary() {
     let mut doc =
         marked(Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (Report SECRETVALUE) /Author (Someone) >>".to_vec()], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let (_, proof) = run_leaving(&mut doc, Left::Info(b"Report SECRETVALUE"));
     assert_eq!(surface(&proof, Surface::Info).verdict, Verdict::Survivor);
     assert_eq!(proof.entries[0].status, Status::Failed);
     assert!(!proof.passed());
@@ -232,20 +263,38 @@ fn a_survivor_in_the_info_dictionary() {
 
 #[test]
 fn a_survivor_in_xmp() {
-    let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta><dc:title>Quarterly &amp; SECRET&#86;ALUE</dc:title></x:xmpmeta>");
+    let packet: &[u8] = b"<x:xmpmeta><dc:title>Quarterly &amp; SECRET&#86;ALUE</dc:title></x:xmpmeta>";
+    let xmp = stream("/Type /Metadata /Subtype /XML", packet);
     let mut doc = marked(Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let (_, proof) = run_leaving(&mut doc, Left::Xmp(packet));
     assert_eq!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
+}
+
+#[test]
+fn applying_removes_the_metadata_survivors_the_proof_finds() {
+    // The same files as the two tests above, applied without putting anything back: the
+    // metadata holding the removed text is gone (#2448), and the proof finds nothing there.
+    let mut doc =
+        marked(Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (Report SECRETVALUE) /Author (Someone) >>".to_vec()], ..Spec::default() });
+    let (r, proof) = run(&mut doc);
+    assert_eq!(r.unwrap().metadata, 1);
+    assert_ne!(surface(&proof, Surface::Info).verdict, Verdict::Survivor, "{}", proof.to_text());
+    let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta><dc:title>Quarterly &amp; SECRET&#86;ALUE</dc:title></x:xmpmeta>");
+    let mut doc = marked(Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
+    let (r, proof) = run(&mut doc);
+    assert_eq!(r.unwrap().metadata, 1);
+    assert_ne!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor, "{}", proof.to_text());
 }
 
 #[test]
 fn a_long_numeric_reference_in_xmp_is_a_survivor() {
     // A character reference may carry any number of leading zeros: the padded form reads the
     // same, and is swept the same.
-    let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta><dc:title>&#x00000000053;ECRET&#x0000000056;ALUE</dc:title></x:xmpmeta>");
+    let packet: &[u8] = b"<x:xmpmeta><dc:title>&#x00000000053;ECRET&#x0000000056;ALUE</dc:title></x:xmpmeta>";
+    let xmp = stream("/Type /Metadata /Subtype /XML", packet);
     let mut doc = marked(Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let (_, proof) = run_leaving(&mut doc, Left::Xmp(packet));
     assert_eq!(surface(&proof, Surface::Xmp).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
 }
@@ -330,6 +379,45 @@ fn a_survivor_in_an_xfa_packet_is_found() {
     assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(s.locations.iter().any(|l| l == "object 7 (decoded)"), "{:?}", s.locations);
     assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_survivor_behind_parameters_given_by_reference_is_found() {
+    // Object 7 holds the text behind Flate and a PNG predictor whose `/DecodeParms` is object 8,
+    // a reference. Read without them, its rows keep their tag bytes, which split the text; the
+    // sweep reads them as redaction does, and reports the copy.
+    let text = format!("note: {SECRET} xx");
+    let rows: Vec<u8> = text.as_bytes().chunks(4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let packed = stream("/Filter /FlateDecode /DecodeParms 8 0 R", Stream::flate(Dict::new(), &rows).raw.as_ref());
+    let parms = b"<< /Predictor 12 /Columns 4 >>".to_vec();
+    let doc = marked(Spec { extra: vec![packed, parms], ..Spec::default() });
+    let snap = Snapshot::capture(&doc, None).unwrap();
+    let proof = snap.prove_saved(doc.bytes(), None, &ProofOptions::default());
+    let s = surface(&proof, Surface::DecodedStreams);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(s.locations.iter().any(|l| l == "object 7 (decoded)"), "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_unicode_map_behind_parameters_given_by_reference_is_read_alike() {
+    // The font's /ToUnicode (object 7) reads codes A..H as "SECRETVA", behind Flate and a PNG
+    // predictor whose `/DecodeParms` is object 8, a reference. The page draws the codes twice,
+    // once under the mark. Redaction takes the removed text from that map, and the proof the page
+    // text it allows for: read by one and not the other, the copy that stays counted as a
+    // survivor of a sound redaction.
+    let cmap = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /Test def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n8 beginbfchar\n<41> <0053>\n<42> <0045>\n<43> <0043>\n<44> <0052>\n<45> <0045>\n<46> <0054>\n<47> <0056>\n<48> <0041>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    let mut data = cmap.to_vec();
+    data.resize(data.len().next_multiple_of(4), b' ');
+    let rows: Vec<u8> = data.chunks(4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let to_unicode = stream("/Filter /FlateDecode /DecodeParms 8 0 R", Stream::flate(Dict::new(), &rows).raw.as_ref());
+    let parms = b"<< /Predictor 12 /Columns 4 >>".to_vec();
+    let content = b"BT /F1 10 Tf 10 200 Td (ABCDEFGH) Tj ET BT /F1 10 Tf 10 100 Td (ABCDEFGH) Tj ET";
+    let mut doc = marked_content(content, Spec { extra: vec![to_unicode, parms], ..Spec::default() });
+    doc.update_dict(ObjRef::new(5, 0), |font| font.set(b"ToUnicode".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let (result, proof) = run(&mut doc);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(proof.passed(), "{}", proof.to_text());
 }
 
 #[test]
@@ -816,14 +904,15 @@ fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     let content = b"BT /F1 10 Tf 10 200 Td (SECRETVALUE) Tj ET BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET";
     let spec = Spec { trailer: "/Info 7 0 R", extra: vec![b"<< /Title (SECRETVALUE) >>".to_vec()], ..Spec::default() };
     let mut doc = marked_content(content, spec);
-    let (_, proof) = run(&mut doc);
+    let (_, proof) = run_leaving(&mut doc, Left::Info(b"SECRETVALUE"));
     assert_eq!(surface(&proof, Surface::Info).verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(!proof.passed());
 
     // Likewise an XMP packet and an annotation string.
-    let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta>SECRETVALUE</x:xmpmeta>");
+    let packet: &[u8] = b"<x:xmpmeta>SECRETVALUE</x:xmpmeta>";
+    let xmp = stream("/Type /Metadata /Subtype /XML", packet);
     let mut doc = marked_content(content, Spec { catalog: "/Metadata 7 0 R", extra: vec![xmp], ..Spec::default() });
-    assert_eq!(surface(&run(&mut doc).1, Surface::Xmp).verdict, Verdict::Survivor);
+    assert_eq!(surface(&run_leaving(&mut doc, Left::Xmp(packet)).1, Surface::Xmp).verdict, Verdict::Survivor);
     let annot = b"<< /Type /Annot /Subtype /Text /Rect [200 200 220 220] /Contents (SECRETVALUE) >>".to_vec();
     let mut doc = marked_content(content, Spec { page: "/Annots [7 0 R]", extra: vec![annot], ..Spec::default() });
     assert_eq!(surface(&run(&mut doc).1, Surface::ObjectStrings).verdict, Verdict::Survivor);

@@ -280,16 +280,81 @@ proptest::proptest! {
     }
 }
 
+/// A `/V 4` RC4 crypt filter with a 40- or 48-bit key, as Acrobat writes it (pdf.js issue 19484):
+/// the file key is extended to 16 bytes with zeros before Algorithm 1, so each object's key is
+/// all 16 bytes of MD5(key, zeros, object, generation). Everything else keeps Algorithm 1 as the
+/// standard has it, n + 5 bytes (at most 16) of MD5(key, object, generation[, "sAlT"]): a `/V 2`
+/// file with the same short key, a full 128-bit `/V 4` RC4 key, and AESV2, short (88 bits) or
+/// full. Each object key is computed here by hand; data written with it must decrypt.
+#[test]
+fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
+    let text = b"Page tree in an object stream".to_vec();
+    let cases =
+        [(4, 40, Method::Rc4), (4, 48, Method::Rc4), (2, 40, Method::Rc4), (4, 128, Method::Rc4), (4, 88, Method::Aes128), (4, 128, Method::Aes128)];
+    for (v, bits, method) in cases {
+        let mut d = EncryptDict {
+            filter: b"Standard".to_vec(),
+            v,
+            r: if v == 4 { 4 } else { 3 },
+            length_bits: bits,
+            o: vec![7; 32],
+            p: -3392,
+            encrypt_metadata: v != 4,
+            ..Default::default()
+        };
+        if v == 4 {
+            d.crypt_filters = vec![(b"StdCF".to_vec(), method)];
+            d.stm_f = b"StdCF".to_vec();
+            d.str_f = b"StdCF".to_vec();
+        }
+        let key = file_key_r4(&d, ID, b"");
+        assert_eq!(key.len(), (bits / 8) as usize);
+        d.u = u_value_r4(&d, ID, &key);
+        let h = SecurityHandler::open(d, ID, None).unwrap();
+        let (num, generation) = (13u32, 0u16);
+        let extended = v == 4 && method == Method::Rc4 && key.len() < 16;
+        let mut md5 = Md5::new();
+        md5.update(&key);
+        if extended {
+            md5.update(vec![0u8; 16 - key.len()]);
+        }
+        md5.update(&num.to_le_bytes()[..3]);
+        md5.update(generation.to_le_bytes());
+        if method == Method::Aes128 {
+            md5.update(b"sAlT");
+        }
+        let digest = md5.finalize();
+        let n = if extended { 16 } else { key.len() };
+        let object_key = digest[..(n + 5).min(16)].to_vec();
+        let case = format!("V{v}, {bits}-bit key, {method:?}");
+        let written = if method == Method::Rc4 {
+            rc4(&object_key, &text)
+        } else {
+            let iv = [3u8; 16];
+            [iv.to_vec(), aes_cbc_encrypt(&object_key, &iv, &text, true)].concat()
+        };
+        assert_eq!(h.decrypt_string(num, generation, &written), text, "{case}");
+        assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text, "{case}");
+        let saved = h.encrypt_stream(num, generation, &text, StreamKind::Normal);
+        if method == Method::Rc4 {
+            assert_eq!(saved, written, "saved as it was read: {case}");
+        }
+        assert_eq!(h.decrypt_stream(num, generation, &saved, StreamKind::Normal), text, "{case}");
+    }
+}
+
 #[test]
 fn owner_authentication_recovers_the_user_password() {
     for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
         let d = new(alg, "user pw", "owner pw", -1).dict().clone();
         let h = SecurityHandler::open(d.clone(), ID, Some("owner pw")).unwrap();
-        assert_eq!(h.recovered_user_password().as_deref(), Some(&b"user pw"[..]), "{alg:?}");
+        let _: &Zeroizing<Vec<u8>> = &h.key;
+        let _: &Option<Zeroizing<Vec<u8>>> = &h.recovered_user;
+        assert_eq!(h.recovered_user_password().as_deref().map(Vec::as_slice), Some(&b"user pw"[..]), "{alg:?}");
         assert_eq!(SecurityHandler::open(d, ID, Some("user pw")).unwrap().recovered_user_password(), None);
     }
     let d = new(Algorithm::Rc4_128, "", "owner", -1).dict().clone();
-    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref(), Some(&b""[..]));
+    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref().map(Vec::as_slice), Some(&b""[..]));
 }
 
 /// /O, /U and the first /ID of files qpdf 12.4.2 wrote (`--static-id`), with the file keys
@@ -330,7 +395,7 @@ fn legacy_passwords_are_pdfdoc_encoded_with_a_utf8_fallback() {
     assert_eq!((user.auth(), user.file_key().to_vec()), (Auth::User, hex("3564ffcea186122595ad55ee157da71f")));
     let owner = SecurityHandler::open(r3.clone(), &id, Some("Öğretmen")).unwrap();
     assert_eq!((owner.auth(), owner.file_key().to_vec()), (Auth::Owner, hex("3564ffcea186122595ad55ee157da71f")));
-    assert_eq!(owner.recovered_user_password(), Some(vec![0x9A, b'l', 0x9A, b'k', 0xA0]));
+    assert_eq!(owner.recovered_user_password(), Some(Zeroizing::new(vec![0x9A, b'l', 0x9A, b'k', 0xA0])));
     // Dropping ı and € (the old Latin-1 conversion) or a near miss doesn't open it.
     for wrong in ["lk", "ilik€", "ılık", "Ogretmen"] {
         assert_eq!(SecurityHandler::open(r3.clone(), &id, Some(wrong)).unwrap_err(), CryptError::WrongPassword, "{wrong}");
@@ -360,6 +425,6 @@ fn pdfdoc_encoding_round_trips() {
     for c in ['ğ', 'ş', 'İ', '\u{A0}', '\u{85}', 'Ж', '日'] {
         assert_eq!(pdfdoc_byte(c), None, "{c}");
     }
-    assert_eq!(legacy_candidates("Çok"), [vec![0xC7, b'o', b'k']]);
-    assert_eq!(legacy_candidates("şifre"), [b"ifre".to_vec(), "şifre".as_bytes().to_vec()]);
+    assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
+    assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
 }

@@ -1,10 +1,10 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, error, function, host, read, s, strings, text, text_line};
+use super::host::{arg, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
-    Source, js_string,
+    Source, error, js_string,
 };
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -90,11 +90,63 @@ fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other. One the cap drops changes nothing, so the script
+        // goes on reading the setting the viewer has.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        if h.request(Request::Highlight(on)) {
+            h.doc.highlight = on;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
 /// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
 /// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = message(&arg(args, 0), "cURL", ctx)?;
     host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
+    Ok(JsValue::undefined())
+}
+
+/// The attached file `exportDataObject` names, and whether to open it: from an object
+/// (`{cName, nLaunch}`) or from the arguments (`cName, cDIPath, bAllowAuth, nLaunch`). `nLaunch`
+/// 1 and 2 open the file; 0 (the default) and any other value save it.
+pub(crate) fn data_object(args: &[JsValue], ctx: &mut Context) -> JsResult<(String, bool)> {
+    let first = arg(args, 0);
+    // Any object of named parameters is read by key, one without `cName` too, so a missing name
+    // is refused rather than read as the object's text.
+    let named = first.as_object().filter(|o| !o.is_array() && !o.is_callable());
+    let name = match &named {
+        Some(o) => text_line(&o.get(js_string!("cName"), ctx)?, ctx)?,
+        None => text_line(&first, ctx)?,
+    };
+    if name.is_empty() {
+        return Err(error("exportDataObject needs cName, the attached file's name"));
+    }
+    let launch = match &named {
+        Some(o) => o.get(js_string!("nLaunch"), ctx)?,
+        None => arg(args, 3),
+    };
+    let launch = if launch.is_undefined() || launch.is_null() { 0.0 } else { launch.to_number(ctx)? };
+    Ok((name, launch == 1.0 || launch == 2.0))
+}
+
+/// `this.exportDataObject(…)`: asks the viewer to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    host(ctx)?.borrow_mut().request(Request::OpenAttachment { name, open });
     Ok(JsValue::undefined())
 }
 
@@ -181,7 +233,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
                 continue;
             }
             let event = Event::field("Calculate", name, &field.value.first().cloned().unwrap_or_default());
-            let object = event_object(ctx, &event);
+            let (object, _) = event_object(ctx, &event)?;
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
             let (fields_before, changed_before, formatted_before) = {
                 let h = host(ctx)?.borrow();
@@ -221,24 +273,69 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 }
 
 /// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+/// `AFSimple_Calculate(op, names)`, with the semantics of the native Simple calculation
+/// (`pdfcraft_forms::af::calculate`), so a total read right after `calculateNow()` is the one the
+/// commit path writes: a name also stands for every field under it (`b` sums `b.c` and `b.d`),
+/// each field counts its first value, and values are read as `AFMakeNumber` reads typed text
+/// (currency, `%`, group separators, a comma decimal separator), anything else counting as 0.
 fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_EXPANDED_VALUES: usize = 1 << 20;
     let op = text(&arg(args, 0), ctx)?;
     let names = strings(&arg(args, 1), ctx)?;
-    let mut values = Vec::new();
-    for name in names {
-        let field = read(ctx, &JsString::from(name))?;
-        values.extend(field.value.iter().map(|v| super::host::as_number(v).unwrap_or(0.0)));
-    }
+    let values: Vec<f64> = {
+        let shared = host(ctx)?;
+        let h = shared.borrow();
+        let mut values = Vec::new();
+        for name in &names {
+            let prefix = format!("{name}.");
+            for f in h.fields.iter().filter(|f| f.name == *name || f.name.starts_with(&prefix)) {
+                if let Some(v) = f.value.first() {
+                    if values.len() >= MAX_EXPANDED_VALUES {
+                        return Ok(s("0"));
+                    }
+                    values.push(make_number(v).unwrap_or(0.0));
+                }
+            }
+        }
+        values
+    };
     let result = match op.as_str() {
         "SUM" => values.iter().sum(),
+        // An empty product is 0, as the native calculation has it, not 1.
+        "PRD" if values.is_empty() => 0.0,
         "PRD" => values.iter().product(),
         "AVG" if values.is_empty() => 0.0,
         "AVG" => values.iter().sum::<f64>() / values.len() as f64,
-        "MIN" => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
-        "MAX" => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+        "MIN" => values.iter().copied().fold(f64::INFINITY, f64::min),
+        "MAX" => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
         _ => 0.0,
     };
-    Ok(s(&if result.is_finite() { result.to_string() } else { "0".into() }))
+    Ok(s(&if result.is_finite() { js_number(result) } else { "0".into() }))
+}
+
+/// `AFMakeNumber`'s reading of typed text, as `pdfcraft_forms::af::make_number` has it: currency
+/// symbols, spaces, `'` and `%` ignored, `(7)` negative, and a comma the decimal separator when
+/// it comes last (`1.234,56`) or is not followed by exactly three digits.
+fn make_number(s: &str) -> Option<f64> {
+    let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && !matches!(c, '$' | '€' | '£' | '¥' | '\'' | '%')).collect();
+    if t.is_empty() {
+        return None;
+    }
+    let neg = t.starts_with('(') && t.ends_with(')');
+    let t = t.trim_start_matches('(').trim_end_matches(')');
+    let normalized = match (t.rfind(','), t.rfind('.')) {
+        (Some(c), Some(d)) if c > d => t.replace('.', "").replace(',', "."),
+        (Some(c), None) if t.len() - c - 1 != 3 => t.replace(',', "."),
+        _ => t.replace(',', ""),
+    };
+    let v: f64 = normalized.parse().ok()?;
+    v.is_finite().then_some(if neg { -v } else { v })
+}
+
+/// A number as JavaScript prints it (integers without a fraction), as the native calculation
+/// writes it.
+fn js_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -275,11 +372,11 @@ fn color_object(ctx: &mut Context) -> JsObject {
 const XFA_VERSION: f64 = 3.5;
 
 /// Defines the form object model's globals: the document's functions (`getField`, `resetForm`,
-/// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
-/// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
-/// `color` objects.
+/// `print`, `submitForm`, `exportDataObject` and others) and properties (`numFields`, `pageNum`,
+/// `numPages`, `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`,
+/// `display` and `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 10] = [
+    let globals: [(&str, usize, NativeFunction); 11] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -290,6 +387,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
@@ -321,7 +419,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
@@ -375,12 +476,29 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
+/// The `event` object for `e`, and the store behind its `value`: `value` holds what the script
+/// reads and writes, and `set` turns true once the script assigns `event.value`, even the value it
+/// already had. The store is out of the script's reach.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, JsObject)> {
+    fn get(_: &JsValue, _: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.get(js_string!("value"), c)
+    }
+    fn set(_: &JsValue, args: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.set(js_string!("value"), arg(args, 0), false, c)?;
+        store.set(js_string!("set"), true, false, c)?;
+        Ok(JsValue::undefined())
+    }
+    let store = ObjectInitializer::new(ctx)
+        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .property(js_string!("set"), false, Attribute::all())
+        .build();
+    let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
+    let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
     let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
-    ObjectInitializer::new(ctx)
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
-        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .accessor(js_string!("value"), Some(value_get), Some(value_set), Attribute::CONFIGURABLE | Attribute::ENUMERABLE)
         .property(js_string!("change"), s(&e.change), Attribute::all())
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
@@ -392,5 +510,6 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    Ok((event, store))
 }

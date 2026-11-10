@@ -13,6 +13,8 @@ aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# The usable-quad rule `/QuadPoints` readers share.
+pdfcraft-geom = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
@@ -20,7 +22,12 @@ pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
+# NFKC for the metadata check; already in the build through pdfcraft-crypt (stringprep).
+unicode-normalization = "0.1"
+# Reads the PDF/A and PDF/UA identification by namespace; already in the build through pdfcraft-xfa.
+roxmltree = "0.21"
 sha2 = "0.11"
 
 [dev-dependencies]

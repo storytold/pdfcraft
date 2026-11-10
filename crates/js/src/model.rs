@@ -52,6 +52,8 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Rectangle of the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 impl FieldState {
@@ -68,6 +70,7 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            rect: None,
         }
     }
 
@@ -111,6 +114,8 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
 }
@@ -236,6 +241,14 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
+    /// `app.runtimeHighlight = on`: highlight the form's fields, or stop.
+    Highlight(bool),
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }
@@ -275,6 +288,8 @@ pub struct Outcome {
     pub rc: bool,
     /// `event.value` after the script.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
