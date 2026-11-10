@@ -690,7 +690,13 @@ impl DocView {
                 }
                 // A recovered-text request that failed (a crash, the watchdog) fails the page's
                 // text as a text request would: asking again for the strict text alone would cost
-                // the same interpretation, and a stuck page another watchdog.
+                // the same interpretation, and a stuck page another watchdog. Where the strict
+                // text is already here (read for Find), only the recovery failed: the page keeps
+                // its text and Find matches, with nothing recovered, and isn't asked again.
+                None if recovering && self.texts.contains_key(&page) => {
+                    log::warn!("page {} recovered text: {}", page + 1, r.error.unwrap_or_default());
+                    self.recovered.insert(page, None);
+                }
                 None => {
                     log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
                     self.text_failed.insert(r.request.page);
