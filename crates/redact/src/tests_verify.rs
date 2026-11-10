@@ -947,6 +947,27 @@ fn the_proof_reads_the_text_states_operands_from_the_end() {
     }
 }
 
+/// The proof reads a path's points from the end too: a square under the region, its points after
+/// a surplus number, still paints there.
+#[test]
+fn the_proof_reads_a_paths_points_from_the_end() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for content in [
+        &b"0 0 1 rg 9 20 98 m 9 60 98 l 9 60 108 l 9 20 108 l h f"[..],
+        b"0 0 1 rg 9 20 98 40 10 re f",
+        // Curves from a point outside the region whose own points reach into it.
+        b"0 0 1 rg 9 200 200 m 9 20 98 40 100 60 108 c h f",
+        b"0 0 1 rg 9 200 200 m 9 20 98 60 108 v h f",
+        b"0 0 1 rg 9 200 200 m 9 20 98 60 108 y h f",
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
 /// An image a Type 3 glyph (one without resources of its own, drawing through the page's) draws
 /// after a surplus operand can't be placed, as one it draws without one can't: the region is
 /// unverifiable.

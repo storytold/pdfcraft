@@ -57,7 +57,8 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
                     Some(Object::Name(n)) => resources.get(b"Properties").and_then(|p| {
                         let props = doc.resolve(p);
                         let prop = doc.resolve(props.as_dict()?.get(n)?);
-                        prop.as_dict()?.int(b"MCID")
+                        // A named property list may give its MCID by reference.
+                        prop.as_dict()?.get(b"MCID").and_then(|id| doc.resolve(id).as_int())
                     }),
                     Some(p) => doc.resolve(p).as_dict().and_then(|d| d.int(b"MCID")),
                     _ => None,
@@ -138,7 +139,7 @@ fn mcid_of(doc: &Document, o: &Object, page: Option<ObjRef>, target: ObjRef, str
         Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
             let pg = m.get(b"Pg").and_then(Object::as_ref).or(page);
             let stm = m.get(b"Stm").and_then(Object::as_ref);
-            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.int(b"MCID")).flatten()
+            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.get(b"MCID").and_then(|id| doc.resolve(id).as_int())).flatten()
         }
         _ => None,
     }

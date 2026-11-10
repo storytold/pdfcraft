@@ -168,3 +168,71 @@ fn a_tagged_tj_after_a_surplus_operand_still_draws() {
     let paragraph = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
     assert_eq!(paragraph.get(b"K").and_then(Object::as_int), Some(0), "it still tags what the page shows: {paragraph:?}");
 }
+
+/// A path's points follow a surplus number: read from the front, each point was shifted by one,
+/// so a square under the mark was placed beside it and kept, and one beside the mark was placed
+/// under it and removed.
+#[test]
+fn a_paths_points_after_a_surplus_number_are_where_the_renderer_draws_them() {
+    let under = b"0 0 1 rg 9 100 100 m 9 140 100 l 9 140 140 l 9 100 140 l h f 9 100 100 m 9 140 140 l S".as_slice();
+    let mut doc = one_page(under, "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 90.0, 150.0, 150.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2, "both paths under the mark go");
+    let beside =
+        b"0 0 1 rg 0 200 200 m 250 200 l 250 250 l 200 250 l h f 0 200 200 m 210 210 220 220 230 230 c 240 240 250 250 v 200 250 200 260 y h f"
+            .as_slice();
+    let mut doc = one_page(beside, "", vec![]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 20.0, 20.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 0, "the paths beside the mark stay");
+    // Curves whose points, after a surplus, reach under the mark.
+    for curve in [&b"200 200 m 9 10 10 12 12 15 15 c f"[..], b"200 200 m 9 10 10 15 15 v f", b"200 200 m 9 10 10 15 15 y f"] {
+        let mut doc = one_page(curve, "", vec![]);
+        mark(&mut doc, 0, &[[0.0, 0.0, 20.0, 20.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1, "{}", String::from_utf8_lossy(curve));
+    }
+}
+
+/// An `MCID` given by reference: in a named property list, and in a structure element's `/MCR`.
+/// Read directly, it was missed, and the element kept the removed text.
+#[test]
+fn an_mcid_given_by_reference_loses_what_redaction_removed() {
+    for (content, properties, kid) in [
+        (b"/P /MC0 BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC".as_slice(), "/Properties << /MC0 << /MCID 10 0 R >> >>", "0"),
+        (b"/P <</MCID 0>> BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC", "", "<< /Type /MCR /Pg 3 0 R /MCID 10 0 R >>"),
+    ] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> {properties} >> >>").into_bytes(),
+            stream("", content),
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+            b"<< /Type /StructTreeRoot /K 8 0 R >>".to_vec(),
+            b"<< /S /Document /P 7 0 R /K [9 0 R] >>".to_vec(),
+            format!("<< /S /P /P 8 0 R /Pg 3 0 R /ActualText (SECRET) /Alt (the SECRET) /K {kid} >>").into_bytes(),
+            b"0".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().tags, 1, "{properties}{kid}");
+        let secret = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+        assert!(secret.get(b"ActualText").is_none() && secret.get(b"Alt").is_none(), "{secret:?}");
+    }
+    // An `/MCR` naming the same MCID in a form's stream (`/Stm`) is other content: it stays.
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"/P <</MCID 0>> BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /StructTreeRoot /K 8 0 R >>".to_vec(),
+        b"<< /S /Document /P 7 0 R /K [9 0 R] >>".to_vec(),
+        b"<< /S /P /P 8 0 R /Pg 3 0 R /ActualText (FORMTEXT) /K << /Type /MCR /Pg 3 0 R /Stm 11 0 R /MCID 10 0 R >> >>".to_vec(),
+        b"0".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/P <</MCID 0>> BDC EMC"),
+    ]);
+    mark(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]], "");
+    apply(&mut doc, None).unwrap();
+    let other = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+    assert!(other.get(b"ActualText").is_some(), "{other:?}");
+}

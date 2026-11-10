@@ -372,21 +372,28 @@ impl Geo<'_> {
 /// carries) by one construction operator.
 fn extend_path(op: &pdfcraft_content::Op, ctm: &Matrix, sub: &mut Vec<Vec<(f64, f64)>>, clip: &mut Option<bool>) {
     let o = op.op.as_slice();
-    let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
     let at = |x: f64, y: f64| ctm.apply(x, y);
+    // Each takes its numbers from the end, as the renderer reads them: a surplus before them is
+    // ignored, not read as a point.
+    let points: Option<Vec<(f64, f64)>> = match o {
+        b"l" => op.nums::<2>().map(|[x, y]| vec![at(x, y)]),
+        b"c" => op.nums::<6>().map(|[x1, y1, x2, y2, x3, y3]| vec![at(x1, y1), at(x2, y2), at(x3, y3)]),
+        b"v" | b"y" => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![at(x1, y1), at(x2, y2)]),
+        _ => None,
+    };
     match o {
         b"m" => {
-            if let [x, y] = nums[..] {
+            if let Some([x, y]) = op.nums::<2>() {
                 sub.push(vec![at(x, y)]);
             }
         }
         b"l" | b"c" | b"v" | b"y" => {
-            if let Some(cur) = sub.last_mut() {
-                cur.extend(nums.as_chunks::<2>().0.iter().map(|p| at(p[0], p[1])));
+            if let (Some(cur), Some(points)) = (sub.last_mut(), points) {
+                cur.extend(points);
             }
         }
         b"re" => {
-            if let [x, y, w, h] = nums[..] {
+            if let Some([x, y, w, h]) = op.nums::<4>() {
                 sub.push(vec![at(x, y), at(x + w, y), at(x + w, y + h), at(x, y + h)]);
             }
         }
