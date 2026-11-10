@@ -16,6 +16,50 @@ fn scan() -> Vec<u8> {
     s.create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
 }
 
+/// Selecting Russian chooses a capable engine even without optional runtime models. Closing
+/// and reopening the dialog retains the choice; returning to English clears the Russian mode.
+#[test]
+fn russian_language_choices_update_the_shared_draft_without_models() {
+    use egui::accesskit::Role;
+    use pdfcraft_engine::ocr::EngineChoice;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("blank.pdf", None, Session::new().create_blank(612.0, 792.0, 1).unwrap().to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().ocr_draft.language, "en");
+    assert_eq!(h.state().ocr_draft.engine, EngineChoice::Ocrs);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.query_all_by_role(Role::ComboBox).find(|node| node.value().as_deref() == Some("English")).expect("the language dropdown").click();
+    h.run_steps(2);
+    h.get_by_label("Russian").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "ru");
+    assert_eq!(h.state().ocr_draft.engine, EngineChoice::Auto);
+    h.query_all_by_role(Role::ComboBox).find(|node| node.value().as_deref() == Some("Russian")).expect("the language dropdown").click();
+    h.run_steps(2);
+    h.get_by_label("Russian and English").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "en+ru");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.query_all_by_role(Role::ComboBox)
+        .find(|node| node.value().as_deref() == Some("Russian and English"))
+        .expect("the restored language dropdown")
+        .click();
+    h.run_steps(2);
+    h.get_by_label("English").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "en");
+    assert!(!pdfcraft_engine::ocr::requires_tesseract(&h.state().ocr_draft.settings().language));
+    assert!(h.state().ocr_run.is_none(), "changing language never starts recognition");
+}
+
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {

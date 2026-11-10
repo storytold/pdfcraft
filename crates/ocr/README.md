@@ -27,16 +27,18 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   process: never linked, bundled or downloaded. Implementations are shared across threads
   (`Send + Sync`); nothing spawns on wasm32.
 - **The tesseract process is fenced in.** The program comes from a user-configured location or
-  the PATH, never from document data (the engine validates a configured path as an absolute
+  the PATH, then the usual Windows installer locations, never from document data (the engine validates a configured path as an absolute
   path to an existing executable file before it is used). The language code is allow-listed
-  (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
+  (`tesseract::LANGUAGE_CODES`, including `ru` → `rus` and `en+ru` → `rus+eng`) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
   reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured
   location that is invalid fails closed (it is never replaced by the PATH search). Availability
   is probed with `--list-langs` (its list is read from stdout, or from stderr where older
-  versions print it); a failed probe is remembered for 30 s, so an install that appears later
-  is found without a restart. Known limit: at the timeout or the output cap only the direct
+  versions print it); the engine caches probes for 30 s, including positive answers, so newly
+  installed language data is found without a restart. Recognition rechecks the requested packs
+  immediately before reading; mixed Russian/English requires both `rus` and `eng`, and never
+  silently falls back to an installed subset. Known limit: at the timeout or the output cap only the direct
   child is killed; a wrapper script's own children may outlive it.
 - **Confidence drives review.** One classifier (`band_for`) puts a word in the High
   (≥ 90), Medium (70–89) or Low (< 70) band — the review overlay's colours, the legend and the
@@ -96,9 +98,12 @@ applies text corrections at the stored original boxes through its stale-document
 or discards the result. Empty corrections remove words. Searchable acceptance is one undo
 step; editable acceptance writes a separate file. `ocr_dictionary` reads or atomically
 updates the UI's per-language dictionary format through an explicitly root-confined path.
+The interface and tools offer `en`, `ru` and `en+ru`. Russian modes use Tesseract alone,
+including with Automatic selected: the Latin-only built-in model cannot contribute a Cyrillic
+reading. The public Tesseract library still accepts its other allow-listed language codes.
 
 Not yet: languages beyond the tested set (the `ocrs` models read only unaccented Latin; the
 Tesseract side is bounded by its allow-list and whatever its installed language packs cover),
-OCR in the browser (the tesseract module is compiled out for wasm32), the deep scan-cleanup
+Tesseract OCR in the browser (the tesseract module is compiled out for wasm32), the deep scan-cleanup
 options (descreen, background removal, edge-shadow removal), and editable glyph coverage
 beyond the available attributed faces.
