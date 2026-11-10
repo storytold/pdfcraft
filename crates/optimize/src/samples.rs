@@ -157,6 +157,10 @@ fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<S
         2 | 4 => return Err(NotDecoded::Alpha),
         _ => return Err(NotDecoded::ColourSpace),
     };
+    // Every component's depth, not the first one's: a deeper one would be scaled to eight bits.
+    if head.depth > 8 {
+        return Err(NotDecoded::BitDepth(i64::from(head.depth)));
+    }
     // The decoder makes a structure for every component of every tile before it reads one: a tile
     // index is 16 bits, so more tiles than that are no real image, only a small file asking for a
     // great deal of memory.
@@ -173,6 +177,13 @@ fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<S
     }
     let named = d.get(b"ColorSpace").map(|cs| components(doc, cs));
     if named.is_some_and(|c| c != Some(n)) {
+        return Err(NotDecoded::ColourSpace);
+    }
+    // A colour space the dictionary names takes the place of the data's own, and the samples are
+    // then read as they are. The decoder converts sYCC and CIELab data to RGB whatever the
+    // dictionary says, so only data it leaves alone is read with a named space: sRGB, greyscale,
+    // a profile, or a bare codestream.
+    if named.is_some() && head.enumerated.is_some_and(|space| !matches!(space, 16 | 17)) {
         return Err(NotDecoded::ColourSpace);
     }
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n)) {
@@ -227,23 +238,31 @@ const JPX_CODESTREAM: [u8; 4] = [0xff, 0x4f, 0xff, 0x51];
 /// What JPEG 2000 data says of itself, read without the decoder.
 #[derive(Debug, PartialEq, Eq)]
 struct JpxHead {
-    /// The most tiles and components a codestream has.
+    /// The most tiles and components a codestream has, and the most bits a component has.
     tiles: u64,
     components: u16,
+    depth: u8,
     /// A JP2 file with a palette (`pclr`) box.
     palette: bool,
+    /// The colour space a JP2 file's first colour box names by number (15444-1, table I.10):
+    /// 16 is sRGB and 17 greyscale. `None` for a bare codestream, or a box with a profile.
+    enumerated: Option<u32>,
 }
 
-/// The tiles and components the codestream `cs` says it has, from its SIZ segment: the image's
-/// far corner, less the tile grid's origin, over the tile size; and `Csiz` after those.
-fn codestream_head(cs: &[u8]) -> Option<(u64, u16)> {
+/// The tiles and components the codestream `cs` says it has, and the bits of its deepest
+/// component, from its SIZ segment: the image's far corner, less the tile grid's origin, over the
+/// tile size; `Csiz` after those; then three bytes a component, the first its depth less one.
+fn codestream_head(cs: &[u8]) -> Option<(u64, u16, u8)> {
     if !cs.starts_with(&JPX_CODESTREAM) {
         return None;
     }
     let word = |i: usize| Some(u64::from(u32::from_be_bytes(cs.get(8 + 4 * i..12 + 4 * i)?.try_into().ok()?)));
     let along = |end: u64, tile: u64, origin: u64| (tile > 0 && end > origin).then(|| (end - origin).div_ceil(tile));
     let tiles = along(word(0)?, word(4)?, word(6)?)?.checked_mul(along(word(1)?, word(5)?, word(7)?)?)?;
-    Some((tiles, u16::from_be_bytes(cs.get(40..42)?.try_into().ok()?)))
+    let components = u16::from_be_bytes(cs.get(40..42)?.try_into().ok()?);
+    let depths = cs.get(42..42 + 3 * usize::from(components))?.iter().step_by(3);
+    let depth = depths.map(|ssiz| (ssiz & 0x7f) + 1).max()?;
+    Some((tiles, components, depth))
 }
 
 /// The boxes of JP2 data, as (type, contents), read as the decoder reads them. A length of 0 is
@@ -268,22 +287,32 @@ fn jp2_boxes(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
 /// looking for the markers, which other boxes may hold. `None` when there is no codestream.
 fn jpx_head(raw: &[u8]) -> Option<JpxHead> {
     if raw.starts_with(&JPX_CODESTREAM) {
-        let (tiles, components) = codestream_head(raw)?;
-        return Some(JpxHead { tiles, components, palette: false });
+        let (tiles, components, depth) = codestream_head(raw)?;
+        return Some(JpxHead { tiles, components, depth, palette: false, enumerated: None });
     }
-    let (mut most, mut palette) = (None, false);
+    let (mut most, mut palette, mut colour) = (None, false, None);
     for (kind, body) in jp2_boxes(raw) {
         match kind {
             b"jp2c" => {
-                let (tiles, components) = codestream_head(body)?;
-                let (t, c) = most.unwrap_or((0, 0));
-                most = Some((tiles.max(t), components.max(c)));
+                let (tiles, components, depth) = codestream_head(body)?;
+                let (t, c, d) = most.unwrap_or((0, 0, 0));
+                most = Some((tiles.max(t), components.max(c), depth.max(d)));
             }
-            b"jp2h" => palette |= jp2_boxes(body).any(|(kind, _)| kind == b"pclr"),
+            b"jp2h" => {
+                for (kind, body) in jp2_boxes(body) {
+                    palette |= kind == b"pclr";
+                    // The first colour box is the one the decoder goes by.
+                    if kind == b"colr" && colour.is_none() {
+                        colour = Some(body);
+                    }
+                }
+            }
             _ => {}
         }
     }
-    most.map(|(tiles, components)| JpxHead { tiles, components, palette })
+    // A method of 1 names the space by number, in the four bytes after the box's three.
+    let enumerated = colour.filter(|c| c.first() == Some(&1)).and_then(|c| Some(u32::from_be_bytes(c.get(3..7)?.try_into().ok()?)));
+    most.map(|(tiles, components, depth)| JpxHead { tiles, components, depth, palette, enumerated })
 }
 
 /// `[1 0]`: a bi-level image whose 1 bits are black.
@@ -625,7 +654,7 @@ mod tests {
         let grey = jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
         let palette = jp2_box(b"pclr", &[&[1u8, 0, 3, 7, 7, 7][..], &[9u8; 256 * 3]].concat());
         let hostile = jp2(&[grey.clone(), palette], &jpx_codestream(1));
-        assert_eq!(jpx_head(&hostile), Some(JpxHead { tiles: 1, components: 1, palette: true }));
+        assert_eq!(jpx_head(&hostile), Some(JpxHead { tiles: 1, components: 1, depth: 8, palette: true, enumerated: Some(17) }));
         assert_eq!(read(hostile), Err(NotDecoded::ColourSpace));
         // The same file without the palette is an ordinary grey image.
         assert_eq!(read(jp2(&[grey], &jpx_codestream(1))).map(|s| s.data), Ok(vec![128]));
@@ -635,6 +664,11 @@ mod tests {
         assert_eq!(read(jpx_codestream(4)), Err(NotDecoded::Alpha));
         assert_eq!(jpx_head(&jpx_codestream(16384)).map(|h| h.components), Some(16384));
         assert_eq!(read(jpx_codestream(16384)), Err(NotDecoded::ColourSpace));
+        // Every component's depth counts, not the first one's: here the second has 12 bits.
+        let mut deep = jpx_codestream(3);
+        deep[45] = 11;
+        assert_eq!(jpx_head(&deep).map(|h| h.depth), Some(12));
+        assert_eq!(read(deep), Err(NotDecoded::BitDepth(12)));
         // JPEG 2000 behind another filter is not read, and the reason names it.
         let chain = [("Filter", Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("JPXDecode")])), one[1].clone(), one[2].clone()];
         let refused = decode_samples(&doc(), &image(&chain, jpx_codestream(1)), &mut budget());
@@ -654,5 +688,13 @@ mod tests {
         assert_eq!(read(&d), Err(NotDecoded::ColourSpace));
         d.push(("ColorSpace", Object::name("DeviceRGB")));
         assert_eq!(read(&d).map(|s| (s.components, s.data)), Ok((3, vec![128; 3])));
+        // Data the decoder converts to RGB (sYCC is 18) is not read with a named space, which
+        // says to take the samples as they are; sRGB (16) needs no conversion. With no name the
+        // data's own space is the image's, and the conversion is right.
+        let boxed = |space: u8| jp2(&[jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, space])], &jpx_codestream(3));
+        let read = |d: &[(&str, Object)], space: u8| decode_samples(&doc(), &image(d, boxed(space)), &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(read(&d, 18), Err(NotDecoded::ColourSpace));
+        assert_eq!(read(&d, 16).map(|s| s.components), Ok(3));
+        assert_eq!(read(&d[..3], 18).map(|s| s.components), Ok(3));
     }
 }
