@@ -6625,11 +6625,351 @@ fn form_javascript_validates_calculates_and_formats() {
     assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().read_only());
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
 
+    s.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    s.apply(id, Edit::DuplicateField { name: "go".into(), pages: vec![1] }).unwrap();
+    let props = Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props }).unwrap();
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) })
+        .unwrap();
+    let caption =
+        s.run_javascript(id, "getField('go').buttonSetCaption('Continue'); event.value = getField('go').buttonGetCaption();", Some("go")).unwrap();
+    assert_eq!(caption.error, None);
+    assert_eq!(caption.result.as_deref(), Some("Continue"));
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").map(|f| f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>()),
+        Some(vec![Some("Continue"), Some("Continue")]),
+        "setting a caption already shown by the first widget updates every widget",
+    );
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue"),
+        "undo keeps the first widget's original caption",
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Old"),
+        "undo restores the second widget's original caption",
+    );
+    s.redo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+
     // JavaScript off: scripts don't run.
     s.set_javascript(false);
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
     assert_eq!(value(&s, "total"), ["12"]);
     assert!(s.run_javascript(id, "1", None).is_err());
+}
+
+#[test]
+fn javascript_field_colours_persist_and_undo_without_changing_other_appearance_properties() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "price".into(),
+            props: Box::new(FieldProps {
+                appearance: Some(pdfcraft_forms::LookPatch {
+                    border: Some(Some([0.1, 0.2, 0.3])),
+                    font: Some(pdfcraft_forms::FieldFont::Courier),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    let before = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+    let out = s.run_javascript(id, "var f = getField('price'); f.fillColor = color.red; f.textColor = color.blue;", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+
+    let inspect = |bytes: Arc<Vec<u8>>| {
+        let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+        let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+        let look = pdfcraft_forms::look(&doc, &f);
+        assert_eq!(look.fill, Some([1.0, 0.0, 0.0]));
+        assert_eq!(look.text, [0.0, 0.0, 1.0]);
+        assert_eq!(look.border, Some([0.1, 0.2, 0.3]));
+        assert_eq!(look.font, pdfcraft_forms::FieldFont::Courier);
+        assert_eq!(f.value, before);
+    };
+    inspect(s.save_bytes(id).unwrap());
+    s.undo(id).unwrap();
+    let undone = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&undone).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&undone, &f).fill, None);
+    s.redo(id).unwrap();
+    inspect(s.save_bytes(id).unwrap());
+
+    let reopened = s.open("saved.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+    let reopened_doc = pdfcraft_cos::Document::open(s.save_bytes(reopened).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&reopened_doc).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).fill, Some([1.0, 0.0, 0.0]));
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).text, [0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let err = s.run_javascript(id, "var f = getField('price'); f.value = '9'; f.fillColor = ['RGB', 2, 0, 0];", None).unwrap_err();
+    assert!(err.to_string().contains("finite values between 0 and 1"), "{err}");
+    assert_eq!(s.save_bytes(id).unwrap(), before, "a refused script changes nothing");
+}
+
+#[test]
+fn javascript_field_colours_respect_document_fill_permissions() {
+    let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    plain
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: 0,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&plain, &Default::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("locked.pdf", None, bytes, None).unwrap();
+    assert!(!s.get(id).unwrap().allows_form_filling());
+    assert_eq!(
+        s.run_javascript(id, "getField('price').fillColor = color.red;", None).unwrap_err(),
+        EditError::NotPermitted("filling in form fields")
+    );
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+#[test]
+fn calculate_now_updates_live_fields_in_one_undo_step() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-now.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let out = s
+        .run_javascript(
+            id,
+            "getField('price').value = 3; getField('qty').value = 2; calculateNow(); var seen = getField('total').value; console.println(seen);",
+            Some("go"),
+        )
+        .unwrap();
+    assert!(out.console.iter().any(|line| line == "6"), "next statement sees calculation result: {out:?}");
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["6"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("reopened.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+}
+
+#[test]
+fn calculate_now_applies_format_script_to_updated_appearance() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-format.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session.run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; calculateNow();", None).unwrap();
+
+    assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value, ["6"]);
+    assert!(page_texts(&session, id)[0].contains("USD 6.00"), "the appearance uses the Format script");
+}
+
+#[test]
+fn calculation_scripts_are_built_only_for_scripts_that_call_calculate_now() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-list.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    crate::js::CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(0));
+
+    s.run_javascript(id, "1 + 1", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 0);
+
+    s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "go").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "calculate-list.pdf", false);
+    crate::js::CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(0));
+
+    runner.run(FieldEvent::Calculate, "1 + 1", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 0);
+
+    runner.run(FieldEvent::Calculate, "calculateNow();", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+    runner.run(FieldEvent::Calculate, "calculateNow();", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+}
+
+#[test]
+fn calculate_now_in_a_document_script_helper_gets_the_calculation_list() {
+    let helpers = "function times\\(a, b\\) { return a * b; } function recalc\\(\\) { calculateNow\\(\\); }";
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-helper.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    let out = session
+        .run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; recalc(); console.println(getField('total').value);", None)
+        .unwrap();
+
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "6"), "the document helper recalculated total: {out:?}");
+}
+
+#[test]
+fn calculate_now_uses_calculation_order_and_bounds_recursion() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    for (name, script) in
+        [("qty", "event.value = Number(getField('price').value) + 1;"), ("total", "event.value = Number(getField('qty').value) * 2;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] }).unwrap();
+    let out = s.run_javascript(id, "getField('price').value = 3; calculateNow(); console.println(getField('total').value);", None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "8"), "{out:?}");
+
+    for (name, script) in
+        [("qty", "event.value = Number(getField('total').value) + 1;"), ("total", "event.value = Number(getField('qty').value) + 1;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    let cyclic = s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert!(cyclic.error.is_none(), "a cyclic calculation runs once in order: {cyclic:?}");
+
+    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
+        .unwrap();
+    let out = s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert!(out.console.iter().any(|line| line.contains("calculateNow recursion limit exceeded")), "{out:?}");
+    s.set_javascript(false);
+    assert!(s.run_javascript(id, "calculateNow();", None).is_err());
+    s.set_javascript(true);
+    assert!(s.run_javascript(id, "1 + 1", None).unwrap().error.is_none());
+}
+
+#[test]
+fn calculation_order_cache_tracks_script_edits_in_a_batch() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Set calculations".into(),
+                edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('price').value) + 1;".into()),
+                    },
+                    Edit::SetFieldScript {
+                        name: "total".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('qty').value) * 2;".into()),
+                    },
+                    Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] },
+                    Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("3".into()) },
+                ],
+            },
+        )
+        .unwrap();
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["8"]);
+}
+
+#[test]
+fn calculation_order_cache_tracks_field_property_edits_in_a_batch() {
+    use form_scripts::{CalcOp, Calculate};
+
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-props-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Change calculation".into(),
+                edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "format".into(),
+                        script: Some("calculateNow(); console.println(getField('total').value);".into()),
+                    },
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) },
+                    Edit::SetFieldProps {
+                        name: "total".into(),
+                        props: Box::new(FieldProps {
+                            calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into()] }),
+                            ..FieldProps::default()
+                        }),
+                    },
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) },
+                ],
+            },
+        )
+        .unwrap();
+
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["4"]);
+    let output = session.take_js_output(id);
+    assert!(output.console.iter().any(|line| line == "4"), "calculateNow observed the refreshed Sum: {output:?}");
+}
+
+#[test]
+fn calculation_order_cache_refreshes_after_inserting_pages() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "qty", &FieldValue::Text("3".into())).unwrap();
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let mut js = crate::js::JsRunner::new(&doc, "destination.pdf", false);
+    js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+
+    let source = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /CO [4 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (importedTotal) /Rect [20 200 180 220] /V (0) /AA << /C << /S /JavaScript /JS (event.value = 9; console.println('inserted field calculated');) >> >> >>")
+        .build();
+    let mut cx = EditCtx::new(None, 0);
+    cx.js = Some(js);
+    run_edit(
+        &mut doc,
+        &Edit::InsertPagesFrom {
+            name: "source.pdf".into(),
+            bytes: Arc::new(source),
+            pages: None,
+            at: 1,
+            field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+        },
+        &mut cx,
+    )
+    .unwrap();
+
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let js = cx.js.as_mut().unwrap();
+    let result = js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+    assert!(
+        result.changes.iter().any(|change| {
+            change.name == "importedTotal" && change.value.as_ref().is_some_and(|value| value.len() == 1 && value.first().is_some_and(|v| v == "9"))
+        }),
+        "imported calculation result: {:?}",
+        result.changes
+    );
+    assert!(js.output.console.iter().any(|line| line == "inserted field calculated"), "{:#?}", js.output);
 }
 
 #[test]
@@ -6750,6 +7090,109 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
         assert!(out.error.is_none(), "{out:?}");
         assert_eq!(out.result.as_deref(), Some("6"));
         assert_eq!(out.alerts, [js::Message::plain("PDF message")]);
+    }
+}
+
+#[test]
+fn js_get_page_box_reads_effective_boxes_without_editing_the_document() {
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).expect("opened document").can_undo().map(str::to_owned);
+    let out = s
+        .run_javascript(id, "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 0), this.getPageBox('Trim', 0)])", None)
+        .expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[[0,300,200,0],[0,300,200,0],[0,300,200,0]]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
+
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotate page");
+    let before = s.get(id).expect("rotated document").can_undo().map(str::to_owned);
+    let out = s.run_javascript(id, "JSON.stringify(this.getPageBox('Crop', 0))", None).expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[0,200,300,0]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
+}
+
+#[test]
+fn automatic_field_scripts_cannot_print() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+        let result = runner.run(
+            event,
+            "console.println('before'); this.print(); app.execMenuItem('SaveAs'); app.execMenuItem('ShowHideFileAttachment'); \
+             this.pageNum = 0; this.print(); app.alert('ok'); event.value = '4';",
+            target,
+            "2",
+            &fields,
+        );
+        assert!(result.rc, "{event:?}: {result:?}");
+        assert_eq!(result.value, "4");
+        assert_eq!(runner.output.requests, [js::Request::GoToPage(0)], "{event:?}: {:?}", runner.output);
+        assert_eq!(runner.output.alerts, [js::Message::plain("ok")]);
+        assert!(runner.output.console.contains(&"before".to_string()));
+        assert!(runner.output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{:?}", runner.output);
+        assert_eq!(runner.output.console.iter().filter(|line| line.contains("only a button may")).count(), 2, "{:?}", runner.output);
+        assert!(runner.output.errors.is_empty());
+
+        runner.output = js::JsOutput::default();
+        runner.run(event, "this.print(); throw new Error('broken script');", target, "2", &fields);
+        assert!(runner.output.requests.is_empty(), "{event:?}: {:?}", runner.output);
+        assert!(runner.output.errors.iter().any(|e| e.contains("broken script")));
+    }
+}
+
+#[test]
+fn automatic_print_suppression_preserves_document_errors() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "failure", Some("throw new Error('document failure');")).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        runner.run(event, "this.print(); throw new Error('field failure');", target, "2", &fields);
+    }
+    let out = runner.output;
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert_eq!(out.console.iter().filter(|line| line.contains("Print") && line.contains("ignored")).count(), 4, "{out:?}");
+    assert_eq!(out.doc_errors.len(), 1, "the document script's error is reported once: {out:?}");
+    assert!(out.doc_errors[0].contains("document failure"), "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("document failure")).count(), 1, "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("field failure")).count(), 4, "each field script's error is retained: {out:?}");
+}
+
+#[test]
+fn form_calculations_cannot_print_but_buttons_and_console_can() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldScript {
+            name: "total".into(),
+            event: "calculate".into(),
+            script: Some("this.print(); event.value = times(getField('price').value, getField('qty').value);".into()),
+        },
+    )
+    .unwrap();
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert!(out.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert!(page_texts(&s, id)[0].contains("USD 10.00"));
+
+    for (target, qty, formatted) in [(Some("go"), 6, "USD 15.00"), (None, 8, "USD 20.00")] {
+        let out = s.run_javascript(id, &format!("getField('qty').value = {qty}; this.print();"), target).unwrap();
+        assert_eq!(out.requests, [js::Request::Print]);
+        let automatic = s.take_js_output(id);
+        assert!(automatic.requests.is_empty(), "{automatic:?}");
+        assert!(automatic.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{automatic:?}");
+        assert!(automatic.errors.is_empty(), "{automatic:?}");
+        assert!(page_texts(&s, id)[0].contains(formatted));
     }
 }
 
@@ -8548,6 +8991,20 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     assert!(field(&s, "leave").is_some_and(|f| f.flags & 1 == 0), "opened before the error");
     assert!(field(&s, "details").is_some(), "shown before the error");
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
+}
+
+/// A laid-out XFA form tabs the way its template's traversal says: the probe form, which
+/// another viewer tabs `start A2 A3 A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`.
+#[test]
+fn xfa_forms_tab_in_their_templates_traversal_order() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::traversal_template()));
+    let mut s = Session::new();
+    let id = s.open("tab.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut tabs: Vec<(usize, &str)> = doc.form.iter().flat_map(|f| f.widgets.iter().map(move |w| (w.tab, f.name.as_str()))).collect();
+    tabs.sort_unstable();
+    let names: Vec<&str> = tabs.iter().map(|t| t.1).filter(|n| !["log", "D5"].contains(n)).collect();
+    assert_eq!(names, ["start", "A2", "A3", "A4", "A1", "B1", "B3", "B2", "B4", "C3", "D1", "D4", "D6", "finish", "C1", "C2"]);
 }
 
 /// A scripted form end to end: initialize and calculate on open, recalculation after a change,
@@ -13292,7 +13749,13 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    // Optimize writes the parameters direct, so a stream that names the dictionary holds the key.
+    let names = |s: &Stream| {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
+        bytes.windows(12).any(|w| w == b"JBIG2Globals")
+    };
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if names(s))).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
 }
 
@@ -13477,4 +13940,94 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     let saved = s.save_bytes(id).unwrap();
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
+}
+
+#[test]
+fn javascript_non_rgb_field_colours_convert_and_keep_the_scripts_other_changes() {
+    let fill_after = |colour: &str| {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        s.run_javascript(id, "getField('price').fillColor = color.red;", None).unwrap();
+        let out = s.run_javascript(id, &format!("var f = getField('price'); f.value = '9'; f.fillColor = {colour}; f.textColor = {colour};"), None);
+        assert!(out.is_ok(), "{colour}: {out:?}");
+        let f = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().clone();
+        assert_eq!(f.value, ["9"], "{colour}: the value write is kept");
+        let doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+        let look = pdfcraft_forms::look(&doc, &f);
+        (look.fill, look.text)
+    };
+    assert_eq!(fill_after("color.white"), (Some([1.0, 1.0, 1.0]), [1.0, 1.0, 1.0]));
+    assert_eq!(fill_after("color.gray"), (Some([0.5, 0.5, 0.5]), [0.5, 0.5, 0.5]));
+    assert_eq!(fill_after("color.cyan"), (Some([0.0, 1.0, 1.0]), [0.0, 1.0, 1.0]));
+    assert_eq!(fill_after("['CMYK', 0, 0, 0, 1]"), (Some([0.0, 0.0, 0.0]), [0.0, 0.0, 0.0]));
+    // Transparent clears the fill; text can't be transparent, so its colour stays.
+    let (fill, text) = fill_after("color.transparent");
+    assert_eq!(fill, None);
+    assert_eq!(text, [0.0, 0.0, 0.0]);
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    for bad in ["['CMYK', 1]", "['G']", "['T', 0]", "['Lab', 0, 0, 0]", "['G', 'x']"] {
+        let err = s.run_javascript(id, &format!("var f = getField('price'); f.value = '9'; f.fillColor = {bad};"), None).unwrap_err();
+        assert!(err.to_string().contains("T, G, RGB or CMYK"), "{bad}: {err}");
+        assert_eq!(s.save_bytes(id).unwrap(), before, "{bad}: a malformed colour still refuses the script");
+    }
+}
+
+#[test]
+fn a_later_field_script_in_the_same_edit_reads_a_colour_an_earlier_one_wrote() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    for (name, script) in
+        [("qty", "getField('price').fillColor = color.green; event.value = 1;"), ("total", "event.value = getField('price').fillColor.join(',');")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "format".into(), script: None }).unwrap();
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("3".into()) }).unwrap();
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["RGB,0,1,0"]);
+}
+
+#[test]
+fn a_document_script_helper_can_set_field_colours() {
+    let helpers = "function mark\\(name\\) { getField\\(name\\).fillColor = color.red; }";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("helpers.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    s.run_javascript(id, "mark('price');", None).unwrap();
+    let doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&doc, &f).fill, Some([1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_native_path_does() {
+    // amount (4), group b (5) with kids b.c (6) and b.d (7), total (8) = SUM(amount, b).
+    let widget = |rest: &str, y: u32| format!("<< /Type /Annot /Subtype /Widget /Rect [20 {y} 180 {}] /P 3 0 R /F 4 {rest} >>", y + 20);
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 8 0 R] /CO [8 0 R] /DA (/Helv 0 Tf 0 g) >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R 8 0 R] >>")
+        .obj(widget("/FT /Tx /T (amount) /V (1,234.50)", 250))
+        .obj("<< /FT /Tx /T (b) /Kids [6 0 R 7 0 R] >>")
+        .obj(widget("/Parent 5 0 R /T (c) /V ($10)", 220))
+        .obj(widget("/Parent 5 0 R /T (d) /V (1.234,5)", 190))
+        .obj(widget(
+            "/FT /Tx /T (total) /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"amount\", \"b\"\\)\\);) >> >>",
+            160,
+        ))
+        .build();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("simple.pdf", None, Arc::new(pdf), None).unwrap();
+    let total = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    // The commit path (native Simple calculation) on an edit elsewhere.
+    s.apply(id, Edit::SetFieldValue { name: "b.c".into(), value: FieldValue::Text("$10".into()) }).unwrap();
+    assert_eq!(total(&s), ["2479"], "native Simple calculation");
+    let out = s.run_javascript(id, "getField('amount').value = '2,000.25'; calculateNow(); console.println(getField('total').value);", None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "3244.75"), "calculateNow agrees with the native path: {out:?}");
+    assert_eq!(total(&s), ["3244.75"]);
 }
