@@ -103,6 +103,13 @@ impl DocView {
         if let Some((p, frac)) = self.goto
             && p == page
         {
+            // An anchored jump not drawn yet (a link's destination) keeps only its page top
+            // in `goto`; the point it will put at the window's top-left carries the fraction,
+            // and that is where the reader is.
+            let frac = match self.goto_point {
+                Some((pp, _, Some(fy), _)) if pp == page => fy,
+                _ => frac,
+            };
             return (page, frac);
         }
         // The page grid doesn't refresh where the pages are on screen (as for bookmarks).

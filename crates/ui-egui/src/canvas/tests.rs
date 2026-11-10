@@ -699,6 +699,10 @@ fn previous_view_discards_a_pending_link_point() {
     assert!(v.view_history(false));
     assert_goto(&v, 1, 0.5, "Previous view goes back halfway down page 1");
     assert_eq!(v.goto_point, None, "the link's point must not scroll the restored place away");
+    // Next view returns to the link's place: a jump not drawn yet counts as where the reader
+    // is, so the history recorded the link's own fraction for it.
+    assert!(v.view_history(true));
+    assert_goto(&v, 3, 0.25, "Next view returns to the link's place a quarter down page 3");
 }
 
 #[test]
