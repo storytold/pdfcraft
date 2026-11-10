@@ -1241,3 +1241,116 @@ fn print_preferences_that_dont_parse_keep_the_defaults() {
     let d = open(Some(r#"{"print": {"duplex": "off"}}"#)).print_draft;
     assert_eq!(d.duplex, Some(Duplex::Off));
 }
+
+/// #2001: each printer keeps the paper, sizing and two-sided choice it last printed with, across
+/// a restart, and the printer printed to last is chosen again. A label printer keeps 4 × 6 in
+/// at Actual size, single-sided, while the office printer keeps A4 at Fit, two-sided.
+#[test]
+fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
+    use pdfcraft_engine::print::spool::{Duplex, Job, Printer};
+    use pdfcraft_engine::print::{LABEL_PAPER, PAPERS, SizeMode};
+    use std::sync::{Arc, Mutex};
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let listed = Arc::new(Mutex::new(vec!["Office", "D520BT_Z"]));
+    let jobs: Arc<Mutex<Vec<Job>>> = Arc::default();
+    let attach = |h: &mut Harness<'static, PdfCraftApp>| {
+        let source = listed.clone();
+        h.state_mut().printer_source = Some(Arc::new(move || {
+            let names = source.lock().map(|n| n.clone()).unwrap_or_default();
+            names
+                .into_iter()
+                .map(|name| Printer { name: name.into(), default: name == "Office", two_sided: None, description: String::new() })
+                .collect()
+        }));
+        let sent = jobs.clone();
+        h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &Job| {
+            sent.lock().unwrap().push(job.clone());
+            Ok(String::new())
+        }));
+    };
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().dialog = None;
+        assert!(h.state_mut().execute("print.dialog"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().print_draft.printers_loading);
+        h.run_steps(2);
+    };
+    let print = |h: &mut Harness<'static, PdfCraftApp>| -> Job {
+        let before = jobs.lock().unwrap().len();
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() > before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+    };
+    let setup = |h: &Harness<'static, PdfCraftApp>| {
+        let d = &h.state().print_draft;
+        (d.printer.clone(), d.paper, d.size, d.duplex)
+    };
+    let label = (Some("D520BT_Z".to_string()), LABEL_PAPER, SizeMode::Actual, Some(Duplex::Off));
+    let office = (Some("Office".to_string()), a4, SizeMode::Fit, Some(Duplex::LongEdge));
+
+    let mut h = harness();
+    attach(&mut h);
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office"), "the system default first");
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("D520BT_Z".into());
+        d.printer_picked = true;
+        d.paper = LABEL_PAPER;
+        d.size = SizeMode::Actual;
+        d.duplex = Some(Duplex::Off);
+    }
+    h.run_steps(2);
+    assert_eq!(print(&mut h).printer.as_deref(), Some("D520BT_Z"));
+    open(&mut h);
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Office".into());
+        d.paper = a4;
+        d.size = SizeMode::Fit;
+        d.duplex = Some(Duplex::LongEdge);
+    }
+    h.run_steps(2);
+    assert_eq!(print(&mut h).printer.as_deref(), Some("Office"));
+
+    // Choosing the label printer in the dialog brings back what it printed with.
+    open(&mut h);
+    assert_eq!(setup(&h), office, "the same printer keeps this session's choices");
+    h.get_by_value("Office").click();
+    h.run_steps(2);
+    h.get_by_label("D520BT_Z").click();
+    h.run_steps(2);
+    assert_eq!(setup(&h), label);
+    let job = print(&mut h);
+    assert_eq!(job.duplex, Some(Duplex::Off));
+
+    // After a restart the label printer, printed to last, is chosen again with its setup, not
+    // the system default; choosing the office printer brings back A4, Fit and two-sided.
+    let saved = h.state().persist();
+    let mut r = harness_with_settings(Some(saved.clone()));
+    attach(&mut r);
+    open(&mut r);
+    assert_eq!(setup(&r), label, "the label printer and its 4 × 6 in at Actual size, single-sided");
+    r.get_by_value("D520BT_Z").click();
+    r.run_steps(2);
+    r.get_by_label("Office (default)").click();
+    r.run_steps(2);
+    assert_eq!(setup(&r), office);
+
+    // A remembered printer that is gone falls back to the system default, with its own setup.
+    *listed.lock().unwrap() = vec!["Office"];
+    let mut gone = harness_with_settings(Some(saved));
+    attach(&mut gone);
+    open(&mut gone);
+    assert_eq!(setup(&gone), office);
+}

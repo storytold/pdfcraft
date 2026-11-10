@@ -60,7 +60,7 @@ mod hotbar;
 mod panels;
 pub mod panes;
 pub use print_ui::{
-    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
     system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};

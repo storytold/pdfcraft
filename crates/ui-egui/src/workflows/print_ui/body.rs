@@ -158,6 +158,8 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    // What this printer was last printed with (#2001).
+                    d.apply_setup();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
