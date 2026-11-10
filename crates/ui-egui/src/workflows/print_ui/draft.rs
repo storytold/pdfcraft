@@ -312,6 +312,16 @@ impl PrintDraft {
         self.handling == Handling::Multiple && self.order == PageOrder::CutStack
     }
 
+    /// Whether the chosen printer's driver takes two-sided settings from other programs:
+    /// `Some(false)` for one that keeps its own (no two-sided printing, or only manual two-sided in
+    /// its Properties); `None` when unknown, and for Save as PDF. The printer list says when it
+    /// knows; on Windows it lists the queues without asking their drivers (#3554), and the answer
+    /// for the printer picked arrives in [`PrintDraft::two_sided`].
+    pub fn printer_two_sided(&self) -> Option<bool> {
+        let p = self.printers.iter().find(|p| self.printer.as_ref() == Some(&p.name))?;
+        p.two_sided.or_else(|| self.two_sided.get(&p.name).copied().flatten())
+    }
+
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
@@ -320,11 +330,12 @@ impl PrintDraft {
             copies: self.copies.max(1),
             collate: self.collate,
             // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
-            // decides two-sided itself (#2707), leaving the Two-sided choice as it was.
+            // decides two-sided itself (#2707), as far as the driver takes it (#5772), leaving the
+            // Two-sided choice as it was.
             duplex: if self.cut_and_stack() {
                 Some(spool::Duplex::Off)
             } else if self.handling == Handling::Booklet {
-                Some(print::booklet_duplex(self.booklet_subset))
+                print::booklet_job_duplex(self.booklet_subset, self.printer_two_sided())
             } else {
                 self.duplex
             },
