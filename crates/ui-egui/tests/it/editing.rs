@@ -7808,7 +7808,8 @@ fn a_click_on_a_picture_grip_changes_nothing() {
 /// stays where it is being typed (#125), as a click there leaves it.
 #[test]
 fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
-    if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello გამარჯობა") {
+    if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello გამარჯობა")
+    {
         return;
     }
     let mut h = edit_page(pdfcraft_ui_egui::QuickTool::AddText);
