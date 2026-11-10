@@ -35,6 +35,22 @@ pub(crate) struct Updates {
     close_queued: bool,
 }
 
+impl Updates {
+    /// The prompt that offers a newer release, after the check at start or Help ▸ Check for
+    /// updates, is open over the whole window. It isn't the Updates dialog (`open`), and it leaves
+    /// the menus on.
+    pub(crate) fn prompt_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.updater.prompt_open()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+}
+
 impl Default for Updates {
     fn default() -> Self {
         Self {

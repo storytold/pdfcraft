@@ -104,6 +104,7 @@ use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
 use canvas::page_cursor;
+use canvas::page_keys;
 use canvas::page_pointer;
 use canvas::page_router;
 pub use canvas::scroll_speed;
@@ -203,6 +204,7 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
+use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
@@ -280,6 +282,7 @@ struct PendingOpen {
 #[cfg(not(target_arch = "wasm32"))]
 struct DeferredOpen {
     path: String,
+    after_open: Option<pdfcraft_render::RemoteDestination>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
@@ -287,6 +290,15 @@ struct DeferredOpen {
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
 /// used instead.
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
+
+/// A named destination being looked up off the UI thread: reading a large document's name tree
+/// takes a noticeable moment.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
+}
 
 pub struct PdfCraftApp {
     /// Split view (`panes`); which pane shows each tab is its view's.
@@ -482,6 +494,8 @@ pub struct PdfCraftApp {
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     password_retry: Option<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -733,8 +747,14 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
+    /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,
+    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
+    /// `release_menu_input`).
+    pub(crate) menu_pastes: usize,
+    /// This frame's keys as the pages see them: none while something is over them.
+    pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,
