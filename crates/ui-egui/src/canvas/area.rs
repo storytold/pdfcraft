@@ -205,6 +205,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
                     read_only: None,
                     required: None,
                     display: Some(if hide { 1 } else { 0 }),
+                    caption: None,
                     rect: None,
                 })
                 .collect();

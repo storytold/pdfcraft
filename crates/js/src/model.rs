@@ -52,6 +52,10 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// `buttonSetCaption` was called, even when it set the current text again.
+    pub caption_was_set: bool,
     /// Rectangle of the first widget, in PDF user space.
     pub rect: Option<[f64; 4]>,
 }
@@ -70,6 +74,8 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            caption: None,
+            caption_was_set: false,
             rect: None,
         }
     }

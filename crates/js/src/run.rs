@@ -443,6 +443,7 @@ fn run_here(
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     started();
     ctx.insert_data(RefCell::new(Host {
+        event_name: event.name.clone(),
         fields,
         changed: BTreeSet::new(),
         formatted: BTreeSet::new(),

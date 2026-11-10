@@ -6625,6 +6625,43 @@ fn form_javascript_validates_calculates_and_formats() {
     assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().read_only());
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
 
+    s.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    s.apply(id, Edit::DuplicateField { name: "go".into(), pages: vec![1] }).unwrap();
+    let props = Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props }).unwrap();
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) })
+        .unwrap();
+    let caption =
+        s.run_javascript(id, "getField('go').buttonSetCaption('Continue'); event.value = getField('go').buttonGetCaption();", Some("go")).unwrap();
+    assert_eq!(caption.error, None);
+    assert_eq!(caption.result.as_deref(), Some("Continue"));
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").map(|f| f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>()),
+        Some(vec![Some("Continue"), Some("Continue")]),
+        "setting a caption already shown by the first widget updates every widget",
+    );
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue"),
+        "undo keeps the first widget's original caption",
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Old"),
+        "undo restores the second widget's original caption",
+    );
+    s.redo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+
     // JavaScript off: scripts don't run.
     s.set_javascript(false);
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
@@ -6995,6 +7032,26 @@ fn opening_says_which_fields_the_document_scripts_changed() {
     assert!(!shows_banner(&doc.display, &doc.config));
     let out = s.take_js_output(id);
     assert!(out.errors.iter().any(|e| e.starts_with("document script 1: TypeError")), "{out:?}");
+}
+
+/// A button caption a document script sets on opening is named among the fields it changed,
+/// though the field states compared before and after do not differ by it.
+#[test]
+fn opening_names_a_button_whose_caption_a_document_script_set() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 5 0 R] >> >> /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /MK << /CA (Old) >> /Rect [0 60 100 80] /P 3 0 R /F 4 >>".to_string(),
+        "<< /S /JavaScript /JS (this.getField('go').buttonSetCaption('New');) >>".to_string(),
+    ];
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(pdf_of(&objs))).unwrap();
+    let mut out = js::JsOutput::default();
+    let changed = js::on_open(&mut cos, "button.pdf", false, &mut out).unwrap();
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let go = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "go").unwrap();
+    assert_eq!(go.widgets.first().and_then(|w| w.caption.as_deref()), Some("New"));
+    assert_eq!(changed, ["go"]);
 }
 
 /// A value a document script sets on opening reruns the calculations: the opening warning names

@@ -248,6 +248,7 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
         _ => f.options.clone(),
     };
+    s.caption = f.widgets.first().and_then(|w| w.caption.clone());
     s
 }
 
@@ -277,9 +278,11 @@ fn changes(
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                caption: a.caption_was_set.then(|| a.caption.clone()).flatten(),
                 rect: (a.rect != b.rect).then_some(a.rect).flatten(),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some() || c.rect.is_some()).then_some(c)
+            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some() || c.caption.is_some() || c.rect.is_some())
+                .then_some(c)
         })
         .collect()
 }
@@ -440,9 +443,16 @@ fn run_on_open(work: &mut pdfcraft_cos::Document, runner: &mut JsRunner, out: &m
     out.append(std::mem::take(&mut runner.output));
     applied?;
     // A value the scripts set reruns the calculations, which can change other fields too: name
-    // every field that differs from before opening, not only the ones the scripts touched.
+    // every field that differs from before opening, and the ones the scripts changed in a way the
+    // field states don't compare (a button caption).
     let after: Vec<_> = pdfcraft_forms::fields(work).iter().map(|f| field_state(work, f)).collect();
-    Ok(self::changes(&states, &after, &std::collections::BTreeSet::new()).into_iter().map(|c| c.name).collect())
+    let mut names: Vec<String> = changes.into_iter().map(|c| c.name).collect();
+    for c in self::changes(&states, &after, &std::collections::BTreeSet::new()) {
+        if !names.contains(&c.name) {
+            names.push(c.name);
+        }
+    }
+    Ok(names)
 }
 
 /// `time` from now, where there is a clock (not in the browser build, whose scripts are bounded
