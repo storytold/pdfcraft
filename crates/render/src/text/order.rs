@@ -837,6 +837,7 @@ mod tests {
     use super::super::layout::layout;
     use super::*;
 
+    /// Appends glyphs for `text` at font height `h` starting at `(x, baseline)`.
     fn sized_run(v: &mut Vec<TextGlyph>, text: &str, x: f32, baseline: f32, h: f32) {
         let mut cursor = x;
         for c in text.chars() {
@@ -893,6 +894,8 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that genuine kerned superscripts and subscripts overlapping their host word edge
+    /// pass `is_script_run` and remain inline.
     #[test]
     fn kerned_superscript_and_subscript_stay_in_line() -> Result<(), Box<dyn std::error::Error>> {
         // Superscript drawn before the host run (tests `win` lower-bound clamping to `host.start`).
@@ -904,11 +907,12 @@ mod tests {
             return Err(format!("superscript drawn before host run did not stay inline: {got_before:?}").into());
         }
 
-        // Subscript in a TJ-gapped single host run ("CH" + gap + "O" with kerned subscript "2").
+        // Subscript in a TJ-gapped single host run ("CH" + gap + "O" with kerned subscript "2"
+        // overlapping "H" by 2.12 > RUN_COLLISION * 7.0 = 1.75).
         let mut formula = Vec::new();
         sized_run(&mut formula, "CH", 40.0, 100.0, 10.0);
         sized_run(&mut formula, "O equals water", 54.5, 100.0, 10.0);
-        sized_run(&mut formula, "2", 50.0, 102.0, 7.0);
+        sized_run(&mut formula, "2", 49.0, 102.0, 7.0);
         let got_formula = layout(formula).plain_text();
         if got_formula != "CH2O equals water" {
             return Err(format!("kerned subscript in TJ-gapped formula did not stay inline: {got_formula:?}").into());
