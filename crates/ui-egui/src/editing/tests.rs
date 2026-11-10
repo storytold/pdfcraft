@@ -1,4 +1,15 @@
-use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+use super::{
+    SaveTarget, is_mail_temp_copy, save_dialog_folder, unredacted_file_name, write_atomically, write_atomically_syncing, write_atomically_with,
+};
+
+#[test]
+fn restored_content_is_not_proposed_under_the_redacted_name() {
+    assert_eq!(unredacted_file_name("contract_Redacted.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("SCAN_Redacted.PDF"), "SCAN.PDF");
+    assert_eq!(unredacted_file_name("Untitled_Redacted"), "Untitled");
+    assert_eq!(unredacted_file_name("contract.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("_Redacted.pdf"), "_Redacted.pdf");
+}
 
 #[test]
 fn save_dialogs_open_in_the_documents_folder() {
@@ -362,6 +373,40 @@ fn save_commits_the_open_text_box() {
     assert_eq!(added.len(), 1, "the open text box was committed before the save");
     assert!(app.views[0].content.draft.is_none());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn moving_pages_cancels_an_in_progress_drawing() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", None, pdf).unwrap();
+    let drawing =
+        || Some(crate::comments::Gesture::Draw { page: 0, tool: crate::comments::CommentTool::Ink, points: vec![[10.0, 10.0], [30.0, 20.0]] });
+    app.views[0].comments.gesture = drawing();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(app.views[0].comments.gesture.is_some(), "rotating the page keeps the drawing on it");
+    app.views[0].comments.gesture = drawing();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::MovePages { pages: vec![1], to: 0 }));
+    assert!(app.views[0].comments.gesture.is_none(), "the drawing's page index would now be a different page");
 }
 
 #[test]

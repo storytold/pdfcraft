@@ -782,10 +782,10 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        let shown = crate::af::format_value(&f.actions.format, &values[0]);
+        let shown = f.actions.format_value(&values[0]);
         // Month and weekday names in the date language that no font here can draw ("окт." in
         // Helvetica) are drawn in English rather than as `?` (#5303).
-        let english = || crate::af::format_value_in(&f.actions.format, &values[0], &crate::af::ENGLISH_DATE_NAMES);
+        let english = || f.actions.format_value_in(&values[0], &crate::af::ENGLISH_DATE_NAMES);
         let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
         formatted = vec![if !dated || draws(doc, f, &wd, &shown) { shown } else { english() }];
         &formatted[..]
@@ -858,11 +858,15 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
-            for (export, display) in f.options.iter().skip(rows.top) {
+            // The field's own selection (its `/I`) when these are its values; values it doesn't
+            // hold yet select by export value alone.
+            let picked = if values == f.value.as_slice() { f.selected.clone() } else { crate::selected_options(&f.options, values, None) };
+            for (i, (_, display)) in f.options.iter().enumerate().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
-                if values.contains(export) {
+                // Both sources list positions in ascending order.
+                if picked.binary_search(&i).is_ok() {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
                 show(pad, y - line + size * 0.25, display);

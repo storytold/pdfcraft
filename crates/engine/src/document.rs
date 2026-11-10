@@ -59,6 +59,10 @@ pub struct Document {
     pub(crate) xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     pub(crate) xfa_scripts_off: bool,
+    /// SOM paths of the XFA fields whose exit scripts ran with a value change ([`xfa::on_changes`])
+    /// since they last gained focus: their exit on losing focus has run already
+    /// ([`Session::field_focus`]).
+    pub(crate) xfa_exited: std::collections::HashSet<String>,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
     /// embedded fonts, so the font list is read again on demand ([`Session::refresh_fonts`]).
     pub(crate) fonts_stale: bool,
@@ -66,8 +70,9 @@ pub struct Document {
     /// (also in `info.warnings`, kept there when the document is re-read).
     pub xfa_warnings: Vec<String>,
     /// What the last successful [`Session::apply`](crate::Session::apply) wants said (see
-    /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
-    /// interface shows it; tools return it.
+    /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off, places
+    /// applied redactions left that still hold the removed text. The interface shows it; tools
+    /// return it.
     pub edit_notices: Vec<EditNotice>,
 }
 
@@ -82,6 +87,21 @@ pub enum EditNotice {
     /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
     /// the same on white paper.
     BackdropsLeftOff { pages: Vec<usize> },
+    /// Applying redactions left these places as they were, and they still hold the removed text
+    /// (bookmark titles, attachments, the comments that remain, XMP on other objects; see
+    /// [`RedactionElsewhere`](crate::RedactionElsewhere)). Only when one is counted, or the text
+    /// couldn't be searched for.
+    RedactionElsewhere(pdfcraft_redact::Elsewhere),
+    /// Applying redactions removed the document's XMP packet, which held the removed text and
+    /// said the file conforms to PDF/A or PDF/UA: each claim was written back in a packet of its
+    /// own, or lost (see [`RedactionIdentification`](crate::RedactionIdentification)).
+    RedactionIdentification(pdfcraft_redact::Identification),
+}
+
+/// The standards whose identification `id` has as `claim`: "PDF/A", "PDF/UA" or both, joined.
+pub(crate) fn standards_with(id: &pdfcraft_redact::Identification, claim: pdfcraft_redact::Claim) -> Option<String> {
+    let names: Vec<&str> = [("PDF/A", id.pdfa), ("PDF/UA", id.pdfua)].into_iter().filter(|(_, c)| *c == claim).map(|(n, _)| n).collect();
+    (!names.is_empty()).then(|| names.join(" and "))
 }
 
 impl std::fmt::Display for EditNotice {
@@ -96,7 +116,47 @@ impl std::fmt::Display for EditNotice {
                     page_runs(pages)
                 )
             }
+            EditNotice::RedactionElsewhere(e) => elsewhere_text(e, f),
+            EditNotice::RedactionIdentification(id) => {
+                use pdfcraft_redact::Claim;
+                write!(f, "the document's XMP metadata held the redacted text and was removed")?;
+                if let Some(kept) = standards_with(id, Claim::Kept) {
+                    write!(f, "; its {kept} identification was written back on its own")?;
+                }
+                match standards_with(id, Claim::Lost) {
+                    Some(lost) => write!(f, "; its {lost} identification couldn't be kept, so the file no longer says it conforms to {lost}"),
+                    None => Ok(()),
+                }
+            }
         }
+    }
+}
+
+/// [`EditNotice::RedactionElsewhere`] in words (English; the interface has its own wording).
+fn elsewhere_text(e: &pdfcraft_redact::Elsewhere, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "bookmark title", "bookmark titles"),
+        count(e.attachments, "attachment", "attachments"),
+        count(e.comments, "comment", "comments"),
+        count(e.xmp, "other metadata stream", "other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let list = match places.split_last() {
+        None => "no place counted".to_string(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    };
+    if e.unsearched {
+        write!(f, "the redacted text couldn't be searched for, so {list} may still hold it (Remove hidden information removes them)")
+    } else {
+        write!(f, "the redacted text also appears in {list}, which redaction doesn't change (Remove hidden information removes them)")
     }
 }
 
@@ -186,6 +246,26 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 }
 
 impl Document {
+    /// The places the last edit's applied redactions left that still hold the removed text
+    /// ([`EditNotice::RedactionElsewhere`]), or `None` when there are none or the last edit
+    /// applied none.
+    pub fn redaction_elsewhere(&self) -> Option<pdfcraft_redact::Elsewhere> {
+        self.edit_notices.iter().find_map(|n| match n {
+            EditNotice::RedactionElsewhere(e) => Some(*e),
+            _ => None,
+        })
+    }
+
+    /// What became of the PDF/A and PDF/UA identification when the last edit's applied
+    /// redactions removed the document's XMP packet ([`EditNotice::RedactionIdentification`]),
+    /// or `None` when no packet that made such a claim was removed.
+    pub fn redaction_identification(&self) -> Option<pdfcraft_redact::Identification> {
+        self.edit_notices.iter().find_map(|n| match n {
+            EditNotice::RedactionIdentification(id) => Some(*id),
+            _ => None,
+        })
+    }
+
     /// How the document opens (Document Properties ▸ Initial View).
     /// Accessibility ▸ Check for accessibility: the full check (`None` if the document can't be
     /// read for editing).
@@ -419,8 +499,14 @@ impl Document {
         self.undo_label().map(Label::as_str)
     }
 
+    /// What Redo would redo, in English, when there is something to redo.
     pub fn can_redo(&self) -> Option<&str> {
         self.redo_label().map(Label::as_str)
+    }
+
+    /// How many steps Undo can take back: a step still at this depth is still the last one.
+    pub fn undo_depth(&self) -> usize {
+        self.editor.as_ref().map_or(0, |e| e.undo.len())
     }
 
     /// What Undo would undo, in parts, for an interface that says it in another language.
@@ -442,16 +528,22 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.cos.permissions())
     }
 
+    /// The renderer opened an encrypted file that the editing parser did not, so its permission
+    /// bits are unknown. Unknown is not unrestricted: printing and copying are refused.
+    fn permissions_unknown(&self) -> bool {
+        self.editor.is_none() && self.info.encrypted
+    }
+
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
-        self.permissions().is_none_or(|p| p.print())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print())
     }
 
     /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
     /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
     /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
     pub fn allows_copying(&self) -> bool {
-        self.permissions().is_none_or(|p| p.copy())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy())
     }
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
@@ -604,6 +696,12 @@ impl Document {
     /// Remove Hidden Information: what each category would remove.
     pub fn hidden_info(&self) -> Vec<(Hidden, usize)> {
         self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan(&e.cos)).unwrap_or_default()
+    }
+
+    /// [`Self::hidden_info`] for the categories in `which` alone, without the reading the others
+    /// need (see [`pdfcraft_redact::sanitize::scan_only`]).
+    pub fn hidden_info_of(&self, which: &[Hidden]) -> Vec<(Hidden, usize)> {
+        self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan_only(&e.cos, which)).unwrap_or_default()
     }
 
     /// Verification: faux redactions (opaque covers over extractable text) and redaction
