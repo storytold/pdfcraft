@@ -115,6 +115,13 @@ impl PdfCraftApp {
                     continue;
                 }
                 let before = self.views.len();
+                // Where the last view remembers this file, when it does: opening applied it,
+                // and going to the session's page again would put the reader back at its
+                // top. The two agree only when the last view is on and its page really
+                // applied — with the preference off, or a page the document has shrunk
+                // past, the opening left the view where it was, and the session's page
+                // rules hold (clamped by `go_to_page`).
+                let remembered = self.last_views.iter().find(|l| l.path == f.path).map(|l| l.page);
                 self.open_path(&f.path);
                 if let Some(p) = self.password_prompt.take() {
                     prompt.get_or_insert(p);
@@ -122,7 +129,9 @@ impl PdfCraftApp {
                 if self.views.len() > before
                     && let Some(view) = self.views.last_mut()
                 {
-                    view.go_to_page(f.page);
+                    if !(self.restore_last_view && remembered.is_some() && view.current == f.page) {
+                        view.go_to_page(f.page);
+                    }
                     if last.active.as_ref() == Some(&f.path) {
                         active = Some(self.views.len() - 1);
                     }

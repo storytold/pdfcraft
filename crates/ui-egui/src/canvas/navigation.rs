@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
+use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, PageXform, SIDE, ViewAction, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -60,12 +60,21 @@ impl DocView {
         Some((*page, at))
     }
 
+    /// The user-space `[left, top]` on the current page at the window's top-left, clamped to the
+    /// page as last drawn: where the reader is, said so that it comes back on the same page. A
+    /// corner past the page (a spread centred in a tall window, a page scrolled past) clamps to
+    /// the page's edge, which puts its top or bottom back at the window's top. The whole place
+    /// is `None` before the first frame has laid the page out.
+    pub(crate) fn current_page_corner(&self, info: &DocInfo) -> Option<[Option<f32>; 2]> {
+        let (_, xf) = self.screen_xforms.iter().find(|(p, xf)| *p == self.current && xf.rect.is_positive())?;
+        self.corner_on_page(info, self.current, xf)
+    }
+
     /// The user-space `[left, top]` at the window's top-left (where `/XYZ` puts its point), on the
     /// page showing there: what a destination's null coordinate keeps (ISO 32000-2 §12.3.2.2).
     /// Acrobat keeps the place this way across pages, so a CAD sheet's cross-reference opens the
-    /// next sheet where the reader was looking. A coordinate is `None` along a screen axis the
-    /// page fits, which keeps the layout's own placement (centred, or the page's top); the whole
-    /// place is `None` before the first frame has laid pages out.
+    /// next sheet where the reader was looking. The whole place is `None` before the first frame
+    /// has laid pages out.
     fn place_at_corner(&self, info: &DocInfo) -> Option<[Option<f32>; 2]> {
         let area = self.viewport_screen;
         if !area.is_positive() {
@@ -77,7 +86,20 @@ impl DocView {
             .iter()
             .filter(|(_, xf)| xf.rect.is_positive())
             .min_by(|a, b| a.1.rect.distance_sq_to_pos(corner).total_cmp(&b.1.rect.distance_sq_to_pos(corner)).then(a.0.cmp(&b.0)))?;
-        let p = info.pages.get(*page)?;
+        self.corner_on_page(info, *page, xf)
+    }
+
+    /// The user-space place `corner_on_page` reads for both corners above, which differ only in
+    /// which page owns the corner: the point clamped to `page` as `xf` last drew it, with a
+    /// coordinate `None` along a screen axis the page fits, which keeps the layout's own
+    /// placement (centred, or the page's top).
+    fn corner_on_page(&self, info: &DocInfo, page: usize, xf: &PageXform) -> Option<[Option<f32>; 2]> {
+        let area = self.viewport_screen;
+        if !area.is_positive() || !xf.rect.is_positive() {
+            return None;
+        }
+        let corner = area.min + vec2(SIDE, 0.0);
+        let p = info.pages.get(page)?;
         let (x, y) = xf.screen_to_view(corner.clamp(xf.rect.min, xf.rect.max));
         // `max` drops a NaN size, so the bounds stay ordered and `clamp` can't panic.
         let (x, y) = (x.clamp(0.0, p.width.max(0.0)), y.clamp(0.0, p.height.max(0.0)));
@@ -200,6 +222,16 @@ impl DocView {
         };
         if fx.is_some() || fy.is_some() {
             self.goto_point = Some((page, fx, fy, rel));
+        }
+    }
+
+    /// Go to `page` and put `at`'s point (fractions of the displayed page, as
+    /// [`Self::go_to_dest`] computes them) at the viewport's top-left corner: where a remembered
+    /// `/XYZ` place comes back to. An all-`None` `at` is the page's top.
+    pub(crate) fn go_to_point(&mut self, page: usize, at: [Option<f32>; 2]) {
+        self.go_to_page(page);
+        if at.iter().any(|v| v.is_some()) {
+            self.goto_point = Some((page, at[0], at[1], vec2(SIDE, 0.0)));
         }
     }
 
