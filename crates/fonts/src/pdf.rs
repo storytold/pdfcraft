@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, Stream};
 
 /// How the bytes of a string map to codes.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +67,11 @@ pub struct Metrics {
     /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
     /// embedded program. See [`cids_with_outlines`].
     outlined_cids: Vec<u64>,
+    /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
+    /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
+    /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
+    /// Type 3 font's height) is a guess.
+    pub past_allowance: bool,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -77,6 +82,12 @@ fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
 
 fn dict(doc: &Document, o: Option<&Object>) -> Option<Dict> {
     o.and_then(|o| doc.resolve(o).as_dict().cloned())
+}
+
+/// Whether `font`'s `/Encoding` is the name Identity-H, given directly or through a reference,
+/// as [`Metrics::from_dict`] reads it (a Type 0 font's `/Encoding` may be indirect).
+fn identity_h(doc: &Document, font: &Dict) -> bool {
+    font.get(b"Encoding").is_some_and(|e| doc.resolve(e).as_name() == Some(b"Identity-H".as_slice()))
 }
 
 /// Whether `base_font` (subset tag allowed) names a legacy Indic font family that is laid out in
@@ -92,14 +103,17 @@ fn legacy_indic_font(base_font: &str) -> bool {
 /// A source PDF's sfnt program for an in-memory editor. Never a bundled font or an export
 /// fallback. Type 1/Type 3 programs cannot be consumed by an sfnt text renderer.
 pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
-    embedded_sfnt_within(doc, font, &mut DecodeBudget::new(2 * MAX_SFNT, 0))
+    // No total: one font's two programs, and the metrics read that may adapt one, are each
+    // bounded by that stream's own limit.
+    embedded_sfnt_within(doc, font, &mut DecodeBudget::new(usize::MAX, 0))
 }
 
 /// The largest embedded sfnt program read for the editor.
 const MAX_SFNT: usize = 16 << 20;
 
 /// [`embedded_sfnt`], decoding against `budget`, which an enumeration of a page's fonts shares:
-/// each program decoded is charged whether or not it turns out to be usable.
+/// each program decoded is charged whether or not it turns out to be usable, and so are the
+/// streams of the metrics read that adapts a program without a Unicode cmap.
 pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
@@ -108,7 +122,10 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = budget.decode_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
+        // As in `Reads::decode`: each stage within the limit, the program, the last, too, read
+        // through a view of the stream; once the allowance is spent a program with data is refused
+        // before its parameters are resolved.
+        let Ok(mut bytes) = budget.decode_stages_within(doc, stream, MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -120,13 +137,32 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
             return Some(bytes);
         }
+        // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
+        // with any other `/Encoding` nothing is, so its metrics aren't read, and a program with a
+        // cmap of its own is kept as it is, as when the rebuild finds nothing.
+        if font.name(b"Subtype") == Some(b"Type0") && !identity_h(doc, font) {
+            if own_cmap {
+                return Some(bytes);
+            }
+            continue;
+        }
         // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
         // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
-        let metrics = Metrics::from_dict(doc, font);
+        // Metrics read past the allowance, its widths' read of the program again included,
+        // adapt no copy.
+        let metrics = Metrics::from_dict_within(doc, font, budget);
+        if metrics.past_allowance {
+            continue;
+        }
         let mut mappings = std::collections::BTreeMap::new();
         if metrics.composite {
+            let refused = budget.refused();
             if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
                 mappings = map;
+            } else if budget.refused() > refused {
+                // The map the cmap is rebuilt from was left unread for want of the allowance: no
+                // copy is listed, adapted or as it is, as for metrics read past it.
+                continue;
             }
             if own_cmap {
                 let charmap = face.charmap();
@@ -166,7 +202,7 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
 /// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
 /// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
 /// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
-fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
+fn cids_with_outlines(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<u64> {
     use skrifa::raw::TableProvider as _;
     let Some(descendant) = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref())
     else {
@@ -175,13 +211,13 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
     let program = doc.resolve(&program);
     let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
-    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
     let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
         None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
         Some(Object::Stream(map)) => {
-            let Ok(map) = doc.with_direct_parms(map).decoded_within(1 << 17) else { return Vec::new() };
+            let Some(map) = reads.decode(map, MAX_CID_TO_GID) else { return Vec::new() };
             bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
@@ -200,7 +236,7 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
 /// wider and leave the end of a line outside a redaction mark (#2130). The glyph is looked up
 /// the way the renderer does: the encoding's character in the Unicode cmap, else the code itself
 /// (as in a symbolic cmap), else `.notdef`. Only sfnt programs are read; others keep the guess.
-fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
+fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics, reads: &mut Reads<'_>) {
     use skrifa::instance::{LocationRef, Size};
     use skrifa::{GlyphId, MetadataProvider as _, raw::TableProvider as _};
     let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return };
@@ -208,7 +244,7 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { continue };
+        let Some(bytes) = reads.decode(stream, MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
         if upem == 0.0 {
@@ -354,8 +390,48 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 /// thousand.
 const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
-/// one is not decoded at all.
+/// one is left unread (behind one filter not decoded past it; behind several, see `Reads::decode`).
 const MAX_CMAP_BYTES: usize = 16 << 20;
+/// Largest decoded `/CIDToGIDMap` stream read: two bytes for each CID below 65,536.
+const MAX_CID_TO_GID: usize = 1 << 17;
+
+/// The streams one reading of a font decodes, against the caller's allowance, and whether one was
+/// left unread because that allowance was spent.
+struct Reads<'a> {
+    doc: &'a Document,
+    budget: &'a mut DecodeBudget,
+    refused: bool,
+}
+
+impl<'a> Reads<'a> {
+    fn new(doc: &'a Document, budget: &'a mut DecodeBudget) -> Self {
+        Self { doc, budget, refused: false }
+    }
+
+    /// `stream` decoded within `max` and the allowance, its `/DecodeParms` read where they are given
+    /// by reference too, through a view of the stream that copies no more of its dictionary than
+    /// its filters and parameters; `None` when it can't be, noting when the allowance is why.
+    ///
+    /// Each of its filter stages is held to `max`, as a decode without an allowance holds it, and
+    /// the stages together to `max` for each of them ([`DecodeBudget::decode_stages_within`]): a
+    /// map of 65,536 CIDs behind ASCIIHex and Flate, its Flate data smaller than the map, makes
+    /// all of `MAX_CID_TO_GID` in its last stage, with the hex stage's output on top. So a stream
+    /// reads here when it reads without an allowance and what is left pays for it. A stream with a
+    /// stage past `max` is unread. When what is left is more than what the stages before that one
+    /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
+    /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
+    /// with no more left than that total, it spends all of it and counts as refused.
+    fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        match self.budget.decode_stages_within(self.doc, stream, max) {
+            Ok(data) => Some(data),
+            Err(_) => {
+                self.refused |= self.budget.remaining() == 0;
+                None
+            }
+        }
+    }
+}
+
 /// Most Type 3 glyph descriptions read for their `d1` box. A simple font shows at most 256 codes.
 const MAX_TYPE3_GLYPHS: usize = 256;
 /// Largest decoded Type 3 glyph description read for its `d1` box; a larger one is skipped.
@@ -372,8 +448,8 @@ const MAX_TYPE3_EXTENT: f64 = 1e6;
 /// no glyph declares one (`d0` glyphs don't). The descriptions the encoding's `/Differences`
 /// names are chosen, since it "shall specify the complete character encoding" (Table 110); only a
 /// font without one has its first descriptions chosen. Reads at most [`MAX_TYPE3_GLYPHS`]
-/// descriptions within [`MAX_TYPE3_FONT_BYTES`].
-fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<([f64; 4], bool)> {
+/// descriptions within [`MAX_TYPE3_FONT_BYTES`], each charged to the reading's allowance too.
+fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option<([f64; 4], bool)> {
     let procs = dict(doc, font.get(b"CharProcs"))?;
     let mut names: Vec<&[u8]> = Vec::new();
     // Whether every glyph that can be drawn is read; if not, the union may be short of them.
@@ -401,12 +477,30 @@ fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<([f64; 4], bool)> {
     } else {
         names.iter().filter_map(|n| procs.get(n)).collect()
     };
-    let mut budget = DecodeBudget::new(MAX_TYPE3_FONT_BYTES, 0);
+    // What is left of the font's own total: the descriptions decode against the reading's
+    // allowance, which charges them, and each within what is left of this.
+    let mut left = MAX_TYPE3_FONT_BYTES;
     let mut union: Option<[f64; 4]> = None;
     for proc in chosen {
         let Object::Stream(s) = &*doc.resolve(proc) else { continue };
-        let Ok(data) = budget.decode_within(&doc.with_direct_parms(s), MAX_TYPE3_GLYPH_BYTES) else {
-            if budget.remaining() == 0 {
+        // Once the reading's allowance is spent the rest go unread, before their parameters are
+        // resolved.
+        if reads.budget.refuses(s) {
+            reads.refused = true;
+            complete = false;
+            break;
+        }
+        let before = reads.budget.remaining();
+        let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
+        left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
+        let Ok(data) = read else {
+            if reads.budget.remaining() == 0 {
+                // The rest go unread too, for want of the reading's allowance.
+                reads.refused = true;
+                complete = false;
+                break;
+            }
+            if left == 0 {
                 // The rest go unread too.
                 complete = false;
                 break;
@@ -785,11 +879,25 @@ impl Metrics {
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
+            past_allowance: false,
         }
     }
 
+    /// The metrics of `font`. Each stream they come from decodes within its own limit (16 MiB for
+    /// a CMap or a program, 4 MiB for a Type 3 font's glyph descriptions together), and again on
+    /// every call: a caller that reads many fonts, or one font many times, shares an allowance
+    /// through [`Metrics::from_dict_within`].
     pub fn from_dict(doc: &Document, font: &Dict) -> Self {
-        let mut m = Self::read_metrics(doc, font);
+        // No total, so nothing is refused: each stream stays within its own limit, as it always has.
+        Self::from_dict_within(doc, font, &mut DecodeBudget::new(usize::MAX, 0))
+    }
+
+    /// [`Metrics::from_dict`], decoding against `budget`, which the caller shares across the fonts
+    /// it reads (a page's, say): each stream pays for what it decodes, usable or not. A stream the
+    /// allowance can't pay for is left unread, and [`Metrics::past_allowance`] says so.
+    pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
+        let mut reads = Reads::new(doc, budget);
+        let mut m = Self::read_metrics(doc, font, &mut reads);
         let base = font
             .name(b"BaseFont")
             .map(|name| String::from_utf8_lossy(name).into_owned())
@@ -806,17 +914,18 @@ impl Metrics {
         m.italic |= italic;
         m.base_font = base;
         if m.composite && m.subset {
-            m.outlined_cids = cids_with_outlines(doc, font);
+            m.outlined_cids = cids_with_outlines(doc, font, &mut reads);
         }
         m.code_len = match &m.codes {
             Codes::One => 1,
             Codes::Two => 2,
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
         };
-        m.unicode = unicode_map(doc, font, m.composite);
+        m.unicode = unicode_map(doc, font, m.composite, &mut reads);
         if m.std14.is_some() {
-            embedded_widths(doc, font, &mut m);
+            embedded_widths(doc, font, &mut m, &mut reads);
         }
+        m.past_allowance = reads.refused;
         let mut reverse = HashMap::new();
         for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(m.unicode.encoding.iter()) {
             if let Some(ch) = only_char(text)
@@ -837,7 +946,7 @@ impl Metrics {
         m
     }
 
-    fn read_metrics(doc: &Document, font: &Dict) -> Self {
+    fn read_metrics(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Self {
         let mut m = Metrics::fallback();
         m.std14 = None;
         let subtype = font.name(b"Subtype").unwrap_or(b"Type1").to_vec();
@@ -850,7 +959,7 @@ impl Metrics {
             m.codes = Codes::Two;
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
-                && let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES)
+                && let Some(data) = reads.decode(s, MAX_CMAP_BYTES)
             {
                 let (spaces, cids) = parse_cmap(&data);
                 if !spaces.is_empty() {
@@ -915,7 +1024,7 @@ impl Metrics {
                     // A union cut short by a limit may miss glyphs that are drawn, so a nonzero
                     // `/FontBBox` comes first then; all zero, the partial union is still better
                     // than no box. A box with no height in text space gives way to the next.
-                    let glyphs = type3_glyph_box(doc, font);
+                    let glyphs = type3_glyph_box(doc, font, reads);
                     // All zero: no assumption about glyph sizes (Table 110).
                     let bbox = <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0));
                     let union = |complete: bool| glyphs.filter(|g| g.1 == complete).map(|(r, _)| (r, 0.0, 0.0));
@@ -1088,8 +1197,14 @@ impl Metrics {
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
-    /// no glyph in it (the caller then substitutes another font).
+    /// no glyph in it, or the metrics were read past their allowance (the caller then substitutes
+    /// another font). Empty text needs no verified glyph and always encodes.
     pub fn encode(&self, text: &str) -> Option<Vec<u8>> {
+        // A refused read cannot establish the mappings or glyphs needed to write new text.
+        // Empty text needs neither and remains usable for erasing existing text.
+        if self.past_allowance && !text.is_empty() {
+            return None;
+        }
         // The lowest code showing each wanted character. Explicit entries and the encoding are
         // checked one by one; each range is asked for the wanted characters it can show.
         let wanted: HashSet<char> = text.chars().collect();
@@ -1432,7 +1547,7 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
 /// to [`symbolic_mac_roman_texts`]). A code whose glyph has no name with a Unicode value reads
 /// as WinAnsi, as the renderer reads it (vendored hayro-interpret patch (79)), so the editor and
 /// extraction agree: `€` for code 0x80, which Standard leaves without a character.
-fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+fn symbolic_glyph_texts(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<(u32, String)> {
     use skrifa::GlyphId;
     use skrifa::raw::{FontData, FontRead as _, TableProvider as _, tables::cmap::PlatformId, tables::post::Post, types::Tag};
     let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
@@ -1443,7 +1558,7 @@ fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
     let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
     let object = doc.resolve(object);
     let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
-    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(MAX_SFNT) else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
     let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
     let Ok(cmap) = face.cmap() else { return Vec::new() };
     // A `post` version written with its 16-bit halves swapped (`00 00 00 02` for 2.0, as ScanSoft
@@ -1534,7 +1649,7 @@ fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str],
 
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
 /// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
-fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
+fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
     let mut out = Unicode::default();
     if !composite {
         let enc = font.get(b"Encoding").map(|e| doc.resolve(e));
@@ -1579,8 +1694,8 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
         // A font whose `post` table names its glyphs reads by those names; one that names none
         // and keeps the Macintosh order reads as Mac OS Roman, over the WinAnsi fallback.
         if base_name.is_none() && !symbolic_builtin {
-            out.encoding.extend(symbolic_glyph_texts(doc, font));
-            out.encoding.extend(symbolic_mac_roman_texts(doc, font));
+            out.encoding.extend(symbolic_glyph_texts(doc, font, reads));
+            out.encoding.extend(symbolic_mac_roman_texts(doc, font, reads));
         }
         if let Some(Object::Dict(d)) = enc.as_deref()
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
@@ -1606,10 +1721,8 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
     }
     match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
         Some(Object::Stream(s)) => {
-            // With `/DecodeParms` given by reference, as every stream of the font is read here,
-            // and as the redaction proof reads the map: the two must get the same text, or a copy
-            // redaction rightly left counts as a survivor.
-            if let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES) {
+            // Reads resolves indirect parameters too, matching the redaction proof's text.
+            if let Some(data) = reads.decode(s, MAX_CMAP_BYTES) {
                 parse_to_unicode(&data, &mut out);
             }
         }
@@ -1657,7 +1770,7 @@ fn identity_to_unicode() -> Vec<u8> {
 /// renderer finds it: the Windows (3, 0) and (3, 1) subtables first, with the code and the code at
 /// 0xF000, 0xF100 and 0xF200, then the Macintosh and Unicode-platform ones. The renderer's text
 /// layer reads the same codes the same way (vendored hayro-interpret patch (101)).
-fn symbolic_mac_roman_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+fn symbolic_mac_roman_texts(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<(u32, String)> {
     use skrifa::GlyphId;
     use skrifa::raw::{TableProvider as _, tables::cmap::PlatformId, tables::post::DEFAULT_GLYPH_NAMES, types::Tag};
     let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
@@ -1668,7 +1781,7 @@ fn symbolic_mac_roman_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
     let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
     let object = doc.resolve(object);
     let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
-    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(MAX_SFNT) else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
     let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
     // A CFF program in `/FontFile2` selects its glyphs by name, not through the `cmap`. A `post`
     // table of version 1.0 or 2.0 (also with its 16-bit halves swapped, as the renderer reads it)

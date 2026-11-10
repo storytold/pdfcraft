@@ -40,6 +40,8 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
+        // Replace Text: the caret (`/IT /Replace`) is the group's primary; earlier builds made
+        // the strikeout primary.
         Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
@@ -89,10 +91,10 @@ pub fn count(info: &DocInfo) -> usize {
     info.annotations.iter().filter(|a| a.is_comment()).count()
 }
 
-/// The replies under the header's count, at any depth: not status changes, checkmarks or a
-/// Replace Text caret (grouped with its strikeout, not a reply to it).
+/// The replies under the header's count, at any depth: not status changes, checkmarks or group
+/// subordinates (`/RT /Group`, such as Replace Text's strikeout: part of the comment, not a reply).
 pub fn reply_count(info: &DocInfo) -> usize {
-    info.annotations.iter().filter(|a| a.is_reply() && a.state.is_none() && !a.grouped).count()
+    info.annotations.iter().filter(|a| a.is_reply() && a.state.is_none() && !a.is_group_member()).count()
 }
 
 fn matches(a: &Annotation, q: &str) -> bool {
@@ -176,10 +178,14 @@ pub(crate) fn show(
     // annotation its `/IRT` chain refers to past earlier state replies (ISO 32000-2 §12.5.6.3),
     // so one set on a reply, at any depth, is that reply's and not the comment's, and the card's
     // badges and checkmark leave it out (comment_list reports it on the reply). Page badges count
-    // roots before filtering.
+    // roots before filtering. A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) is one comment, its
+    // primary's: a subordinate is no reply, and a reply to one (a status too) is the group's.
     let tops = pdfcraft_render::thread_tops(&info.annotations);
     let states = ReviewStates::new(&info.annotations);
     for a in &info.annotations {
+        if a.is_group_member() {
+            continue;
+        }
         if let Some(parent) = a.parent {
             if a.state.is_none() {
                 replies.entry(tops.get(&(a.page, a.index)).copied().unwrap_or(parent)).or_default().push(a);
@@ -605,6 +611,11 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     let menu_id = ui.scope_id().with(("card-menu", key));
     if open_menu {
         egui::Popup::open_id(ui.ctx(), menu_id);
+    } else if more_rect.is_none() {
+        // The button is drawn on the selected card alone. Without it (Undo deselected the card
+        // with its menu open), egui would keep the menu open with nowhere to show it, and an
+        // open popup holds every page key (`PageKeys`).
+        egui::Popup::close_id(ui.ctx(), menu_id);
     }
     // Hang the menu from the "…" button (a pointer anchor would follow the mouse to the items).
     let anchor = more_rect.map_or(egui::PopupAnchor::PointerFixed, egui::PopupAnchor::ParentRect);

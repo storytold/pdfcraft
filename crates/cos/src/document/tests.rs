@@ -1,5 +1,26 @@
 use super::*;
 
+/// What [`crate::reachable_objects`] gives is what a full save keeps: not an object nothing refers to, nor one
+/// a reference only dangles at, and a ring of references ends.
+#[test]
+fn what_is_reachable_is_what_a_full_save_keeps() {
+    let mut doc = Document::new_empty();
+    let root = doc.root().unwrap();
+    let kept = doc.add(Object::Int(7));
+    let dangling = ObjRef::new(4_000, 0);
+    let list = doc.add(Object::Null);
+    let ring = doc.add(Object::Array(vec![Object::Ref(list)]));
+    doc.set(list, Object::Array(vec![Object::Ref(kept), Object::Ref(ring), Object::Ref(dangling)]));
+    let orphan = doc.add(Object::Int(8));
+    doc.update_dict(root, |d| d.set(b"Held".to_vec(), Object::Ref(list))).unwrap();
+    let found = crate::reachable_objects(&doc).unwrap();
+    assert!([root, kept, list, ring].iter().all(|r| found.contains(&r.num)));
+    assert!(!found.contains(&orphan.num) && !found.contains(&dangling.num));
+    let saved = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let holds = |n: i64| saved.scan_objects().any(|(_, o)| matches!(*o, Object::Int(v) if v == n));
+    assert!(holds(7) && !holds(8));
+}
+
 std::thread_local! {
     /// How many times `Document::scan_for` read the file on this thread.
     pub(super) static FILE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
