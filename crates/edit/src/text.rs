@@ -54,6 +54,8 @@ use fallback::{
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+#[cfg(test)]
+use interp::tj_operands;
 use interp::{Origin, Paint, union};
 pub(crate) use lines::{
     ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
@@ -62,7 +64,7 @@ pub(crate) use lines::{
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 use lines::{page_dict, word_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
-use rewrite::{coincident_ops, rewrite_block_from};
+use rewrite::{drop_and_patch, rewrite_block_from};
 pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
@@ -132,6 +134,16 @@ pub struct TextLine {
     /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
     /// (#2529). Meaningless otherwise.
     soft_gap: usize,
+    /// When a run comes from a sub-slice of a multi-column `TJ` array, its operator index,
+    /// operand range and equivalent numeric adjustment (`-1000 * advance / (size * scale)`).
+    slices: Vec<TjSlice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TjSlice {
+    pub(super) op: usize,
+    pub(super) range: std::ops::Range<usize>,
+    pub(super) adjustment: f64,
 }
 
 impl TextLine {
@@ -154,6 +166,26 @@ impl TextLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tj_move_ranges_reject_mismatched_bounds() {
+        let pieces =
+            [Object::String(PdfString::literal(vec![0xff, 0x80])), Object::Int(-8000), Object::String(PdfString::literal(b"Right".to_vec()))];
+        assert_eq!(tj_operands(&pieces, 0..1).unwrap(), &pieces[..1]);
+        assert_eq!(tj_operands(&pieces, 1..2).unwrap(), &pieces[1..2]);
+        assert_eq!(tj_operands(&pieces, 2..3).unwrap(), &pieces[2..]);
+        assert!(tj_operands(&pieces, 3..3).unwrap().is_empty());
+        // Parsed runs normally share the exact array that produced them. Exercise the
+        // defensive boundary directly with stale, overlapping and extreme ranges.
+        for (start, end) in [(0, 4), (4, 4), (2, 1), (0, usize::MAX), (usize::MAX, usize::MAX)] {
+            let range = start..end;
+            assert_eq!(
+                tj_operands(&pieces, range.clone()),
+                Err(EditError::Invalid("a text operation has an invalid array range".into())),
+                "{range:?}"
+            );
+        }
+    }
 
     /// The clip regions reading uses (#3503): intersected regions keep only what both cover,
     /// regions apart leave nothing, turned ones keep their shape, and touching is not showing.
