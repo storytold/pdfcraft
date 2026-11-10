@@ -89,16 +89,26 @@ pub(super) fn panel(ui: &mut egui::Ui, p: DestinationsPanel<'_>) {
     let current = state.by_page;
     let mut sort = None;
     ui.horizontal(|ui| {
-        // The sort's own label is marked with a small triangle.
-        let label = |by_page: bool, text: &str| {
-            let text = if current == by_page { format!("{} \u{25be}", tl!(text)) } else { tl!(text).to_string() };
-            egui::Button::new(egui::RichText::new(text).font(theme::semibold(12.0)).color(t.text_muted)).frame(false)
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let label = |text: &str| egui::Button::new(egui::RichText::new(text).font(theme::semibold(12.0)).color(t.text_muted)).frame(false);
+        // The sort's own label is marked with a small chevron after it. It is an icon: the
+        // interface fonts have no triangle glyph, and a glyph no font has is a panic.
+        let mark = |ui: &mut egui::Ui| {
+            let (_, rect) = ui.allocate_space(vec2(12.0, 12.0));
+            icons::paint(ui, rect, "chevron-down", 12.0, t.text_muted);
         };
-        if ui.add(label(false, "Name")).on_hover_text(tl!("Sort by name")).clicked() {
+        if ui.add(label(tl!("Name"))).on_hover_text(tl!("Sort by name")).clicked() {
             sort = Some(false);
         }
+        if !current {
+            mark(ui);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add(label(true, "Page")).on_hover_text(tl!("Sort by page")).clicked() {
+            // Right to left: the mark comes first so that it follows the label.
+            if current {
+                mark(ui);
+            }
+            if ui.add(label(tl!("Page"))).on_hover_text(tl!("Sort by page")).clicked() {
                 sort = Some(true);
             }
         });
