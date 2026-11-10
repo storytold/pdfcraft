@@ -362,3 +362,63 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
 }
+
+/// A copy of `owner`'s certificate with the same subject and key but chosen validity and path
+/// length, signed by a key that is not the owner's: its own signature does not verify, and
+/// anyone can write one. It is what the trust store calls a different encoding of the anchor.
+fn resealed(owner: &Party, valid: (u32, u32), path_len: Option<u64>) -> Certificate {
+    let forger = PrivateKey::generate_p256().unwrap();
+    let alg = forger.preferred_digest();
+    let sig_alg = forger.signature_algorithm(alg);
+    let exts = [basic_constraints(true, path_len), key_usage(KEY_CERT_SIGN)];
+    let refs: Vec<&[u8]> = exts.iter().map(Vec::as_slice).collect();
+    let mut fields: Vec<Vec<u8>> = vec![der::explicit(0, &der::int(2))];
+    fields.extend([
+        der::uint(&[9]),
+        sig_alg.clone(),
+        owner.name.raw.clone(),
+        der::seq(&[&time(valid.0).encode(), &time(valid.1).encode()]),
+        owner.name.raw.clone(),
+        owner.key.public_key().spki(),
+    ]);
+    fields.push(der::explicit(3, &der::seq(&refs)));
+    let refs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
+    let tbs = der::seq(&refs);
+    let signature = forger.sign(alg, &tbs).unwrap();
+    Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+}
+
+#[test]
+fn a_copy_of_a_trusted_root_cannot_widen_its_own_limits() {
+    // A root that may not vouch for an intermediate (pathLen 0), and a chain that needs it to.
+    let r = issue("Constrained Root", None, FOREVER, &[basic_constraints(true, Some(0)), key_usage(KEY_CERT_SIGN)]);
+    let i = ca("Intermediate", &r, None);
+    let l = end_entity("Leaf", &i);
+    let trust = TrustStore { certs: vec![r.cert.clone()] };
+
+    // Honestly, the root refuses: the chain stops at the intermediate.
+    let pool = [i.cert.clone(), r.cert.clone()];
+    let chain = build_chain(&l.cert, &pool, Some(time(2026)));
+    assert_eq!(names(&chain), ["Leaf", "Intermediate"], "the root's path length stops the chain");
+    assert!(!trust.anchors(&chain, Some(time(2026))), "a chain the trusted root refuses is not trusted");
+
+    // A copy of the root with no path length, a stretched validity and a signature nobody can
+    // verify still carries the root's name and key, so the intermediate's signature verifies
+    // with it and the chain reaches it. The trusted root's own limits still decide.
+    let copy = resealed(&r, (2020, 2099), None);
+    let pool = [i.cert.clone(), copy];
+    let chain = build_chain(&l.cert, &pool, Some(time(2026)));
+    assert_eq!(names(&chain), ["Leaf", "Intermediate", "Constrained Root"], "the copy is reached");
+    assert!(!trust.anchors(&chain, Some(time(2026))), "the trusted root's own path length still decides");
+
+    // The same shape under a root that does allow it is trusted: the verdict is the trusted
+    // certificate's, not a blanket refusal of copies.
+    let open = issue("Open Root", None, FOREVER, &[basic_constraints(true, Some(1)), key_usage(KEY_CERT_SIGN)]);
+    let i = ca("Open Intermediate", &open, None);
+    let l = end_entity("Open Leaf", &i);
+    let trust = TrustStore { certs: vec![open.cert.clone()] };
+    let pool = [i.cert.clone(), open.cert.clone()];
+    let chain = build_chain(&l.cert, &pool, Some(time(2026)));
+    assert_eq!(names(&chain), ["Open Leaf", "Open Intermediate", "Open Root"]);
+    assert!(trust.anchors(&chain, Some(time(2026))));
+}
