@@ -50,7 +50,11 @@ impl Automation {
         {
             return PrinterProfile::read(path).map_err(bad);
         }
-        let installed = colour::installed_profiles();
+        let installed = match self.installed_profiles() {
+            Ok(list) => list,
+            // Confined without read authority: say why the file was refused, if it was.
+            Err(e) => return Err(file.err().unwrap_or(e)),
+        };
         if let Some(p) = colour::find_installed(&installed, name) {
             return PrinterProfile::read(&p.path).map_err(failed);
         }
@@ -58,8 +62,27 @@ impl Automation {
         Err(bad(format!("color_profile {name:?} is neither an installed profile (print_color_profiles) nor an ICC file")))
     }
 
+    /// The profiles that can be named: the system's, or, when file access is confined, those in
+    /// the read root (as `text_font_files` does), each file checked against it before it is read.
+    fn installed_profiles(&self) -> Result<Vec<colour::InstalledProfile>> {
+        let Some(roots) = &self.roots else {
+            let folders = match &self.root {
+                Some(root) => vec![root.clone()],
+                None => colour::profile_folders(),
+            };
+            return Ok(colour::installed_profiles_in(&folders));
+        };
+        let read = roots
+            .read_root()
+            .ok_or_else(|| failed("automation filesystem access is not granted: read authority is absent: installed colour profiles"))?;
+        let folders = vec![self.resolve(&read.to_string_lossy(), false)?];
+        let inside = |path: &std::path::Path| roots.check(&path.to_string_lossy(), crate::file_access::Access::Read).is_ok();
+        Ok(colour::installed_profiles_where(&folders, &inside))
+    }
+
     pub(crate) fn print_color_profiles(&self) -> Result<Value> {
-        let list: Vec<Value> = colour::installed_profiles()
+        let list: Vec<Value> = self
+            .installed_profiles()?
             .into_iter()
             .map(|p| json!({ "name": p.name, "path": p.path.to_string_lossy(), "color_space": if p.gray { "gray" } else { "rgb" } }))
             .collect();

@@ -12293,6 +12293,8 @@ fn doc_print_with_app_managed_colour() {
     }
     let listed = ok(&mut a, "print_color_profiles", json!({}));
     assert_eq!(listed["count"].as_u64(), listed["profiles"].as_array().map(|p| p.len() as u64), "{listed}");
+    // Under a root the profiles listed are the root's RGB and grey ones.
+    assert_eq!(listed["count"], 1, "{listed}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
