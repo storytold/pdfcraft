@@ -33,5 +33,5 @@ pub use container::{FileStructure, MAX_FILE_STRUCTURES, MAX_INFLATED_BYTES, PRC_
 pub use error::PrcError;
 pub use geometry::Matrix;
 pub use schema::Schema;
-pub use tess::{Tessellation, TriangleMesh, TriangleStyle};
+pub use tess::{Tessellation, TriangleMesh, TriangleStyle, WireTessellation};
 pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, NameSource, Placement, Rgba, StyleAlpha};
