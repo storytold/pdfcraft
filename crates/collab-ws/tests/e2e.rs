@@ -9,7 +9,8 @@
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use pdfcraft_collab_client_pdf::{
     add_annotation_payload, add_note_payload, apply, blank_page_payload, combine_pages_payload, duplicate_page_payload, insert_page_payload,
-    merge_op, replace_page_payload, reply_payload, rotate_payload, set_contents_payload, split_pages_payload, structural_op,
+    merge_op, page_link_clear_payload, page_link_set_payload, replace_page_payload, reply_payload, rotate_payload, set_contents_payload,
+    split_pages_payload, structural_op,
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
@@ -18,7 +19,7 @@ use pdfcraft_collab_proto::{
 };
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, RoomConfig};
 use pdfcraft_collab_ws::{Claims, Config, Hs256Verifier, ServerHandle, TokenError, Verifier, WsServer};
-use pdfcraft_engine::Session;
+use pdfcraft_engine::{LinkAction, LinkContent, LinkStyle, LinkZoom, Session};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -229,6 +230,23 @@ impl Peer {
 
     fn labels(&self) -> Vec<String> {
         self.session.get(self.id).expect("the peer document is open").info.pages.iter().map(|page| page.label.clone()).collect()
+    }
+
+    /// The peer's links, `target` per link in `/Annots` order: the page's number (1-based)
+    /// and zoom, an address, a name, or the other file and its page.
+    fn links(&self) -> Vec<String> {
+        let document = self.session.get(self.id).expect("the peer document is open");
+        document
+            .links()
+            .iter()
+            .map(|link| match &link.action {
+                LinkAction::Page { page, zoom } => format!("page:{}:{zoom:?}", page + 1),
+                LinkAction::Uri(uri) => format!("uri:{uri}"),
+                LinkAction::Named(name) => format!("named:{name}"),
+                LinkAction::Remote { file, page, .. } => format!("remote:{file}#{}", page + 1),
+                LinkAction::Other(reason) => format!("other:{reason}"),
+            })
+            .collect()
     }
 
     fn saved(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -2302,6 +2320,13 @@ impl Room {
         assert_eq!(self.bo.labels(), self.ada.labels(), "the second replica converged");
         assert_eq!(self.cy.labels(), self.ada.labels(), "and the viewer sees them too");
     }
+
+    /// Every replica has the same links.
+    fn assert_links(&self, expected: &[&str]) {
+        assert_eq!(self.ada.links(), expected);
+        assert_eq!(self.bo.links(), self.ada.links(), "the second replica converged");
+        assert_eq!(self.cy.links(), self.ada.links(), "and the viewer sees them too");
+    }
 }
 
 /// Two editors and a viewer share the outline over a real socket: an item is
@@ -2527,5 +2552,114 @@ fn page_labels_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::
     );
     assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
     room.assert_labels(&["i", "2"]);
+    Ok(())
+}
+
+/// Links over a real socket: a page's whole link list is one structural operation,
+/// every replica applies it, the undo swaps the lists the server carried, a clear
+/// removes one link, a stale check is refused without moving the version, and a
+/// viewer is refused before the adapter runs.
+#[test]
+fn page_links_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    room.assert_links(&[]);
+    let link = |rect: [f64; 4], action: LinkAction| LinkContent { rect, quads: None, action, style: LinkStyle::default() };
+    let set = |room: &Room, id: &str, links: &[LinkContent]| -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(structural_op(
+            room.doc.clone(),
+            OpId::new(id)?,
+            room.ada.version,
+            room.ada.epoch,
+            Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+            page_link_set_payload(links),
+        ))
+    };
+    // A web address, a page with a view, a name and another file's page: every target
+    // the wire carries travels through the room and lands on all three replicas.
+    let web = link([10.0, 10.0, 60.0, 40.0], LinkAction::Uri("https://example.org".into()));
+    let applied = room.write(set(&room, "link-web", std::slice::from_ref(&web))?)?;
+    assert_eq!(applied.op.payload["before"], json!([]), "the undo image is the empty list the set replaced");
+    room.assert_links(&["uri:https://example.org"]);
+
+    let page = link([10.0, 50.0, 60.0, 80.0], LinkAction::Page { page: 1, zoom: LinkZoom::FitWidth });
+    let named = link([10.0, 90.0, 60.0, 120.0], LinkAction::Named("intro".into()));
+    let remote = link([10.0, 130.0, 60.0, 160.0], LinkAction::Remote { file: "other.pdf".into(), page: 2, zoom: LinkZoom::FitPage });
+    let both = room.write(set(&room, "link-three", &[web.clone(), page.clone(), named.clone(), remote.clone()])?)?;
+    assert_eq!(both.op.payload["before"].as_array().map(Vec::len), Some(1));
+    room.assert_links(&["uri:https://example.org", "page:2:FitWidth", "named:intro", "remote:other.pdf#3"]);
+
+    // A stale check (the list before the last set) is refused, and nothing moves.
+    let version = room.ada.version;
+    let mut stale_payload = page_link_set_payload(std::slice::from_ref(&web));
+    stale_payload["before"] = json!([]);
+    let stale = structural_op(
+        room.doc.clone(),
+        OpId::new("link-stale")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        stale_payload,
+    );
+    room.ada.send(stale)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Conflict));
+    assert_eq!(room.ada.version, version);
+    room.assert_links(&["uri:https://example.org", "page:2:FitWidth", "named:intro", "remote:other.pdf#3"]);
+
+    // The undo of the set goes back through the socket: the list it replaced.
+    let mut undo = pdfcraft_collab_client_pdf::inverse_after(&both).ok_or("the set is undoable")?;
+    undo.base_version = room.ada.version;
+    undo.epoch = room.ada.epoch;
+    room.write(undo)?;
+    room.assert_links(&["uri:https://example.org"]);
+    // A redo sends the intent again.
+    room.write(set(&room, "link-redo", &[web.clone(), page])?)?;
+    room.assert_links(&["uri:https://example.org", "page:2:FitWidth"]);
+
+    // A clear removes the link at its position among the page's links; its undo is a
+    // set over the list the server says it removed.
+    let clear = structural_op(
+        room.doc.clone(),
+        OpId::new("link-clear")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        page_link_clear_payload(0),
+    );
+    let cleared = room.write(clear)?;
+    assert_eq!(cleared.op.payload["removed"]["target"]["kind"], "uri");
+    room.assert_links(&["page:2:FitWidth"]);
+    let mut undo_clear = pdfcraft_collab_client_pdf::inverse_after(&cleared).ok_or("the clear is undoable")?;
+    undo_clear.base_version = room.ada.version;
+    undo_clear.epoch = room.ada.epoch;
+    room.write(undo_clear)?;
+    room.assert_links(&["uri:https://example.org", "page:2:FitWidth"]);
+
+    // A viewer is refused before the adapter runs.
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-link")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.cy.epoch }),
+        page_link_set_payload(&[link([10.0, 10.0, 60.0, 40.0], LinkAction::Uri("https://example.org".into()))]),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    room.assert_links(&["uri:https://example.org", "page:2:FitWidth"]);
+
+    // A page operation keeps the links on their page.
+    let blank = structural_op(
+        room.doc.clone(),
+        OpId::new("link-blank")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        blank_page_payload(200.0, 300.0),
+    );
+    room.write(blank)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        let document = peer.session.get(peer.id).ok_or("the peer document is open")?;
+        assert_eq!(document.links().iter().map(|link| link.page).collect::<Vec<_>>(), [1, 1], "the links stay on the page they were on");
+    }
     Ok(())
 }

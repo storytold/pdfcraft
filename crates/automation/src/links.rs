@@ -136,12 +136,23 @@ impl Automation {
                         }
                         match action {
                             LinkAction::Page { zoom, .. } => v["zoom"] = zoom_value(*zoom),
+                            // A name the viewer resolved to this page is the link's own
+                            // destination; an action it could not carry stays unsupported.
+                            LinkAction::Named(_) => v["named"] = json!(true),
                             LinkAction::Other(_) => v["named"] = json!(true),
-                            LinkAction::Uri(_) => {}
+                            LinkAction::Remote { .. } | LinkAction::Uri(_) => {}
                         }
                     }
                     (LinkAction::Page { page, zoom }, None) => {
                         v["to_page"] = json!(page + 1);
+                        v["zoom"] = zoom_value(*zoom);
+                    }
+                    (LinkAction::Named(name), None) => v["named_destination"] = json!(name),
+                    (LinkAction::Remote { file, page, zoom }, None) => {
+                        v["remote_file"] = json!(file);
+                        // A page of the other file, 1-based here as every page number this tool
+                        // reports; `to_page` is never set from it, because it is not our page.
+                        v["remote_page"] = json!(page.saturating_add(1));
                         v["zoom"] = zoom_value(*zoom);
                     }
                     (LinkAction::Other(o), None) => v["other"] = json!(o),

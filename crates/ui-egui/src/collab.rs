@@ -1172,6 +1172,15 @@ impl PdfCraftApp {
                 // commenter may not renumber the pages (TASK §6).
                 | Edit::NumberPages { .. }
                 | Edit::ClearPageLabels { .. }
+                // A link is a destination of the document too (RFC §3.1.9): adding,
+                // changing or removing one is structural, and the room refuses a
+                // commenter's operation before it runs.
+                | Edit::AddLink { .. }
+                | Edit::SetLink { .. }
+                | Edit::DeleteLink { .. }
+                | Edit::RemoveLinks { .. }
+                | Edit::AddLinks { .. }
+                | Edit::SetPageLinks { .. }
         );
         if structural && !collab.role.can_structural() {
             collab.error = Some("This role cannot change pages".into());

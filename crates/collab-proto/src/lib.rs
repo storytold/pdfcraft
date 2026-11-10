@@ -106,6 +106,34 @@ pub const MAX_PAGE_LABEL_BYTES: usize = 1024;
 /// reasonably rewrite; a set that would cross it is refused (`limit`).
 pub const MAX_PAGE_LABEL_RANGES: usize = 1_024;
 
+/// Longest web address a shared link may carry, in bytes. PdfCraft opens an
+/// address from a document only up to 2 048 characters, and one operation has to
+/// fit a frame, so a longer address is refused before the document changes.
+pub const MAX_LINK_URI_BYTES: usize = 2_048;
+
+/// Longest path to another file a remote go-to may carry, in bytes: the bound
+/// the resolver accepts for a remote document (an untrusted path, never opened
+/// by the room).
+pub const MAX_LINK_REMOTE_FILE_BYTES: usize = 4_096;
+
+/// Most links a room accepts on one page. A rewrite names the page's whole list,
+/// so a page over this is refused (`limit`) before anything changes.
+pub const MAX_LINKS_PER_PAGE: usize = 1_024;
+
+/// Most links a room accepts in one document, the room's own additions included.
+pub const MAX_LINKS: usize = 10_000;
+
+/// Most text areas (`/QuadPoints`, eight numbers each) one link may carry.
+pub const MAX_LINK_QUADS: usize = 1_024;
+
+/// Largest coordinate, in points, a link's area may name. A page is far smaller;
+/// the bound keeps a hostile rectangle from claiming half the plane.
+pub const MAX_LINK_COORD: f64 = 1_000_000.0;
+
+/// Smallest side of a link's area, in points: a link smaller than this cannot be
+/// clicked, and the engine refuses one too.
+pub const MIN_LINK_SIDE: f64 = 2.0;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
     #[error("unsupported protocol version {0}")]

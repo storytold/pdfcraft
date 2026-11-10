@@ -36,6 +36,8 @@
 //! | `dest.delete` | structural | named destination (its name) |
 //! | `page.label.set` | structural | page-label range (the page it starts on) |
 //! | `page.label.clear` | structural | page-label range (the page it starts on) |
+//! | `page.link.set` | structural | page (its whole link list) |
+//! | `page.link.clear` | structural | page (one link of its list) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -80,6 +82,16 @@
 //! page it starts on, `page.label.set` names the span it labels and
 //! `page.label.clear` removes the range; both carry the whole range they
 //! replaced, and page operations keep every page's label on it. See `labels.rs`.
+//!
+//! Links are structural too (RFC §3.1.9): the unit is one page's whole list of
+//! link annotations, because the undo image is the links the page had.
+//! `page.link.set` makes the page's links exactly the list it names (a rectangle
+//! or the quads of a text area, and a target: a page with a view, a named
+//! destination, a page of another file, or a web address); `page.link.clear`
+//! removes one of them. Both carry the list before and after, a page that holds
+//! a link the model cannot carry is refused with `unsupported`, and page
+//! operations keep a link's page and renumber the number it names. See
+//! `links.rs`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -96,6 +108,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod labels;
+mod links;
 mod outline;
 mod store;
 
@@ -1322,6 +1335,8 @@ impl Adapter for PdfAdapter {
             ("dest.delete", ConflictClass::Structural) => self.delete_named_destination(&effective.target, &mut effective.payload)?,
             ("page.label.set", ConflictClass::Structural) => self.set_page_label(&effective.target, &mut effective.payload)?,
             ("page.label.clear", ConflictClass::Structural) => self.clear_page_label(&effective.target, &mut effective.payload)?,
+            ("page.link.set", ConflictClass::Structural) => self.set_page_links(&effective.target, &mut effective.payload)?,
+            ("page.link.clear", ConflictClass::Structural) => self.clear_page_link(&effective.target, &mut effective.payload)?,
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -4368,6 +4383,221 @@ mod tests {
         )?;
         room.apply(&editor, &split, 0)?;
         assert_eq!(labels(room.adapter()), ["i", "ii", "iii", "iv"]);
+        Ok(())
+    }
+    // ---- Links (RFC §3.1.9) ----------------------------------------------
+
+    /// The action of every link on `page`, in `/Annots` order.
+    fn link_actions(adapter: &PdfAdapter, page: usize) -> Vec<pdfcraft_engine::LinkAction> {
+        adapter
+            .document()
+            .map(|document| document.links().iter().filter(|link| link.page == page).map(|link| link.action.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    fn link_op(id: &str, page: u32, version: u64, epoch: u64, payload: Value) -> Result<Op, Box<dyn std::error::Error>> {
+        op(id, ConflictClass::Structural, Target::Page(PageRef { index: page, epoch }), version, epoch, payload)
+    }
+
+    fn link(rect: [f64; 4], target: Value) -> Value {
+        json!({"rect": rect, "target": target})
+    }
+
+    /// A page that holds a link this model cannot write back (a JavaScript action):
+    /// the room refuses a rewrite rather than dropping the link.
+    fn fixture_with_a_script_link() -> Vec<u8> {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [10 10 60 30] /A << /S /JavaScript /JS (app.alert(1)) >> >>".to_vec(),
+        ];
+        objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn page_links_are_set_and_cleared_as_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let web = link([10.0, 10.0, 110.0, 40.0], json!({"kind": "uri", "uri": "https://example.org"}));
+        let first = link_op("link-1", 0, room.version(), room.epoch(), json!({"action": "page.link.set", "links": [web]}))?;
+        let applied = room.apply(&editor, &first, 0)?;
+        assert_eq!(applied.result["page"], 0);
+        assert_eq!(applied.op.payload["links"].as_array().map(Vec::len), Some(1));
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(0), "the undo image is the empty list it replaced");
+        assert_eq!(link_actions(room.adapter(), 0), [pdfcraft_engine::LinkAction::Uri("https://example.org".into())]);
+        let kept = room.adapter().document().and_then(|d| d.links().iter().find(|l| l.page == 0).and_then(|l| l.obj));
+
+        // A page target and a text area join the list: the first link is untouched.
+        let text = json!({"quads": [[10.0, 50.0, 110.0, 50.0, 10.0, 70.0, 110.0, 70.0]], "target": {"kind": "page", "page": 1, "zoom": {"kind": "fit_width"}}});
+        let both = link_op("link-2", 0, room.version(), room.epoch(), json!({"action": "page.link.set", "links": [web, text], "before": [web]}))?;
+        let applied = room.apply(&editor, &both, 0)?;
+        assert_eq!(applied.op.payload["links"].as_array().map(Vec::len), Some(2));
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(1));
+        let actions = link_actions(room.adapter(), 0);
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[1], pdfcraft_engine::LinkAction::Page { page: 1, zoom: pdfcraft_engine::LinkZoom::FitWidth });
+        assert_eq!(
+            room.adapter().document().and_then(|d| d.links().iter().find(|l| l.page == 0).and_then(|l| l.obj)),
+            kept,
+            "a link that did not change keeps its object"
+        );
+
+        // Clear one link: the accepted operation carries the list before and after, so
+        // the client's undo is a plain set over the old list.
+        let clear = link_op("link-clear", 0, room.version(), room.epoch(), json!({"action": "page.link.clear", "index": 0}))?;
+        let applied = room.apply(&editor, &clear, 0)?;
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(2));
+        assert_eq!(applied.op.payload["links"].as_array().map(Vec::len), Some(1));
+        assert_eq!(applied.op.payload["removed"]["target"]["kind"], "uri");
+        assert_eq!(link_actions(room.adapter(), 0), [pdfcraft_engine::LinkAction::Page { page: 1, zoom: pdfcraft_engine::LinkZoom::FitWidth }]);
+
+        // Its undo: the old list back, with the list this operation left as the check.
+        let undo = link_op(
+            "link-undo",
+            0,
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.link.set", "links": applied.op.payload["before"].clone(), "before": applied.op.payload["links"].clone()}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert_eq!(link_actions(room.adapter(), 0).len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn a_bad_link_operation_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let web = link([10.0, 10.0, 110.0, 40.0], json!({"kind": "uri", "uri": "https://example.org"}));
+        room.apply(&editor, &link_op("link-first", 0, 0, 0, json!({"action": "page.link.set", "links": [web]}))?, 0)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let before = link_actions(room.adapter(), 0);
+        let cases: Vec<(Value, ErrorCode, u32)> = vec![
+            (json!({"action": "page.link.set", "links": []}), ErrorCode::Invalid, 9),
+            (json!({"action": "page.link.set", "links": [], "before": []}), ErrorCode::Conflict, 0),
+            (
+                json!({"action": "page.link.set", "links": [link([0.0, 0.0, 1.0, 1.0], json!({"kind": "uri", "uri": "https://a.example"}))]}),
+                ErrorCode::Invalid,
+                0,
+            ),
+            (
+                json!({"action": "page.link.set", "links": [link([0.0, 0.0, 1.0e9, 50.0], json!({"kind": "uri", "uri": "https://a.example"}))]}),
+                ErrorCode::Invalid,
+                0,
+            ),
+            (
+                json!({"action": "page.link.set", "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "page", "page": 9}))]}),
+                ErrorCode::Invalid,
+                0,
+            ),
+            (
+                json!({"action": "page.link.set", "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "uri", "uri": " "}))]}),
+                ErrorCode::Invalid,
+                0,
+            ),
+            (
+                json!({"action": "page.link.set", "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "uri", "uri": "x".repeat(2049)}))]}),
+                ErrorCode::Limit,
+                0,
+            ),
+            (json!({"action": "page.link.set", "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "javascript"}))]}), ErrorCode::Invalid, 0),
+            (json!({"action": "page.link.set", "links": vec![web.clone(); pdfcraft_collab_proto::MAX_LINKS_PER_PAGE + 1]}), ErrorCode::Limit, 0),
+            (json!({"action": "page.link.clear", "index": 5}), ErrorCode::Invalid, 0),
+            (json!({"action": "page.link.clear"}), ErrorCode::Invalid, 0),
+        ];
+        for (index, (payload, code, page)) in cases.into_iter().enumerate() {
+            let attempt = link_op(&format!("bad-link-{index}"), page, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a bad link operation must be refused")?;
+            assert_eq!(rejected.code, code, "{}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch), "{}", rejected.message);
+            assert_eq!(link_actions(room.adapter(), 0), before, "{}", rejected.message);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_page_with_an_unshared_link_is_refused_whole() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("script.pdf", fixture_with_a_script_link().into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt = link_op(
+            "script",
+            0,
+            version,
+            epoch,
+            json!({"action": "page.link.set", "links": [link([10.0, 50.0, 60.0, 70.0], json!({"kind": "uri", "uri": "https://example.org"}))]}),
+        )?;
+        let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a page it cannot describe is refused")?;
+        assert_eq!(rejected.code, ErrorCode::Unsupported);
+        assert_eq!((room.version(), room.epoch()), (version, epoch));
+        assert_eq!(link_actions(room.adapter(), 0).len(), 1, "the script link is still there");
+        Ok(())
+    }
+
+    #[test]
+    fn a_viewer_and_a_commenter_cannot_change_links() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt =
+            json!({"action": "page.link.set", "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "uri", "uri": "https://example.org"}))]});
+        for role in [Role::Viewer, Role::Commenter] {
+            let actor = ActorId::new(format!("{role:?}"))?;
+            room.hello(actor.clone(), role, &hello()?, 0)?;
+            let op = link_op("link-role", 0, version, epoch, attempt.clone())?;
+            assert!(matches!(room.apply(&actor, &op, 0), Err(rejected) if rejected.code == ErrorCode::Forbidden), "{role:?} must be refused");
+            assert_eq!((room.version(), room.epoch()), (version, epoch));
+        }
+        assert!(link_actions(room.adapter(), 0).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn page_operations_keep_the_links_on_their_pages() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let web = link([10.0, 10.0, 110.0, 40.0], json!({"kind": "uri", "uri": "https://example.org"}));
+        room.apply(&editor, &link_op("link", 0, 0, 0, json!({"action": "page.link.set", "links": [web]}))?, 0)?;
+        let blank = op(
+            "blank",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.insert_blank", "width": 200.0, "height": 300.0}),
+        )?;
+        room.apply(&editor, &blank, 0)?;
+        assert!(link_actions(room.adapter(), 0).is_empty(), "the new blank page has none");
+        assert_eq!(link_actions(room.adapter(), 1), [pdfcraft_engine::LinkAction::Uri("https://example.org".into())], "the link stays on its page");
+        // A delete of the page takes the link with it; the other pages are untouched.
+        let delete = op(
+            "delete",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.delete"}),
+        )?;
+        room.apply(&editor, &delete, 0)?;
+        assert_eq!(room.adapter().document().map(|d| d.links().len()), Some(0));
         Ok(())
     }
 }

@@ -138,6 +138,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddLink { .. }
         | Edit::SetLink { .. }
         | Edit::DeleteLink { .. }
+        | Edit::SetPageLinks { .. }
         | Edit::RemoveLinks { .. }
         | Edit::AddLinks { .. }
         | Edit::Sanitize
@@ -1000,6 +1001,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetLink { page, index, rect, action, style } => pdfcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?,
         Edit::DeleteLink { page, index } => pdfcraft_annot::links::delete(doc, *page, *index)?,
+        Edit::SetPageLinks { page, links } => pdfcraft_annot::links::set_page_links(doc, *page, links)?,
         Edit::RemoveLinks { pages } => {
             if pdfcraft_annot::links::remove_all(doc, pages.as_deref())? == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("there are no links to remove".into())));

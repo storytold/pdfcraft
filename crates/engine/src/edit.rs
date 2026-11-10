@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
-    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, PrinterMarks, Protection, Restyle, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
-    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
-    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkContent, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon,
+    ObjectTarget, PageBox, PrinterMarks, Protection, Restyle, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y,
+    copy_image, decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure,
+    model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -687,6 +687,13 @@ pub enum Edit {
     DeleteLink {
         page: usize,
         index: usize,
+    },
+    /// Every link on `page`, in order: the room's form of a link edit. Links that
+    /// did not change keep their annotation object, so a rewrite touches only what
+    /// it must; the page's links the model cannot carry refuse the whole edit.
+    SetPageLinks {
+        page: usize,
+        links: Vec<LinkContent>,
     },
     /// Remove all links (on `pages`, or everywhere).
     RemoveLinks {

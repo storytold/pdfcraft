@@ -35,6 +35,7 @@ pdfcraft-collab-outline = { path = "crates/collab-outline", version = "0.18.1" }
 pdfcraft-collab-client = { path = "crates/collab-client", version = "0.18.1" }
 pdfcraft-collab-client-pdf = { path = "crates/collab-client-pdf", version = "0.18.1" }
 pdfcraft-collab-hub = { path = "crates/collab-hub", version = "0.18.1" }
+pdfcraft-collab-link = { path = "crates/collab-link", version = "0.18.1" }
 pdfcraft-collab-pdf = { path = "crates/collab-pdf", version = "0.18.1" }
 pdfcraft-collab-proto = { path = "crates/collab-proto", version = "0.18.1" }
 pdfcraft-collab-server = { path = "crates/collab-server", version = "0.18.1" }

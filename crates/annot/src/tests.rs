@@ -5507,3 +5507,123 @@ fn summaries_list_only_usable_quads() {
     let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
     assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
 }
+
+/// A link whose action this model cannot write back: a JavaScript action.
+fn add_unsupported_link(doc: &mut Document) {
+    let page = page_refs(doc).unwrap()[0];
+    let script = dict(&[(b"S", Object::name("JavaScript")), (b"JS", Object::String(PdfString::text("app.alert(1)")))]);
+    let annot = dict(&[
+        (b"Type", Object::name("Annot")),
+        (b"Subtype", Object::name("Link")),
+        (b"Rect", Object::Array(reals(&[10.0, 10.0, 60.0, 30.0]))),
+        (b"A", script),
+    ]);
+    let r = doc.add(annot);
+    let mut entries = annots(doc, page);
+    entries.push(Object::Ref(r));
+    set_annots(doc, page, entries).unwrap();
+}
+
+fn dict(pairs: &[(&[u8], Object)]) -> Object {
+    let mut d = Dict::new();
+    for (key, value) in pairs {
+        d.set(key.to_vec(), value.clone());
+    }
+    Object::Dict(d)
+}
+
+#[test]
+fn a_remote_go_to_and_a_named_destination_round_trip() {
+    let mut doc = fixture();
+    let named = links::LinkBody {
+        rect: [10.0, 10.0, 110.0, 40.0],
+        quads: None,
+        action: links::LinkAction::Named("chapter-2".into()),
+        style: links::LinkStyle::default(),
+    };
+    let remote = links::LinkBody {
+        rect: [10.0, 50.0, 110.0, 80.0],
+        quads: None,
+        action: links::LinkAction::Remote { file: "other.pdf".into(), page: 2, zoom: links::LinkZoom::FitWidth },
+        style: links::LinkStyle::default(),
+    };
+    links::add_body(&mut doc, 0, &named).unwrap();
+    links::add_body(&mut doc, 0, &remote).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(links::bodies(&doc, 0).unwrap(), vec![named, remote], "a name and a remote page survive a save");
+    // The remote page is written as a number of the other file, never as a page of this one.
+    let page = page_refs(&doc).unwrap()[0];
+    let action = annots(&doc, page)
+        .iter()
+        .filter_map(|a| doc.resolve(a).as_dict().cloned())
+        .filter(|d| d.name(b"Subtype") == Some(b"Link"))
+        .filter_map(|d| d.get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()))
+        .find(|a| a.name(b"S") == Some(b"GoToR"))
+        .unwrap();
+    assert_eq!(action.name(b"S"), Some(&b"GoToR"[..]));
+    let dest = doc.resolve(action.get(b"D").unwrap());
+    assert!(matches!(dest.as_array().and_then(|d| d.first().map(|f| doc.resolve(f))), Some(first) if matches!(&*first, Object::Int(2))));
+}
+
+#[test]
+fn a_page_link_list_is_written_whole_and_keeps_what_did_not_change() {
+    let mut doc = fixture();
+    let one = links::LinkBody {
+        rect: [10.0, 10.0, 110.0, 40.0],
+        quads: None,
+        action: links::LinkAction::Uri("https://example.org/one".into()),
+        style: links::LinkStyle::default(),
+    };
+    let two = links::LinkBody {
+        rect: [10.0, 50.0, 110.0, 80.0],
+        quads: None,
+        action: links::LinkAction::Page { page: 1, zoom: links::LinkZoom::FitPage },
+        style: links::LinkStyle::default(),
+    };
+    links::add_body(&mut doc, 0, &one).unwrap();
+    links::add_body(&mut doc, 0, &two).unwrap();
+    let before = links::list(&doc);
+    let kept = before[0].obj;
+
+    // A text area over the first link (the same one, given quads), the second link's
+    // page changed, and a third added: one write names all three.
+    let quad = [10.0, 10.0, 110.0, 10.0, 10.0, 40.0, 110.0, 40.0];
+    let mut first = one.clone();
+    first.quads = Some(vec![quad]);
+    let mut second = two.clone();
+    second.action = links::LinkAction::Page { page: 0, zoom: links::LinkZoom::FitWidth };
+    let third = links::LinkBody {
+        rect: [10.0, 90.0, 110.0, 120.0],
+        quads: None,
+        action: links::LinkAction::Uri("mailto:ada@example.org".into()),
+        style: links::LinkStyle::default(),
+    };
+    links::set_page_links(&mut doc, 0, &[first.clone(), second.clone(), third.clone()]).unwrap();
+    let after = links::list(&doc);
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[0].obj, kept, "a link that did not change keeps its annotation object");
+    assert_eq!(after[0].quads.as_deref(), Some(&[quad][..]));
+    assert_eq!(links::bodies(&doc, 0).unwrap(), vec![first, second, third], "the list is the one that was named");
+
+    // Fewer links than before: the surplus goes from the end, and the rest stay.
+    links::set_page_links(&mut doc, 0, std::slice::from_ref(&one)).unwrap();
+    assert_eq!(links::bodies(&doc, 0).unwrap(), vec![one]);
+}
+
+#[test]
+fn a_link_the_model_cannot_carry_refuses_the_whole_page() {
+    let mut doc = fixture();
+    let one = links::LinkBody {
+        rect: [10.0, 10.0, 110.0, 40.0],
+        quads: None,
+        action: links::LinkAction::Uri("https://example.org".into()),
+        style: links::LinkStyle::default(),
+    };
+    links::add_body(&mut doc, 0, &one).unwrap();
+    add_unsupported_link(&mut doc);
+    let page = page_refs(&doc).unwrap()[0];
+    let annots_before = annots(&doc, page).len();
+    assert!(links::bodies(&doc, 0).is_err(), "a JavaScript action is not a link this model writes");
+    assert!(links::set_page_links(&mut doc, 0, &[one]).is_err(), "a rewrite of that page is refused");
+    assert_eq!(annots(&doc, page).len(), annots_before, "the refusal changes nothing");
+}

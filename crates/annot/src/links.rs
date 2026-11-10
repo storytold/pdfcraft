@@ -14,7 +14,19 @@ pub enum LinkAction {
         zoom: LinkZoom,
     },
     Uri(String),
-    /// Something PdfCraft doesn't edit yet (named destination, JavaScript…): kept as is.
+    /// An explicit destination of this document, by name (`/Dest (name)`, or a
+    /// go-to whose `/D` is a name). The name is the document's own key in
+    /// `/Names /Dests`, so a link to one survives the pages moving.
+    Named(String),
+    /// A page of another file: a remote go-to (`/S /GoToR`). `file` is the path
+    /// the file gives, kept as written and never resolved; `page` is a page of
+    /// that file (0-based), so page operations of this document leave it alone.
+    Remote {
+        file: String,
+        page: usize,
+        zoom: LinkZoom,
+    },
+    /// Something PdfCraft doesn't edit yet (a JavaScript or Launch action…): kept as is.
     Other(String),
 }
 
@@ -138,6 +150,22 @@ pub struct LinkItem {
     pub index: usize,
     pub obj: Option<ObjRef>,
     pub rect: [f64; 4],
+    /// The text areas the link draws over, when the file gives them
+    /// (`/QuadPoints`); `None` for a link that is only its rectangle.
+    pub quads: Option<Vec<[f64; 8]>>,
+    pub action: LinkAction,
+    pub style: LinkStyle,
+}
+
+/// A link as a rewrite writes it back: everything the model carries, so a
+/// caller can name the whole link (the room shares a page's links as one list)
+/// and the writer can skip the ones that did not change. A link whose action
+/// the model cannot express is an error from [`bodies`], never an omission: a
+/// rewrite that silently dropped it would lose a destination no undo brings back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkBody {
+    pub rect: [f64; 4],
+    pub quads: Option<Vec<[f64; 8]>>,
     pub action: LinkAction,
     pub style: LinkStyle,
 }
@@ -162,7 +190,7 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
         Some(LinkAction::Page { page, zoom: LinkZoom::of_dest(doc, a) })
     };
     if let Some(dest) = d.get(b"Dest") {
-        return page_view(dest).unwrap_or_else(|| LinkAction::Other("named destination".into()));
+        return page_view(dest).or_else(|| named_of(doc, dest)).unwrap_or_else(|| LinkAction::Other("destination".into()));
     }
     let Some(a) = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) else { return LinkAction::Other("no action".into()) };
     match a.name(b"S") {
@@ -180,10 +208,60 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
                 None => LinkAction::Other("web address too long".into()),
             }
         }
-        Some(b"GoTo") => a.get(b"D").and_then(page_view).unwrap_or_else(|| LinkAction::Other("named destination".into())),
+        Some(b"GoTo") => {
+            a.get(b"D").and_then(|d| page_view(d).or_else(|| named_of(doc, d))).unwrap_or_else(|| LinkAction::Other("destination".into()))
+        }
+        // A remote go-to names a page of another file. Its page number is a number in that
+        // file, never a page of this one, so page operations must leave it alone; a name in
+        // it names a destination of the other file, which this model cannot carry.
+        Some(b"GoToR") => {
+            let Some(file) = a.get(b"F").and_then(|f| file_spec(doc, f)) else { return LinkAction::Other("remote go-to".into()) };
+            let dest = a.get(b"D").map(|d| doc.resolve(d));
+            let remote = match dest.as_deref() {
+                Some(Object::Int(i)) => usize::try_from(*i).ok().map(|page| LinkAction::Remote { file, page, zoom: LinkZoom::Inherit }),
+                Some(Object::Array(_)) => {
+                    let array = dest.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default();
+                    match &*doc.resolve(array.first().unwrap_or(&Object::Null)) {
+                        Object::Int(i) => usize::try_from(*i).ok().map(|page| LinkAction::Remote { file, page, zoom: LinkZoom::of_dest(doc, array) }),
+                        // A name or a page reference opens something of the other file this model
+                        // cannot write; it is not a page number, so it is not guessed at.
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            remote.unwrap_or_else(|| LinkAction::Other("remote destination".into()))
+        }
         Some(s) => LinkAction::Other(String::from_utf8_lossy(s).into_owned()),
         None => LinkAction::Other("no action".into()),
     }
+}
+
+/// A destination named as a name object or a string, the two forms `/Dest` and
+/// a go-to's `/D` take for a named destination.
+fn named_of(doc: &Document, value: &Object) -> Option<LinkAction> {
+    let value = doc.resolve(value);
+    match &*value {
+        Object::Name(n) => Some(LinkAction::Named(String::from_utf8_lossy(n).into_owned())),
+        Object::String(s) => Some(LinkAction::Named(s.to_text())),
+        _ => None,
+    }
+}
+
+/// The path a file specification names, as written: a string, or a dictionary's
+/// `/UF`, `/F`, `/Unix`, `/DOS` or `/Mac` entry, in that order. A path is never
+/// resolved or opened here (the resolver is the engine's, and a remote go-to is
+/// only carried).
+fn file_spec(doc: &Document, value: &Object) -> Option<String> {
+    let value = doc.resolve(value);
+    if let Some(s) = value.as_string() {
+        return Some(s.to_text());
+    }
+    let d = value.as_dict()?;
+    [b"UF".as_slice(), b"F", b"Unix", b"DOS", b"Mac"].iter().find_map(|key| {
+        let v = doc.resolve(d.get(key)?);
+        v.as_string().map(|s| s.to_text()).filter(|s| !s.is_empty())
+    })
 }
 
 fn style_of(doc: &Document, d: &Dict) -> LinkStyle {
@@ -236,12 +314,24 @@ pub fn list(doc: &Document) -> Vec<LinkItem> {
                 index: k,
                 obj: a.as_ref(),
                 rect: [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])],
+                quads: quads_of(doc, &d),
                 action: action_of(doc, &d, &pages, &mut uri_budget),
                 style: style_of(doc, &d),
             });
         }
     }
     out
+}
+
+/// The `/QuadPoints` of a link: its text areas, eight numbers each (§12.5.6.6). `None`
+/// when the file gives none; a malformed array is `None` here and an error from
+/// [`bodies`], because a rewrite must not silently drop areas it cannot write.
+fn quads_of(doc: &Document, d: &Dict) -> Option<Vec<[f64; 8]>> {
+    let raw = nums(doc, d.get(b"QuadPoints"));
+    if raw.is_empty() || !raw.len().is_multiple_of(8) || !raw.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    Some(raw.as_chunks::<8>().0.iter().map(|c| [c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]).collect())
 }
 
 fn write_style(d: &mut Dict, s: &LinkStyle) {
@@ -338,6 +428,35 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
             act.set(b"URI".to_vec(), PdfString::literal(uri_bytes(u)));
             d.set(b"A".to_vec(), Object::Dict(act));
         }
+        // A named destination is an explicit destination of this document that the
+        // `/Names /Dests` tree resolves; a string is the form every reader takes (§12.3.2.3).
+        LinkAction::Named(name) => {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(AnnotError::Invalid("type the destination's name first".into()));
+            }
+            d.remove(b"A");
+            d.set(b"Dest".to_vec(), Object::String(PdfString::literal(name.as_bytes().to_vec())));
+        }
+        // A remote go-to opens a page of another file: `/D` is a page number of that
+        // file, which is written as an integer, not as a reference or a number here.
+        LinkAction::Remote { file, page, zoom } => {
+            let file = file.trim();
+            if file.is_empty() {
+                return Err(AnnotError::Invalid("name the other file first".into()));
+            }
+            let page = i64::try_from(*page).map_err(|_| AnnotError::Invalid("the remote page number is too large".into()))?;
+            let mut dest = vec![Object::Int(page)];
+            dest.extend(zoom.operands()?);
+            d.remove(b"Dest");
+            let mut act = Dict::new();
+            act.set(b"S".to_vec(), Object::name("GoToR"));
+            // A file specification is a byte string; the path travels as written.
+            act.set(b"F".to_vec(), PdfString::literal(file.as_bytes().to_vec()));
+            act.set(b"D".to_vec(), Object::Array(dest));
+            act.set(b"NewWindow".to_vec(), Object::Bool(false));
+            d.set(b"A".to_vec(), Object::Dict(act));
+        }
         LinkAction::Other(_) => {}
     }
     Ok(())
@@ -357,10 +476,51 @@ fn checked_rect(rect: [f64; 4]) -> Result<[f64; 4], AnnotError> {
     Ok(r)
 }
 
+/// The text areas of a link, bounded and normalised: eight finite numbers a quad,
+/// already inside the area the link draws over.
+fn checked_quads(quads: &[[f64; 8]]) -> Result<(), AnnotError> {
+    if quads.is_empty() {
+        return Err(AnnotError::Invalid("a text link's areas cannot be empty".into()));
+    }
+    if !quads.iter().flatten().all(|v| v.is_finite()) {
+        return Err(AnnotError::Invalid("the link's areas must have finite coordinates".into()));
+    }
+    Ok(())
+}
+
+/// The area a link draws over, from its quads: the smallest rectangle that holds them.
+fn quads_rect(quads: &[[f64; 8]]) -> [f64; 4] {
+    let mut rect = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for quad in quads {
+        for pair in quad.as_chunks::<2>().0 {
+            rect[0] = rect[0].min(pair[0]);
+            rect[1] = rect[1].min(pair[1]);
+            rect[2] = rect[2].max(pair[0]);
+            rect[3] = rect[3].max(pair[1]);
+        }
+    }
+    [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])]
+}
+
+/// Write a link's text areas, or remove them when it has none.
+fn write_quads(d: &mut Dict, quads: Option<&[[f64; 8]]>) {
+    match quads {
+        Some(quads) => d.set(b"QuadPoints".to_vec(), Object::Array(quads.iter().flatten().map(|v| Object::Real(*v)).collect())),
+        None => {
+            d.remove(b"QuadPoints");
+        }
+    }
+}
+
 /// Add a link over `rect` (user space). Returns its index in the page's `/Annots`.
 pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<usize, AnnotError> {
+    add_body(doc, page, &LinkBody { rect, quads: None, action: action.clone(), style: *style })
+}
+
+/// Add a link with an area (a rectangle and, for a text link, its quads).
+pub fn add_body(doc: &mut Document, page: usize, body: &LinkBody) -> Result<usize, AnnotError> {
     let p = page_ref(doc, page)?;
-    let obj = new_link(doc, p, rect, action, style)?;
+    let obj = new_link(doc, p, body)?;
     let mut list = annots(doc, p);
     list.push(Object::Ref(obj));
     let index = list.len() - 1;
@@ -369,18 +529,26 @@ pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction,
 }
 
 /// A link annotation object for page `p`, not yet on the page's `/Annots`.
-fn new_link(doc: &mut Document, p: ObjRef, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<ObjRef, AnnotError> {
-    let r = checked_rect(rect)?;
+fn new_link(doc: &mut Document, p: ObjRef, body: &LinkBody) -> Result<ObjRef, AnnotError> {
+    let r = match body.quads.as_deref() {
+        Some(quads) => {
+            checked_quads(quads)?;
+            checked_rect(quads_rect(quads))?
+        }
+        None => checked_rect(body.rect)?,
+    };
+    let action = &body.action;
     if matches!(action, LinkAction::Other(_)) {
-        return Err(AnnotError::Invalid("choose a page or a web address".into()));
+        return Err(AnnotError::Invalid("choose a page, a name, another file or a web address".into()));
     }
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("Annot"));
     d.set(b"Subtype".to_vec(), Object::name("Link"));
     d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect()));
+    write_quads(&mut d, body.quads.as_deref());
     d.set(b"P".to_vec(), Object::Ref(p));
     d.set(b"F".to_vec(), Object::Int(4));
-    write_style(&mut d, style);
+    write_style(&mut d, &body.style);
     write_action(doc, &mut d, action)?;
     Ok(doc.add(Object::Dict(d)))
 }
@@ -395,7 +563,9 @@ fn link_at(doc: &Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef)
     Ok((p, r))
 }
 
-/// Link Properties: change a link's area, action and/or appearance.
+/// Link Properties: change a link's area, action and/or appearance. A rectangle
+/// change drops the text areas the old area carried, since they would describe the
+/// previous area; [`set_body`] writes an area whole.
 pub fn set(
     doc: &mut Document,
     page: usize,
@@ -409,6 +579,7 @@ pub fn set(
     if let Some(rect) = rect {
         let rr = checked_rect(rect)?;
         d.set(b"Rect".to_vec(), Object::Array(rr.iter().map(|v| Object::Real(*v)).collect()));
+        d.remove(b"QuadPoints");
     }
     if let Some(s) = style {
         write_style(&mut d, s);
@@ -418,6 +589,123 @@ pub fn set(
     }
     doc.set(r, Object::Dict(d));
     Ok(())
+}
+
+/// Write one link whole: its area (rectangle and quads), its action and its look.
+/// Everything is checked before the annotation changes.
+pub fn set_body(doc: &mut Document, page: usize, index: usize, body: &LinkBody) -> Result<(), AnnotError> {
+    let (_, r) = link_at(doc, page, index)?;
+    let rect = match body.quads.as_deref() {
+        Some(quads) => {
+            checked_quads(quads)?;
+            checked_rect(quads_rect(quads))?
+        }
+        None => checked_rect(body.rect)?,
+    };
+    if matches!(body.action, LinkAction::Other(_)) {
+        return Err(AnnotError::Invalid("choose a page, a name, another file or a web address".into()));
+    }
+    let mut d = doc.get(r).as_dict().cloned().unwrap_or_default();
+    d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+    write_quads(&mut d, body.quads.as_deref());
+    write_style(&mut d, &body.style);
+    write_action(doc, &mut d, &body.action)?;
+    doc.set(r, Object::Dict(d));
+    Ok(())
+}
+
+/// The links on `page` as [`LinkBody`]s a rewrite writes back, in `/Annots` order.
+/// A link the model cannot carry — an action it has no form for, a rectangle or an
+/// area that is not numbers — is an error: a rewrite that skipped it would lose a
+/// destination, and no undo would bring it back.
+pub fn bodies(doc: &Document, page: usize) -> Result<Vec<LinkBody>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let pages = page_refs(doc)?;
+    let mut uri_budget = MAX_URI_BYTES;
+    let mut out = Vec::new();
+    for a in annots(doc, p) {
+        let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
+        if d.name(b"Subtype") != Some(b"Link") {
+            continue;
+        }
+        let r = nums(doc, d.get(b"Rect"));
+        if r.len() != 4 || !r.iter().all(|v| v.is_finite()) {
+            return Err(AnnotError::Invalid("a link on this page has no usable area".into()));
+        }
+        let fixed = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
+        let raw_quads = d.get(b"QuadPoints").is_some();
+        let quads = quads_of(doc, &d);
+        if raw_quads && quads.is_none() {
+            return Err(AnnotError::Invalid("a link on this page has areas that are not four points each".into()));
+        }
+        let action = action_of(doc, &d, &pages, &mut uri_budget);
+        if matches!(action, LinkAction::Other(_)) {
+            return Err(AnnotError::Invalid("a link on this page goes somewhere PdfCraft cannot write back".into()));
+        }
+        out.push(LinkBody { rect: fixed, quads, action, style: style_of(doc, &d) });
+    }
+    Ok(out)
+}
+
+/// Make the page's links exactly `links`, in order. Links that did not change keep
+/// their annotation object (and every key the model does not carry); a changed one
+/// is written in place, a surplus one deleted from the last, and a new one appended.
+/// The whole list is checked before the first write, and [`bodies`] refuses a page
+/// whose links the model cannot carry, so nothing is dropped silently.
+pub fn set_page_links(doc: &mut Document, page: usize, links: &[LinkBody]) -> Result<(), AnnotError> {
+    page_ref(doc, page)?;
+    // Check everything that can be checked without writing.
+    for body in links {
+        match body.quads.as_deref() {
+            Some(quads) => {
+                checked_quads(quads)?;
+                checked_rect(quads_rect(quads))?;
+            }
+            None => {
+                checked_rect(body.rect)?;
+            }
+        }
+        match &body.action {
+            LinkAction::Uri(u) if u.trim().is_empty() => return Err(AnnotError::Invalid("type the web address first".into())),
+            LinkAction::Named(n) if n.trim().is_empty() => return Err(AnnotError::Invalid("name the destination first".into())),
+            LinkAction::Remote { file, .. } if file.trim().is_empty() => return Err(AnnotError::Invalid("name the other file first".into())),
+            LinkAction::Other(_) => return Err(AnnotError::Invalid("choose a page, a name, another file or a web address".into())),
+            _ => {}
+        }
+        if let LinkAction::Page { page, .. } = &body.action {
+            page_ref(doc, *page)?;
+        }
+    }
+    let old = bodies(doc, page)?;
+    let indices = link_indices(doc, page)?;
+    if indices.len() != old.len() {
+        return Err(AnnotError::Invalid("the page's links changed while they were being read".into()));
+    }
+    for (k, body) in links.iter().enumerate().take(old.len()) {
+        if &old[k] != body {
+            set_body(doc, page, indices[k], body)?;
+        }
+    }
+    // Surplus links go from the last: deleting a higher `/Annots` index leaves the
+    // indices of the links before it valid.
+    for k in (links.len().min(old.len())..old.len()).rev() {
+        delete(doc, page, indices[k])?;
+    }
+    for body in links.iter().skip(old.len()) {
+        add_body(doc, page, body)?;
+    }
+    Ok(())
+}
+
+/// The `/Annots` positions of the links on `page`, in order.
+fn link_indices(doc: &Document, page: usize) -> Result<Vec<usize>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    Ok(annots(doc, p)
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| doc.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link")))
+        .map(|(k, _)| k)
+        .collect())
 }
 
 /// Delete one link.
@@ -610,7 +898,7 @@ pub fn add_many(doc: &mut Document, links: &[(usize, Vec<[f64; 4]>, String)], st
         let p = pages.get(*page).copied().ok_or(AnnotError::NoSuchPage(*page))?;
         let action = LinkAction::Uri(uri.clone());
         for r in rects {
-            let obj = new_link(doc, p, *r, &action, style)?;
+            let obj = new_link(doc, p, &LinkBody { rect: *r, quads: None, action: action.clone(), style: *style })?;
             let k = *slot.entry(p).or_insert_with(|| {
                 added.push((p, Vec::new()));
                 added.len() - 1

@@ -76,6 +76,7 @@ pub fn import_pages_with(
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
+    let pages_before = crate::page_links::page_order(dst)?;
     let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
         Ok(imported) => imported,
         Err(e) => {
@@ -89,6 +90,9 @@ pub fn import_pages_with(
     };
     let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
+    // The pages that were here keep the pages their links named by number; the inserted
+    // pages keep their own file's numbers (they never named a page of this document).
+    crate::page_links::keep_page_numbers(dst, &pages_before)?;
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
 

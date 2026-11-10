@@ -5156,3 +5156,79 @@ fn a_bookmark_goes_to_a_named_destination_and_back() {
     set_bookmark_dest(&mut doc, &[1], BookmarkDest::Nowhere).unwrap();
     assert_eq!(bookmarks(&doc)[1].page, None);
 }
+
+/// A three-page document whose first page links to the third by number and by name, and to
+/// another file by number: only the first one is a page of this document.
+fn doc_with_numbered_links() -> Document {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),                                             // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [7 0 R 8 0 R 9 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),                               // 5
+        body("page"),                                                                           // 6
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 30 30] /Dest [2 /Fit] >>".into(),            // 7: page 3, by number
+        "<< /Type /Annot /Subtype /Link /Rect [0 40 30 70] /A << /S /GoToR /F (other.pdf) /D [1 /Fit] >> >>".into(), // 8
+        "<< /Type /Annot /Subtype /Link /Rect [0 80 30 110] /Dest (intro) >>".into(),           // 9: a name
+    ];
+    open(build(&b, "/Root 1 0 R"))
+}
+
+/// The destination an annotation names: its `/Dest`, or a go-to action's `/D`.
+fn link_destination(doc: &Document, number: u32) -> Option<Object> {
+    let d = doc.get(ObjRef::new(number, 0)).as_dict().cloned()?;
+    d.get(b"Dest").map(|x| doc.resolve(x).as_ref().clone()).or_else(|| {
+        let action = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())?;
+        action.get(b"D").map(|x| doc.resolve(x).as_ref().clone())
+    })
+}
+
+fn object_number_of_first_link(doc: &Document) -> u32 {
+    let page = pages(doc).unwrap()[0].obj;
+    doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).and_then(|a| a.first()).and_then(Object::as_ref).unwrap().num
+}
+
+#[test]
+fn page_numbers_in_links_follow_the_pages_they_name() {
+    let mut doc = doc_with_numbered_links();
+    let link = object_number_of_first_link(&doc);
+    let number = |doc: &Document| match link_destination(doc, link) {
+        Some(Object::Array(a)) => doc.resolve(a.first().unwrap()).as_int(),
+        Some(other) => panic!("the link lost its array destination: {other:?}"),
+        None => None,
+    };
+    assert_eq!(number(&doc), Some(2));
+
+    // The page the link is on moves to the end: its target is now the second page.
+    move_pages(&mut doc, &[0], 2).unwrap();
+    assert_eq!(number(&doc), Some(1), "a moved page's link follows its page");
+
+    // A blank page at the front pushes both pages one place along.
+    insert_blank_page(&mut doc, 0, 300.0, 400.0).unwrap();
+    assert_eq!(number(&doc), Some(2));
+
+    // The remote go-to and the named destination are not this document's numbering.
+    let remote = doc.get(ObjRef::new(8, 0)).as_dict().cloned().unwrap();
+    assert!(remote.get(b"A").is_some(), "a remote go-to keeps its action");
+    let action = remote.get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    let dest = action.get(b"D").and_then(|d| doc.resolve(d).as_array().cloned()).unwrap();
+    assert_eq!(doc.resolve(dest.first().unwrap()).as_int(), Some(1), "the other file's page number is left alone");
+    assert_eq!(
+        doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Dest")).map(|d| doc.resolve(d).as_string().map(|s| s.to_text())),
+        Some(Some("intro".to_string())),
+        "a named destination is a name, not a number"
+    );
+}
+
+#[test]
+fn a_link_to_a_deleted_page_loses_its_destination() {
+    let mut doc = doc_with_numbered_links();
+    let link = object_number_of_first_link(&doc);
+    assert!(link_destination(&doc, link).is_some());
+    delete_pages(&mut doc, &[2]).unwrap();
+    assert_eq!(link_destination(&doc, link), None, "the page it opened is gone");
+    // The link annotation itself stays on its page, and its page is still there.
+    let page = pages(&doc).unwrap()[0].obj;
+    let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(annots.len(), 3, "the annotations are kept, only the destination goes");
+}

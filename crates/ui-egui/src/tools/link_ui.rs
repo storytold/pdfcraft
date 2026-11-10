@@ -238,7 +238,7 @@ impl PdfCraftApp {
                 page,
                 rect: l.rect,
                 index,
-                preserve_action: matches!(l.action, LinkAction::Other(_)),
+                preserve_action: !matches!(l.action, LinkAction::Page { .. } | LinkAction::Uri(_)),
                 web: matches!(l.action, LinkAction::Uri(_)),
                 url: match &l.action {
                     LinkAction::Uri(u) => u.clone(),
@@ -450,7 +450,7 @@ mod tests {
             page: 0,
             rect: [0.0; 4],
             index: Some(3),
-            preserve_action: matches!(current, LinkAction::Other(_)),
+            preserve_action: !matches!(current, LinkAction::Page { .. } | LinkAction::Uri(_)),
             web: false,
             url: String::new(),
             target: 1,

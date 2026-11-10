@@ -4624,9 +4624,11 @@ version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-collab-annot",
+ "pdfcraft-collab-link",
  "pdfcraft-collab-outline",
  "pdfcraft-collab-proto",
  "pdfcraft-engine",
+ "pdfcraft-organize",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -4660,6 +4662,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-link"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-annot",
+ "pdfcraft-collab-proto",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-collab-outline"
 version = "0.18.1"
 dependencies = [
@@ -4675,10 +4687,12 @@ version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-collab-annot",
+ "pdfcraft-collab-link",
  "pdfcraft-collab-outline",
  "pdfcraft-collab-proto",
  "pdfcraft-collab-server",
  "pdfcraft-engine",
+ "pdfcraft-organize",
  "serde",
  "serde_json",
  "sha2 0.11.1",

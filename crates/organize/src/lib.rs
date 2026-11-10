@@ -22,6 +22,7 @@ mod import;
 mod labels;
 mod outline;
 mod outline_io;
+mod page_links;
 mod pdfx;
 mod prune;
 mod transition;
@@ -276,6 +277,7 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
 pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
+    let pages_before: Vec<ObjRef> = all.iter().map(|(r, _)| *r).collect();
     let keep: Vec<(ObjRef, Dict)> = all.iter().enumerate().filter(|(i, _)| !indices.contains(i)).map(|(_, p)| p.clone()).collect();
     if keep.is_empty() {
         return Err(OrganizeError::WouldRemoveAllPages);
@@ -297,6 +299,9 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     }
     drop_widgets(doc, widgets)?;
     drop_destinations_to(doc, &gone, &keep)?;
+    // The links that named a surviving page by number follow it to its new place; one
+    // that named a deleted page lost it above.
+    page_links::keep_page_numbers(doc, &pages_before)?;
     for r in gone {
         doc.free(r);
     }
@@ -528,6 +533,7 @@ fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), Orga
 pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
+    let pages_before: Vec<ObjRef> = all.iter().map(|(r, _)| *r).collect();
     let before = labels::snapshot(doc);
     let mut sorted = indices.to_vec();
     sorted.sort_unstable();
@@ -546,6 +552,7 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
         None => None,
     };
     rebuild(doc, &rest)?;
+    page_links::keep_page_numbers(doc, &pages_before)?;
     if let Some(plan) = &plan {
         labels::write_plan(doc, plan.as_deref())?;
     }
@@ -557,6 +564,7 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
 pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let mut all = walk(doc)?;
     check(indices, all.len())?;
+    let pages_before: Vec<ObjRef> = all.iter().map(|(r, _)| *r).collect();
     let mut slots = indices.to_vec();
     slots.sort_unstable();
     slots.dedup();
@@ -569,7 +577,8 @@ pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organi
             *entry = page;
         }
     }
-    rebuild(doc, &all)
+    rebuild(doc, &all)?;
+    page_links::keep_page_numbers(doc, &pages_before)
 }
 
 /// Duplicate pages: copies of `indices` (in order) are inserted at `at` in the page order
@@ -632,6 +641,7 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
 /// Insert a blank page of `width × height` points at position `at` (0 = before the first page).
 pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64) -> Result<ObjRef, OrganizeError> {
     let mut all = walk(doc)?;
+    let pages_before: Vec<ObjRef> = all.iter().map(|(r, _)| *r).collect();
     let root = pages_root(doc)?;
     let at = at.min(all.len());
     // A blank page has no label of its own: it takes the numbering it falls into, and the pages
@@ -648,6 +658,7 @@ pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64)
     let r = doc.add(page);
     all.insert(at, (r, Dict::new()));
     rebuild(doc, &all)?;
+    page_links::keep_page_numbers(doc, &pages_before)?;
     if let Some(plan) = plan {
         labels::write_plan(doc, plan.as_deref())?;
     }
