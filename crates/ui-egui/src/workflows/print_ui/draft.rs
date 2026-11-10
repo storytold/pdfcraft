@@ -61,6 +61,8 @@ pub struct PrintDraft {
     pub auto_rotate: bool,
     pub booklet_subset: BookletSubset,
     pub binding: Binding,
+    /// Booklet creep compensation, points per sheet.
+    pub creep: f64,
     pub poster_scale: f64,
     pub overlap: f64,
     pub cut_marks: bool,
@@ -94,6 +96,9 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// Whether each printer's driver takes two-sided settings, as read in the background for
+    /// the printer picked (see [`TwoSidedSource`](super::TwoSidedSource)); `None` when it couldn't be read.
+    pub two_sided: std::collections::BTreeMap<String, Option<bool>>,
     /// The paper, sizing and two-sided choice each printer was last printed with, the printer
     /// printed to last first; kept across restarts (#2001).
     pub setups: Vec<(String, PrinterSetup)>,
@@ -128,6 +133,7 @@ impl Default for PrintDraft {
             auto_rotate: true,
             booklet_subset: BookletSubset::BothSides,
             binding: Binding::Left,
+            creep: 0.0,
             poster_scale: 200.0,
             overlap: 18.0,
             cut_marks: true,
@@ -148,6 +154,7 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            two_sided: Default::default(),
             setups: Vec::new(),
         }
     }
@@ -245,7 +252,7 @@ impl PrintDraft {
                     other => other,
                 }
             }
-            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
+            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding, creep: self.creep },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
