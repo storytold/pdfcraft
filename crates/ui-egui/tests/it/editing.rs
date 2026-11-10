@@ -7808,7 +7808,7 @@ fn a_click_on_a_picture_grip_changes_nothing() {
 /// stays where it is being typed (#125), as a click there leaves it.
 #[test]
 fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
-    if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello 世界") {
+    if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello გამარჯობა") {
         return;
     }
     let mut h = edit_page(pdfcraft_ui_egui::QuickTool::AddText);
@@ -7818,9 +7818,9 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
     let blank = point_on(&h, block.rect[0], block.rect[3] + 12.0);
     slipping_click(&mut h, blank, blank);
-    h.event(egui::Event::Text("Hello 世界".into()));
+    h.event(egui::Event::Text("Hello გამარჯობა".into()));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello 世界"), "the draft holds the text");
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello გამარჯობა"), "the draft holds the text");
     let rect = h.state().views[0].content.draft.as_ref().map(|d| d.rect).unwrap();
     let on_text = point_on(&h, (block.rect[0] + block.rect[2]) / 2.0, (block.rect[1] + block.rect[3]) / 2.0);
     h.hover_at(on_text);
@@ -7835,7 +7835,7 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, block.rect, "the paragraph stays");
     let draft = h.state().views[0].content.draft.as_ref().map(|d| (d.text.clone(), d.rect));
-    assert_eq!(draft, Some(("Hello 世界".to_string(), rect)), "and the draft stays where it is typed");
+    assert_eq!(draft, Some(("Hello გამარჯობა".to_string(), rect)), "and the draft stays where it is typed");
 }
 
 /// With Edit text, a right-click on a comment over a picture opens the comment's menu, and the
