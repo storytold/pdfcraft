@@ -550,7 +550,8 @@ fn is_type3(doc: &Document, f: &Object) -> bool {
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
 /// content no longer draws any text using that font name. `page` is the page's dictionary when
 /// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
-/// allowance.
+/// allowance, when the resources list a Type 3 font, and otherwise to an allowance of a page of its
+/// own (below).
 pub(crate) fn prune_type3_from_resources(
     doc: &Document,
     budget: &mut pdfcraft_cos::DecodeBudget,
@@ -566,9 +567,11 @@ pub(crate) fn prune_type3_from_resources(
     // The operators of forms that draw through these resources count too: dropping a font a child
     // form still shows would leave its text without one. Without a Type 3 font nothing is pruned,
     // but the read is still made: it refuses bytes the parser can't read in what the content draws,
-    // which for a text redaction is the only check that does (the walk reads past them, so text
-    // they hide would stay under the mark). It is then charged to an allowance of a page of its own,
-    // not to what the walk left of the page's, since it decides nothing about the fonts.
+    // and on a page with nothing replaced and no properties listed no other check does, unless the
+    // document still lists a Type 3 font (`unlink_type3` then reads every page). The walk reads
+    // past them, so text they hide would stay under the mark. The read is then charged to an
+    // allowance of a page of its own, not to what the walk left of the page's, since it decides
+    // nothing about the fonts.
     let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
     let mut own = pdfcraft_cos::DecodeBudget::page();
     let mut ops = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;

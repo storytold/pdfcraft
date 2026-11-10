@@ -3625,11 +3625,16 @@ fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance
     }
 }
 
-/// Text under the mark in a content stream that also holds bytes the parser can't read, inside a
-/// `TJ` array, is read past by the walk and would stay. The font cleanup's read of what the content
-/// draws refuses such bytes, and makes that read with any font listed, a Type 3 font or not (with
-/// none, on an allowance of its own): Apply Redactions refuses the page, whether the stream is the
-/// page's or a form's without resources of its own, and so does Remove Hidden Information.
+/// Text under the mark in a content stream that holds bytes the parser can't read, inside a `TJ`
+/// array, is read past by the walk and would stay. The font cleanup's read of what the content
+/// draws refuses such bytes in the streams and forms the walk leaves as they were, and makes that
+/// read with any font listed, a Type 3 font or not (with none, on an allowance of its own). Here
+/// the walk rewrites the text in the page's first stream and leaves the broken `TJ` as it was:
+/// Apply Redactions refuses the page, whether that `TJ` is in the page's second stream or in a
+/// form without resources of its own, and so does Remove Hidden Information. The cleanups run only
+/// when the walk rewrites some of the page, and read what it rewrote as rewritten, so such bytes in
+/// a stream it rewrites still go by, and so do those on a page it rewrites nothing of, unless the
+/// document still lists a Type 3 font (`unlink_type3` then reads every page).
 #[test]
 fn text_beside_bytes_the_parser_cannot_read_refuses_the_redaction() {
     use crate::sanitize::{Hidden, remove_hidden};
@@ -3669,12 +3674,13 @@ fn text_beside_bytes_the_parser_cannot_read_refuses_the_redaction() {
 /// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
 /// form has resources of its own, so the page's cleanups don't follow it, and draws through them a
 /// form without any that crosses the mark: the walk reads that form, then the check of what the
-/// rewritten form still draws and its font cleanup (it lists a Type 3 font) read it again. At
+/// rewritten form still draws and its font cleanup (when it lists a Type 3 font) read it again. At
 /// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at 50 MiB
-/// it goes on.
+/// it goes on. With no Type 3 font the font cleanup's read has an allowance of its own, so the
+/// page's pays for two reads of 100 MiB, and the redaction goes on.
 #[test]
 fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"/FmText Do",
@@ -3687,21 +3693,25 @@ fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
-        list_type3(&mut doc, ObjRef::new(7, 0));
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(7, 0));
+        }
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
 }
 
 /// Removing hidden text spends what its content walk left of the page's allowance too. The page
 /// draws a form holding hidden text, which is rewritten, and a form without resources of its own:
-/// the walk reads the second, then the check of what the page still draws and the font cleanup (the
-/// page lists a Type 3 font) read it again. At 100 MiB, three reads are more than the page's
-/// 256 MiB, and the removal is refused; at 50 MiB it goes on.
+/// the walk reads the second, then the check of what the page still draws and the font cleanup
+/// (when the page lists a Type 3 font) read it again. At 100 MiB, three reads are more than the
+/// page's 256 MiB, and the removal is refused; at 50 MiB it goes on. With no Type 3 font the font
+/// cleanup's read has an allowance of its own, so the page's pays for two reads of 100 MiB, and the
+/// removal goes on.
 #[test]
 fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance() {
     use crate::sanitize::{Hidden, remove_hidden};
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"/FmHidden Do /FmBare Do",
@@ -3711,8 +3721,10 @@ fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
-        list_type3(&mut doc, ObjRef::new(3, 0));
-        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB");
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(3, 0));
+        }
+        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
 }
 
