@@ -188,6 +188,22 @@ impl DocView {
     /// top-left on the new page, as Acrobat does. A point past the end of the document scrolls
     /// as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        // A destination on the page already showing still moves the reader, so its origin
+        // belongs in the view history like a page change's does: `go_to_page` records nothing
+        // for a same-page jump, and Previous view would skip the place the link was clicked
+        // from (or do nothing). Distinct places on the page are kept as distinct entries; an
+        // exact repeat of the last entry is not duplicated. (Find's same-page steps go through
+        // `go_to_page` directly and keep their own no-duplicate rule.)
+        if page.min(self.page_count.saturating_sub(1)) == self.current {
+            let here = self.history_place();
+            if self.back.last() != Some(&here) {
+                self.back.push(here);
+                if self.back.len() > 200 {
+                    self.back.remove(0);
+                }
+            }
+            self.forward.clear();
+        }
         // Read before the jump: it is where the reader is now.
         let kept = match dest {
             DestView::Xyz { left, top, .. } if left.is_none() || top.is_none() => self.place_at_corner(info),

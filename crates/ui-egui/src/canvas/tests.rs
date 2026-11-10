@@ -601,6 +601,46 @@ fn previous_view_comes_back_to_the_place_on_the_page_left() {
 }
 
 #[test]
+fn previous_view_comes_back_to_where_a_same_page_link_was_clicked() {
+    // A link to another place on the page already showing: the click's origin is a history
+    // entry, so Previous view returns to it instead of skipping it (or doing nothing).
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..3)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = view(5, PageLayout::Single, true);
+    // Halfway down page 1 when a link goes to a point a quarter down the same page.
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert_eq!(v.back, vec![(1, 0.5)], "a same-page link records where it was clicked from");
+    assert!(v.goto_point.is_some(), "the link's point is parked, as before");
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 1);
+    assert_goto(&v, 1, 0.5, "Previous view goes back to where the link was clicked");
+}
+
+#[test]
+fn two_same_page_links_keep_both_origins() {
+    // Each same-page link leaves its own place: the second click's origin does not replace
+    // the first's entry.
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..3)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = view(5, PageLayout::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    // Drawn at the first link's target, three quarters down page 1, when the second is clicked.
+    drawn_at(&mut v, 1, 300.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(100.0), zoom: None }, &info);
+    assert_eq!(v.back, vec![(1, 0.5), (1, 0.75)], "distinct places on one page stay distinct entries");
+}
+
+#[test]
 fn next_view_comes_back_to_the_place_previous_view_left() {
     let mut v = view(5, PageLayout::Single, true);
     drawn_at(&mut v, 1, 200.0);
