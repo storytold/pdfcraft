@@ -236,6 +236,7 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
         _ => f.options.clone(),
     };
+    s.caption = f.widgets.first().and_then(|w| w.caption.clone());
     s
 }
 
@@ -265,6 +266,7 @@ fn changes(
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                caption: a.caption_was_set.then(|| a.caption.clone()).flatten(),
                 rect: (a.rect != b.rect).then_some(a.rect).flatten(),
                 text_color: (a.text_color != b.text_color).then(|| a.text_color.clone()).flatten(),
                 fill_color: (a.fill_color != b.fill_color).then(|| a.fill_color.clone()).flatten(),
@@ -273,6 +275,7 @@ fn changes(
                 || c.read_only.is_some()
                 || c.required.is_some()
                 || c.display.is_some()
+                || c.caption.is_some()
                 || c.rect.is_some()
                 || c.text_color.is_some()
                 || c.fill_color.is_some())

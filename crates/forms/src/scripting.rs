@@ -48,6 +48,7 @@ pub struct FieldChange {
     /// `["RGB", r, g, b]` or `["CMYK", c, m, y, k]`, components between 0 and 1.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    pub caption: Option<String>,
     /// Move/resize the first widget, in PDF user space.
     pub rect: Option<[f64; 4]>,
 }
@@ -133,8 +134,8 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 }
 
 /// Apply script changes to other fields (values written without re-running their scripts;
-/// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
+/// read-only, required and visibility as flags; button captions). `except` is the event's own
+/// field, whose value the event sets.
 pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
@@ -153,18 +154,20 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             && *v != f.value
         {
             let value = match f.kind {
-                FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => f.check_box_value(v.first().map(String::as_str)),
-                FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
-                FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
-                _ => continue,
+                FieldKind::Text => Some(FieldValue::Text(v.first().cloned().unwrap_or_default())),
+                FieldKind::CheckBox => Some(f.check_box_value(v.first().map(String::as_str))),
+                FieldKind::Radio => Some(FieldValue::Radio(v.first().cloned())),
+                FieldKind::Combo | FieldKind::List => Some(FieldValue::Choice(v.clone())),
+                _ => None,
             };
-            let mut tmp = f.clone();
-            tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-            tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
-            if c.formatted {
-                crate::redraw_calculated_value(doc, f, v, scripts)?;
+            if let Some(value) = value {
+                let mut tmp = f.clone();
+                tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
+                tmp.actions = Default::default();
+                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                if c.formatted {
+                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                }
             }
         }
         let mut ff = f.flags;
@@ -204,6 +207,12 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 &c.name,
                 &crate::FieldProps { appearance: Some(crate::LookPatch { text, fill, ..Default::default() }), ..Default::default() },
             )?;
+        }
+        if let Some(caption) = &c.caption {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
+            }
+            crate::set_props(doc, &f.name, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
         }
         if let Some(rect) = c.rect {
             crate::set_props(doc, &c.name, &crate::FieldProps { rect: Some((0, rect)), ..Default::default() })?;
