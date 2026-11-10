@@ -311,21 +311,34 @@ impl<'a> Lexer<'a> {
     }
 
     /// The rest of a key written with raw spaces, as in `/Universal PDF(...)` (seen in Info
-    /// dictionaries): a bare word after a key cannot be its value, so it is part of the name.
-    /// Without this the whole dictionary fails at that word. `true`, `false` and `null` are values.
+    /// dictionaries). Bare words join the key only when a string follows them: before a name,
+    /// number or keyword they are more likely a value missing its slash, and the dictionary
+    /// fails as before. At most [`Self::KEY_WORDS`] words.
     fn spaced_key_words(&mut self, key: &mut Vec<u8>) {
-        while self.peek().is_some_and(|b| is_regular(b) && !matches!(b, b'+' | b'-' | b'.' | b'0'..=b'9')) {
-            let start = self.pos;
-            if matches!(self.token(), b"true" | b"false" | b"null") {
-                self.pos = start;
-                return;
+        let start = self.pos;
+        let mut words = Vec::new();
+        while words.len() < Self::KEY_WORDS && self.peek().is_some_and(|b| is_regular(b) && !matches!(b, b'+' | b'-' | b'.' | b'0'..=b'9')) {
+            let at = self.pos;
+            if matches!(self.token(), b"true" | b"false" | b"null" | b"R" | b"obj" | b"endobj" | b"stream" | b"endstream") {
+                self.pos = at;
+                break;
             }
-            self.pos = start;
-            key.push(b' ');
-            key.extend(self.name_body());
+            self.pos = at;
+            words.push(self.name_body());
             self.skip_ws();
         }
+        if words.is_empty() || !matches!(self.peek(), Some(b'(' | b'<')) {
+            self.pos = start;
+            return;
+        }
+        for word in words {
+            key.push(b' ');
+            key.extend(word);
+        }
     }
+
+    /// The most bare words [`Self::spaced_key_words`] joins to one key.
+    const KEY_WORDS: usize = 8;
 
     fn number_or_ref(&mut self) -> Result<Object, CosError> {
         let start = self.pos;
@@ -617,18 +630,35 @@ mod tests {
     #[test]
     fn a_key_with_raw_spaces_keeps_the_dictionary() {
         let Ok(Object::Dict(d)) =
-            Lexer::new(b"<< /Title (Report) /Universal PDF(Acme) /A B  C#41 /D /Author (Ken) /On true /Off null >>", 0).object()
+            Lexer::new(b"<< /Title (Report) /Universal PDF(Acme) /A B  C#41 <4B> /T x\n<< /K 1 >> /Author (Ken) /On true /Off null >>", 0).object()
         else {
             panic!("the dictionary did not parse")
         };
         let text = |k: &[u8]| d.get(k).and_then(|v| v.as_string().map(|s| s.to_text()));
         assert_eq!(text(b"Title").as_deref(), Some("Report"));
         assert_eq!(text(b"Universal PDF").as_deref(), Some("Acme"));
-        assert_eq!(d.get(b"A B CA"), Some(&Object::name("D")));
+        assert_eq!(text(b"A B CA").as_deref(), Some("K"));
+        assert!(matches!(d.get(b"T x"), Some(Object::Dict(_))), "a dictionary value");
         assert_eq!(text(b"Author").as_deref(), Some("Ken"));
         assert_eq!(d.get(b"On"), Some(&Object::Bool(true)), "true is a value");
         assert_eq!(d.get(b"Off"), Some(&Object::Null), "null is a value");
-        assert_eq!(d.len(), 6);
+        assert_eq!(d.len(), 7);
+    }
+
+    /// A bare word before a name, a number or a keyword is a value missing its slash, not part of
+    /// the key: the dictionary fails as before, for the file's own repair, rather than read
+    /// with entries silently moved.
+    #[test]
+    fn a_bare_word_that_is_not_a_key_still_fails_the_dictionary() {
+        for bad in [
+            &b"<< /Type Catalog /Pages 2 0 R >>"[..],
+            b"<< /Length 10 /Filter FlateDecode >>",
+            b"<< /Contents endobj 4 0 obj (x) >>",
+            b"<< /S Span >> BDC",
+            b"<< /K a b c d e f g h i (x) >>",
+        ] {
+            assert!(Lexer::new(bad, 0).object().is_err(), "{}", String::from_utf8_lossy(bad));
+        }
     }
 
     #[test]
