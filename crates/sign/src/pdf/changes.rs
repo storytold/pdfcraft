@@ -949,6 +949,9 @@ fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>, now: Optio
     refs(old, was).iter().filter(|r| live(old, r)).any(|r| !now.contains(&r.num))
 }
 
+/// What changing the dictionary `before` (as signed; `None` for a new object) into `d` amounts
+/// to, judged by the role the object had when signed: signing, form fill, comments, page content
+/// or another change.
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature

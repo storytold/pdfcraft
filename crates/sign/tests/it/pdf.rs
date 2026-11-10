@@ -597,7 +597,15 @@ fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signin
                 assert_ne!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);
                 assert_eq!(s.modification, Modification::Disallowed(vec![kind::COMMENTS]), "P={p}, {what}");
             } else {
-                assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])), "P={p}, {what}");
+                // P=3 permits the new annotation, and nothing about it is signing. A new
+                // dictionary it refers to (the `<< /Foo /Bar >>` value) is counted as any new
+                // object is, as form fill, which P=3 permits too.
+                assert_eq!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);
+                assert!(
+                    matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::COMMENTS) && !k.contains(&kind::SIGNATURE)),
+                    "P={p}, {what}: {:?}",
+                    s.modification
+                );
             }
         }
         // Signing the empty field is signing.
