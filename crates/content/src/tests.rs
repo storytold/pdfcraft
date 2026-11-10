@@ -54,6 +54,19 @@ fn a_valid_array_after_a_given_up_one_is_parsed() {
     assert!(matches!(tj.operands.first(), Some(Object::Array(a)) if a.len() == 3), "{:?}", tj.operands);
 }
 
+/// Closing delimiters re-arm array parsing, but only within the rescan allowance: runs of openers
+/// each followed by a `]` can't make every re-armed read scan the rest of the stream.
+#[test]
+fn re_armed_array_reads_stay_within_the_rescan_allowance() {
+    let src = "[".repeat(100) + "]";
+    let src = src.repeat(2000);
+    RESCANNED.with(|c| c.set(0));
+    parse(src.as_bytes());
+    let rescanned = RESCANNED.with(|c| c.get());
+    let limit = src.len() * RESCAN_PER_BYTE + MIN_RESCAN + src.len();
+    assert!(rescanned <= limit, "{rescanned} bytes read for a {}-byte stream", src.len());
+}
+
 #[test]
 fn a_long_unreadable_number_is_read_once() {
     for junk in ["+", "5"] {

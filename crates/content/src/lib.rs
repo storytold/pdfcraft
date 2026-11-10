@@ -263,7 +263,9 @@ impl Iterator for Ops<'_> {
                 // behind, so a later `[` is a new array and is parsed rather than skipped. Only a
                 // closing delimiter re-arms the attempt: an unterminated nest of openers, which
                 // reads to the end of the stream at each one, is still read once.
-                if b == b']' {
+                // Not once retries have read more than the stream allows: re-arming then would
+                // rescan the rest of the stream for every `[`.
+                if b == b']' && *rescanned <= rescan_limit {
                     *arrays_given_up = false;
                 }
                 lx.pos += 1;
