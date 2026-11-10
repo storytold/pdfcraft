@@ -10,6 +10,7 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
@@ -34,6 +35,7 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "acces
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+zeroize = { workspace = true }
 # UTC/calendar display (combine modified-time stamp, the form date picker) goes through chrono
 # (no hand-rolled calendar code); std-only, so it stays wasm-safe.
 chrono = { workspace = true }

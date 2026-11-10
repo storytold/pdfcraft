@@ -100,6 +100,9 @@ struct Interp<'h> {
     /// burning a core to the loop limit).
     #[cfg(not(target_arch = "wasm32"))]
     deadline: Option<std::time::Instant>,
+    /// `deadline` passed and stopped the script: the run reports as abandoned.
+    #[cfg(not(target_arch = "wasm32"))]
+    out_of_time: bool,
 }
 
 type R<T> = Result<T, String>;
@@ -151,6 +154,8 @@ pub(crate) fn run_formcalc_at(
         exited: false,
         #[cfg(not(target_arch = "wasm32"))]
         deadline: deadline.and_then(|d| std::time::Instant::now().checked_add(d)),
+        #[cfg(not(target_arch = "wasm32"))]
+        out_of_time: false,
     };
     let mut out = XfaOutcome::default();
     match interp.block(&body) {
@@ -164,6 +169,19 @@ pub(crate) fn run_formcalc_at(
             }
         }
         Err(e) => out.error = Some(e),
+    }
+    // The caller stops waiting at the same time limit, so which of the two notices first is
+    // down to the scheduler. The outcome must not depend on it: stopped by the clock, the run
+    // reports what an abandoned one does, the error and no changes. Keeping the changes made
+    // it a race: a loop adding rows until the clock stopped it left the form unchanged on one
+    // run and 1000 rows longer on the next (each laid out again, tens of seconds).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (true, Some(d)) = (interp.out_of_time, deadline) {
+        return XfaOutcome {
+            error: Some(format!("the script ran longer than {:.1} s and was abandoned", d.as_secs_f64())),
+            abandoned: true,
+            ..Default::default()
+        };
     }
     out.notes = host.notes();
     out.effects = host.effects;

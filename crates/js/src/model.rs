@@ -114,6 +114,10 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
     pub highlight: bool,
     /// The document has an XFA form, so scripts see `xfa_installed`.
@@ -241,6 +245,12 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.runtimeHighlight = on`: highlight the form's fields, or stop.
     Highlight(bool),
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
