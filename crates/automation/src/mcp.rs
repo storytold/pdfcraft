@@ -673,6 +673,8 @@ mod tests {
             && build.is_none_or(|b| b.split('.').all(ident))
     }
 
+    /// The strict semver check the version test relies on accepts release, pre-release and
+    /// build versions, and rejects labelled, short, padded and prefixed strings.
     #[test]
     fn strict_semver_check_accepts_versions_and_rejects_labels() {
         for ok in ["0.18.1", "1.0.0", "10.20.30", "1.2.3-rc.1", "1.2.3-0.alpha", "1.2.3+build.5", "1.2.3-rc.1+b-7"] {
@@ -683,20 +685,20 @@ mod tests {
         }
     }
 
+    /// A labelled build (PDFCRAFT_BUILD_LABEL at compile time) must be told apart from the
+    /// release over MCP too, the same way the About dialog shows it. Injecting the version
+    /// makes this fail in an unlabelled build too if the reply goes back to the bare
+    /// package version.
     #[test]
     fn initialize_reports_a_labelled_version_as_given() {
-        // A labelled build (PDFCRAFT_BUILD_LABEL at compile time) must be told apart from the
-        // release over MCP too, the same way the About dialog shows it. Injecting the version
-        // makes this fail in an unlabelled build too if the reply goes back to the bare
-        // package version.
         let server = McpServer::new(Automation::new()).with_version("0.18.1 (probe)");
         assert_eq!(initialize_version(server), "0.18.1 (probe)");
     }
 
+    /// Clients may parse serverInfo.version: it is the strict semver release version, or
+    /// that version followed by ` (<label>)` in a labelled build.
     #[test]
     fn initialize_reports_the_release_version_then_any_label() {
-        // Clients may parse serverInfo.version: it is the strict semver release version, or
-        // that version followed by ` (<label>)` in a labelled build.
         let version = initialize_version(McpServer::new(Automation::new()));
         let release = pdfcraft_engine::build_info::VERSION;
         assert!(is_strict_semver(release), "{release}");
