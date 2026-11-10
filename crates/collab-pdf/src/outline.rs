@@ -28,7 +28,8 @@
 //! and the name's own entry is a separate operation that may have moved since.
 
 use pdfcraft_collab_outline::{
-    OutlineWireError, check_name, check_title, copy_bytes, dest_from_value, dest_to_value, node_count, subtree_depth, tree_from_value, tree_to_value,
+    ItemLook, OutlineWireError, check_name, check_title, copy_bytes, dest_from_value, dest_to_value, look_from_value, look_to_value, node_count,
+    subtree_depth, tree_from_value, tree_to_value,
 };
 use pdfcraft_collab_proto::{
     ErrorCode, MAX_NAMED_DESTINATIONS, MAX_OUTLINE_COPY_BYTES, MAX_OUTLINE_COPY_NODES, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, OutlineKey, Target,
@@ -136,6 +137,13 @@ impl PdfAdapter {
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "there is no outline item there", false))
     }
 
+    /// The item's colour at the precision the file keeps it. The listing rounds
+    /// each component to an `f32` for the interface; an undo has to write back
+    /// the number the file held.
+    fn item_color(&self, path: &[usize]) -> Option<[f64; 3]> {
+        self.document().and_then(|document| document.bookmark_color(path))
+    }
+
     /// How many children the item at `parent` has (`[]` = the top level).
     fn children_count(&self, items: &[Item], parent: &[usize]) -> Result<usize, AdapterError> {
         Ok(items.iter().filter(|item| item.path.len() == parent.len().saturating_add(1) && item.path.starts_with(parent)).count())
@@ -206,13 +214,19 @@ impl PdfAdapter {
     }
 
     /// `outline.item.add` (RFC §3.1.7): a title and a destination as child
-    /// `index` of the parent the target names (`null` = the top level).
+    /// `index` of the parent the target names (`null` = the top level), with the
+    /// look (`color`, `italic`, `bold`) the operation names. A new item has no
+    /// children, so an `open` state has nothing to change and is refused.
     pub(crate) fn add_outline_item(&mut self, target: &Target, payload: &mut Value) -> Result<Value, AdapterError> {
         let parent = self.parent_path(Self::outline_target(target)?)?;
         let title = payload.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
         check_title(&title).map_err(map_outline)?;
         let dest =
             self.read_dest(payload.get("dest").ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the item names no destination", false))?)?;
+        let look = look_from_value(payload).map_err(map_outline)?;
+        if look.open.is_some() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "a new bookmark has no children, so it has no open state to set", false));
+        }
         if parent.len().saturating_add(1) > MAX_OUTLINE_DEPTH {
             return Err(AdapterError::new(ErrorCode::Limit, format!("bookmarks may nest at most {MAX_OUTLINE_DEPTH} levels deep"), false));
         }
@@ -225,7 +239,6 @@ impl PdfAdapter {
             None => self.children_count(&items, &parent)?,
         };
         self.apply_edit(Edit::AddBookmarkWith { parent: parent.clone(), index, title: title.clone(), dest: dest.clone() })?;
-        self.epoch = self.epoch.saturating_add(1);
         // The engine clamps a position past the end, so the new item is found by
         // what it is rather than by where the operation asked for it.
         let after = self.outline_items()?;
@@ -235,18 +248,34 @@ impl PdfAdapter {
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the bookmark was added without an object", false))?;
         let key = added.key;
         let path = added.path.clone();
+        // The look is written after the item exists, in the same accepted
+        // operation. Every value was checked above, so this second step cannot
+        // be the one that refuses: the room never accepts half a bookmark.
+        if !look.is_empty() {
+            self.apply_edit(Edit::UpdateBookmark {
+                path: path.clone(),
+                title: None,
+                dest: None,
+                color: look.color,
+                bold: look.bold,
+                italic: look.italic,
+                open: None,
+            })?;
+        }
+        self.epoch = self.epoch.saturating_add(1);
         payload["parent"] = json!(parent);
         payload["path"] = json!(path);
         payload["index"] = json!(path.last().copied().unwrap_or(0));
         payload["title"] = json!(title);
         payload["dest"] = dest_to_value(&dest);
+        apply_look_payload(payload, &look);
         payload["key"] = json!(key);
         Ok(json!({ "key": key, "path": path }))
     }
 
-    /// `outline.item.update`: a new title and/or destination for an existing item,
-    /// as one step. The accepted operation carries what it replaced (`before`), so
-    /// the undo is the same action with those values.
+    /// `outline.item.update`: a new title, destination and/or look for an
+    /// existing item, as one step. The accepted operation carries the whole node
+    /// it replaced (`before`), so the undo is the same action with those values.
     pub(crate) fn update_outline_item(&mut self, target: &Target, payload: &mut Value) -> Result<Value, AdapterError> {
         let key = Self::outline_item_key(target)?;
         let path = self.item_path(key)?;
@@ -255,14 +284,32 @@ impl PdfAdapter {
             Some(value) => Some(self.read_dest(value)?),
             None => None,
         };
-        if title.is_none() && dest.is_none() {
-            return Err(AdapterError::new(ErrorCode::Invalid, "the update names no title and no destination", false));
+        let look = look_from_value(payload).map_err(map_outline)?;
+        if title.is_none() && dest.is_none() && look.is_empty() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "the update names no title, destination or look", false));
         }
         if let Some(title) = &title {
             check_title(title).map_err(map_outline)?;
         }
+        // A bookmark with no children has no `/Count` to open or close: the
+        // request says nothing about a state the file could keep.
+        if look.open.is_some() {
+            let items = self.outline_items()?;
+            if self.children_count(&items, &path)? == 0 {
+                return Err(AdapterError::new(ErrorCode::Invalid, "this bookmark has no children, so it has no open state to set", false));
+            }
+        }
         let before = self.node_at(&path)?;
-        self.apply_edit(Edit::UpdateBookmark { path: path.clone(), title: title.clone(), dest: dest.clone() })?;
+        let before_color = self.item_color(&path);
+        self.apply_edit(Edit::UpdateBookmark {
+            path: path.clone(),
+            title: title.clone(),
+            dest: dest.clone(),
+            color: look.color,
+            bold: look.bold,
+            italic: look.italic,
+            open: look.open,
+        })?;
         self.epoch = self.epoch.saturating_add(1);
         payload["path"] = json!(path);
         if let Some(title) = &title {
@@ -271,7 +318,8 @@ impl PdfAdapter {
         if let Some(dest) = &dest {
             payload["dest"] = dest_to_value(dest);
         }
-        payload["before"] = json!({ "title": before.title, "dest": node_dest_value(&before) });
+        apply_look_payload(payload, &look);
+        payload["before"] = node_before_value(&before, before_color);
         payload["key"] = json!(key);
         Ok(json!({ "key": key, "path": path }))
     }
@@ -502,6 +550,29 @@ fn node_dest_value(node: &OutlineNode) -> Value {
     match (node.page, node.view.as_ref()) {
         (Some(page), view) => dest_value(page, view),
         _ => json!({"kind": "nowhere"}),
+    }
+}
+
+/// The whole node an update replaced, for its undo: its title, destination and
+/// look, so `before` puts back every field the update could have changed.
+fn node_before_value(node: &OutlineNode, color: Option<[f64; 3]>) -> Value {
+    let look = ItemLook { color: Some(color), bold: Some(node.bold), italic: Some(node.italic), open: Some(node.open) };
+    let mut value = json!({"title": node.title, "dest": node_dest_value(node)});
+    if let Value::Object(look) = look_to_value(&look) {
+        for (field, field_value) in look {
+            value[field] = field_value;
+        }
+    }
+    value
+}
+
+/// Write the look an operation named into its accepted payload, so every replica
+/// and the journal see the same fields the client sent.
+fn apply_look_payload(payload: &mut Value, look: &ItemLook) {
+    if let Value::Object(look) = look_to_value(look) {
+        for (field, field_value) in look {
+            payload[field] = field_value;
+        }
     }
 }
 

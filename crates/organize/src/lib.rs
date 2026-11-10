@@ -46,8 +46,8 @@ pub use labels::{
 };
 pub use outline::{
     Bookmark, BookmarkDest, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, add_bookmark_with,
-    bookmark_page, bookmarks, delete_bookmark, move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_dest, set_bookmark_open,
-    set_bookmark_page, set_bookmark_style, top_level_bookmarks,
+    bookmark_color, bookmark_page, bookmarks, delete_bookmark, move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_dest,
+    set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};

@@ -39,6 +39,8 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set bookmark destination",
     "Colour",
     "Style",
+    "Expand bookmark",
+    "Collapse bookmark",
     "Import bookmarks",
     "New bookmarks from structure",
     "New bookmarks from text styles",
@@ -197,6 +199,14 @@ impl Edit {
             Edit::AddBookmark { .. } => Label::of("Add bookmark"),
             Edit::AddBookmarkWith { .. } => Label::of("Add bookmark"),
             Edit::RenameBookmark { .. } => Label::of("Rename bookmark"),
+            // One step that changes a bookmark's look says which look it changed;
+            // a step that changes several at once keeps the general wording below.
+            Edit::UpdateBookmark { title: None, dest: None, color: Some(_), bold: None, italic: None, open: None, .. } => Label::of("Colour"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: Some(_), italic: None, open: None, .. } => Label::of("Style"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: None, italic: Some(_), open: None, .. } => Label::of("Style"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: None, italic: None, open: Some(open), .. } => {
+                Label::of(if *open { "Expand bookmark" } else { "Collapse bookmark" })
+            }
             // A step that changes where a bookmark goes says so; one that only
             // renames keeps the rename's wording.
             Edit::UpdateBookmark { dest: Some(_), .. } => Label::of("Set bookmark destination"),

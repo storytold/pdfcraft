@@ -20,7 +20,7 @@ use pdfcraft_collab_annot::{
     PopupUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
 };
 use pdfcraft_collab_link::{bodies_from_value, bodies_to_value};
-use pdfcraft_collab_outline::{dest_from_value, dest_to_value, tree_from_value, tree_to_value};
+use pdfcraft_collab_outline::{ItemLook, dest_from_value, dest_to_value, look_from_value, look_to_value, tree_from_value, tree_to_value};
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, OutlineKey, PageRef, Target};
 use pdfcraft_engine::{
     BookmarkDest, DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, LinkAction, LinkContent, NoteIcon, Session, Shape,
@@ -357,6 +357,13 @@ pub fn outline_update_payload(title: Option<&str>, dest: Option<&BookmarkDest>) 
         payload["dest"] = dest_to_value(dest);
     }
     payload
+}
+
+/// An existing item's look — colour, weight and slant, and open state — as the
+/// fields an `outline.item.update`/`add` names. Only the fields the look names
+/// are written, so an operation changes just what the user changed.
+pub fn outline_look_payload(look: &ItemLook) -> Value {
+    look_to_value(look)
 }
 
 /// An item (and everything under it) removed, with the copy the server keeps for
@@ -744,7 +751,10 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let path = path_in(op, "path")?;
             let title = op.payload.get("title").and_then(Value::as_str).map(str::to_owned);
             let dest = op.payload.get("dest").map(|_| dest_in(op)).transpose()?;
-            Ok(Edit::UpdateBookmark { path, title, dest })
+            // The look travels in the same step as the title and destination: a
+            // colour, a weight or an open state the operation named.
+            let look = look_from_value(&op.payload).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+            Ok(Edit::UpdateBookmark { path, title, dest, color: look.color, bold: look.bold, italic: look.italic, open: look.open })
         }
         ("outline.item.delete", ConflictClass::Structural) => Ok(Edit::DeleteBookmark { path: path_in(op, "path")? }),
         // A deleted subtree comes back whole from the copy the accepted operation
@@ -1275,9 +1285,18 @@ pub fn ops_for_edit(
         Edit::AddBookmarkWith { parent, index, title, dest } => {
             Ok(vec![outline_add_op(document, doc, client_id, base_version, epoch, counter, parent, *index, title, dest)?])
         }
-        Edit::RenameBookmark { path, title } => {
-            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, Some(title.as_str()), None)?])
-        }
+        Edit::RenameBookmark { path, title } => Ok(vec![outline_update_op(
+            document,
+            doc,
+            client_id,
+            base_version,
+            epoch,
+            counter,
+            path,
+            Some(title.as_str()),
+            None,
+            &ItemLook::default(),
+        )?]),
         Edit::SetBookmarkPage { path, page } => Ok(vec![outline_update_op(
             document,
             doc,
@@ -1288,9 +1307,21 @@ pub fn ops_for_edit(
             path,
             None,
             Some(&BookmarkDest::Page { page: *page, left: None, top: None }),
+            &ItemLook::default(),
         )?]),
-        Edit::UpdateBookmark { path, title, dest } => {
-            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, title.as_deref(), dest.as_ref())?])
+        Edit::UpdateBookmark { path, title, dest, color, bold, italic, open } => {
+            let look = ItemLook { color: *color, bold: *bold, italic: *italic, open: *open };
+            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, title.as_deref(), dest.as_ref(), &look)?])
+        }
+        // The Style and Colour menus' own edits are the same operation as an
+        // update of the item's look: one addressed step, undone by the same one.
+        Edit::SetBookmarkColor { path, color } => {
+            let look = ItemLook { color: Some(*color), ..ItemLook::default() };
+            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, None, None, &look)?])
+        }
+        Edit::SetBookmarkStyle { path, bold, italic } => {
+            let look = ItemLook { bold: *bold, italic: *italic, ..ItemLook::default() };
+            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, None, None, &look)?])
         }
         Edit::DeleteBookmark { path } => {
             let key = outline_key_at(document, path)?;
@@ -1480,8 +1511,8 @@ fn outline_add_op(
     ))
 }
 
-/// One `outline.item.update` for an edit that changes a bookmark's title and/or
-/// destination.
+/// One `outline.item.update` for an edit that changes a bookmark's title,
+/// destination and/or look.
 #[allow(clippy::too_many_arguments)]
 fn outline_update_op(
     document: &Document,
@@ -1493,16 +1524,16 @@ fn outline_update_op(
     path: &[usize],
     title: Option<&str>,
     dest: Option<&BookmarkDest>,
+    look: &ItemLook,
 ) -> Result<Op, ProjectionError> {
     let key = outline_key_at(document, path)?;
-    Ok(structural_op(
-        doc,
-        next_id(client_id, counter)?,
-        base_version,
-        epoch,
-        Target::OutlineItem { key: Some(key) },
-        outline_update_payload(title, dest),
-    ))
+    let mut payload = outline_update_payload(title, dest);
+    if let Value::Object(named) = look_to_value(look) {
+        for (field, value) in named {
+            payload[field] = value;
+        }
+    }
+    Ok(structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::OutlineItem { key: Some(key) }, payload))
 }
 
 /// The `dest` a named destination operation carries: a page and a point for the
@@ -2238,12 +2269,30 @@ fn outline_inverse(applied: &Applied, op_id: &OpId, doc: &DocKey) -> Option<Op> 
             let before = op.payload.get("before")?;
             // Only what the update named is put back; a title the file had as
             // empty is left alone rather than sent as an invalid rename.
-            let title = before.get("title").and_then(Value::as_str).filter(|title| !title.trim().is_empty());
-            let dest = before.get("dest").and_then(|value| dest_from_value(value).ok());
-            if title.is_none() && dest.is_none() {
+            let title = op.payload.get("title").and(before.get("title")).and_then(Value::as_str).filter(|title| !title.trim().is_empty());
+            let dest = if op.payload.get("dest").is_some() { before.get("dest").and_then(|value| dest_from_value(value).ok()) } else { None };
+            // The look goes back as the node had it, and only for the fields the
+            // update changed: a colour it took away comes back as `null`, and an
+            // open state goes back only when the update named one (an item without
+            // children has none to put back).
+            let named = look_from_value(&op.payload).ok()?;
+            let restored = look_from_value(before).ok()?;
+            let look = ItemLook {
+                color: named.color.and(restored.color),
+                bold: named.bold.and(restored.bold),
+                italic: named.italic.and(restored.italic),
+                open: named.open.and(restored.open),
+            };
+            if title.is_none() && dest.is_none() && look.is_empty() {
                 return None;
             }
-            structural_op(doc.clone(), op_id.clone(), base, epoch, target, outline_update_payload(title, dest.as_ref()))
+            let mut payload = outline_update_payload(title, dest.as_ref());
+            if let Value::Object(named) = look_to_value(&look) {
+                for (field, value) in named {
+                    payload[field] = value;
+                }
+            }
+            structural_op(doc.clone(), op_id.clone(), base, epoch, target, payload)
         }
         "outline.item.delete" => {
             // The copy goes back under the parent it came from, named by its key:
@@ -2521,6 +2570,85 @@ mod tests {
         // A named destination may not be a name of a name in the room.
         let nested = Op { payload: serde_json::json!({"action": "dest.add", "dest": {"kind": "named", "name": "other"}}), ..destination };
         assert!(edit_for(document, &nested).is_err());
+        Ok(())
+    }
+
+    /// A bookmark's colour, weight, slant and open state travel as the same
+    /// addressed `outline.item.update` its title does; the accepted operation
+    /// turns back into one `UpdateBookmark`, and its undo names the look the
+    /// server says the operation replaced — the whole node, not a guess.
+    #[test]
+    fn bookmark_look_edits_become_one_update_and_its_undo() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        session.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Part".into(), page: 0, left: None, top: None })?;
+        session.apply(id, Edit::AddBookmark { parent: vec![0], index: 0, title: "One".into(), page: 1, left: None, top: None })?;
+        let document = session.get(id).ok_or("open")?;
+        let part = document.bookmarks().into_iter().find(|row| row.path == vec![0]).and_then(|row| row.object).ok_or("Part is listed")?;
+        let part = pdfcraft_collab_proto::OutlineKey::new(part.0, part.1);
+        let mut counter = 0;
+
+        let colour =
+            ops_for_edit(document, &Edit::SetBookmarkColor { path: vec![0], color: Some([0.2, 0.4, 0.6]) }, doc()?, "ada", 5, 1, &mut counter)?;
+        assert_eq!(colour[0].payload["action"], "outline.item.update");
+        assert_eq!(colour[0].target, Target::OutlineItem { key: Some(part) });
+        assert_eq!(colour[0].payload["color"], serde_json::json!([0.2, 0.4, 0.6]));
+        assert!(colour[0].payload.get("title").is_none(), "a colour names no title");
+
+        let style =
+            ops_for_edit(document, &Edit::SetBookmarkStyle { path: vec![0], bold: Some(true), italic: None }, doc()?, "ada", 5, 1, &mut counter)?;
+        assert_eq!(style[0].payload["bold"], serde_json::json!(true));
+        assert!(style[0].payload.get("italic").is_none(), "a style the edit left out travels as nothing");
+
+        // The open state is the same step: an item with children is closed.
+        let close = Edit::UpdateBookmark { path: vec![0], title: None, dest: None, color: None, bold: None, italic: None, open: Some(false) };
+        let shut = ops_for_edit(document, &close, doc()?, "ada", 5, 1, &mut counter)?;
+        assert_eq!(shut[0].payload["open"], serde_json::json!(false));
+        assert!(shut[0].payload.get("color").is_none());
+
+        // An accepted update applies as one edit carrying every field it named.
+        let accepted = Op {
+            op_id: OpId::new("look-1")?,
+            doc: doc()?,
+            base_version: 0,
+            epoch: 0,
+            kind: pdfcraft_collab_proto::OpKind::Structural,
+            class: pdfcraft_collab_proto::ConflictClass::Structural,
+            target: Target::OutlineItem { key: Some(part) },
+            payload: serde_json::json!({
+                "action": "outline.item.update", "path": [0], "color": null, "bold": true, "open": false,
+                "before": {"title": "Part", "dest": {"kind": "page", "page": 1, "left": null, "top": null}, "color": [0.2, 0.4, 0.6], "italic": true, "bold": false, "open": true},
+            }),
+            preview: None,
+        };
+        match edit_for(document, &accepted)? {
+            Edit::UpdateBookmark { color, bold, italic, open, title, dest, .. } => {
+                assert_eq!(color, Some(None), "a colour given as null is the default black");
+                assert_eq!(bold, Some(true));
+                assert_eq!(italic, None, "an italic the operation did not name is left alone");
+                assert_eq!(open, Some(false));
+                assert!(title.is_none() && dest.is_none());
+            }
+            other => return Err(format!("expected an update, got {other:?}").into()),
+        }
+        // The undo names the look the operation replaced, and only the fields it changed.
+        let applied = Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: ActorId::new("ada")?,
+            version: 6,
+            epoch: 2,
+            op: accepted.clone(),
+            result: serde_json::json!({}),
+        };
+        let undo = inverse_after(&applied).ok_or("the update is undoable")?;
+        assert_eq!(undo.target, Target::OutlineItem { key: Some(part) });
+        assert_eq!(undo.payload["action"], "outline.item.update");
+        assert_eq!(undo.payload["color"], serde_json::json!([0.2, 0.4, 0.6]));
+        assert_eq!(undo.payload["bold"], serde_json::json!(false));
+        // The update never named the slant, so its undo leaves the slant alone:
+        // only the fields the operation changed go back.
+        assert!(undo.payload.get("italic").is_none());
+        assert_eq!(undo.payload["open"], serde_json::json!(true));
+        assert_eq!((undo.base_version, undo.epoch), (6, 2), "the undo is addressed in the version and epoch the update left");
         Ok(())
     }
 

@@ -137,13 +137,18 @@ pub enum Edit {
         title: String,
         dest: pdfcraft_organize::BookmarkDest,
     },
-    /// Change a bookmark's title and/or where it goes, as one step. A title that is
-    /// only spaces, an empty destination or a name this document does not define is
-    /// refused, and nothing changes.
+    /// Change a bookmark's title, where it goes and how it looks, as one step. A title
+    /// that is only spaces, an empty destination or a name this document does not
+    /// define is refused, and nothing changes. `color: Some(None)` is the default
+    /// black; a style or an open state left out keeps what the file has.
     UpdateBookmark {
         path: Vec<usize>,
         title: Option<String>,
         dest: Option<pdfcraft_organize::BookmarkDest>,
+        color: Option<Option<[f64; 3]>>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        open: Option<bool>,
     },
     /// Point the named destination `name` at `dest` (a page and a point, or a page
     /// with the view type the file already had), creating it when it does not exist

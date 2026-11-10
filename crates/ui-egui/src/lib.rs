@@ -784,6 +784,8 @@ pub struct PdfCraftApp {
     pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
+    /// Named destinations dialog state.
+    pub named_dests_draft: dialogs::named_dests_ui::NamedDestsDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
     /// Header & footer / watermark / background dialog state.

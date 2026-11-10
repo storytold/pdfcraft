@@ -131,6 +131,85 @@ pub fn dest_to_value(dest: &BookmarkDest) -> Value {
     }
 }
 
+/// How a bookmark looks, as an `outline.item.update`/`add` may change it: its
+/// colour, its title's weight and slant, and whether it shows expanded. Every
+/// field is optional, so an operation changes only what it names, and `None`
+/// everywhere is an operation that changes nothing (the adapter refuses it).
+///
+/// A colour is `null` for the default black or three numbers from 0 to 1; a
+/// style that is not a boolean and a colour that is not those three numbers are
+/// refused here, before an adapter touches its document.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ItemLook {
+    /// `Some(None)` paints the title in the default black (`/C` removed).
+    pub color: Option<Option<[f64; 3]>>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    /// Whether the item shows expanded. Only an item with children has a state
+    /// to change; the adapter refuses it on one without.
+    pub open: Option<bool>,
+}
+
+impl ItemLook {
+    /// Whether the operation names no look at all.
+    pub fn is_empty(&self) -> bool {
+        self.color.is_none() && self.bold.is_none() && self.italic.is_none() && self.open.is_none()
+    }
+}
+
+/// The look a payload names. An absent field is left alone; a colour that is not
+/// `null` or three numbers from 0 to 1 is `Malformed("bookmark colour")`, and a
+/// style or open state that is not a boolean is `Malformed` too.
+pub fn look_from_value(value: &Value) -> Result<ItemLook> {
+    Ok(ItemLook {
+        color: match value.get("color") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(color) => Some(Some(rgb_of(color)?)),
+        },
+        bold: flag(value, "bold")?,
+        italic: flag(value, "italic")?,
+        open: flag(value, "open")?,
+    })
+}
+
+fn rgb_of(color: &Value) -> Result<[f64; 3]> {
+    let components = color.as_array().ok_or(OutlineWireError::Malformed("bookmark colour"))?;
+    let [r, g, b] = components.as_slice() else {
+        return Err(OutlineWireError::Malformed("bookmark colour"));
+    };
+    let channel = |v: &Value| v.as_f64().filter(|v| (0.0..=1.0).contains(v)).ok_or(OutlineWireError::Malformed("bookmark colour"));
+    Ok([channel(r)?, channel(g)?, channel(b)?])
+}
+
+fn flag(value: &Value, field: &'static str) -> Result<Option<bool>> {
+    match value.get(field) {
+        None => Ok(None),
+        Some(value) => value.as_bool().map(Some).ok_or(OutlineWireError::Malformed(field)),
+    }
+}
+
+/// The look as an accepted operation carries it: the fields the operation named,
+/// and nothing for the ones it left alone.
+pub fn look_to_value(look: &ItemLook) -> Value {
+    let mut value = serde_json::Map::new();
+    match look.color {
+        None => {}
+        Some(None) => {
+            value.insert("color".into(), Value::Null);
+        }
+        Some(Some(rgb)) => {
+            value.insert("color".into(), json!(rgb));
+        }
+    }
+    for (field, flag) in [("bold", look.bold), ("italic", look.italic), ("open", look.open)] {
+        if let Some(flag) = flag {
+            value.insert(field.into(), Value::Bool(flag));
+        }
+    }
+    Value::Object(value)
+}
+
 /// A subtree as the wire carries it: the copy an `outline.item.delete` keeps.
 /// Nodes are objects with `title`, `page`, `view`, `color`, `italic`, `bold`,
 /// `open` and `children`; a view is `{"kind": "XYZ", "values": [1.0, null, …]}`
@@ -202,17 +281,11 @@ fn node_from(value: &Value, depth: usize, count: &mut usize) -> Result<OutlineNo
         }
     };
     let view = value.get("view").filter(|view| !view.is_null()).map(view_from_value).transpose()?;
+    // The node's own colour is an `f32`; a copy writes the file's value back
+    // through it.
     let color = match value.get("color") {
         None | Some(Value::Null) => None,
-        Some(color) => {
-            let components = color.as_array().ok_or(OutlineWireError::Malformed("bookmark colour"))?;
-            let [r, g, b] = components.as_slice() else {
-                return Err(OutlineWireError::Malformed("bookmark colour"));
-            };
-            let channel = |v: &Value| v.as_f64().filter(|v| (0.0..=1.0).contains(v)).ok_or(OutlineWireError::Malformed("bookmark colour"));
-            let rgb = [channel(r)? as f32, channel(g)? as f32, channel(b)? as f32];
-            Some(rgb)
-        }
+        Some(color) => Some(rgb_of(color)?.map(|c| c as f32)),
     };
     let flag = |field: &'static str| value.get(field).and_then(Value::as_bool).unwrap_or(false);
     let open = value.get("open").and_then(Value::as_bool).unwrap_or(true);

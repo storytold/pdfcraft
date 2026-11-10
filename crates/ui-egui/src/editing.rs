@@ -1205,6 +1205,10 @@ impl PdfCraftApp {
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
             A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
             A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
+            // One addressed step: the look goes through the same `outline.item.update`
+            // a colour or a style does (collab-client-pdf), and the engine writes
+            // the sign of `/Count` for it.
+            A::SetOpen(path, open) => Edit::UpdateBookmark { path, title: None, dest: None, color: None, bold: None, italic: None, open: Some(open) },
             A::Delete(path) => Edit::DeleteBookmark { path },
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);

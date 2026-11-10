@@ -3,7 +3,8 @@
 //! refuse an operation before it touches a document.
 
 use super::{
-    OutlineWireError, check_name, check_title, copy_bytes, dest_from_value, dest_to_value, node_count, subtree_depth, tree_from_value, tree_to_value,
+    OutlineWireError, check_name, check_title, copy_bytes, dest_from_value, dest_to_value, look_from_value, look_to_value, node_count, subtree_depth,
+    tree_from_value, tree_to_value,
 };
 use pdfcraft_collab_proto::{MAX_DEST_NAME, MAX_OUTLINE_COPY_NODES, MAX_OUTLINE_DEPTH, MAX_OUTLINE_TITLE};
 use pdfcraft_organize::{BookmarkDest, OutlineNode};
@@ -129,4 +130,45 @@ fn an_empty_copy_is_an_empty_list() {
     assert_eq!(tree_from_value(&json!([])).expect("parses"), Vec::new());
     assert_eq!(node_count(&[]), 0);
     assert_eq!(subtree_depth(&[]), 0);
+}
+
+#[test]
+fn a_look_round_trips_and_leaves_out_what_it_did_not_name() {
+    let look = look_from_value(&json!({"color": [0.1, 0.2, 0.3], "bold": true, "open": false})).expect("parses");
+    assert_eq!(look.color, Some(Some([0.1, 0.2, 0.3])));
+    assert_eq!(look.bold, Some(true));
+    assert_eq!(look.italic, None, "a style the operation does not name is left alone");
+    assert_eq!(look.open, Some(false));
+    let value = look_to_value(&look);
+    assert_eq!(value, json!({"color": [0.1, 0.2, 0.3], "bold": true, "open": false}));
+    assert_eq!(look_from_value(&value).expect("parses"), look);
+    // A colour given as null is the default black, not "leave it alone": the
+    // undo of a colour has to be able to take the colour away.
+    let cleared = look_from_value(&json!({"color": null})).expect("parses");
+    assert_eq!(cleared.color, Some(None));
+    assert_eq!(look_to_value(&cleared), json!({"color": null}));
+    assert!(look_from_value(&json!({})).expect("parses").is_empty());
+    assert_eq!(look_from_value(&json!({"italic": true})).expect("parses").italic, Some(true));
+}
+
+#[test]
+fn a_look_that_is_not_what_it_must_be_is_refused() {
+    for bad in [
+        json!({"color": [1, 0]}),
+        json!({"color": [0, 0, 1, 0]}),
+        json!({"color": [1.1, 0, 0]}),
+        json!({"color": [-0.1, 0, 0]}),
+        json!({"color": ["red", 0, 0]}),
+        json!({"color": "red"}),
+        json!({"color": 0}),
+        json!({"bold": 1}),
+        json!({"italic": "yes"}),
+        json!({"open": null}),
+        json!({"open": 1}),
+    ] {
+        assert!(look_from_value(&bad).is_err(), "{bad} must be refused");
+    }
+    // The default colour is the one every reader draws: three components in range.
+    assert!(look_from_value(&json!({"color": [0, 0, 0]})).is_ok());
+    assert!(look_from_value(&json!({"color": [1, 1, 1]})).is_ok());
 }

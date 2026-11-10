@@ -567,13 +567,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddBookmarkWith { parent, index, title, dest } => {
             pdfcraft_organize::add_bookmark_with(doc, parent, *index, title, dest.clone())?;
         }
-        Edit::UpdateBookmark { path, title, dest } => {
-            if let Some(title) = title {
-                pdfcraft_organize::rename_bookmark(doc, path, title)?;
-            }
-            if let Some(dest) = dest {
-                pdfcraft_organize::set_bookmark_dest(doc, path, dest.clone())?;
-            }
+        Edit::UpdateBookmark { path, title, dest, color, bold, italic, open } => {
+            update_bookmark(doc, path, title.as_deref(), dest.as_ref(), *color, *bold, *italic, *open)?;
         }
         Edit::SetNamedDestination { name, dest } => pdfcraft_organize::set_named_destination(doc, name, dest)?,
         Edit::DeleteNamedDestination { name } => pdfcraft_organize::delete_named_destination(doc, name)?,
@@ -1118,6 +1113,37 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 run_edit(doc, e, cx)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// A bookmark's title, where it goes and how it looks, as one step: each field
+/// the edit names is written, the ones it leaves out keep what the file has.
+#[allow(clippy::too_many_arguments)]
+fn update_bookmark(
+    doc: &mut pdfcraft_cos::Document,
+    path: &[usize],
+    title: Option<&str>,
+    dest: Option<&pdfcraft_organize::BookmarkDest>,
+    color: Option<Option<[f64; 3]>>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    open: Option<bool>,
+) -> Result<(), EditError> {
+    if let Some(title) = title {
+        pdfcraft_organize::rename_bookmark(doc, path, title)?;
+    }
+    if let Some(dest) = dest {
+        pdfcraft_organize::set_bookmark_dest(doc, path, dest.clone())?;
+    }
+    if let Some(color) = color {
+        pdfcraft_organize::set_bookmark_color(doc, path, color)?;
+    }
+    if bold.is_some() || italic.is_some() {
+        pdfcraft_organize::set_bookmark_style(doc, path, bold, italic)?;
+    }
+    if let Some(open) = open {
+        pdfcraft_organize::set_bookmark_open(doc, path, open)?;
     }
     Ok(())
 }

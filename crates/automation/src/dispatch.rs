@@ -198,6 +198,9 @@ impl Automation {
                 out
             }
             "bookmark_list" => self.bookmark_listing(&a)?,
+            "destinations" => self.destinations_list(&a)?,
+            "destination_set" => self.destination_set(&a)?,
+            "destination_delete" => self.destination_delete(&a)?,
             "bookmark_export" => self.bookmark_export(&a)?,
             "bookmark_import" => self.bookmark_import(&a)?,
             "bookmark_copy" => self.bookmark_copy(&a)?,

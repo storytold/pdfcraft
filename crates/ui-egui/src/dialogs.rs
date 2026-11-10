@@ -14,6 +14,7 @@ pub(super) mod convert_colours_ui;
 pub(super) mod credits;
 pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
+pub mod named_dests_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
 pub(super) mod preferences;
@@ -154,6 +155,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
+            Dialog::NamedDestinations => 720.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -500,6 +502,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::BookmarksFromTextStyles => {
             req.close = crate::bookmark_styles_ui::body(ui, app, &t);
+            return false;
+        }
+        Dialog::NamedDestinations => {
+            req.close = crate::dialogs::named_dests_ui::body(ui, app, &t);
             return false;
         }
         Dialog::NumberPages => {

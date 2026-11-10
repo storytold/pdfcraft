@@ -2014,6 +2014,57 @@ fn bookmarks_through_tools() {
     assert_eq!((list[0]["title"].as_str(), list[0]["children"][0]["title"].as_str()), (Some("Body"), Some("Details")));
 }
 
+/// Named destinations through the tools: listed, added, moved, deleted, and
+/// refused before anything is written when the name, the page or the view is
+/// wrong.
+#[test]
+fn named_destinations_through_tools() {
+    let dir = workdir("destinations");
+    std::fs::write(dir.join("dests.pdf"), fixture(3)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dests.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "destinations", json!({ "doc": doc }))["destinations"], json!([]));
+
+    ok(&mut a, "destination_set", json!({ "doc": doc, "name": "chapter-1", "page": 2, "view": "XYZ", "values": [40.0, null, null] }));
+    ok(&mut a, "destination_set", json!({ "doc": doc, "name": "cover", "page": 1, "view": "Fit" }));
+    let list = ok(&mut a, "destinations", json!({ "doc": doc }))["destinations"].clone();
+    assert_eq!(list[0]["name"], "chapter-1", "the list is in the name tree's own order");
+    assert_eq!(list[0]["page"], 2);
+    assert_eq!(list[0]["view"], json!({ "type": "XYZ", "values": [40.0, null, null] }));
+    assert_eq!(list[1]["view"], json!({ "type": "Fit", "values": [] }));
+
+    // An existing name moves; the name is the address, so no second entry appears.
+    ok(&mut a, "destination_set", json!({ "doc": doc, "name": "chapter-1", "page": 3 }));
+    let list = ok(&mut a, "destinations", json!({ "doc": doc }))["destinations"].clone();
+    assert_eq!((list[0]["page"].clone(), list[1].clone()), (json!(3), json!({"name": "cover", "page": 1, "view": {"type": "Fit", "values": []}})));
+
+    // Refusals before the first write: a blank or over-long name, a page past the
+    // last, an unknown view, the wrong number of values, and a FitR with a hole.
+    for args in [
+        json!({ "doc": doc, "name": "  ", "page": 1 }),
+        json!({ "doc": doc, "name": "x".repeat(129), "page": 1 }),
+        json!({ "doc": doc, "name": "past", "page": 4 }),
+        json!({ "doc": doc, "name": "odd", "page": 1, "view": "Frobnicate" }),
+        json!({ "doc": doc, "name": "odd", "page": 1, "view": "XYZ", "values": [1.0, 2.0] }),
+        json!({ "doc": doc, "name": "odd", "page": 1, "view": "FitR", "values": [0.0, 0.0, null, 10.0] }),
+        json!({ "doc": doc, "name": "odd", "page": 1, "view": "Fit", "values": [1.0] }),
+    ] {
+        assert!(a.call("destination_set", &args).is_err(), "{args} must be refused");
+    }
+    assert_eq!(ok(&mut a, "destinations", json!({ "doc": doc }))["count"], 2, "a refusal wrote nothing");
+
+    ok(&mut a, "destination_delete", json!({ "doc": doc, "name": "cover" }));
+    assert_eq!(ok(&mut a, "destinations", json!({ "doc": doc }))["count"], 1);
+    assert!(a.call("destination_delete", &json!({ "doc": doc, "name": "cover" })).is_err(), "a name that is gone is refused");
+    // A bookmark that goes to the name keeps its destination across a save.
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Chapter", "page": 3 }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "dests-out.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "dests-out.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut b, "destinations", json!({ "doc": re }))["destinations"].clone();
+    assert_eq!(list, json!([{"name": "chapter-1", "page": 3, "view": {"type": "XYZ", "values": [null, null, null]}}]));
+}
+
 /// A flat outline of `n` top-level bookmarks, `Item 0` to `Item n-1`, on one page.
 fn flat_outline_pdf(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec![

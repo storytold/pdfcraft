@@ -3854,6 +3854,82 @@ mod tests {
         if value.is_null() { None } else { serde_json::from_value(value.clone()).ok() }
     }
 
+    /// A bookmark's colour, weight and slant, and its open state, are the same
+    /// addressed step as its title and destination: the accepted operation names
+    /// the fields it changed, and its `before` is the whole node it replaced, so
+    /// a replica can put every field back with one more update.
+    #[test]
+    fn a_bookmark_look_is_updated_with_the_whole_node_as_its_undo_image() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let chapters = key_of(room.adapter(), "Chapters");
+        assert!(node(room.adapter(), &[1]).open, "the fixture's parent shows its children");
+
+        let update = op(
+            "look-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(chapters) },
+            0,
+            0,
+            json!({"action": "outline.item.update", "color": [0.25, 0.5, 0.75], "bold": true, "italic": true}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!((applied.version, applied.epoch), (1, 1), "a structural step");
+        let item = node(room.adapter(), &[1]);
+        assert_eq!(item.color, Some([0.25, 0.5, 0.75]));
+        assert!(item.bold && item.italic);
+        assert_eq!(applied.op.payload["color"], json!([0.25, 0.5, 0.75]), "the accepted operation names the colour");
+        assert_eq!(applied.op.payload["bold"], json!(true));
+        let before = &applied.op.payload["before"];
+        assert_eq!(before["title"], "Chapters");
+        assert_eq!(before["color"], json!(null), "the default black");
+        assert_eq!((before["bold"].clone(), before["italic"].clone()), (json!(false), json!(false)));
+        assert_eq!(before["open"], json!(true), "the undo image is the whole node");
+        assert_eq!(before["dest"]["kind"], "page");
+
+        // The colour goes away (the default black) and the parent closes; the
+        // undo image names both as they were.
+        let clear = op(
+            "look-2",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(chapters) },
+            1,
+            1,
+            json!({"action": "outline.item.update", "color": null, "open": false}),
+        )?;
+        let applied = room.apply(&editor, &clear, 0)?;
+        let item = node(room.adapter(), &[1]);
+        assert_eq!(item.color, None);
+        assert!(!item.open);
+        assert_eq!(applied.op.payload["before"]["color"], json!([0.25, 0.5, 0.75]));
+        assert_eq!(applied.op.payload["before"]["open"], json!(true));
+        assert_eq!(applied.op.payload["before"]["title"], "Chapters", "an update that names no title still carries it");
+        assert_eq!(applied.op.payload.get("title"), None, "and the accepted operation names only what changed");
+
+        // A new item carries its look from the start, in the same operation.
+        let add = op(
+            "look-3",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(chapters) },
+            2,
+            2,
+            json!({"action": "outline.item.add", "title": "Tinted", "dest": {"kind": "page", "page": 1}, "color": [1, 0, 0], "italic": true}),
+        )?;
+        let applied = room.apply(&editor, &add, 0)?;
+        let path = applied.op.payload["path"].as_array().ok_or("a path")?.clone();
+        let path: Vec<usize> = path.iter().filter_map(Value::as_u64).map(|p| p as usize).collect();
+        let item = node(room.adapter(), &path);
+        assert_eq!(item.color, Some([1.0, 0.0, 0.0]));
+        assert!(item.italic && !item.bold);
+        Ok(())
+    }
+
+    /// The item at `path` as the document has it: its title, colour, style and
+    /// open state.
+    fn node(adapter: &PdfAdapter, path: &[usize]) -> pdfcraft_engine::OutlineNode {
+        let tree = adapter.session().outline_tree(adapter.id, path).expect("the outline is readable").expect("the subtree reads");
+        tree.nodes.into_iter().next().expect("the path names an item")
+    }
+
     /// Hostile or simply wrong addresses are refused before the first write: an
     /// item nobody has, a page or a name this document lacks, a blank or
     /// over-long title, a move into the item's own subtree, and a copy that nests
@@ -3896,6 +3972,31 @@ mod tests {
             ),
             (Target::OutlineItem { key: Some(missing) }, json!({"action": "outline.item.update", "title": "Lost"}), ErrorCode::Invalid),
             (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update"}), ErrorCode::Invalid),
+            // A look that is not what it must be: a colour that is not three
+            // numbers from 0 to 1, a style that is not a boolean.
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update", "color": [0.1, 0.2]}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update", "color": [0.1, 0.2, 1.5]}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update", "color": "red"}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update", "bold": 1}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update", "italic": "yes"}), ErrorCode::Invalid),
+            // "Two" has no children: there is no open state for it to change.
+            (
+                Target::OutlineItem { key: Some(key_of(room.adapter(), "Two")) },
+                json!({"action": "outline.item.update", "open": false}),
+                ErrorCode::Invalid,
+            ),
+            // A new bookmark has no children either, so an open state is refused
+            // where an add names one.
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": "Lost", "dest": {"kind": "page", "page": 0}, "open": false}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": "Lost", "dest": {"kind": "page", "page": 0}, "color": [0, 0, 2]}),
+                ErrorCode::Invalid,
+            ),
             (Target::OutlineItem { key: Some(missing) }, json!({"action": "outline.item.delete"}), ErrorCode::Invalid),
             // A move into the item's own subtree is a cycle.
             (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.move", "parent": one, "index": 0}), ErrorCode::Invalid),

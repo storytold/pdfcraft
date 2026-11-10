@@ -739,6 +739,23 @@ pub fn set_bookmark_color(doc: &mut Document, path: &[usize], color: Option<[f64
     put(doc, r, b"C", value)
 }
 
+/// The colour a bookmark's title has (`/C`), each component from 0 to 1 at the
+/// precision the file keeps: `None` is the default black (or a `/C` that is not
+/// three numbers). The listing rounds a colour to an `f32` for the interface; an
+/// undo has to write back the number the file held, so a shared session reads it
+/// here.
+pub fn bookmark_color(doc: &Document, path: &[usize]) -> Result<Option<[f64; 3]>> {
+    let (r, _) = resolve_path(doc, path)?;
+    let Some(color) = doc.get(r).as_dict().and_then(|d| d.get(b"C").map(|c| doc.resolve(c))) else { return Ok(None) };
+    let Some([r, g, b]) = color.as_array().map(Vec::as_slice) else { return Ok(None) };
+    let channel = |v: &Object| doc.resolve(v).as_f64().filter(|v| (0.0..=1.0).contains(v));
+    let rgb = match (channel(r), channel(g), channel(b)) {
+        (Some(r), Some(g), Some(b)) => [r, g, b],
+        _ => return Ok(None),
+    };
+    Ok((rgb != [0.0; 3]).then_some(rgb))
+}
+
 /// Make a bookmark's title bold or italic or not (`/F`, ISO 32000-2 §12.3.3, Table 152: bit 1
 /// italic, bit 2 bold); `None` keeps that one as it is, and so are the other bits. When no bit is
 /// left, `/F` is removed, its default being 0.

@@ -213,6 +213,16 @@ impl Peer {
         document.named_destinations().into_iter().map(|destination| (destination.name, destination.page)).collect()
     }
 
+    /// The bookmark titled `title` as this replica has its look: colour (none is
+    /// the default black), bold, italic and open.
+    fn look(&self, title: &str) -> Option<(Option<[f32; 3]>, bool, bool, bool)> {
+        let document = self.session.get(self.id)?;
+        let path = document.bookmarks().into_iter().find(|row| row.title == title)?.path;
+        let tree = self.session.outline_tree(self.id, &path).and_then(|tree| tree.ok())?;
+        let node = tree.nodes.into_iter().next()?;
+        Some((node.color, node.bold, node.italic, node.open))
+    }
+
     fn names(&self) -> Vec<String> {
         let document = self.session.get(self.id).expect("the peer document is open");
         let mut names: Vec<String> = document.info.annotations.iter().filter_map(|a| a.name.clone()).collect();
@@ -2367,6 +2377,84 @@ fn two_clients_share_the_outline() -> Result<(), Box<dyn std::error::Error>> {
     let moved = room.outline_op("op-move", Target::OutlineItem { key: Some(two) }, pdfcraft_collab_client_pdf::outline_move_payload(None, 0))?;
     room.write(moved)?;
     room.assert_outline(&["Deux→2", "Part→1", "One→1"]);
+    Ok(())
+}
+
+/// A bookmark's colour, weight, slant and open state are one `outline.item.update`
+/// over a socket: both editors converge on it, the undo (built from the accepted
+/// operation) puts the whole node's look back, the redo returns it, a viewer is
+/// refused before the adapter runs, and a key the room no longer has changes
+/// nothing.
+#[test]
+fn a_bookmarks_look_converges_and_undoes_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    let part = room.add("op-part", None, "Part", 0)?;
+    room.add("op-one", Some(part), "One", 0)?;
+    room.assert_outline(&["Part→1", "One→1"]);
+
+    // Colour, weight and slant in one operation, addressed by the item's key.
+    let mut paint = pdfcraft_collab_client_pdf::outline_update_payload(None, None);
+    paint["color"] = serde_json::json!([0.2, 0.4, 0.6]);
+    paint["bold"] = serde_json::json!(true);
+    paint["italic"] = serde_json::json!(true);
+    let applied = room.write(room.outline_op("op-look", Target::OutlineItem { key: Some(part) }, paint)?)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.look("Part"), Some((Some([0.2, 0.4, 0.6]), true, true, true)), "the look converged");
+    }
+    assert_eq!(applied.op.payload["before"]["color"], Value::Null, "the undo image is the whole node");
+    assert_eq!(applied.op.payload["before"]["bold"], serde_json::json!(false));
+
+    // The undo comes from the accepted operation, not from a replica's guess.
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the look is undoable")?;
+    assert_eq!(undo.payload["action"], "outline.item.update");
+    assert_eq!(undo.payload["color"], Value::Null, "the default black comes back as null");
+    assert_eq!(undo.payload["bold"], serde_json::json!(false));
+    assert_eq!(undo.payload["italic"], serde_json::json!(false));
+    let applied = room.write(undo)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.look("Part"), Some((None, false, false, true)), "the undo put the look back on every replica");
+    }
+
+    // The redo names the look again.
+    let redo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the undo is undoable")?;
+    assert_eq!(redo.payload["color"], serde_json::json!([0.2, 0.4, 0.6]));
+    room.write(redo)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.look("Part"), Some((Some([0.2, 0.4, 0.6]), true, true, true)));
+    }
+
+    // The open state is the same step: the parent closes, in the file and in
+    // every replica.
+    let mut close = pdfcraft_collab_client_pdf::outline_update_payload(None, None);
+    close["open"] = serde_json::json!(false);
+    let applied = room.write(room.outline_op("op-close", Target::OutlineItem { key: Some(part) }, close)?)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.look("Part"), Some((Some([0.2, 0.4, 0.6]), true, true, false)), "the parent no longer shows expanded");
+    }
+    assert_eq!(applied.op.payload["before"]["open"], serde_json::json!(true));
+
+    // A viewer cannot change a look, and nothing moves.
+    let paint = pdfcraft_collab_client_pdf::outline_update_payload(None, None);
+    let attempt =
+        structural_op(room.doc.clone(), OpId::new("op-viewer-look")?, room.cy.version, room.cy.epoch, Target::OutlineItem { key: Some(part) }, {
+            let mut payload = paint;
+            payload["color"] = serde_json::json!([0, 0, 1]);
+            payload
+        });
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    assert_eq!(room.cy.look("Part"), Some((Some([0.2, 0.4, 0.6]), true, true, false)), "the viewer's refusal changed nothing");
+
+    // A key the room no longer has is refused, and neither the version nor a
+    // replica moves.
+    let gone = pdfcraft_collab_proto::OutlineKey::new(999, 0);
+    let version = room.ada.version;
+    let mut paint = pdfcraft_collab_client_pdf::outline_update_payload(None, None);
+    paint["color"] = serde_json::json!([1, 0, 0]);
+    room.ada.send(room.outline_op("op-stale-look", Target::OutlineItem { key: Some(gone) }, paint)?)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Invalid));
+    assert_eq!(room.ada.version, version, "a refusal moves no version");
+    assert_eq!(room.ada.look("Part"), Some((Some([0.2, 0.4, 0.6]), true, true, false)));
     Ok(())
 }
 

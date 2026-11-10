@@ -2104,7 +2104,15 @@ fn named_destinations_and_the_shared_outline_edits() {
     // Title and destination in one step, and both come back with one undo.
     s.apply(
         id,
-        Edit::UpdateBookmark { path: vec![0], title: Some("Begin".into()), dest: Some(BookmarkDest::Page { page: 0, left: None, top: None }) },
+        Edit::UpdateBookmark {
+            path: vec![0],
+            title: Some("Begin".into()),
+            dest: Some(BookmarkDest::Page { page: 0, left: None, top: None }),
+            color: None,
+            bold: None,
+            italic: None,
+            open: None,
+        },
     )
     .unwrap();
     assert_eq!(titles(&s), ["Begin→1"]);

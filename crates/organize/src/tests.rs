@@ -5232,3 +5232,43 @@ fn a_link_to_a_deleted_page_loses_its_destination() {
     let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
     assert_eq!(annots.len(), 3, "the annotations are kept, only the destination goes");
 }
+
+/// A bookmark with no children has no `/Count` to change: opening or closing it
+/// leaves the file as it is. The room refuses the request instead of writing
+/// nothing, so a client is told rather than left thinking it changed a state
+/// that a file cannot hold.
+#[test]
+fn opening_a_bookmark_without_children_changes_nothing() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Leaf", 0).unwrap();
+    let leaf = crate::bookmarks(&d)[0].obj;
+    assert_eq!(count_of(&d, leaf), None);
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    assert_eq!(count_of(&d, leaf), None, "nothing to close");
+    crate::set_bookmark_open(&mut d, &[0], true).unwrap();
+    assert_eq!(count_of(&d, leaf), None, "and nothing to open");
+    // A parent does change, and its children stay where they are.
+    crate::add_bookmark(&mut d, &[0], 0, "Child", 0).unwrap();
+    let leaf = crate::bookmarks(&d)[0].obj;
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    assert_eq!(count_of(&d, leaf), Some(-1));
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Leaf[Child]"]);
+}
+
+/// The colour a shared session writes back is the number the file holds, not
+/// the `f32` the listing rounds it to: an operation's undo image is read at full
+/// precision, and the default black is no colour at all.
+#[test]
+fn a_bookmarks_colour_is_read_back_at_the_files_precision() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Tinted", 0).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), None, "no /C is the default black");
+    crate::set_bookmark_color(&mut d, &[0], Some([0.1, 0.25, 0.75])).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), Some([0.1, 0.25, 0.75]));
+    // The listing rounds the same colour for the interface; that is the value it
+    // is meant to show, not the one an undo writes.
+    assert_eq!(crate::bookmarks(&d)[0].color, Some([0.1_f32, 0.25, 0.75]));
+    crate::set_bookmark_color(&mut d, &[0], Some([0.0, 0.0, 0.0])).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), None, "black removes /C");
+    assert_eq!(crate::bookmark_color(&d, &[4]).unwrap_err(), crate::OutlineError::NoSuchBookmark(vec![4]));
+}

@@ -392,6 +392,11 @@ impl PdfCraftApp {
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),
+            "bookmark.destinations" => {
+                if let Some((_, id)) = self.active_ids() {
+                    self.open_named_destinations(id);
+                }
+            }
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {

@@ -411,6 +411,14 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_organize::named_destinations(&e.cos)).unwrap_or_default()
     }
 
+    /// The colour a bookmark's title has (`/C`), each component from 0 to 1 at the
+    /// precision the file keeps it. `None` is the default black, and also what a
+    /// document that can't be read for editing gives. The listing rounds a colour
+    /// to an `f32` for the interface; an undo writes back the number the file held.
+    pub fn bookmark_color(&self, path: &[usize]) -> Option<[f64; 3]> {
+        self.editor.as_ref().and_then(|e| pdfcraft_organize::bookmark_color(&e.cos, path).ok().flatten())
+    }
+
     /// Every bookmark of the document's own outline, in listing order, with the
     /// path an edit takes and the object reference that outlives a position. Empty
     /// when the structure can't be read for editing (the viewer's copy is not
