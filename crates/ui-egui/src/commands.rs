@@ -7,46 +7,10 @@
 use pdfcraft_engine::Edit;
 use pdfcraft_engine::commands::{self, COMMANDS, CommandSpec, Shortcut};
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::file_filter::AddFilterAnyCase as _;
-
 use crate::{
     Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, SaveTarget,
     theme::{ThemeKind, ThemePreference},
 };
-
-thread_local! {
-    /// An image picked for Edit ▸ Image, waiting for its alternate-text or decorative
-    /// choice before it is placed.
-    static PENDING_ALT_TEXT_IMAGE: std::cell::RefCell<Option<(pdfcraft_engine::DocId, String, Vec<u8>)>> =
-        std::cell::RefCell::new(None);
-}
-
-fn hold_alt_text_image(app: &mut PdfCraftApp, name: String, bytes: Vec<u8>) {
-    if let Some((_, id)) = app.active_ids() {
-        PENDING_ALT_TEXT_IMAGE.with(|p| *p.borrow_mut() = Some((id, name, bytes)));
-        app.dialog = Some(Dialog::AltText);
-    }
-}
-
-fn pending_alt_text_image() -> Option<(pdfcraft_engine::DocId, String, Vec<u8>)> {
-    PENDING_ALT_TEXT_IMAGE.with(|p| p.borrow_mut().take())
-}
-
-/// Places an image held for its alternate-text or decorative choice, if any.
-pub(crate) fn place_pending_alt_text_image(app: &mut PdfCraftApp) -> bool {
-    let Some((id, name, bytes)) = pending_alt_text_image() else { return false };
-    match app.views.iter().position(|v| v.id == id) {
-        Some(i) if app.active != Some(i) => app.active = Some(i),
-        Some(_) => {}
-        None => {
-            app.notify_tr("The document changed while confirming the image, so nothing was placed.");
-            return false;
-        }
-    }
-    app.add_image(name, bytes);
-    true
-}
 
 /// Keys the document view handles itself (`canvas::shortcuts`), for the View menu, tooltips and
 /// Help ▸ Keyboard shortcuts. Keep them in step with the bindings there.
@@ -66,6 +30,9 @@ pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
+/// Go to first / last page beside Home and End (`canvas::navigation`).
+pub(crate) const FIRST_PAGE: Shortcut = Shortcut::cmd_shift("↑");
+pub(crate) const LAST_PAGE: Shortcut = Shortcut::cmd_shift("↓");
 
 /// Whether shortcuts are written the macOS way (`⇧⌘S`) rather than `Ctrl+Shift+S`. egui knows the
 /// platform from the build target, and on the web from the browser's user agent.
@@ -146,13 +113,18 @@ impl PdfCraftApp {
     /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, id: &str) -> bool {
-        match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
+        let done = match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
+                // A command stopped part way through closing or replacing a tab must not leave
+                // the next frame pointing past the last one (#3914).
+                self.keep_active_valid();
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
-        }
+        };
+        crate::dialogs::discard_inactive_password_drafts(self);
+        done
     }
 
     /// Why the command can't run right now, for the user.
@@ -171,6 +143,7 @@ impl PdfCraftApp {
                     pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
                     pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
                     pdfcraft_engine::MarkKind::Background => tl!("background"),
+                    pdfcraft_engine::MarkKind::PrinterMarks => tl!("printer marks"),
                 };
                 crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
             }
@@ -248,6 +221,8 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),
+            "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
@@ -300,6 +275,16 @@ impl PdfCraftApp {
             }
             "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
             "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
+            // Find and replace changes page text, so it runs in Edit text mode (as Acrobat's
+            // does): the command turns the mode on, and the find bar shows its Replace row there.
+            "edit.replace" => {
+                if let Some(i) = active {
+                    self.quick_tool = crate::QuickTool::EditText;
+                    self.left = crate::LeftPanel::Tool("edit");
+                    self.reveal_tools();
+                    self.views[i].open_replace();
+                }
+            }
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -360,6 +345,8 @@ impl PdfCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.split" => self.toggle_split(),
+            crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -549,11 +536,13 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
-            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
                     "edit.header_footer.remove" => K::HeaderFooter,
                     "edit.watermark.remove" => K::Watermark,
+                    "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });
@@ -584,51 +573,7 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("edit");
                 self.reveal_tools();
             }
-            "edit.image" => {
-                // When a file is already chosen (tests and automation), hold it for the
-                // alternate-text or decorative choice instead of placing it straight away.
-                if let Some(path) = self.save_override.clone().filter(|p| p.ends_with(".png") || p.ends_with(".jpg")) {
-                    match std::fs::read(&path) {
-                        Ok(bytes) => {
-                            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                            hold_alt_text_image(self, name, bytes);
-                        }
-                        Err(e) => {
-                            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path), ("e", &e.to_string())]);
-                        }
-                    }
-                } else {
-                    // The normal path: the file the dialog picks is held for the same
-                    // choice, never placed straight away.
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let target = self.active_ids().map(|(_, id)| id);
-                        self.ask_one(
-                            crate::pickers::Ask::File(
-                                rfd::AsyncFileDialog::new()
-                                    .add_filter_any_case(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                                    .set_title(tl!("Choose an image")),
-                            ),
-                            target,
-                            move |app, path| match std::fs::read(&path) {
-                                Ok(bytes) => {
-                                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                                    hold_alt_text_image(app, name, bytes);
-                                }
-                                Err(e) => {
-                                    app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())])
-                                }
-                            },
-                        );
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    // The alternate-text prompt is gated to non-wasm: the web build has no
-                    // image picker yet, so nothing is picked and nothing can be placed
-                    // here. Show the existing notice only; do not route through
-                    // add_image_dialog, whose native picker path places immediately.
-                    self.notify_tr("Adding images arrives on the web with file pickers for images");
-                }
-            }
+            "edit.image" => self.add_image_dialog(),
             "edit.link" => {
                 self.quick_tool = crate::QuickTool::Link;
                 self.notify_tr("Drag a rectangle to create a link; double-click a link to edit it");
@@ -874,13 +819,15 @@ impl PdfCraftApp {
     /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
     /// next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
-        let count = self.views.len() + usize::from(self.combine_tab.open);
-        let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
+        // The tabs of the strip being worked in: split view's second pane steps through its own.
+        let place = self.active.and_then(|i| self.place_of(i)).unwrap_or_default();
+        let tabs = self.tabs_in(place);
+        let count = tabs.len() + usize::from(place == crate::panes::Place::Main && self.combine_tab.open);
+        let current = if self.combine_showing() { Some(tabs.len()) } else { self.active.and_then(|a| tabs.iter().position(|&i| i == a)) };
         let Some(next) = tab_after(current, count, forward) else { return };
-        if next < self.views.len() {
-            self.active = Some(next);
-        } else {
-            self.open_combine_tab();
+        match tabs.get(next) {
+            Some(&i) => self.active = Some(i),
+            None => self.open_combine_tab(),
         }
     }
 
@@ -898,6 +845,11 @@ impl PdfCraftApp {
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
             }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
+                continue;
+            }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
             // Redo only while it holds typing the page doesn't have, or Redo has typing to put
             // back; then they reach the document. ⌘⇧Z is also ⌘Z to the Undo shortcut, so a
@@ -911,6 +863,9 @@ impl PdfCraftApp {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };
+            if ctx.input(|i| altgr_pressed(i, key)) {
+                continue;
+            }
             let mut m = Modifiers::NONE;
             if s.command {
                 m |= Modifiers::COMMAND;
@@ -945,6 +900,17 @@ impl PdfCraftApp {
             self.execute(id);
         }
     }
+}
+
+/// Whether `key` was pressed with Ctrl+Alt this frame. That is how AltGr can reach us, and egui's
+/// shortcut match ignores an extra Alt, so German or Spanish AltGr+ß or AltGr+º, which type a
+/// backslash, would run ⌘\ (and AltGr+8 ⌘[) instead. No registered shortcut uses Alt. On macOS
+/// the command key is not Ctrl, and Option stays free to type a shortcut's character.
+fn altgr_pressed(input: &egui::InputState, key: egui::Key) -> bool {
+    input
+        .events
+        .iter()
+        .any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.ctrl && modifiers.alt))
 }
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From
@@ -1010,24 +976,5 @@ mod tests {
         assert_eq!(tab_after(Some(7), 3, true), Some(0), "a stale index starts over");
         assert_eq!(tab_after(None, 0, true), None);
         assert_eq!(tab_after(Some(0), 0, false), None);
-    }
-
-    /// Edit ▸ Image pauses for an alternate-text or decorative choice before the picture
-    /// is placed; it does not put the image on the page straight away.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn add_image_command_prompts_for_alt_text_before_placing() {
-        let mut app = crate::PdfCraftApp::new();
-        app.create_blank();
-        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).expect("test image");
-        let path = std::env::temp_dir().join("pdfcraft-alt-text-prompt.png");
-        std::fs::write(&path, png).expect("write test image");
-        app.save_override = Some(path.to_string_lossy().into_owned());
-        let active = app.active;
-        let done = app.run_edit_command("edit.image", active);
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(done, Some(true), "the image command runs");
-        let id = app.active_ids().expect("open document").1;
-        assert!(app.session.get(id).expect("open").page_images(0).is_empty(), "placement waits for the alternate-text or decorative choice");
     }
 }
