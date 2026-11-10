@@ -8550,6 +8550,20 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
 }
 
+/// A laid-out XFA form tabs the way its template's traversal says: the probe form, which
+/// another viewer tabs `start A2 A3 A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`.
+#[test]
+fn xfa_forms_tab_in_their_templates_traversal_order() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::traversal_template()));
+    let mut s = Session::new();
+    let id = s.open("tab.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut tabs: Vec<(usize, &str)> = doc.form.iter().flat_map(|f| f.widgets.iter().map(move |w| (w.tab, f.name.as_str()))).collect();
+    tabs.sort_unstable();
+    let names: Vec<&str> = tabs.iter().map(|t| t.1).filter(|n| !["log", "D5"].contains(n)).collect();
+    assert_eq!(names, ["start", "A2", "A3", "A4", "A1", "B1", "B3", "B2", "B4", "C3", "D1", "D4", "D6", "finish", "C1", "C2"]);
+}
+
 /// A scripted form end to end: initialize and calculate on open, recalculation after a change,
 /// a failing validation's message, buttons that add and remove rows and show messages, a check
 /// box that shows a subform (undoable), FormCalc, and a save and reopen that keep it all.
@@ -13292,7 +13306,13 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    // Optimize writes the parameters direct, so a stream that names the dictionary holds the key.
+    let names = |s: &Stream| {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
+        bytes.windows(12).any(|w| w == b"JBIG2Globals")
+    };
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if names(s))).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
 }
 
