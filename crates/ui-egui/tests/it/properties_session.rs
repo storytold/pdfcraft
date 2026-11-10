@@ -91,3 +91,20 @@ fn properties_session_inspection_tabs_do_not_rebase_pending_input() {
         assert!(doc.custom_info().is_empty());
     }
 }
+
+#[test]
+/// A clean inspection tab keeps the dialog open and follows a same-document edit.
+fn properties_session_clean_inspection_tab_follows_a_newer_edit() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    // No pending input: the typed title is cleared again before switching tabs.
+    h.state_mut().props_draft.as_mut().unwrap().1[0].clear();
+    h.state_mut().set_option("dialog", "space-audit").unwrap();
+    h.run_steps(3);
+    h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Newer title".into() }).unwrap();
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "a clean inspection tab stays open");
+    assert_eq!(h.state().props_draft.as_ref().unwrap().1[0], "Newer title", "the draft is reseeded from the newer revision");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "refreshing issues no edit");
+}
