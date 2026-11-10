@@ -209,6 +209,7 @@ impl Type1Font {
             names: Some(&names),
             program: None,
             code_glyph: None,
+            ..FontFacts::of_kind(FontKind::Type1)
         };
         let glyph = || GlyphFacts {
             gid,
@@ -216,6 +217,7 @@ impl Type1Font {
                 .ok()
                 .and_then(|c| self.code_to_ps_name(c)),
             strict,
+            id: None,
         };
         self.4.cache.recover(facts, glyph)
     }

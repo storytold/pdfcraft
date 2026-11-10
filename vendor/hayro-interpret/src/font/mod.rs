@@ -69,7 +69,7 @@ use crate::util::hash128;
 use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
 #[cfg(feature = "test-counters")]
-pub use recovery::recovery_rule_calls;
+pub use recovery::{recovery_rule_calls, test_hooks};
 pub use recovery::{RecoveredFontStyle, Recovery, RecoveryMode, RecoveryRule, recovery_policy};
 pub use standard_font::StandardFont;
 
@@ -123,15 +123,13 @@ impl Glyph<'_> {
     /// reading of a glyph without strict text ([`RecoveryMode::Fill`]), or one that replaces
     /// strict text a rule judges untrustworthy ([`RecoveryMode::Override`]). Search, plain copy
     /// and text extraction use the strict text only; the recovery is for copies that recover
-    /// what they can, such as Copy with formatting. Type 3 glyphs have no rule yet.
+    /// what they can, such as Copy with formatting.
     pub fn unicode_and_recovery(&self) -> (Option<BfString>, Option<Recovery>) {
         let strict = self.as_unicode();
+        let shown = strict.as_ref().filter(|s| !recovery::is_control_only(s));
         let recovery = match self {
-            Glyph::Outline(g) => {
-                let shown = strict.as_ref().filter(|s| !recovery::is_control_only(s));
-                g.font.recovery(g.char_code, g.id, shown)
-            }
-            Glyph::Type3(_) => None,
+            Glyph::Outline(g) => g.font.recovery(g.char_code, g.id, shown),
+            Glyph::Type3(g) => g.font.recovery(g.char_code, shown),
         };
         (strict, recovery)
     }
@@ -141,12 +139,12 @@ impl Glyph<'_> {
     /// subset tag included, and bold and italic from the font descriptor (`/Flags` ForceBold
     /// and Italic, `/FontWeight` of 600 or more, a slanted `/ItalicAngle`) or an embedded
     /// program's own weight (600 and above), italic style and `head.macStyle` bits. Worked out
-    /// once per font and shared (the name is one `Arc` for all its glyphs). `None` for Type 3
-    /// glyphs.
+    /// once per font and shared (the name is one `Arc` for all its glyphs). A Type 3 font has
+    /// no program, so its style comes from its dictionary and descriptor alone.
     pub fn recovery_style(&self) -> Option<RecoveredFontStyle> {
         match self {
             Glyph::Outline(g) => Some(g.font.recovery_style()),
-            Glyph::Type3(_) => None,
+            Glyph::Type3(g) => Some(g.font.recovery_style()),
         }
     }
 }
@@ -285,6 +283,14 @@ impl<'a> Type3Glyph<'a> {
     /// PdfCraft patch: the advance width in glyph space (1000 units per em), from `/Widths`.
     pub fn advance_width(&self) -> Option<f32> {
         u8::try_from(self.char_code).ok().map(|c| self.font.glyph_width(c))
+    }
+}
+
+impl Type3Glyph<'_> {
+    /// PdfCraft patch (104): a key identifying the glyph's font, as `OutlineGlyph::font_cache_key`
+    /// does for outline fonts (the recovered layer's budgets count fonts by it).
+    pub fn font_cache_key(&self) -> u128 {
+        self.font.cache_key()
     }
 }
 

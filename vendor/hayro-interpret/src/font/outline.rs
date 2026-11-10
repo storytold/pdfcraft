@@ -119,7 +119,7 @@ impl OutlineFont {
         match self {
             Self::Type1(t) => t.recovery(char_code, gid, strict),
             Self::TrueType(t) => t.recovery(char_code, gid, strict),
-            Self::Type0(t) => t.recovery(gid, strict),
+            Self::Type0(t) => t.recovery(char_code, gid, strict),
         }
     }
 

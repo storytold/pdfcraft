@@ -20,16 +20,23 @@
 //! Rules are named by the mechanism they read, never by a language or a producer, and tried
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
+mod candidate;
+mod orders;
+#[allow(
+    dead_code,
+    reason = "the width evidence is read by the standard-order rules that build on this layer"
+)]
+mod widths;
+
 use crate::font::FontFlags;
-use crate::font::generated::symbol;
-use crate::font::{glyph_name_numbers, glyph_name_to_unicode, is_numbered_glyph_name};
+use crate::font::{glyph_name_numbers, is_numbered_glyph_name};
 use hayro_cmap::BfString;
 use hayro_syntax::object::dict::keys::{
     BASE_FONT, ENCODING, FLAGS, FONT_DESC, FONT_WEIGHT, ITALIC_ANGLE,
 };
 use hayro_syntax::object::{Dict, Name};
+use orders::{mac_glyph_char, symbol_char};
 use skrifa::raw::TableProvider;
-use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::raw::types::Version16Dot16;
 use skrifa::{FontRef, GlyphId};
 use std::sync::{Arc, OnceLock};
@@ -65,6 +72,38 @@ thread_local! {
     /// Asks of the recovery rules (`RecoveryCache::recover`, before any guard is decided) on
     /// this thread.
     static RULE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (104) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
+/// dev-dependency only): the shared pieces the rules read, for tests outside the crate.
+#[cfg(feature = "test-counters")]
+pub mod test_hooks {
+    /// Whether the width evidence proves a reading that gives each character its glyph width
+    /// ([`super::widths::widths_agree`] and `proves`).
+    pub fn widths_prove(widths: &[(char, f32)]) -> bool {
+        super::widths::widths_agree(&widths.iter().copied().collect()).proves()
+    }
+
+    /// The character the standard Macintosh order gives glyph id `gid`.
+    pub fn mac_glyph_char(gid: u32) -> Option<char> {
+        super::orders::mac_glyph_char(gid)
+    }
+
+    /// The character the CFF standard string `sid` names.
+    pub fn standard_string_char(sid: u32) -> Option<char> {
+        super::orders::standard_string_char(sid)
+    }
+
+    /// The candidate policy's choice among `candidates`.
+    pub fn choose(candidates: &[char]) -> Option<char> {
+        super::candidate::choose(candidates.iter().copied())
+    }
+
+    /// Whether the glyphs `drawn` the Macintosh order reads as accented letters are as wide as
+    /// those it reads as their base letters, with the widths `width` gives.
+    pub fn accents_as_wide_as_bases(drawn: &[u32], width: &dyn Fn(u16) -> Option<f32>) -> bool {
+        super::accents_as_wide_as_bases(drawn, width)
+    }
 }
 
 /// How many times the recovery rules were asked about a glyph on this thread, guards
@@ -110,8 +149,15 @@ pub(crate) enum FontKind {
     TrueType,
     /// A Type 0 font whose descendant has a TrueType (or OpenType) program.
     CidTrueType,
+    /// A Type 0 font whose descendant is an embedded CID-keyed CFF program (`CIDFontType0`),
+    /// whose glyphs are found by CID through the program's charset (ISO 32000-2 §9.7.4.2:
+    /// `/CIDToGIDMap` applies to `CIDFontType2` only; a stream there is a producer's error, and
+    /// such a font is left as `CidOther`).
+    CidCff,
     /// Any other Type 0 font.
     CidOther,
+    /// A Type 3 font.
+    Type3,
 }
 
 /// What a font says about itself, for the rules' font-level guards and readings. Built
@@ -135,6 +181,55 @@ pub(crate) struct FontFacts<'a> {
     pub(crate) program: Option<&'a FontRef<'a>>,
     /// Simple TrueType fonts: the glyph a code draws and the code's strict text.
     pub(crate) code_glyph: Option<&'a dyn Fn(u8) -> (GlyphId, Option<BfString>)>,
+    /// Type 0 fonts: whether `has_to_unicode` comes from a `/ToUnicode` map alone (not the
+    /// `/Identity-H` name or an Adobe character collection), so its answers can be checked
+    /// against a reading through [`Self::id_text`].
+    #[allow(
+        dead_code,
+        reason = "read by the standard-order rules that build on this layer"
+    )]
+    pub(crate) to_unicode_checkable: bool,
+    /// The numbers [`GlyphFacts::id`] takes in this font, for rules that read them in a standard
+    /// order: the CIDs of a CID-keyed CFF program's charset, the codes of a Type 3 font that
+    /// have a glyph procedure.
+    #[allow(
+        dead_code,
+        reason = "read by the standard-order rules that build on this layer"
+    )]
+    pub(crate) ids: Option<&'a dyn Fn() -> Vec<u32>>,
+    /// The width the font gives an id (`/W` by CID, `/Widths` by code), when it gives one.
+    #[allow(
+        dead_code,
+        reason = "read by the standard-order rules that build on this layer"
+    )]
+    pub(crate) id_width: Option<&'a dyn Fn(u32) -> Option<f32>>,
+    /// For a Type 0 font shown through an identity CMap and `/CIDToGIDMap`: the strict text of
+    /// the code that draws glyph id `id`.
+    #[allow(
+        dead_code,
+        reason = "read by the standard-order rules that build on this layer"
+    )]
+    pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+}
+
+impl FontFacts<'_> {
+    /// The facts of a font of `kind` that says nothing more about itself.
+    pub(crate) fn of_kind(kind: FontKind) -> Self {
+        Self {
+            kind,
+            base_font: None,
+            flags: None,
+            has_to_unicode: false,
+            has_encoding: false,
+            names: None,
+            program: None,
+            code_glyph: None,
+            to_unicode_checkable: false,
+            ids: None,
+            id_width: None,
+            id_text: None,
+        }
+    }
 }
 
 /// What one glyph says, for a rule's reading.
@@ -151,6 +246,13 @@ pub(crate) struct GlyphFacts<'a> {
     pub(crate) name: Option<&'a str>,
     /// The strict text, when it is more than control characters.
     pub(crate) strict: Option<&'a BfString>,
+    /// The number a standard-order rule reads ([`FontFacts::ids`]): a Type 0 glyph's CID, a
+    /// Type 3 glyph's code.
+    #[allow(
+        dead_code,
+        reason = "read by the standard-order rules that build on this layer"
+    )]
+    pub(crate) id: Option<u32>,
 }
 
 /// One recovery rule.
@@ -350,17 +452,21 @@ pub(crate) fn apply<R: Rule>(
     recovery_policy(R::RULE, glyph.strict, text, mode)
 }
 
-/// The fill/override policy every rule's reading passes through: over a glyph without strict
-/// text (`strict` is `None`: none, or only control characters) the reading is a fill whatever
-/// the rule said; strict text is replaced only by a reading marked [`RecoveryMode::Override`],
-/// and only when the text differs. Public so the policy can be tested from outside the crate
-/// with a synthetic rule's reading.
+/// The fill/override policy every rule's reading passes through. A reading the candidate policy
+/// refuses (`candidate`: empty, or with a private use character, a control character or a
+/// noncharacter) is nothing. Over a glyph without strict text (`strict` is `None`: none, or only
+/// control characters) the reading is a fill whatever the rule said; strict text is replaced
+/// only by a reading marked [`RecoveryMode::Override`], and only when the text differs. Public
+/// so the policy can be tested from outside the crate with a synthetic rule's reading.
 pub fn recovery_policy(
     rule: RecoveryRule,
     strict: Option<&BfString>,
     text: BfString,
     mode: RecoveryMode,
 ) -> Option<Recovery> {
+    if !candidate::text_acceptable(&text) {
+        return None;
+    }
     let mode = match (strict, mode) {
         (None, _) => RecoveryMode::Fill,
         (Some(_), RecoveryMode::Fill) => return None,
@@ -465,22 +571,6 @@ fn symbol_copy(base: Option<&str>) -> bool {
 /// codes above 127 aren't Latin-1.
 fn advent_postscript(base: Option<&str>) -> bool {
     base.is_some_and(|b| untagged(b).starts_with("AdvPS"))
-}
-
-/// The character the Symbol font's built-in encoding gives `code`, through the Adobe Glyph
-/// List. The glyph list puts the Symbol font's serif and sans-serif ©, ® and ™ in the private
-/// use area; they are the plain characters. Other private-use glyphs (the pieces of large
-/// brackets and braces) read as nothing.
-fn symbol_char(code: u8) -> Option<char> {
-    let name = symbol::get(code)?;
-    let c = match name {
-        "copyrightserif" | "copyrightsans" => '\u{a9}',
-        "registerserif" | "registersans" => '\u{ae}',
-        "trademarkserif" | "trademarksans" => '\u{2122}',
-        _ => glyph_name_to_unicode(name)?,
-    };
-    let private = matches!(u32::from(c), 0xE000..=0xF8FF);
-    (!private && !c.is_control()).then_some(c)
 }
 
 impl Rule for NumberedLatin1Names {
@@ -635,11 +725,16 @@ fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
     use skrifa::MetadataProvider;
     use skrifa::instance::{LocationRef, Size};
     let metrics = program.glyph_metrics(Size::unscaled(), LocationRef::default());
-    let width = |gid: u16| {
-        metrics
-            .advance_width(GlyphId::new(u32::from(gid)))
-            .filter(|w| w.is_finite() && *w > 0.0)
-    };
+    accents_as_wide_as_bases(drawn, |gid| {
+        metrics.advance_width(GlyphId::new(u32::from(gid)))
+    })
+}
+
+/// [`accents_match_bases`] with the widths `width` gives by glyph id (or by any number a rule
+/// reads in the Macintosh order, such as a CID that is a glyph id); widths that aren't finite
+/// and positive are left out. Shared by every rule that reads the order.
+pub(crate) fn accents_as_wide_as_bases(drawn: &[u32], width: impl Fn(u16) -> Option<f32>) -> bool {
+    let width = |gid: u16| width(gid).filter(|w| w.is_finite() && *w > 0.0);
     ACCENTED_BASES
         .iter()
         .filter(|(accented, _)| drawn.contains(&u32::from(*accented)))
@@ -647,13 +742,6 @@ fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
             (Some(a), Some(b)) => (a - b).abs() <= a.max(b) * 0.01,
             _ => true,
         })
-}
-
-/// The character the standard Macintosh glyph order gives glyph id `gid`, through the Adobe
-/// Glyph List; nothing past the 258 standard glyphs or for a control (`.null`).
-pub(crate) fn mac_glyph_char(gid: u32) -> Option<char> {
-    let name = DEFAULT_GLYPH_NAMES.get(usize::try_from(gid).ok()?)?;
-    glyph_name_to_unicode(name).filter(|c| !c.is_control())
 }
 
 /// The glyph id a name that only numbers it gives (`g55` is 55): `g` and one to five decimal
@@ -675,14 +763,27 @@ fn g_name_number(name: &str) -> Option<u32> {
 /// letters, at least two different vowels. Renumbered glyph ids (1, 2, 3 …) decode to
 /// punctuation and digits and fail.
 pub(crate) fn plausible(ids: &[u32]) -> bool {
-    let (mut known, mut basic, mut letters, mut lower) = (0_usize, 0_usize, 0_usize, 0_usize);
+    plausible_reading(
+        ids.iter()
+            .map(|&gid| (mac_glyph_char(gid), (3..=97).contains(&gid))),
+    )
+}
+
+/// Whether a standard order's reading of a font's ids reads as text, as [`plausible`] says it
+/// for the Macintosh order: each id's character (`None` when the order gives none) and whether
+/// the id is in the order's basic Latin range (printable ASCII). Shared by every rule that reads
+/// a standard order.
+pub(crate) fn plausible_reading(readings: impl Iterator<Item = (Option<char>, bool)>) -> bool {
+    let (mut total, mut known, mut basic, mut letters, mut lower) =
+        (0_usize, 0_usize, 0_usize, 0_usize, 0_usize);
     let mut vowels = [false; 6];
-    for &gid in ids {
-        let Some(c) = mac_glyph_char(gid) else {
+    for (c, in_basic) in readings {
+        total = total.saturating_add(1);
+        let Some(c) = c else {
             continue;
         };
         known = known.saturating_add(1);
-        if (3..=97).contains(&gid) {
+        if in_basic {
             basic = basic.saturating_add(1);
         }
         if c.is_alphabetic() {
@@ -695,7 +796,6 @@ pub(crate) fn plausible(ids: &[u32]) -> bool {
             }
         }
     }
-    let total = ids.len();
     let vowel_kinds = vowels.iter().filter(|v| **v).count();
     total >= 3
         && known.saturating_mul(10) >= total.saturating_mul(9)

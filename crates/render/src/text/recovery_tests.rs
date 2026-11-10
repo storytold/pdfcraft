@@ -914,3 +914,353 @@ fn the_redraw_dedupe_and_drop_doubles_share_one_budget() {
     let _ = layers(&pdf);
     assert!(DOUBLES_WORK.with(std::cell::Cell::get) > 0);
 }
+
+/// The candidate policy, through `recovery_policy`: whatever a rule reads, a private use
+/// character (U+E000–U+F8FF, planes 15 and 16), a C0 or C1 control, a noncharacter or nothing at
+/// all is never recovered, alone or inside a string.
+#[test]
+fn the_candidate_policy_refuses_what_is_not_text() {
+    use hayro::hayro_interpret::hayro_cmap::BfString;
+    let read = |text: BfString| recovery_policy(RecoveryRule::MacGlyphOrder, None, text, RecoveryMode::Fill);
+    for c in [
+        '\u{E000}',
+        '\u{F8FF}',
+        '\u{F0041}',
+        '\u{10FFFD}',
+        '\u{0}',
+        '\u{1F}',
+        '\u{7F}',
+        '\u{80}',
+        '\u{9F}',
+        '\u{FDD0}',
+        '\u{FDEF}',
+        '\u{FFFE}',
+        '\u{FFFF}',
+        '\u{1FFFE}',
+    ] {
+        assert_eq!(read(BfString::Char(c)), None, "{c:?}");
+        assert_eq!(read(BfString::String(format!("a{c}"))), None, "a{c:?}");
+    }
+    assert_eq!(read(BfString::String(String::new())), None);
+    for c in ['A', ' ', '\u{A0}', '\u{AD}', '\u{2019}', '\u{D7FF}', '\u{FDCF}', '\u{FFFD}', '\u{1F600}'] {
+        assert!(read(BfString::Char(c)).is_some(), "{c:?}");
+    }
+    assert!(read(BfString::String("fi".into())).is_some());
+    // An override is refused the same way, and replaces strict text only with other text.
+    let strict = BfString::Char('%');
+    let over = RecoveryMode::Override { reason: "test" };
+    assert_eq!(recovery_policy(RecoveryRule::MacGlyphOrder, Some(&strict), BfString::Char('\u{E000}'), over), None);
+    assert!(recovery_policy(RecoveryRule::MacGlyphOrder, Some(&strict), BfString::Char('D'), over).is_some());
+}
+
+/// The candidate policy's choice among several names for one glyph: the acceptable ones, one
+/// distinct character, or a single ASCII one among several; nothing when it stays ambiguous,
+/// whatever order the names come in.
+#[test]
+fn the_candidate_choice_is_deterministic() {
+    use hayro::hayro_interpret::font::test_hooks::choose;
+    assert_eq!(choose(&['a']), Some('a'));
+    assert_eq!(choose(&['a', 'a']), Some('a'));
+    assert_eq!(choose(&['-', '\u{2010}']), Some('-'));
+    assert_eq!(choose(&['\u{2010}', '-']), Some('-'));
+    assert_eq!(choose(&['\u{A0}', ' ']), Some(' '));
+    assert_eq!(choose(&['a', 'b']), None);
+    assert_eq!(choose(&['\u{2010}', '\u{2011}']), None);
+    assert_eq!(choose(&['\u{E000}', 'x']), Some('x'));
+    assert_eq!(choose(&['\u{E000}']), None);
+    assert_eq!(choose(&[]), None);
+    assert_eq!(choose(&['x'; 17]), None, "a list longer than any glyph's names is no evidence");
+}
+
+/// The standard orders, in one place: the Macintosh order as Apple's TrueType Reference Manual
+/// lists it (`space` 3, `A` 36, `a` 68, `quoteleft` 182), with nothing for `.notdef`, `.null`,
+/// the private use `apple` (210) or past 257; and the CFF standard strings as Adobe Technical
+/// Note #5176 Appendix A lists them (`space` 1, `A` 34, `a` 66, `quoteright` 8, `quoteleft` 65,
+/// `bullet` 116), with nothing for `.notdef`, the expert set's private use small capitals
+/// (`Asmall`, 229 + …) or past 390.
+#[test]
+fn the_standard_orders_read_as_their_specifications_list_them() {
+    use hayro::hayro_interpret::font::test_hooks::{mac_glyph_char, standard_string_char};
+    for (gid, c) in [(3, Some(' ')), (36, Some('A')), (68, Some('a')), (98, Some('\u{C4}')), (182, Some('\u{2018}')), (183, Some('\u{2019}'))] {
+        assert_eq!(mac_glyph_char(gid), c, "glyph {gid}");
+    }
+    for gid in [0, 1, 210, 258, u32::MAX] {
+        assert_eq!(mac_glyph_char(gid), None, "glyph {gid}");
+    }
+    for (sid, c) in [(1, ' '), (34, 'A'), (66, 'a'), (8, '\u{2019}'), (65, '\u{2018}'), (116, '\u{2022}')] {
+        assert_eq!(standard_string_char(sid), Some(c), "SID {sid}");
+    }
+    for c in ('!'..='~').filter(|c| *c != '\'' && *c != '`') {
+        assert_eq!(standard_string_char(u32::from(pdfcraft_testkit::cff::standard_string_id(c))), Some(c), "{c}");
+    }
+    for sid in [0, 391, u32::MAX] {
+        assert_eq!(standard_string_char(sid), None, "SID {sid}");
+    }
+    let small_caps = (229..=390).filter_map(standard_string_char).filter(|c| matches!(u32::from(*c), 0xE000..=0xF8FF)).count();
+    assert_eq!(small_caps, 0, "private use small capitals read as nothing");
+}
+
+/// The accent check every rule reading the Macintosh order shares: an accented letter as wide
+/// as its base letter (to 1%) agrees, a wider one doesn't, a width the font doesn't give
+/// decides nothing, and the accented `i` letters are left out.
+#[test]
+fn the_shared_accent_check_compares_accents_with_their_base_letters() {
+    use hayro::hayro_interpret::font::test_hooks::accents_as_wide_as_bases;
+    let width = |eacute: f32, iacute: f32| {
+        move |gid: u16| match gid {
+            112 => Some(eacute),
+            72 => Some(556.0),
+            118 => Some(iacute),
+            76 => Some(222.0),
+            _ => None,
+        }
+    };
+    assert!(accents_as_wide_as_bases(&[72, 112], &width(556.0, 278.0)));
+    assert!(accents_as_wide_as_bases(&[72, 112], &width(561.0, 278.0)), "within 1%");
+    assert!(!accents_as_wide_as_bases(&[72, 112], &width(600.0, 278.0)));
+    assert!(accents_as_wide_as_bases(&[76, 118], &width(556.0, 278.0)), "the accented i is left out");
+    assert!(accents_as_wide_as_bases(&[112], &|_| None), "no widths, no evidence against");
+}
+
+/// The width evidence's characters for `text` read `shift` places along printable ASCII from
+/// what each glyph is (a glyph whose reading leaves the range reads nothing), each with the
+/// Helvetica width of the letter the glyph really is.
+fn shifted_widths(text: &str, shift: i32) -> Vec<(char, f32)> {
+    let mut out: Vec<(char, f32)> = Vec::new();
+    for c in text.chars() {
+        let read = u32::try_from(i64::from(u32::from(c)) + i64::from(shift)).ok().and_then(char::from_u32).filter(|r| ('!'..='~').contains(r));
+        if let Some(r) = read
+            && !out.iter().any(|(k, _)| *k == r)
+        {
+            out.push((r, pdfcraft_testkit::cff::helvetica_width(c) as f32));
+        }
+    }
+    out
+}
+
+/// A small deterministic generator for the width properties.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        usize::try_from((self.0 >> 33) % u64::try_from(n).unwrap()).unwrap()
+    }
+}
+
+/// Review on the standard-order rules (H1, M3): the width evidence never proves a reading off
+/// by a glyph or more, nor one in capitals only. A subset of capitals (a form's labels, a name)
+/// read a glyph or more off gives `J` as `I` and every other capital wider, which held three
+/// comparisons before; texts are generated in capitals only, as small subsets of two to six
+/// letters, and as mixed sentences, and read with shifts of one to three places, 29 to 33 (a
+/// numbering by ASCII or Unicode against one by standard string ids) and between the cases.
+#[test]
+fn the_width_evidence_never_proves_a_shifted_or_one_case_reading() {
+    use hayro::hayro_interpret::font::test_hooks::widths_prove;
+    // The review's own counter-examples, and the readings this test's generator found proving
+    // one condition of the proof at a time.
+    for (text, shift) in [
+        ("JACQUES DUPRE", -1),
+        ("PROJECT QUEUE", -1),
+        ("SUBJECT", -1),
+        ("SUBJECT MATTER", 1),
+        ("PROJECT QUEUE ADMIN", 1),
+        ("JACQUES DUPRE", 3),
+        ("of and Residence", 1),
+        ("of and Residence", 3),
+        ("nil indicated", -3),
+        ("isbbddls", -3),
+        ("nil address", -3),
+        ("nil Residence ZIP", -3),
+        ("WGKVCIQJ", 32),
+        ("Z PB MKYX CKDNICKEEH", 32),
+        ("IIW KIOWGWG    FQ T ", 32),
+    ] {
+        assert!(!widths_prove(&shifted_widths(text, shift)), "{text} shifted {shift}");
+    }
+    let words = [
+        "minimal",
+        "endorsement",
+        "within",
+        "the",
+        "human",
+        "body",
+        "annual",
+        "report",
+        "Corporate",
+        "name",
+        "address",
+        "Residence",
+        "and",
+        "ZIP",
+        "code",
+        "are",
+        "indicated",
+        "Willem",
+        "Jansen",
+        "Quarterly",
+        "Summary",
+        "of",
+        "Accounts",
+        "Payable",
+        "milk",
+        "lamb",
+        "mill",
+        "nil",
+        "limb",
+    ];
+    let shifts = [-33, -32, -31, -29, -3, -2, -1, 1, 2, 3, 29, 31, 32, 33];
+    let mut rng = Lcg(6733);
+    for case in 0..3000 {
+        let text: String = match case % 3 {
+            // Capitals only, as a form's labels.
+            0 => (0..3 + rng.next(18)).map(|_| if rng.next(6) == 0 { ' ' } else { char::from(b'A' + u8::try_from(rng.next(26)).unwrap()) }).collect(),
+            // A small subset: two to six distinct letters, either case.
+            1 => {
+                let base = if rng.next(2) == 0 { b'a' } else { b'A' };
+                let letters: Vec<char> = (0..2 + rng.next(5)).map(|_| char::from(base + u8::try_from(rng.next(26)).unwrap())).collect();
+                (0..8).map(|_| letters[rng.next(letters.len())]).collect()
+            }
+            // A sentence in mixed case.
+            _ => (0..2 + rng.next(6)).map(|_| words[rng.next(words.len())]).collect::<Vec<_>>().join(" "),
+        };
+        for shift in shifts {
+            assert!(!widths_prove(&shifted_widths(&text, shift)), "{text:?} shifted {shift}");
+        }
+        if case % 3 == 0 {
+            assert!(!widths_prove(&shifted_widths(&text, 0)), "capitals only prove nothing: {text:?}");
+        }
+    }
+    // Read right, sentences with lowercase letters of different widths prove their reading, in
+    // Helvetica's widths and in Times's (its AFM: rounder letters closer to the narrow ones).
+    let times = |c: char| -> f32 {
+        const LOWER: [u16; 26] =
+            [444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500, 500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444];
+        const UPPER: [u16; 26] =
+            [722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611];
+        f32::from(match c {
+            'a'..='z' => LOWER[(c as usize) - ('a' as usize)],
+            'A'..='Z' => UPPER[(c as usize) - ('A' as usize)],
+            _ => 250,
+        })
+    };
+    for text in ["minimal endorsement within the human body", "Quarterly Summary of Accounts Payable in limbo", "the annual report, filed in July"] {
+        assert!(widths_prove(&shifted_widths(text, 0)), "{text}");
+        let mut in_times: Vec<(char, f32)> = Vec::new();
+        for c in text.chars().filter(|c| *c != ' ') {
+            if !in_times.iter().any(|(k, _)| *k == c) {
+                in_times.push((c, times(c)));
+            }
+        }
+        assert!(widths_prove(&in_times), "{text} in Times");
+    }
+}
+
+/// Each condition of the width proof on its own, with a reading built so that only it fails:
+/// widths that agree with every comparison made, but a reading with no comparison between two
+/// lowercase letters (capitals against `i` and `l`), with two wide characters only, with a full
+/// stop as its second narrow character, or with seven comparisons. Each of these is a handful of
+/// glyphs whose widths fall right by chance as easily as by being read right.
+#[test]
+fn each_condition_of_the_width_proof_is_needed() {
+    use hayro::hayro_interpret::font::test_hooks::widths_prove;
+    let enough = [('a', 556.0), ('b', 556.0), ('d', 556.0), ('e', 556.0), ('i', 222.0), ('l', 222.0)];
+    assert!(widths_prove(&enough), "four round letters against `i` and `l` prove");
+    let capitals_only = [('A', 667.0), ('B', 667.0), ('C', 722.0), ('D', 722.0), ('i', 222.0), ('l', 222.0)];
+    assert!(!widths_prove(&capitals_only), "no lowercase pair");
+    let two_wide = [('a', 556.0), ('b', 556.0), ('i', 222.0), ('l', 222.0), ('j', 222.0), ('.', 278.0), (',', 278.0)];
+    assert!(!widths_prove(&two_wide), "two wide characters");
+    let stop_as_narrow = [('a', 556.0), ('b', 556.0), ('d', 556.0), ('e', 556.0), ('i', 222.0), ('.', 278.0)];
+    assert!(!widths_prove(&stop_as_narrow), "a full stop is no narrow letter");
+    let seven = [('A', 667.0), ('B', 667.0), ('a', 556.0), ('b', 556.0), ('i', 222.0), ('r', 333.0)];
+    assert!(!widths_prove(&seven), "seven comparisons");
+}
+
+/// A page of `type3` Type 3 fonts, then `/C83 /C111 /C99` (`Soc`) in a numbered-names font
+/// (rule 1).
+fn type3_fonts_then_names(type3: usize) -> Vec<u8> {
+    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    let resources: String = (0..type3).map(|k| format!("/T{k} {} 0 R ", k + 5)).collect();
+    let names = type3 + 5;
+    let mut content: String = (0..type3).map(|k| format!("BT /T{k} 10 Tf 20 {} Td <41> Tj ET ", 700 - (k % 60) * 11)).collect();
+    content.push_str("BT /F3 20 Tf 300 100 Td <010203> Tj ET");
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
+        .stream("", b"500 0 0 0 500 700 d1 0 0 500 700 re f")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << {resources}/F3 {names} 0 R >> >> >>", names + 3));
+    // Each font its own dictionary (`/Name`): fonts are told apart by their bytes.
+    for k in 0..type3 {
+        pdf = pdf.obj(format!(
+            "<< /Type /Font /Subtype /Type3 /Name /T{k} /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 3 0 R >> >>"
+        ));
+    }
+    pdf.obj(format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 3 /Widths [600 600 600] /FontDescriptor {} 0 R /Encoding << /Type /Encoding /Differences [1 /C83 /C111 /C99] >> >>",
+        names + 1
+    ))
+    .obj(format!(
+        "<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 {} 0 R >>",
+        names + 2
+    ))
+    .stream("/Subtype /Type1C", CFF)
+    .stream("", content)
+    .build()
+}
+
+/// Type 3 glyphs go to the recovery rules as outline glyphs do (asked once per glyph, under the
+/// rules' font-level guards), and their fonts count toward the page's budget of fonts asked: a
+/// page showing more Type 3 fonts than the budget allows recovers nothing from the font after
+/// them, which a few Type 3 fonts leave to rule 1. The strict text is the same either way.
+#[test]
+fn type3_glyphs_reach_the_rules_and_count_toward_the_font_budget() {
+    use hayro::hayro_interpret::font::recovery_rule_calls;
+    let pdf = parse(type3_fonts_then_names(3));
+    let before = recovery_rule_calls();
+    let (strict, recovered, plain) = layers(&pdf);
+    // Three Type 3 glyphs and three numbered-names glyphs asked; the plain extraction asks none.
+    assert_eq!(recovery_rule_calls() - before, 6);
+    assert_eq!(strict, plain);
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref().map(|t| t.contains("Soc")), Some(true));
+    let (strict, recovered, plain) = layers(&parse(type3_fonts_then_names(1025)));
+    assert_eq!(strict, plain);
+    assert!(!strict.glyphs.is_empty());
+    assert!(recovered.is_none(), "past the font budget nothing is recovered");
+}
+
+/// A Type 0 font over an embedded CID-keyed CFF program (`CIDFontType0`) goes to the rules as a
+/// font of its own kind, with its charset's CIDs; no rule here reads such a font, so it keeps
+/// its strict text (nothing, without `/ToUnicode`: ISO 32000-2 §9.10.2) and recovers nothing.
+#[test]
+fn a_cid_keyed_cff_font_is_asked_of_the_rules_and_keeps_its_strict_text() {
+    use hayro::hayro_interpret::font::recovery_rule_calls;
+    let text = "Indicated";
+    let cids: Vec<u16> = text.chars().map(pdfcraft_testkit::cff::standard_string_id).collect();
+    let w: String =
+        text.chars().map(|c| format!("{} [{}] ", pdfcraft_testkit::cff::standard_string_id(c), pdfcraft_testkit::cff::helvetica_width(c))).collect();
+    let shown: String = cids.iter().map(|c| format!("{c:04X}")).collect();
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        &format!("<{shown}>"),
+        true,
+        &[
+            (
+                &format!(
+                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Meta /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
+                ),
+                Vec::new(),
+            ),
+            (
+                "<< /Type /FontDescriptor /FontName /ABCDEF+Meta /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                Vec::new(),
+            ),
+            ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+        ],
+    );
+    let before = recovery_rule_calls();
+    let (strict, recovered, plain) = layers(&parse(page));
+    assert!(recovery_rule_calls() - before >= text.len(), "its glyphs are asked of the rules");
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "Hi");
+    assert!(recovered.is_none());
+}
