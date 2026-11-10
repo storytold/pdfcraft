@@ -93,7 +93,10 @@ pub(crate) fn body(
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
-    let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let laid = settings.as_ref().ok().map(|s| print::layout(sizes, s));
+    // Creep within its field's range can still be too much for a thick booklet.
+    let too_much_creep = d.handling == Handling::Booklet && d.creep > 0.0 && matches!(laid, Some(Err(_)));
+    let sheets = laid.and_then(Result::ok).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     ui.horizontal_top(|ui| {
         // Settings.
@@ -472,6 +475,10 @@ pub(crate) fn body(
             match (&settings, sheets.get(d.sheet)) {
                 (Err(e), _) => {
                     ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
+                }
+                (Ok(_), None) if too_much_creep => {
+                    let msg = tl!("The creep moves the innermost sheet's pages too far for this many pages. Reduce Creep.");
+                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(msg).color(t.text_muted)).wrap());
                 }
                 (Ok(_), Some(sheet)) => {
                     let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
