@@ -1376,6 +1376,29 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
 }
 
 #[test]
+fn preferences_with_always_default_view_on_toggling_continuous_preserves_custom_zoom() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = harness(&[("always-default-view", "on"), ("default-continuous", "off"), ("continuous", "off"), ("zoom", "200")]);
+    assert!(h.state().always_default_view);
+    assert!(!h.state().view_defaults.continuous);
+    assert!(!h.state().views[0].continuous());
+    assert_eq!(h.state().views[0].zoom, 2.0);
+
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Continuous scrolling").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Continuous scrolling").click();
+    h.run_steps(2);
+
+    assert!(h.state().view_defaults.continuous);
+    let v = &h.state().views[0];
+    assert!(v.continuous(), "continuous scrolling is updated");
+    assert_eq!(v.zoom, 2.0, "custom zoom is preserved because fit/zoom did not change");
+}
+
+#[test]
 fn preferences_set_the_default_zoom() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
