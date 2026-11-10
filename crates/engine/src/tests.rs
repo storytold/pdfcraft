@@ -1638,13 +1638,12 @@ fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Ch
     Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
 }
 
-/// "Any except extracting pages" (#5081): page extraction, splitting and using the file as a
-/// page source are refused without the permissions password and leave nothing changed, and the
-/// owner can do everything. At revision 3 and later the preset (bit 4 without bit 11) allows no
-/// page changes either; at revision 2, where bit 4 covers assembly, extraction is still refused
-/// because copying is withheld.
+/// "Any except extracting pages" (#5081) withholds page extraction on every handler revision. At
+/// revision 3 and later the preset (bit 4 without bit 11) allows no page changes either; at
+/// revision 2, where bit 4 covers assembly, extraction, splitting and being a page source are
+/// still refused because copying is withheld.
 #[test]
-fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_output() {
+fn extraction_permissions_refuse_any_except_extract_on_every_revision() {
     use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_40, Rc4_128};
 
     for algorithm in [Rc4_128, Aes128, Aes256] {
@@ -1662,8 +1661,13 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
     assert_eq!(session.extract(r2_id, &[0]), Err(EditError::NotPermitted("extracting pages")));
     assert_eq!(session.split(r2_id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted("splitting the document")));
     assert_eq!(crate::combine_source_check(&r2, None), Err(crate::SourceProblem::NotPermitted));
+}
 
-    let bytes = protected_with_changes(Aes256, Changes::AnyExceptExtract);
+/// "Any except extracting pages" (#5081): Extract, Split and Combine refuse the file without the
+/// permissions password and leave it unchanged; Combine takes it with that password.
+#[test]
+fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_output() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
     assert_eq!(crate::combine_source_check(&bytes, None), Err(crate::SourceProblem::NotPermitted));
     assert_eq!(crate::combine_source_check(&bytes, Some("boss")), Ok(()));
     let mut restricted = Session::new();
@@ -1677,6 +1681,17 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
     assert!(!doc.dirty);
     assert_eq!(doc.bytes, before, "a refused extraction leaves the source untouched");
 
+    let sources = vec![("restricted.pdf".into(), bytes.clone(), None)];
+    assert!(matches!(restricted.combine_unlocked(&sources, &[None]), Err(EditError::Source(_))));
+    let combined = restricted.combine_unlocked(&sources, &[Some("boss")]).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&pdfcraft_cos::Document::open(combined).unwrap()).unwrap(), 2);
+}
+
+/// A file under "Any except extracting pages" (#5081) is refused as an Insert Pages or Replace
+/// Pages source for an unprotected document, which is left as it was, with nothing to undo.
+#[test]
+fn extraction_permissions_refuse_a_restricted_page_source() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
     let plain = Arc::new(fixture(1));
     let mut destination = Session::new();
     let dest = destination.open("destination.pdf", None, plain.clone(), None).unwrap();
@@ -1696,14 +1711,15 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
         Err(EditError::Source(_))
     ));
     assert_eq!(destination.get(dest).unwrap().bytes, plain, "a refused replace leaves the destination untouched");
+}
 
-    let sources = vec![("restricted.pdf".into(), bytes.clone(), None)];
-    assert!(matches!(restricted.combine_unlocked(&sources, &[None]), Err(EditError::Source(_))));
-    let combined = restricted.combine_unlocked(&sources, &[Some("boss")]).unwrap();
-    assert_eq!(pdfcraft_organize::page_count(&pdfcraft_cos::Document::open(combined).unwrap()).unwrap(), 2);
-
+/// Opened with the permissions password, a file under "Any except extracting pages" (#5081) can
+/// be extracted from and split.
+#[test]
+fn extraction_permissions_yield_to_the_owner_password() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
     let mut owner = Session::new();
-    let owner_id = owner.open("restricted.pdf", None, bytes.clone(), Some("boss")).unwrap();
+    let owner_id = owner.open("restricted.pdf", None, bytes, Some("boss")).unwrap();
     assert!(owner.get(owner_id).unwrap().permissions().unwrap().extract_pages());
     assert!(owner.extract(owner_id, &[0]).is_ok());
     assert_eq!(owner.split(owner_id, &pdfcraft_organize::SplitBy::PageCount(1)).unwrap().len(), 2);
