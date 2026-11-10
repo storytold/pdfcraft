@@ -13,7 +13,9 @@
 //! under a region the whole operation fails (callers keep the previous document: fail-closed).
 //! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed.
 //! Places it leaves as they are (bookmark titles, attachments, remaining comments, other XMP)
-//! are only counted when they still hold that text ([`Report::still_holding`]).
+//! are only counted when they still hold that text ([`Report::still_holding`]). Last, a shared
+//! JBIG2 symbol dictionary (`/JBIG2Globals`) that anything gone by then used leaves the file too:
+//! what still names it is stored again without it, or the redaction is refused.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -23,6 +25,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
 mod elsewhere;
+mod globals;
 mod identification;
 mod image;
 mod interp;
@@ -96,18 +99,37 @@ pub enum RedactError {
     /// take what no mark covers with it, unreported.
     #[error("the images under these marks are more than one redaction can decode, so nothing was changed; redact fewer pages at a time")]
     ImagesPastAllowance,
-    /// A JBIG2 image shares its `/JBIG2Globals` with a redacted one and can't be stored again
-    /// without them, so the shapes they hold, those of marks under the area included, would stay.
-    #[error(
-        "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
-    )]
+    /// `/JBIG2Globals` used by something removed would stay: something that names them can't be
+    /// stored again without them, or something else refers to them. Either way the shapes they
+    /// hold, those of marks under the area included, would stay. Counts what can't be stored without
+    /// them: 0 when only something else keeps them.
+    #[error("{}", shared_jbig2_text(*.0))]
     SharedJbig2Globals(usize),
+    /// Finding what shares JBIG2 symbol data with what is being removed would read more of the file
+    /// than one run allows (`globals::RUN_BUDGET`): its images and parameters refer to the same
+    /// objects in more ways than are checked, or hold more than is decoded. Removing hidden
+    /// information says so too when the dictionaries it reads to know copies, or the images it
+    /// stores again, would decode more than its image allowance, which no choice of pages makes
+    /// smaller.
+    #[error(
+        "finding and storing again what shares JBIG2 symbol data with something being removed would read more of this file than one run allows, so it can't be shown that the data leaves with it; this was refused"
+    )]
+    SharedJbig2Budget,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
     Form(#[from] pdfcraft_forms::FormError),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+/// [`RedactError::SharedJbig2Globals`]'s text, which says what keeps the data.
+fn shared_jbig2_text(stuck: usize) -> String {
+    let why = match stuck {
+        0 => "something else in the file refers to JBIG2 symbol data shared with something being removed".to_string(),
+        n => format!("{n} item(s) share JBIG2 symbol data with something being removed and can't be stored without it"),
+    };
+    format!("{why}, so that data, which can show what was removed, would stay in the file; this was refused")
 }
 
 /// A redaction mark on a page.
@@ -167,7 +189,7 @@ pub struct Report {
     pub images_removed: usize,
     pub images_cleared: usize,
     /// JBIG2 images, anywhere in the document, stored again (as a cleared copy is) without the
-    /// `/JBIG2Globals` they shared with a redacted image, so those globals leave the file.
+    /// `/JBIG2Globals` they shared with something this removed, so those globals leave the file.
     pub images_restored: usize,
     pub paths_removed: usize,
     pub paths_clipped: usize,
@@ -484,6 +506,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             pdfcraft_fonts::undrawable_message(&format!("the overlay text of a redaction mark on page {}", m.page + 1), c)
         )));
     }
+    let kept_before = globals::kept(doc)?;
     let mut report = Report { marks: chosen.len(), ..Report::default() };
     // `marks` visits pages in order. Keep slices of that order for appearance generation,
     // content rewriting and verification instead of scanning all marks for every page.
@@ -645,7 +668,6 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
     // Likewise a pruned pattern: a /Pages node above the page can still name its cell.
     interp::unlink_pruned_patterns(doc, &pruned_patterns)?;
-    report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects, &mut images)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -694,82 +716,16 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     let scrubbed = metadata::scrub(doc, &removed_text, !removed_cut)?;
     report.metadata = scrubbed.removed;
     report.identification = scrubbed.identification;
+    // Last of what leaves: an image that left with any of the above, the metadata removed just
+    // now included, is a user of a dictionary too. Storing images again changes no page's content
+    // or pattern cells, so the checks above hold for what follows.
+    report.images_restored = globals::unshare(doc, &kept_before, &mut images)?;
     // What it doesn't scrub is counted, never changed.
     report.still_holding = elsewhere::find(doc, &removed_text, !removed_cut);
     // The previous revision still holds the removed content: the next save must rewrite, and the
     // rewritten file is a different file from its source, so it gets a new identifier.
     doc.require_full_save_with_new_id();
     Ok(report)
-}
-
-/// Most XObjects followed down from the removed and replaced ones to find their JBIG2 images.
-const MAX_JBIG2_WALK: usize = 100_000;
-
-/// The `/JBIG2Globals` of a redacted JBIG2 image hold the symbol dictionary of every image that
-/// shares them (`jbig2enc -s` and most scanners give one to all the pages of a scan): the bitmaps
-/// of marks drawn only under the area too. The image itself is replaced or removed, but the globals
-/// would stay for as long as another image uses them. So every image that uses the globals of a
-/// removed or replaced image (`doomed`), or of one drawn in a removed or replaced form, is decoded
-/// and stored again in place without them, as a cleared copy is, and a full save then leaves them
-/// out. An image that can't be stored again refuses the redaction (nothing changes, as `apply`
-/// works on a copy), but for a removed or replaced one, which is either unlinked or still drawn
-/// whole on another page. They are decoded within what is left of the run's allowance (`images`);
-/// past it the redaction is refused as one clearing too many images is. Returns how many images
-/// that weren't removed or replaced were stored again.
-fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef], images: &mut pdfcraft_cos::ImageBudget) -> Result<usize, RedactError> {
-    let mut globals = HashSet::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<ObjRef> = doomed.to_vec();
-    while let Some(r) = stack.pop() {
-        if !seen.insert(r) || seen.len() > MAX_JBIG2_WALK {
-            continue;
-        }
-        let object = doc.get(r);
-        let Object::Stream(s) = &*object else { continue };
-        if let Some(g) = doc.jbig2_globals_ref(s) {
-            globals.insert(g);
-        }
-        // A form's images, and its forms' (an image's /SMask is a stream of its own, found below).
-        let resources = s.dict.get(b"Resources").map(|r| doc.resolve(r));
-        let xobjects = resources.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"XObject")).map(|x| doc.resolve(x));
-        if let Some(x) = xobjects.as_deref().and_then(Object::as_dict) {
-            stack.extend(x.iter().filter_map(|(_, v)| v.as_ref()));
-        }
-        if let Some(m) = s.dict.get(b"SMask").and_then(Object::as_ref) {
-            stack.push(m);
-        }
-    }
-    if globals.is_empty() {
-        return Ok(0);
-    }
-    let sharing: Vec<ObjRef> = doc
-        .scan_objects()
-        .filter(|(_, o)| matches!(&**o, Object::Stream(s) if doc.jbig2_globals_ref(s).is_some_and(|g| globals.contains(&g))))
-        .map(|(r, _)| r)
-        .collect();
-    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let (mut restored, mut stuck, mut past_allowance) = (0, 0, false);
-    for r in sharing {
-        let object = doc.get(r);
-        let Object::Stream(s) = &*object else { continue };
-        let refused = images.refused();
-        match image::without_globals(doc, s, images) {
-            Some(new) => {
-                doc.set(r, Object::Stream(new));
-                restored += usize::from(!doomed.contains(&r));
-            }
-            None if doomed.contains(&r) => {}
-            None if images.refused() > refused => past_allowance = true,
-            None => stuck += 1,
-        }
-    }
-    if past_allowance {
-        return Err(RedactError::ImagesPastAllowance);
-    }
-    if stuck > 0 {
-        return Err(RedactError::SharedJbig2Globals(stuck));
-    }
-    Ok(restored)
 }
 
 /// What applying the marks collects across pages.
@@ -812,14 +768,15 @@ fn redact_page_content(
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let out = {
+    // What the walk leaves of the page's allowance, the cleanups below spend.
+    let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
         *removed_room = scope.removed_room;
-        out
+        (out, scope.into_budget())
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly
@@ -861,6 +818,11 @@ fn redact_page_content(
         let mut res = resources.clone();
         if !out.xobjects.is_empty() || !out.replaced.is_empty() {
             let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+            // The rewritten XObjects first, as for a rewritten form: one left without resources of
+            // its own draws through these, and `prune` follows it only under a name it can find.
+            for (n, r) in &out.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
             // A full save keeps whatever is still referenced: unlink the originals this page no
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
@@ -875,10 +837,7 @@ fn redact_page_content(
                     _ => Vec::new(),
                 })
                 .collect();
-            interp::prune(&mut xo, &out.replaced, &page_content);
-            for (n, r) in &out.xobjects {
-                xo.set(n.clone(), Object::Ref(*r));
-            }
+            interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         let (_, cleaned_data) = page_streams(
@@ -895,8 +854,8 @@ fn redact_page_content(
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
-        retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data, Some(&page.dict))?;
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data)?);
+        type3::prune_type3_from_resources(doc, &mut budget, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));
