@@ -182,7 +182,7 @@ fn despeckle_is_its_own_switch() {
     // Despeckle alone, at level 0, changes nothing but the specks.
     let (mut s, id) = open(grey_scan());
     let before = samples(&s, id);
-    s.enhance_scanned_pages(id, &[], ScanCleanSettings { level: 0, edge_shadows: false, despeckle: true }).unwrap();
+    s.enhance_scanned_pages(id, &[], ScanCleanSettings { level: 0, edge_shadows: false, despeckle: true, ..ScanCleanSettings::default() }).unwrap();
     let after = samples(&s, id);
     let changed: Vec<usize> = before.data.iter().zip(&after.data).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
     let mut specks: Vec<usize> = SPECKS.iter().map(|&(x, y)| y * W + x).collect();
@@ -190,7 +190,9 @@ fn despeckle_is_its_own_switch() {
     assert_eq!(changed, specks);
     // Nothing to do: no undo step, and the report says why.
     let (mut s, id) = open(grey_scan());
-    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings { level: 0, edge_shadows: false, despeckle: false }).unwrap();
+    let report = s
+        .enhance_scanned_pages(id, &[], ScanCleanSettings { level: 0, edge_shadows: false, despeckle: false, ..ScanCleanSettings::default() })
+        .unwrap();
     assert_eq!(report.images, 0);
     assert!(report.pages.is_empty());
     assert_eq!(report.skipped.len(), 1);
@@ -234,6 +236,45 @@ fn a_black_and_white_scan_stays_one_bit_and_loses_its_specks() {
     assert_eq!((at(5, 5), at(58, 58)), (255, 255), "specks gone");
     assert_eq!((at(10, 20), at(30, 25), at(49, 29)), (0, 0, 0), "the bar stays");
     assert_eq!(px.data.iter().filter(|&&v| v == 0).count(), 40 * 10);
+}
+
+#[test]
+fn a_halftone_scan_becomes_clean_grey_whatever_its_fax_encoding() {
+    // 96 × 96: grey paper as 20 % dots, a darker block (70 % dots) as the ink; 1 = white.
+    let (w, h) = (96usize, 96usize);
+    let mut bits = vec![0u8; w / 8 * h];
+    for y in 0..h {
+        for x in 0..w {
+            let ink = (30..66).contains(&x) && (30..66).contains(&y);
+            let dot = (x * 7 + y * 3) % 10 < if ink { 7 } else { 2 };
+            if !dot {
+                bits[y * w / 8 + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    let g4 = pdfcraft_filters::encode_g4(&bits, w as u32, h as u32).expect("encodable");
+    let dict = format!(
+        "/Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns {w} /Rows {h} >>"
+    );
+    let bytes = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 96 96] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>")
+        .stream(&format!("/Type /XObject /Subtype /Image {dict}"), &g4)
+        .stream("", "q 96 0 0 96 0 0 cm /Im0 Do Q")
+        .build();
+    let (mut s, id) = open(bytes);
+    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(50)).unwrap();
+    assert_eq!((report.images, report.skipped.len()), (1, 0), "{:?}", report.skipped);
+    assert_eq!(report.halftone, vec![HalftoneImage { format: "CCITT fax 1-bit halftone".into(), pages: vec![0] }]);
+    let Object::Stream(img) = &*object(&s, id, 4) else { panic!("the image") };
+    assert_eq!(img.dict.int(b"BitsPerComponent"), Some(8));
+    let px = samples(&s, id);
+    assert!(!px.bilevel);
+    assert_eq!((px.width, px.height), (96, 96), "the same size");
+    let at = |x: usize, y: usize| px.data[y * w + x];
+    assert!(at(10, 10) >= 225 && at(85, 85) >= 225, "paper white: {} {}", at(10, 10), at(85, 85));
+    assert!(at(48, 48) <= 120, "ink dark: {}", at(48, 48));
 }
 
 #[test]
@@ -422,7 +463,7 @@ fn edge_shadow_removal_whitens_the_gutter_background_removal_alone_leaves() {
     // On its own, at level 0, it lightens the gutter's paper to the paper beside it.
     let (mut s, id) = open(grey_scan());
     let before = samples(&s, id);
-    s.enhance_scanned_pages(id, &[0], ScanCleanSettings { level: 0, edge_shadows: true, despeckle: false }).unwrap();
+    s.enhance_scanned_pages(id, &[0], ScanCleanSettings { level: 0, edge_shadows: true, despeckle: false, ..ScanCleanSettings::default() }).unwrap();
     let after = samples(&s, id);
     assert!(grey_at(&after, 3, 40).abs_diff(grey_at(&before, 150, 40)) <= 4, "{} vs {}", grey_at(&after, 3, 40), grey_at(&before, 150, 40));
     assert_eq!(grey_at(&after, 150, 40), grey_at(&before, 150, 40), "the middle is left alone");
@@ -460,4 +501,48 @@ fn only_the_chosen_pages_scan_is_cleaned() {
         assert_eq!(was.raw, now.raw, "the other image's stream bytes");
         assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance scanned file"));
     }
+}
+
+#[test]
+fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
+    // Two pages, each with its own copy of the same 96 x 96 halftone scan.
+    let (w, h) = (96usize, 96usize);
+    let mut bits = vec![0u8; w / 8 * h];
+    for y in 0..h {
+        for x in 0..w {
+            let ink = (30..66).contains(&x) && (30..66).contains(&y);
+            if (x * 7 + y * 3) % 10 >= if ink { 7 } else { 2 } {
+                bits[y * w / 8 + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    let image = "/Type /XObject /Subtype /Image /Width 96 /Height 96 /ColorSpace /DeviceGray /BitsPerComponent 1";
+    let page = |img: u32, contents: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 96 96] /Resources << /XObject << /Im0 {img} 0 R >> >> /Contents {contents} 0 R >>")
+    };
+    let bytes = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
+        .obj(page(5, 7))
+        .obj(page(6, 8))
+        .stream(image, &bits)
+        .stream(image, &bits)
+        .stream("", "q 96 0 0 96 0 0 cm /Im0 Do Q")
+        .stream("", "q 96 0 0 96 0 0 cm /Im0 Do Q")
+        .build();
+    let (mut s, id) = open(bytes);
+    let heavy = HalftoneTuning { weight: 100, contrast: 100, cleanup: 50 };
+    let light = HalftoneTuning { weight: 0, contrast: 0, cleanup: 50 };
+    let job = s.scan_clean_job(id, &[], ScanCleanSettings::default()).unwrap().with_page_tunings(vec![(0, heavy), (1, light)]);
+    let cleaned = job.run(|_, _| true).unwrap();
+    assert_eq!(cleaned.report.halftone.len(), 2, "both pages restored");
+    s.apply_scan_clean(id, cleaned).unwrap();
+    let ink = |page: usize| {
+        let doc = s.get(id).unwrap();
+        let cos = &doc.editor.as_ref().unwrap().cos;
+        let Object::Stream(img) = &*cos.get(doc.page_images(page)[0].object.unwrap()) else { panic!("the image") };
+        let px = optimize::decode_samples(cos, img, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
+        px.data.iter().map(|v| u32::from(255 - v)).sum::<u32>()
+    };
+    assert!(ink(0) > ink(1), "page 1 was tuned heavier than page 2: {} vs {}", ink(0), ink(1));
 }

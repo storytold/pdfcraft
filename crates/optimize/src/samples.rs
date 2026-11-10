@@ -37,7 +37,7 @@ pub enum NotDecoded {
     BitDepth(i64),
     #[error("its decode array remaps the samples")]
     Decode,
-    #[error("it is compressed in a format PdfCraft cannot read back yet (JBIG2 or CCITT fax)")]
+    #[error("it is compressed in a format PdfCraft cannot read back yet (JBIG2)")]
     Filter,
     #[error("its JPEG colour transform is ambiguous, so readers may disagree about its colours")]
     Ambiguous,
@@ -59,7 +59,12 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
     if is_jpx(s) {
         return jpx_samples(doc, s, budget);
     }
-    let jpeg = is_dct(s).ok_or(NotDecoded::Filter)?;
+    // A CCITT fax image is black and white: read through its filter like other 1-bit images.
+    let jpeg = match is_dct(s) {
+        Some(j) => j,
+        None if is_ccitt(s) => false,
+        None => return Err(NotDecoded::Filter),
+    };
     let n = d.get(b"ColorSpace").and_then(|cs| components(doc, cs)).ok_or(NotDecoded::ColourSpace)?;
     let bpc = d.get(b"BitsPerComponent").map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(0);
     let bilevel = match bpc {
@@ -105,6 +110,16 @@ fn is_jpx(s: &Stream) -> bool {
         Some(Object::Name(n)) => n.as_slice() == b"JPXDecode",
         Some(Object::Array(a)) => matches!(a.as_slice(), [f] if f.as_name() == Some(b"JPXDecode")),
         _ => false,
+    }
+}
+
+/// Whether `s` is a CCITT fax image: `/CCITTFaxDecode` as its only filter.
+fn is_ccitt(s: &Stream) -> bool {
+    let fax = |f: &Object| matches!(f.as_name(), Some(b"CCITTFaxDecode" | b"CCF"));
+    match s.dict.get(b"Filter") {
+        Some(Object::Array(a)) => matches!(a.as_slice(), [f] if fax(f)),
+        Some(f) => fax(f),
+        None => false,
     }
 }
 
@@ -182,7 +197,7 @@ fn packed_len(w: u32, h: u32) -> Option<usize> {
 fn unpack_bits(doc: &Document, s: &Stream, w: u32, h: u32, inverted: bool, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let stride = usize::try_from(w).ok()?.div_ceil(8);
     let need = packed_len(w, h)?;
-    let bits = budget.decode_filters(doc, s, allowance(need, h)?).ok()?;
+    let bits = budget.decode(doc, s, allowance(need, h)?).ok()?;
     let bits = bits.get(..need)?;
     let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
     let mut out = Vec::with_capacity(w.checked_mul(h)?);

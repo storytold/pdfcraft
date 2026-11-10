@@ -4773,6 +4773,7 @@ fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     assert_eq!(r["undo"], "Enhance scanned file");
     assert_eq!((r["pages_cleaned"].clone(), r["images"].clone(), r["not_scanned"].clone()), (json!([1]), json!(1), json!([])));
     assert_eq!(r["skipped"], json!([]));
+    assert_eq!(r["halftone"], json!([]), "a grey scan is no halftone");
     // In place: still one picture of the same size, still a JPEG, now with white paper.
     let images = ok(&mut a, "page_images", json!({ "doc": scan, "page": 1 }));
     assert_eq!((images["count"].clone(), images["images"][0]["pixels"].clone()), (json!(1), json!([300, 400])));

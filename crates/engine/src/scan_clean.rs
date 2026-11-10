@@ -5,15 +5,16 @@
 //! image object**, at the same size and in the same colour space. So everything else on the
 //! page stays as it was: an invisible OCR text layer, comments, links, form fields, other
 //! content, and the image's own soft mask, `/Interpolate` and other entries. A JPEG stays a JPEG
-//! (at quality 90), a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000),
+//! (at quality 90), and a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000);
 //! any other grey or RGB image is stored losslessly (Flate), and a black and white (1-bit) image
-//! stays 1-bit. An image several pages draw is cleaned once.
+//! stays 1-bit as Flate, a CCITT fax one included, unless it is a halftone ([`crate::descreen`]),
+//! which is restored to 8-bit grey. An image several pages draw is cleaned once.
 //!
 //! A page is a scan when its pictures cover at least half of it (as for Recognize text); the
 //! pictures each covering at least a tenth of the page are its scan. What is not cleaned is
 //! reported, never skipped silently: pages that are no scan, and scan images in a form PdfCraft
-//! can't rewrite yet (CMYK, indexed, JBIG2, CCITT fax, a stencil mask, a remapping
-//! decode array, a scan drawn inside grouped Form artwork) or whose data is broken.
+//! can't rewrite yet (CMYK, indexed, JBIG2, a stencil mask, a remapping decode array, a scan
+//! drawn inside grouped Form artwork) or whose data is broken.
 //!
 //! Like Optimize, the work is a job: [`Session::scan_clean_job`] captures the document,
 //! [`ScanCleanJob::run`] cleans anywhere (a worker thread), and [`Session::apply_scan_clean`]
@@ -23,9 +24,10 @@ use pdfcraft_cos::{ObjRef, Object, Stream};
 
 use crate::camera_clean::{CleanUp, MAX_LEVEL, clean_samples};
 use crate::edit::check_permission;
-use crate::{DocId, Edit, EditError, Session, guard, optimize};
+use crate::{DocId, Edit, EditError, Session, descreen, guard, optimize};
 
 pub use crate::camera_clean::DESPECKLE_FROM;
+pub use crate::descreen::Tuning as HalftoneTuning;
 
 /// The JPEG quality a cleaned JPEG scan is written back at (as Enhance camera image).
 const QUALITY: u8 = 90;
@@ -49,6 +51,9 @@ pub struct ScanCleanSettings {
     /// Despeckle: isolated dark specks (dust, scanner noise), dark pixels with at most one dark
     /// neighbour, turn white. The only change a black and white (1-bit) scan takes.
     pub despeckle: bool,
+    /// How a halftone (dotted) 1-bit scan looks once restored: stroke weight, contrast and paper
+    /// clean-up. Nothing else takes them.
+    pub halftone: HalftoneTuning,
 }
 
 impl ScanCleanSettings {
@@ -56,7 +61,7 @@ impl ScanCleanSettings {
     /// despeckling from [`DESPECKLE_FROM`] as the camera tool does.
     pub fn at(level: u8) -> Self {
         let level = level.min(MAX_LEVEL);
-        Self { level, edge_shadows: level > 0, despeckle: level >= DESPECKLE_FROM }
+        Self { level, edge_shadows: level > 0, despeckle: level >= DESPECKLE_FROM, halftone: HalftoneTuning::default() }
     }
 
     /// Whether these settings change anything at all.
@@ -82,6 +87,16 @@ pub struct ScanCleanReport {
     pub not_scanned: Vec<usize>,
     /// Scan images left as they were, and why.
     pub skipped: Vec<SkippedImage>,
+    /// Halftone scans restored: what they are stored as, and the pages (0-based) that draw them.
+    pub halftone: Vec<HalftoneImage>,
+}
+
+/// A halftone scan that was restored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HalftoneImage {
+    /// How the image is stored, for example "CCITT fax 1-bit".
+    pub format: String,
+    pub pages: Vec<usize>,
 }
 
 /// A scan image that was not cleaned.
@@ -110,6 +125,9 @@ pub struct ScanCleanJob {
     /// The document's edit generation it was taken at: a result is for that state only.
     generation: u64,
     report: ScanCleanReport,
+    /// Halftone tunings of single pages (0-based), which take the place of the settings' for the
+    /// image drawn on that page.
+    page_tunings: Vec<(usize, HalftoneTuning)>,
 }
 
 /// The cleaned images, ready for [`Session::apply_scan_clean`], and the report.
@@ -186,7 +204,7 @@ impl Session {
                 }
             }
         }
-        Ok(ScanCleanJob { cos: editor.cos.clone(), targets, settings, generation: doc.edit_generation(), report })
+        Ok(ScanCleanJob { cos: editor.cos.clone(), targets, settings, generation: doc.edit_generation(), report, page_tunings: Vec::new() })
     }
 
     /// Write the images [`ScanCleanJob::run`] cleaned into document `id` as one undoable step,
@@ -213,6 +231,13 @@ impl Session {
 }
 
 impl ScanCleanJob {
+    /// Give single pages their own halftone tuning: an image takes that of the first of its pages
+    /// that has one, else the settings'.
+    pub fn with_page_tunings(mut self, tunings: Vec<(usize, HalftoneTuning)>) -> Self {
+        self.page_tunings = tunings;
+        self
+    }
+
     /// The images to clean (one drawn on several pages counts once).
     pub fn total(&self) -> usize {
         self.targets.len()
@@ -226,7 +251,7 @@ impl ScanCleanJob {
     }
 
     fn work(self, progress: &mut dyn FnMut(usize, usize) -> bool) -> Result<ScanCleaned, EditError> {
-        let ScanCleanJob { cos, targets, settings, generation, mut report } = self;
+        let ScanCleanJob { cos, targets, settings, generation, mut report, page_tunings } = self;
         let total = targets.len();
         let mut images = Vec::new();
         let mut changed_pages: Vec<usize> = Vec::new();
@@ -237,8 +262,12 @@ impl ScanCleanJob {
                 return Err(EditError::Cancelled);
             }
             let mut skip = |reason: String| report.skipped.push(SkippedImage { pages: target.pages.clone(), name: target.name.clone(), reason });
-            match clean_image(&cos, target.object, settings, &mut budget) {
-                Ok(Some(stream)) => {
+            let halftone = target.pages.iter().find_map(|p| page_tunings.iter().find(|(q, _)| q == p)).map_or(settings.halftone, |(_, t)| *t);
+            match clean_image(&cos, target.object, ScanCleanSettings { halftone, ..settings }, &mut budget) {
+                Ok(Some((stream, halftone))) => {
+                    if let Some(format) = halftone {
+                        report.halftone.push(HalftoneImage { format, pages: target.pages.clone() });
+                    }
                     images.push((target.object, stream));
                     changed_pages.extend(target.pages.iter().copied());
                 }
@@ -255,14 +284,14 @@ impl ScanCleanJob {
     }
 }
 
-/// Image `object` cleaned with `settings`: the new stream, `None` when nothing changes, or why it
-/// can't be cleaned.
+/// Image `object` cleaned with `settings`: the new stream (and, for a halftone scan, how it was
+/// stored), `None` when nothing changes, or why it can't be cleaned.
 fn clean_image(
     cos: &pdfcraft_cos::Document,
     object: ObjRef,
     settings: ScanCleanSettings,
     budget: &mut pdfcraft_cos::ImageBudget,
-) -> Result<Option<Stream>, String> {
+) -> Result<Option<(Stream, Option<String>)>, String> {
     let obj = cos.get(object);
     let Object::Stream(s) = &*obj else { return Err("it is not an image".into()) };
     if s.dict.name(b"Subtype") != Some(b"Image") {
@@ -273,6 +302,10 @@ fn clean_image(
         return Err("it has a colour-key mask, which cleaning would change".into());
     }
     let samples = optimize::decode_samples(cos, s, budget).map_err(|e| e.to_string())?;
+    if samples.bilevel && settings.level > 0 && descreen::is_halftone(&samples.data, samples.width, samples.height) {
+        let format = storage(s);
+        return descreened(s, samples, settings.halftone).map(|stream| Some((stream, Some(format))));
+    }
     let cleaned = if samples.bilevel {
         if !settings.despeckle {
             return Err("it is black and white, which only Despeckle changes, and Despeckle is off".into());
@@ -290,7 +323,31 @@ fn clean_image(
         return Ok(None);
     }
     let cleaned = optimize::Samples { data: cleaned, ..samples };
-    optimize::encode_samples(s, &cleaned, QUALITY).map(Some).ok_or_else(|| "it could not be written back".into())
+    optimize::encode_samples(s, &cleaned, QUALITY).map(|stream| Some((stream, None))).ok_or_else(|| "it could not be written back".into())
+}
+
+/// How image `s` is stored, in a few words, for the report.
+fn storage(s: &Stream) -> String {
+    let codec = match s.filters().last().map(|(f, _)| f.name()) {
+        Some("CCITTFaxDecode") => "CCITT fax",
+        Some("JBIG2Decode") => "JBIG2",
+        Some("FlateDecode") => "Flate",
+        Some(_) => "compressed",
+        None => "uncompressed",
+    };
+    format!("{codec} 1-bit halftone")
+}
+
+/// A halftone (dithered) 1-bit scan turned into the clean grey picture it was made from
+/// ([`descreen::restore`]: smoothed tones, then bolder, smoother text), stored as 8-bit grey.
+fn descreened(old: &Stream, samples: optimize::Samples, tuning: HalftoneTuning) -> Result<Stream, String> {
+    let data = descreen::restore(&samples.data, samples.width, samples.height, tuning)
+        .ok_or("its samples don't match its size, or it is too large to restore")?;
+    let grey = optimize::Samples { data, components: 1, jpeg: false, bilevel: false, inverted: false, ..samples };
+    let mut stream = optimize::encode_samples(old, &grey, QUALITY).ok_or("it could not be written back")?;
+    // The grey picture is drawn as it is: a decode array meant for the 1-bit data would invert it.
+    stream.dict.remove(b"Decode");
+    Ok(stream)
 }
 
 /// [`Edit::EnhanceScan`]: put the cleaned images in place. Each object must still be an image.

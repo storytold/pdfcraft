@@ -269,6 +269,7 @@ impl PdfCraftApp {
             optimize_run: None,
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
+            scan_clean_result: None,
             progress_notice: None,
             page_clipboard: None,
             comment_clipboard: None,
