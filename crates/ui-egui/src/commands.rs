@@ -531,7 +531,7 @@ impl PdfCraftApp {
                     && last + 1 - first != selected.len()
                 {
                     self.notify_tr("Header and footer can only be applied to a run of neighbouring pages. Select one, such as pages 2 to 4.");
-                    return false;
+                    return Some(false);
                 }
                 self.marks_draft.replace = id.ends_with(".update");
                 self.marks_draft.opened(kind);
