@@ -712,6 +712,18 @@ fn tool_schema_enums_have_one_json_type() {
 }
 
 #[test]
+/// object_list returns path rows, so every tool taking `objects` references must accept them:
+/// an MCP client validating against the schema otherwise refuses a copy of a selected path.
+fn every_objects_schema_accepts_each_object_list_kind() {
+    for tool in tools() {
+        let Some(kinds) = tool.input_schema["properties"]["objects"]["items"]["properties"]["kind"]["enum"].as_array() else { continue };
+        for kind in ["added", "text", "image", "path"] {
+            assert!(kinds.iter().any(|k| k == kind), "{}: objects kind enum lacks {kind}", tool.name);
+        }
+    }
+}
+
+#[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
     std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();

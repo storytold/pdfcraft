@@ -274,12 +274,10 @@ pub fn tools() -> Vec<ToolDef> {
                 "order":{"type":"string","enum":["front","forward","backward","back"]},
                 "generation":generation()}), &["doc","page","object","order"])),
         t("object_copy", "Copy or cut objects together", "Edit ▸ Copy (cut: Cut) of 1–1000 mixed references from object_list, or with all: true every object on the page, as ⌘A then ⌘C select and copy them in Edit a PDF. The copy keeps their content operators and every resource they use (fonts, images, ExtGStates, colour spaces, patterns, shadings) and is kept for object_paste into any open document, also after this one changes or closes. cut then deletes them as one undo step. Refused when the document doesn't allow copying (cut: or changes), or when text used as a clipping path is drawn before them. Returns the count copied and their text.")
-            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
-                "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
-                    "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),
                 "all":{"type":"boolean","description":"Every object on the page, instead of objects."},
                 "cut":{"type":"boolean","description":"Delete them after copying (one undo step)."},
-                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page"])),
+                "generation":generation()}), &["doc","page"])),
         t("object_paste", "Paste copied objects", "Edit ▸ Paste of what object_copy copied, onto page of doc as page content that draws the same: where it was, or on the page it came from 18 points down and to the right, and 18 more for each further paste onto the same page; centred when that would leave it off the page. Resources join the page's under names that don't clash; into another document the fonts, images and other objects they use are copied (each once, sharing what is there; refused past 20,000 objects or 256 MB). Pasted content is untagged and in no layer. One undo step.")
             .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("text_word_count", "Word count", "Count Unicode words and characters on selected pages (default all), with totals and per-page counts. Table/code exclusions use PDF structure tags, not visual guesses; unclassified text is retained. Image exclusion removes Figure-tagged and invisible/OCR text. Does not run OCR. Copy permission is required. Fails rather than returning a partial total when a page cannot be read.")
