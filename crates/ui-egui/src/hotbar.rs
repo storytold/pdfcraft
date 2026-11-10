@@ -973,7 +973,9 @@ mod tests {
             app.hotbar.position = [0.5, 0.5];
             app.hotbar.picker_open = true;
             let mut fonts = false;
-            let mut harness = Harness::builder().with_size(vec2(1000.0, 900.0)).with_accessibility_check(false).build_ui_state(
+            // Wide enough that the largest horizontal bar, quick tools' Zoom button included, leaves
+            // the picker room to flip to the bar's other side, which the resize tests check.
+            let mut harness = Harness::builder().with_size(vec2(1100.0, 900.0)).with_accessibility_check(false).build_ui_state(
                 move |ui, app: &mut PdfCraftApp| {
                     if !fonts {
                         ui.ctx().set_fonts(theme::font_definitions());

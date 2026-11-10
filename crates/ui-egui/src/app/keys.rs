@@ -135,7 +135,7 @@ impl PdfCraftApp {
             self.quick_tool = QuickTool::Hand;
             self.space_hand = None;
         }
-        if ctx.input(|input| input.key_pressed(Key::Z)) {
+        if keys.pressed(ctx, Key::Z) {
             self.quick_tool = QuickTool::DynamicZoom;
             self.space_hand = None;
         }
