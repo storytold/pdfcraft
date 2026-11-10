@@ -9,7 +9,7 @@ use crate::RecoveryStore;
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
-const MAX_QUEUED_OPENS: usize = 16;
+pub(crate) const MAX_QUEUED_OPENS: usize = 16;
 
 pub(crate) enum Input {
     Path(PathBuf),
@@ -37,7 +37,7 @@ struct Job {
     context: OpenContext,
     name: String,
     path: Option<String>,
-    password: Option<String>,
+    password: Option<zeroize::Zeroizing<String>>,
     input: Input,
     reply: Sender<ResultMessage>,
     #[cfg(test)]
@@ -80,7 +80,7 @@ impl OpenWorker {
         context: OpenContext,
         name: String,
         path: Option<String>,
-        password: Option<String>,
+        password: Option<zeroize::Zeroizing<String>>,
         input: Input,
     ) -> Result<Receiver<ResultMessage>, String> {
         let (reply, receiver) = mpsc::channel();
@@ -178,7 +178,7 @@ fn prepare(job: Job) -> ResultKind {
     if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
         return ResultKind::Conversion(bytes);
     }
-    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
+    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref().map(String::as_str));
     ResultKind::Prepared { bytes, result: Box::new(result) }
 }
 

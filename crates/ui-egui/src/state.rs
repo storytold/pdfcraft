@@ -109,6 +109,12 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Print production ▸ Add printer marks.
+    PrinterMarks,
+    /// Print production ▸ Convert colours.
+    ConvertColours,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
     /// Organize pages ▸ Page properties (the tab order of the selected pages).
     PageProps,
     /// Protect Using Password.
@@ -125,6 +131,8 @@ pub enum Dialog {
     Signature,
     /// Comment Properties.
     CommentProps,
+    /// Edit the description of an embedded document attachment.
+    AttachmentDescription,
     /// Replace Pages (after choosing the file).
     ReplacePages,
     /// Prepare a form ▸ Field Properties.
@@ -142,6 +150,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
+    /// first? (#2149)
+    LockSignatures,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -166,6 +177,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -186,6 +199,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Pin tools to Home: selection modal.
+    PinTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +242,14 @@ pub struct PagePropsDraft {
     pub pages: Vec<usize>,
     pub before: Option<pdfcraft_engine::TabOrder>,
     pub tab_order: Option<pdfcraft_engine::TabOrder>,
+}
+
+/// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentClip {
+    pub xfdf: String,
+    /// How many comments (replies not counted) were copied.
+    pub count: usize,
 }
 
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
@@ -329,6 +352,14 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
+}
+
+impl Drop for PasswordPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -337,7 +368,7 @@ pub(crate) struct OpenRequest {
     pub(crate) path: Option<String>,
     pub(crate) stamp: Option<file_watch::Stamp>,
     pub(crate) input: open_worker::Input,
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<zeroize::Zeroizing<String>>,
     pub(crate) activate: bool,
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<RecoveryMeta>,
@@ -355,11 +386,23 @@ pub struct UnlockPrompt {
     pub then: Option<&'static str>,
 }
 
+impl Drop for UnlockPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
+}
+
 impl UnlockPrompt {
+    /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
 }
+
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {

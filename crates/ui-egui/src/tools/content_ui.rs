@@ -3,13 +3,16 @@
 //! (images keep their proportions), double-click text to retype it, format it from the panel,
 //! Delete to remove it. Each change is one undoable engine edit.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
-use crate::page_router::{Hit, Owner};
+use crate::page_keys::PageKeys;
+use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -106,6 +109,10 @@ pub struct ContentView {
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
+    /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
+    pressed_at: Option<(usize, Pos2)>,
+    /// A button is down on the pages this frame (for [`keys`], which runs after them).
+    held: bool,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -114,6 +121,12 @@ impl ContentView {
     /// Forget an in-progress pointer grab for content editing.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.grab = None;
+        self.pressed_at = None;
+    }
+
+    /// An added item is being moved or resized on `page`.
+    pub(crate) fn moving_on(&self, page: usize) -> bool {
+        self.grab.is_some_and(|(p, ..)| p == page)
     }
 
     pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
@@ -263,29 +276,30 @@ impl MoveBackground {
             return;
         }
         let r = screen_rect(xf, info, page, from);
+        let base = self.settling.map_or(r, |s| screen_rect(xf, info, page, s));
         let to = if let Some((_, grab, start)) = cv.grab {
             let Some(p) = pointer else { return };
-            dragged(r, grab, p - start, self.picture)
-        } else if let Some(to) = self.settling {
-            let to = screen_rect(xf, info, page, to);
+            dragged(base, grab, p - start, self.picture)
+        } else if self.settling.is_some() {
             // A moved text box keeps its top edge (its height follows its lines).
-            if self.picture { to } else { r.translate(to.left_top() - r.left_top()) }
+            if self.picture { base } else { r.translate(base.left_top() - r.left_top()) }
         } else {
             return;
         };
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
         xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
-        // A pixel around the box, so its edges come along.
+        // A pixel around the box, so its edges come along. Clip the source to the page raster so
+        // an item extending past the page border never samples clamped edge texels (#3938, #4477).
         let (r, to) = (r.expand(1.0), to.expand(1.0));
+        let clipped = r.intersect(xf.rect);
+        if !clipped.is_positive() || r.width() <= 0.0 || r.height() <= 0.0 {
+            return;
+        }
+        let map = |p: Pos2| Pos2::new(to.min.x + (p.x - r.min.x) / r.width() * to.width(), to.min.y + (p.y - r.min.y) / r.height() * to.height());
         let mut mesh = egui::Mesh::with_texture(item.id());
-        for (a, b) in [
-            (r.left_top(), to.left_top()),
-            (r.right_top(), to.right_top()),
-            (r.right_bottom(), to.right_bottom()),
-            (r.left_bottom(), to.left_bottom()),
-        ] {
+        for a in [clipped.left_top(), clipped.right_top(), clipped.right_bottom(), clipped.left_bottom()] {
             let (u, v) = xf.screen_to_norm(a);
-            mesh.vertices.push(egui::epaint::Vertex { pos: b, uv: Pos2::new(u, v), color: Color32::WHITE });
+            mesh.vertices.push(egui::epaint::Vertex { pos: map(a), uv: Pos2::new(u, v), color: Color32::WHITE });
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
@@ -315,7 +329,10 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 }
 
 pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
-    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+    on_page(added, page)
+        .iter()
+        .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
+        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -329,7 +346,11 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
         Grab::Corner(left, top) => {
             let (mut dx, mut dy) = (if left { -d.x } else { d.x }, if top { -d.y } else { d.y });
             if keep_aspect && r.width() > 0.0 && r.height() > 0.0 {
-                let k = ((r.width() + dx) / r.width()).max((r.height() + dy) / r.height()).max(0.05);
+                // Use the axis with the larger relative pointer change so shrinking along one axis
+                // does not freeze when the other axis has not moved inward (#4477).
+                let (rx, ry) = (dx / r.width(), dy / r.height());
+                let delta = if rx.abs() > ry.abs() { rx } else { ry };
+                let k = (1.0 + delta).max(0.05);
                 dx = r.width() * k - r.width();
                 dy = r.height() * k - r.height();
             }
@@ -355,10 +376,11 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     if !xf.rect.contains(p) {
         return None;
     }
-    let items = on_page(added, page);
+    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let selected = view.content.selected.filter(|s| s.0 == page).and_then(|(_, si)| items.iter().find(|(i, _)| *i == si));
     if let Some((index, a)) = selected
-        && let Some((_, left, top)) = handles(screen_rect(xf, info, page, a.content.rect())).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
+        && let Some((_, left, top)) =
+            handles(screen_rect(xf, info, page, a.content.rect()).expand(1.0)).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
     {
         let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
         return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, icon));
@@ -367,17 +389,34 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     Some(Hit::new(Owner::Added { index: *index, corner: None }, Layer::Placed, egui::CursorIcon::Move))
 }
 
-/// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
-/// used the input.
-pub(crate) fn page_input(
-    cx: PageToolContext<'_>,
-    added: &[Added],
-    adding_text: bool,
-    edit_on_click: bool,
-    style: &AddedText,
-    view: &mut DocView,
-) -> bool {
+/// What added content is told on one page.
+#[derive(Clone, Copy)]
+pub(crate) struct ContentCx<'a> {
+    pub added: &'a [Added],
+    /// What the press the pages hold is to this page. With the Edit panel open, a press on added
+    /// text is its own with the tools that pick it up ([`hit`]).
+    pub press: PagePress,
+    /// Edit text's input is open: no dialog, palette, other window or other tab has it.
+    pub gate: bool,
+    /// The tool picks added content up (Select, Add text, Edit text): a drag moves it or resizes it.
+    pub picks_up: bool,
+    /// The Add text tool: a click nobody holds starts a new box where it was pressed.
+    pub adding_text: bool,
+    /// A click on added text opens it for typing (Add text, Edit text); otherwise a double-click does.
+    pub edit_on_click: bool,
+    /// The style of new text.
+    pub style: &'a AddedText,
+}
+
+/// Pointer input on one page in Edit mode, on the presses that are added content's ([`hit`]) and,
+/// with Add text, the clicks nobody holds. `true` when it used the input.
+pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
+    let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style } = ccx;
+    view.content.held = ptr.any_down;
+    if !gate {
+        return false;
+    }
     let mut consumed = false;
     let pointer = ptr.pos;
     let cv = &mut view.content;
@@ -390,11 +429,10 @@ pub(crate) fn page_input(
             let end = pointer.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
                 && sp == page
-                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
+                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
                 && (end - start).length() >= 1.0
             {
-                let keep = matches!(a.content, AddedContent::Image(_));
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, keep);
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -408,19 +446,28 @@ pub(crate) fn page_input(
         }
         return consumed;
     }
+    // Where a press nobody holds begins on this page: Add text's click starts its box there.
+    if let Some(o) = ptr.pressed().filter(|_| press != PagePress::Elsewhere) {
+        cv.pressed_at = (press == PagePress::Free).then_some((page, o));
+    }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
-    let items = on_page(added, page);
-    let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
-    let selected_rect = cv
-        .selected
-        .filter(|s| s.0 == page)
-        .and_then(|(_, si)| items.iter().find(|(i, _)| *i == si))
-        .map(|(_, a)| screen_rect(xf, info, page, a.content.rect()));
-    let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
-    if adding_text && hit.is_none() {
+    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
+    // What the press was on ([`hit`]): an item, or a corner of the selected one.
+    let owned = match press {
+        PagePress::Mine(Owner::Added { index, corner }) => Some((index, corner)),
+        _ => None,
+    };
+    // The tools that don't pick added content up have no hit on it: with the Edit panel open their
+    // clicks on added text still select it and their presses there are its, by this test at the
+    // pointer, as before.
+    let under = (!picks_up)
+        .then(|| items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, _)| *i))
+        .flatten();
+    let target = if picks_up { owned } else { under.map(|i| (i, None)) };
+    if adding_text {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
         // A new box where nothing drawn over the page holds the press.
-        if resp.clicked() && view.router.owner(page).is_none() {
+        if resp.clicked() && press == PagePress::Free {
             // Text that can't be drawn stays where it is being typed (#125).
             if cv.hold_blocked() {
                 return true;
@@ -430,7 +477,9 @@ pub(crate) fn page_input(
             let typed = cv.draft.take().and_then(|d| finish(cv, d, added));
             // The Format panel styles the new text, not the box just kept.
             (cv.selected, cv.select_added) = (None, None);
-            let at = to_display(xf, info, page, p);
+            // Where the click was pressed, as every owner acts where its press was.
+            let start = cv.pressed_at.take().filter(|(pg, _)| *pg == page).map_or(p, |(_, o)| o);
+            let at = to_display(xf, info, page, start);
             let mut style = style.clone();
             style.text.clear();
             let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
@@ -441,29 +490,31 @@ pub(crate) fn page_input(
             if typed.is_some() {
                 view.pending_edit = typed;
             }
+            return consumed;
         }
-        return consumed;
     }
-    // A drag on what the press was on ([`hit`]): a corner resizes the selected item, the item
-    // itself moves.
-    if resp.drag_started() {
+    // A drag on what the press was on: a corner resizes the selected item, the item itself moves,
+    // with the tools that pick added content up.
+    if ptr.drag_started {
         let origin = ptr.origin.unwrap_or(p);
-        match view.router.owner(page) {
-            Some(Owner::Added { corner: Some((left, top)), .. }) => {
+        match owned.filter(|_| picks_up) {
+            Some((_, Some((left, top)))) => {
                 cv.grab = Some((page, Grab::Corner(left, top), origin));
                 consumed = true;
             }
-            Some(Owner::Added { index, corner: None }) => {
+            Some((index, None)) => {
                 cv.selected = Some((page, index));
                 cv.grab = Some((page, Grab::Move, origin));
                 consumed = true;
             }
-            _ => {}
+            None => {}
         }
-        return consumed;
+        return consumed || owned.is_some();
     }
-    if (resp.double_clicked() || edit_on_click && resp.clicked() && corner.is_none())
-        && let Some((i, a)) = hit
+    // A double-click, or with `edit_on_click` a click, opens the text the press was on for typing.
+    if (resp.double_clicked() || edit_on_click && resp.clicked())
+        && let Some((i, None)) = target
+        && let Some((_, a)) = items.iter().find(|(index, _)| *index == i)
         && let AddedContent::Text(t) = &a.content
     {
         if cv.hold_blocked() {
@@ -489,17 +540,21 @@ pub(crate) fn page_input(
         consumed = true;
         return consumed;
     }
+    // A click selects the item its press was on, keeps the selected one when on a corner of it, and
+    // on anything else on this page (but the objects selected together, which take the selection
+    // themselves) leaves it unselected.
     if resp.clicked() {
-        match hit {
-            Some((i, _)) => {
+        match (target, press) {
+            (Some((i, None)), _) => {
                 cv.selected = Some((page, i));
                 consumed = true;
             }
-            None if corner.is_none() => cv.selected = None,
-            None => consumed = true,
+            (Some((_, Some(_))), _) => consumed = true,
+            (None, PagePress::Elsewhere | PagePress::Mine(Owner::Objects { .. })) => {}
+            (None, _) => cv.selected = None,
         }
     }
-    consumed || hit.is_some() && resp.is_pointer_button_down_on()
+    consumed || owned.is_some() || under.is_some() && resp.is_pointer_button_down_on()
 }
 
 /// Outlines of added items (hover and selection with handles) and the box being dragged, the
@@ -515,6 +570,9 @@ pub(crate) fn paint_page(
 ) {
     let cv = &view.content;
     for (i, a) in on_page(added, page) {
+        if matches!(a.content, AddedContent::Image(_)) {
+            continue;
+        }
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
@@ -537,13 +595,62 @@ pub(crate) fn paint_page(
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
-    if view.content.selected.is_none() || view.content.draft.is_some() || ctx.egui_wants_keyboard_input() {
+/// The image controller owns image selection; the added-content panel follows the same XObject.
+pub(crate) fn sync_image_selection(view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], added: &[Added]) {
+    let Some(selection) = view.image_selection.as_ref().filter(|selection| selection.page == page) else { return };
+    if view.content.draft.is_some() {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
-    if del && let Some((page, index)) = view.content.selected.take() {
+    let object = images
+        .get(selection.index)
+        .and_then(|image| image.object)
+        .filter(|object| images.iter().filter(|image| image.object == Some(*object)).count() == 1);
+    view.content.selected = object.and_then(|object| {
+        let mut matches = added
+            .iter()
+            .filter(|item| item.page == page)
+            .enumerate()
+            .filter(|(_, item)| matches!(&item.content, AddedContent::Image(image) if image.image == object));
+        let selected = matches.next().map(|(index, _)| (page, index));
+        if matches.next().is_none() { selected } else { None }
+    });
+    view.content.select_added = None;
+    view.content.grab = None;
+}
+
+/// Leaving the image controller cannot leave a hidden added image owning keyboard actions.
+pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
+    if view.content.draft.is_some() {
+        return;
+    }
+    let image_selected = view.content.selected.is_some_and(|(page, index)| {
+        added.iter().filter(|item| item.page == page).nth(index).is_some_and(|item| matches!(item.content, AddedContent::Image(_)))
+    });
+    if image_selected {
+        view.content.selected = None;
+        view.content.select_added = None;
+        view.content.grab = None;
+    }
+}
+
+/// Delete removes the selected item; Escape clears the selection. Not while something is over the
+/// pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
+    if image_controller_active && view.image_selection.is_some()
+        || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
+        || view.content.selected.is_none()
+        || view.content.draft.is_some()
+        || ctx.egui_wants_keyboard_input()
+    {
+        return;
+    }
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
+    let esc = keys.pressed(ctx, egui::Key::Escape);
+    // Not while a button is down: the press held would then name another item.
+    if del
+        && !view.content.held
+        && let Some((page, index)) = view.content.selected.take()
+    {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
     } else if esc {
         view.content.selected = None;
@@ -567,7 +674,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
     let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
@@ -627,7 +734,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
     // the page, so only where the document shows: text scrolled under the mode bar or a side
     // panel must leave them their pointer (#2755).
-    egui::Area::new(egui::Id::unique(("added-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("added-text", view.view_key())))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(at)
@@ -707,7 +814,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
                     || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+                cancel |= keys.pressed(ui.ctx(), egui::Key::Escape);
                 commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
@@ -849,7 +956,7 @@ impl crate::PdfCraftApp {
             Some(_) => {}
             None => {
                 let dialog = rfd::AsyncFileDialog::new()
-                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .add_filter_any_case(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                     .set_title(title);
                 let target = self.active_ids().map(|(_, id)| id);
                 self.ask_one(crate::pickers::Ask::File(dialog), target, read);
@@ -899,7 +1006,7 @@ impl crate::PdfCraftApp {
     }
 
     /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
-    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
+    pub fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
         // A newer copy wins over a whole-document copy still reading its pages.
         self.document_copy = None;
         let Some((_, id)) = self.active_ids() else { return false };
@@ -911,12 +1018,13 @@ impl crate::PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
+            self.last_copied_file = None;
             self.last_copied_image = Some((w, h, rgba));
             Ok((w, h))
         });
@@ -933,17 +1041,26 @@ impl crate::PdfCraftApp {
     }
 
     /// The picture's visible box on its page, in user space.
-    fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
+    pub(crate) fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
         let (_, id) = self.active_ids()?;
         let image = self.session.get(id)?.page_images(page).into_iter().nth(index)?;
         Some(image.visible_rect.unwrap_or(image.rect))
     }
 
     /// Cut: copy the picture, and only when that worked take it off the page (one undo step).
-    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) {
-        if self.copy_page_image(page, index) {
-            self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
+    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) -> bool {
+        let Some((view, id)) = self.active_ids() else { return false };
+        if self.session.get(id).is_some_and(|doc| !doc.allows_modification()) {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
         }
+        if !self.copy_page_image(page, index) || !self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete }) {
+            return false;
+        }
+        if let Some(view) = self.views.get_mut(view) {
+            view.image_selection = None;
+        }
+        true
     }
 
     /// Redact image: a redaction mark over the whole picture. It is applied, like any mark, from
@@ -1002,50 +1119,203 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+        let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
+        let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.select_added = Some((page, before));
+            self.views[i].content.selected = Some((page, before_added));
+            self.views[i].content.select_added = Some((page, before_added));
+            self.views[i].image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
+            self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
         }
     }
 
-    /// Whether ⌘V / Ctrl+V was let go this frame. egui-winit swallows that press (with a Paste
-    /// event only if the clipboard holds text), while a plain V press always comes through: a
-    /// release of V with no press of V since the last one is the shortcut, even when ⌘ or Ctrl
-    /// was let go first. Read every frame, dialogs or not, so a press is never missed.
-    pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
-        let mut released = false;
-        ctx.input(|inp| {
-            for e in &inp.events {
-                if let egui::Event::Key { key: egui::Key::V, pressed, .. } = e {
-                    released |= !*pressed && !self.v_pressed;
-                    self.v_pressed = *pressed;
-                }
+    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
+    pub fn can_paste_image(&self) -> bool {
+        if let Some(crate::create_ui::Clip::Image { .. }) = self.clipboard_override.as_ref() {
+            return true;
+        }
+        if self.clipboard_override.is_some() {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.system_clipboard {
+                return matches!(crate::os_clipboard::for_image_paste(), Some(crate::create_ui::Clip::Image { .. }));
             }
-        });
-        released
+        }
+        self.last_copied_image.is_some() || self.last_copied_file.is_some()
     }
 
-    /// ⌘V / Ctrl+V with a picture on the system clipboard (a screenshot, a picture copied in a
-    /// browser) places it on the current page, as Add Image does.
-    /// Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text fields for text.
-    pub(crate) fn paste_image_key(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
-        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input();
-        let Some(view) = self.views.get(i) else { return };
-        if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
-            return;
+    /// Paste the integration's delivered pixels without rereading a clipboard that may have changed.
+    pub(crate) fn paste_received_image(&mut self, page: usize, image: &egui::ColorImage) -> bool {
+        let [width, height] = image.size;
+        let pixels = width.checked_mul(height);
+        let bytes = pixels.and_then(|n| n.checked_mul(4));
+        if width == 0
+            || height == 0
+            || width > crate::create_ui::MAX_IMAGE_SIDE
+            || height > crate::create_ui::MAX_IMAGE_SIDE
+            || pixels != Some(image.pixels.len())
+            || bytes.is_none_or(|n| n > crate::create_ui::MAX_IMAGE_BYTES)
+        {
+            self.notify_error("the clipboard image is empty, malformed or exceeds size limits");
+            return false;
         }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
-            #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
+        let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
+        let delivered = crate::create_ui::Clip::Image { width, height, rgba };
+        self.paste_image_with_system(page, None, None, None, false, Some(delivered))
+    }
+
+    /// Paste an image from the clipboard onto `page`.
+    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
+        self.paste_image_internal(page, rect, None)
+    }
+
+    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
+    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
+        self.paste_image_internal(page, None, Some(at))
+    }
+
+    fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        let system = if self.clipboard_override.is_none() && self.system_clipboard { crate::os_clipboard::for_image_paste() } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let system = None;
+        self.paste_image_with_system(
+            page,
+            rect,
+            at,
+            system,
+            cfg!(not(target_arch = "wasm32")) && self.system_clipboard,
+            self.clipboard_override.clone(),
+        )
+    }
+
+    fn paste_image_with_system(
+        &mut self,
+        page: usize,
+        rect: Option<[f64; 4]>,
+        at: Option<[f64; 2]>,
+        system: Option<crate::create_ui::Clip>,
+        system_authoritative: bool,
+        clipboard: Option<crate::create_ui::Clip>,
+    ) -> bool {
+        let Some((i, id)) = self.active_ids() else {
+            return false;
         };
-        let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
-        match crate::create_ui::png_from_rgba(width, height, &rgba) {
-            Ok(png) => self.add_image("Pasted image.png".into(), png),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", tl!("Clipboard")), ("e", &e)]),
+        if let Some(doc) = self.session.get(id)
+            && !doc.allows_modification()
+        {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+
+        let image_data: Option<(String, Vec<u8>)> = match clipboard {
+            Some(crate::create_ui::Clip::Image { width, height, rgba }) => {
+                let is_same = self
+                    .last_copied_image
+                    .as_ref()
+                    .is_some_and(|(w, h, bytes)| *w as usize == width && *h as usize == height && bytes.as_slice() == rgba.as_slice());
+                if !is_same {
+                    self.last_copied_file = None;
+                    self.last_copied_image = Some((width as u32, height as u32, rgba.clone()));
+                }
+                crate::create_ui::png_from_rgba(width, height, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+            }
+            Some(crate::create_ui::Clip::Text(_)) => None,
+            None => {
+                if matches!(system, Some(crate::create_ui::Clip::Text(_))) || (system_authoritative && system.is_none()) {
+                    self.last_copied_image = None;
+                    self.last_copied_file = None;
+                    self.notify_tr("No image on clipboard to paste");
+                    return false;
+                }
+                let sys_result = match system {
+                    Some(crate::create_ui::Clip::Image { width, height, rgba }) => Some((width, height, rgba)),
+                    _ => None,
+                };
+
+                if let Some((img_width, img_height, img_bytes)) = sys_result {
+                    let is_same_as_last = self
+                        .last_copied_image
+                        .as_ref()
+                        .is_some_and(|(w, h, rgba)| *w as usize == img_width && *h as usize == img_height && rgba.as_slice() == img_bytes.as_slice());
+                    if is_same_as_last && let Some((name, bytes)) = self.last_copied_file.clone() {
+                        Some((name, bytes))
+                    } else if is_same_as_last && let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                        crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+                    } else {
+                        // System clipboard has a newer / external image!
+                        self.last_copied_file = None;
+                        self.last_copied_image = Some((img_width as u32, img_height as u32, img_bytes.clone()));
+                        crate::create_ui::png_from_rgba(img_width, img_height, &img_bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
+                    }
+                } else if let Some((name, bytes)) = self.last_copied_file.clone() {
+                    Some((name, bytes))
+                } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                    crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+                } else {
+                    None
+                }
+            }
+        };
+
+        let Some((name, bytes)) = image_data else {
+            self.notify_tr("No image on clipboard to paste");
+            return false;
+        };
+
+        let target_rect = if let Some(r) = rect {
+            Some(r)
+        } else if let Some(at) = at {
+            let (raw_w, raw_h) = self
+                .last_copied_image
+                .as_ref()
+                .map(|(w, h, _)| (*w as f64, *h as f64))
+                .or_else(|| {
+                    (bytes.len() <= 64_000_000 * 4).then(|| pdfcraft_engine::image_dimensions(&bytes)).flatten().map(|(w, h)| (w as f64, h as f64))
+                })
+                .unwrap_or((100.0, 100.0));
+            let (pw, ph) =
+                self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+            let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
+            let (w, h) = (raw_w * k, raw_h * k);
+            let Some(info) = self.session.get(id).and_then(|doc| doc.info.pages.get(page)) else { return false };
+            let view = info.user_to_view(at[0] as f32, at[1] as f32).map(f64::from);
+            // Added content uses the page's bottom-left display origin; rendered view space is y-down.
+            let center = [view[0], f64::from(info.height) - view[1]];
+            Some([center[0] - w * 0.5, center[1] - h * 0.5, center[0] + w * 0.5, center[1] + h * 0.5])
+        } else {
+            None
+        };
+
+        let added_before: std::collections::HashSet<_> =
+            self.session.get(id).into_iter().flat_map(|doc| doc.added()).filter(|item| item.page == page).map(|item| item.obj).collect();
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+            let selection = self.session.get(id).and_then(|doc| {
+                let mut inserted =
+                    doc.added().iter().filter(|item| item.page == page).enumerate().filter(|(_, item)| !added_before.contains(&item.obj));
+                let (added_idx, item) = inserted.next()?;
+                if inserted.next().is_some() {
+                    return None;
+                }
+                let AddedContent::Image(image) = &item.content else { return None };
+                let pasted_idx = doc.page_images(page).iter().rposition(|placed| placed.object == Some(image.image))?;
+                Some((added_idx, pasted_idx))
+            });
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = page;
+                v.content.selected = selection.map(|(added, _)| (page, added));
+                v.content.select_added = v.content.selected;
+                v.image_selection = selection.map(|(_, image)| crate::edit_text_ui::ImageSelection::at(page, image));
+            }
+            self.quick_tool = crate::QuickTool::EditText;
+            self.notify_tr("Image pasted");
+            true
+        } else {
+            false
         }
     }
 }
@@ -1140,6 +1410,89 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    #[test]
+    fn delivered_pixels_are_bounded_before_cache_or_document_changes() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
+        let before = app.last_copied_image.clone();
+        for size in [[0, 1], [usize::MAX, 2], [crate::create_ui::MAX_IMAGE_SIDE + 1, 1], [2, 2]] {
+            let mut image = egui::ColorImage::filled([1, 1], egui::Color32::RED);
+            image.size = size;
+            assert!(!app.paste_received_image(0, &image));
+            assert_eq!(app.last_copied_image, before);
+        }
+        assert!(app.session.get(app.views[0].id).unwrap().page_images(0).is_empty());
+    }
+
+    #[test]
+    fn delivered_pixels_keep_unpremultiplied_alpha() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 0, 0, 128]);
+        assert!(app.paste_received_image(0, &image));
+        assert_eq!(app.last_copied_image.unwrap().2, vec![255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn review_web_can_paste_an_internal_image_without_a_native_clipboard() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.system_clipboard = true;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        assert!(app.paste_image_with_system(0, None, None, None, false, None));
+        let id = app.active_ids().unwrap().1;
+        assert_eq!(app.session.get(id).unwrap().page_images(0).len(), 1);
+    }
+
+    #[test]
+    fn review_system_without_supported_formats_does_not_paste_a_cached_image() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.system_clipboard = true;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        assert!(!app.paste_image_with_system(0, None, None, None, true, None));
+    }
+
+    #[test]
+    fn review_cut_checks_modify_permission_before_writing_the_clipboard() {
+        let mut app = crate::PdfCraftApp::new();
+        app.system_clipboard = false;
+        app.create_blank();
+        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
+        app.add_image("test.png".into(), png);
+        app.apply_edit(Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            copy: true,
+            ..Default::default()
+        }));
+        let id = app.active_ids().unwrap().1;
+        let bytes = app.session.save_bytes(id).unwrap();
+        let mut locked = crate::PdfCraftApp::new();
+        locked.system_clipboard = false;
+        locked.open_bytes("locked.pdf", None, bytes.as_ref().clone()).unwrap();
+        assert!(!locked.session.get(locked.active_ids().unwrap().1).unwrap().allows_modification());
+        locked.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
+        let before = locked.last_copied_image.clone();
+        assert!(!locked.cut_page_image(0, 0));
+        assert_eq!(locked.last_copied_image, before);
+    }
+
+    #[test]
+    fn system_text_prevents_context_menu_paste_of_a_cached_image() {
+        let mut app = crate::PdfCraftApp::new();
+        app.system_clipboard = false;
+        app.create_blank();
+        let id = app.active_ids().unwrap().1;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        let undo = app.session.get(id).unwrap().can_undo().map(str::to_owned);
+        assert!(!app.paste_image_with_system(0, None, Some([20.0, 20.0]), Some(crate::create_ui::Clip::Text("new text".into())), true, None));
+        assert_eq!(app.session.get(id).unwrap().can_undo().map(str::to_owned), undo);
+        assert!(app.session.get(id).unwrap().page_images(0).is_empty());
+        assert!(app.last_copied_image.is_none());
+    }
 
     /// The image a flip button leaves behind, as the panel returns it.
     fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {
@@ -1251,5 +1604,15 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    /// #4477: dragging a corner handle predominantly inward on one axis must still shrink an image
+    /// proportionally instead of freezing because the other axis did not shrink.
+    #[test]
+    fn corner_resize_shrinks_image_when_dragged_inward_along_one_axis() {
+        let r = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 150.0));
+        let shrunk = dragged(r, Grab::Corner(false, false), egui::vec2(-40.0, 2.0), true);
+        assert!((shrunk.width() - 60.0).abs() < 1e-3, "width shrinks by 40%: {shrunk:?}");
+        assert!((shrunk.height() - 30.0).abs() < 1e-3, "height shrinks proportionally by 40%: {shrunk:?}");
     }
 }

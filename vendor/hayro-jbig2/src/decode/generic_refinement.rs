@@ -10,7 +10,7 @@ use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
 use crate::decode::generic::ContextGatherer;
-use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
+use crate::error::{ParseError, RegionError, Result, bail};
 use crate::reader::Reader;
 
 /// Generic refinement region decoding procedure (6.3).
@@ -46,27 +46,18 @@ pub(crate) fn decode_into(
 
     // Validate that the region fits within the reference bitmap.
     // When referring to another segment, dimensions must match exactly (7.4.7.5).
-    // When using the page bitmap as reference, the region must fit within the page.
+    // PdfCraft patch: a refinement of the page refines the page's area of its own size (7.4.7.4,
+    // `Bitmap::area`), which it always fits.
     if header.region_info.width > reference.width || header.region_info.height > reference.height {
         bail!(RegionError::InvalidDimension);
     }
 
-    let reference_dx = i32::try_from(reference.x_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.x_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
-    let reference_dy = i32::try_from(reference.y_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.y_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
+    // PdfCraft patch: "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35). The reference is another
+    // region, which a refinement refines where it is (their locations should be equal, 7.4.7.5),
+    // or the page restricted to the refinement's area (7.4.7.4, `Bitmap::area`). Offsetting it by
+    // the difference of the locations refused one past `i32::MAX` as an overflow, and read the
+    // page around a refinement of it.
+    let (reference_dx, reference_dy) = (0, 0);
 
     let mut decoder = ArithmeticDecoder::new(data);
     let num_context_bits = header.template.context_bits();
@@ -179,10 +170,12 @@ impl<'a> RefinementContextGatherer<'a> {
 
     pub(crate) fn start_row(&mut self, region: &Bitmap, reference: &Bitmap, y: u32) {
         self.reg_y = y;
-        let ref_y = y as i32 - self.reference_dy;
+        // The offsets can be anywhere an `i32` reaches, so coordinates in the reference wrap here and
+        // below. Wrapped, they are off the reference, whose pixels there read as 0.
+        let ref_y = (y as i32).wrapping_sub(self.reference_dy);
         // This will on purpose wrap to a very large `u32` for negative values, such that
         // they resolve to 0 in `ContextGatherer::load_word`.
-        let ref_x0 = (-self.reference_dx) as u32;
+        let ref_x0 = self.reference_dx.wrapping_neg() as u32;
 
         self.reg_cur_x = 0;
         self.reg_m1 = if y >= 1 {
@@ -192,10 +185,24 @@ impl<'a> RefinementContextGatherer<'a> {
         };
         self.reg_cur = 0;
 
-        self.ref_cur_x = 0;
-        self.ref_m1 = ContextGatherer::load_word(reference, (ref_y - 1) as u32, 0);
-        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, 0);
-        self.ref_p1 = ContextGatherer::load_word(reference, (ref_y + 1) as u32, 0);
+        // PdfCraft patch: the buffers start a column left of the reference column the row starts
+        // at, as `maybe_reload_buffers` would load them, or at column 0 where that is left of the
+        // reference. The row's first context takes in that column and the one left of it, which
+        // from column 32 on lay outside a word loaded from column 0 and read as 0: with the
+        // reference offset 32 left of the region its first column, and from 33 both (GRREFERENCEDX
+        // below −31, which a refined text instance has from a narrower bitmap or an RDX below −31,
+        // and a refined symbol from such an RDX). The region decoded to other pixels than were
+        // coded, or failed.
+        self.ref_cur_x = self
+            .reference_dx
+            .checked_neg()
+            .and_then(|column| u32::try_from(column).ok())
+            .map_or(0, |column| column.saturating_sub(1));
+        self.ref_m1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, self.ref_cur_x);
+        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, self.ref_cur_x);
+        self.ref_p1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, self.ref_cur_x);
 
         self.ctx = match self.template {
             RefinementTemplate::Template1 => {
@@ -257,29 +264,31 @@ impl<'a> RefinementContextGatherer<'a> {
             self.reg_cur = ContextGatherer::load_word(region, self.reg_y, new_start);
         }
 
-        let ref_x_signed = x as i32 - self.reference_dx;
-        if ref_x_signed < 0 {
-            self.ref_cur_x = 0;
-            self.ref_m1 = 0;
-            self.ref_cur = 0;
-            self.ref_p1 = 0;
-        } else {
-            let ref_x = ref_x_signed as u32;
-
-            if ref_x + 1 >= self.ref_cur_x + WORD_BITS || ref_x < self.ref_cur_x {
-                let new_start = ref_x.saturating_sub(1);
-                let ref_y = self.reg_y as i32 - self.reference_dy;
-                self.ref_cur_x = new_start;
-                self.ref_m1 = ContextGatherer::load_word(reference, (ref_y - 1) as u32, new_start);
-                self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, new_start);
-                self.ref_p1 = ContextGatherer::load_word(reference, (ref_y + 1) as u32, new_start);
-            }
+        // PdfCraft patch: left of the reference the buffers keep what `start_row` loaded, its words
+        // from column 0. The context takes in the reference a column to the right of the current
+        // one (Figures 12 and 13), so at column −1 it reads column 0, and from 0 on the buffers are
+        // the reference's own. They were zeroed here and, at column 0, not loaded again: with the
+        // reference offset right of the region (GRREFERENCEDX above 0, which a refined text
+        // instance or symbol has from a wider bitmap or an RDX above 0), its first 32 columns read
+        // as 0, and the region decoded to other pixels than were coded, or as garbage that failed.
+        let ref_x_signed = (x as i32).wrapping_sub(self.reference_dx);
+        if let Ok(ref_x) = u32::try_from(ref_x_signed)
+            && (ref_x + 1 >= self.ref_cur_x + WORD_BITS || ref_x < self.ref_cur_x)
+        {
+            let new_start = ref_x.saturating_sub(1);
+            let ref_y = (self.reg_y as i32).wrapping_sub(self.reference_dy);
+            self.ref_cur_x = new_start;
+            self.ref_m1 =
+                ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, new_start);
+            self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, new_start);
+            self.ref_p1 =
+                ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, new_start);
         }
     }
 
     #[inline(always)]
     pub(crate) fn tpgr_all_same(&self, x: u32) -> bool {
-        let ref_x = (x as i32 - self.reference_dx) as u32;
+        let ref_x = (x as i32).wrapping_sub(self.reference_dx) as u32;
         let rbx = ref_x.wrapping_sub(self.ref_cur_x);
 
         #[inline(always)]
@@ -310,7 +319,7 @@ impl<'a> RefinementContextGatherer<'a> {
 
     #[inline(always)]
     pub(crate) fn ref_center_pixel(&self, x: u32) -> u8 {
-        let ref_x = (x as i32 - self.reference_dx) as u32;
+        let ref_x = (x as i32).wrapping_sub(self.reference_dx) as u32;
         let rbx = ref_x.wrapping_sub(self.ref_cur_x);
 
         ContextGatherer::get_buf_pixel(self.ref_cur, rbx) as u8
@@ -329,7 +338,7 @@ impl<'a> RefinementContextGatherer<'a> {
     #[inline(always)]
     fn gather_template0_default(&mut self, _region: &Bitmap, _reference: &Bitmap, x: u32) -> u16 {
         let bx = x - self.reg_cur_x;
-        let ref_x = (x as i32 - self.reference_dx) as u32;
+        let ref_x = (x as i32).wrapping_sub(self.reference_dx) as u32;
         let rbx = ref_x.wrapping_sub(self.ref_cur_x);
 
         let new_pixels = (ContextGatherer::get_buf_pixel(self.reg_m1, bx + 1) << 10)
@@ -345,12 +354,12 @@ impl<'a> RefinementContextGatherer<'a> {
     #[inline(always)]
     fn gather_template0_custom(&mut self, region: &Bitmap, reference: &Bitmap, x: u32) -> u16 {
         let bx = x - self.reg_cur_x;
-        let ref_x_i = x as i32 - self.reference_dx;
+        let ref_x_i = (x as i32).wrapping_sub(self.reference_dx);
         let rbx = ref_x_i as u32 - self.ref_cur_x;
 
         let xi = x as i32;
         let yi = self.reg_y as i32;
-        let ref_y = yi - self.reference_dy;
+        let ref_y = yi.wrapping_sub(self.reference_dy);
         let at1 = self.at_pixels[0];
         let at2 = self.at_pixels[1];
 
@@ -360,8 +369,8 @@ impl<'a> RefinementContextGatherer<'a> {
             | (ContextGatherer::get_buf_pixel(self.reg_m1, bx + 1) << 10)
             | (ContextGatherer::get_buf_pixel(self.reg_cur, bx.wrapping_sub(1)) << 9)
             | ((reference.get_pixel(
-                (ref_x_i + at2.x as i32) as u32,
-                (ref_y + at2.y as i32) as u32,
+                ref_x_i.wrapping_add(at2.x as i32) as u32,
+                ref_y.wrapping_add(at2.y as i32) as u32,
             ) as u16)
                 << 8)
             | (ContextGatherer::get_buf_pixel(self.ref_m1, rbx.wrapping_add(1)) << 6)
@@ -375,7 +384,7 @@ impl<'a> RefinementContextGatherer<'a> {
     #[inline(always)]
     fn gather_template1(&mut self, _region: &Bitmap, _reference: &Bitmap, x: u32) -> u16 {
         let bx = x - self.reg_cur_x;
-        let ref_x = (x as i32 - self.reference_dx) as u32;
+        let ref_x = (x as i32).wrapping_sub(self.reference_dx) as u32;
         let rbx = ref_x.wrapping_sub(self.ref_cur_x);
 
         let new_pixels = (ContextGatherer::get_buf_pixel(self.reg_m1, bx + 1) << 7)
