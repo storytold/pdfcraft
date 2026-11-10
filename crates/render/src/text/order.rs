@@ -911,7 +911,7 @@ mod tests {
         // overlapping "H" by 2.12 > RUN_COLLISION * 7.0 = 1.75).
         let mut formula = Vec::new();
         sized_run(&mut formula, "CH", 40.0, 100.0, 10.0);
-        sized_run(&mut formula, "O equals water", 54.5, 100.0, 10.0);
+        sized_run(&mut formula, "O equals water", 53.5, 100.0, 10.0);
         sized_run(&mut formula, "2", 49.0, 102.0, 7.0);
         let got_formula = layout(formula).plain_text();
         if got_formula != "CH2O equals water" {
