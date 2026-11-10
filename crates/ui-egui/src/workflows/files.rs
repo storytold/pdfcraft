@@ -445,12 +445,20 @@ impl PdfCraftApp {
         if files.is_empty() {
             return;
         }
-        // Combine files lists when each file was last modified.
+        // Combine files lists when each file was last modified, and sorts by its folder.
         if purpose == FilePurpose::Combine {
             let incoming = files
                 .into_iter()
                 .zip(modified)
-                .map(|((name, bytes), modified)| crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None })
+                .zip(paths)
+                .map(|(((name, bytes), modified), path)| crate::combine_ui::Incoming {
+                    name,
+                    bytes: Arc::new(bytes),
+                    modified,
+                    folder: crate::combine_ui::real_folder(path),
+                    note: None,
+                    open_doc: None,
+                })
                 .collect();
             self.stage_combine_with(incoming);
         } else {
@@ -472,15 +480,19 @@ impl PdfCraftApp {
                 continue;
             }
             let name = dropped_name(&f);
-            // A file on disk is read from there, with when it was last modified; a drop that
-            // carries only bytes (no path) as it is.
-            let (read, modified) = if path.is_absolute() {
-                (std::fs::read(path).map_err(|e| e.to_string()), std::fs::metadata(path).and_then(|m| m.modified()).ok())
+            // A file on disk is read from there, with when it was last modified and the folder it
+            // is in; a drop that carries only bytes (no path) as it is.
+            let (read, modified, folder) = if path.is_absolute() {
+                (
+                    std::fs::read(path).map_err(|e| e.to_string()),
+                    std::fs::metadata(path).and_then(|m| m.modified()).ok(),
+                    crate::combine_ui::real_folder(path),
+                )
             } else {
-                (f.bytes(), None)
+                (f.bytes(), None, None)
             };
             match read {
-                Ok(bytes) => files.push(crate::combine_ui::Incoming { modified, ..crate::combine_ui::Incoming::new(name, bytes) }),
+                Ok(bytes) => files.push(crate::combine_ui::Incoming { modified, folder, ..crate::combine_ui::Incoming::new(name, bytes) }),
                 Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
             }
         }

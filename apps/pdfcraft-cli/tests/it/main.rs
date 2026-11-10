@@ -5,6 +5,7 @@ mod automation_roots;
 mod batch;
 mod batch_exit;
 mod check;
+mod combine;
 mod edit;
 mod extract;
 mod help;

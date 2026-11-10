@@ -1247,6 +1247,26 @@ fn files_dropped_on_the_combine_tab_join_the_end_of_its_list_in_the_order_droppe
     assert_eq!(combine_names(&h), ["first.pdf"]);
 }
 
+/// Sort ▸ Folder goes by the folder each file came from: a file dropped from disk has one, a
+/// drop that carries only bytes has none.
+#[test]
+fn a_file_dropped_from_disk_on_the_combine_tab_keeps_its_folder() {
+    let mut h = combine_tab_with_one_file();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("on-disk.pdf"), FIXTURE).unwrap();
+    let real = dir.canonicalize().unwrap();
+    let on_disk: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: dir.join("on-disk.pdf"), bytes: Vec::new() });
+    let in_memory: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "in-memory.pdf".into(), bytes: FIXTURE.to_vec() });
+    h.input_mut().dropped_files.extend([on_disk, in_memory]);
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(combine_names(&h), ["first.pdf", "on-disk.pdf", "in-memory.pdf"]);
+    let folders: Vec<_> = h.state().combine_draft.iter().map(|f| f.folder.clone()).collect();
+    assert_eq!(folders, [None, Some(real), None]);
+}
+
 #[test]
 fn a_file_combine_does_not_take_is_left_out_of_a_drop_and_named() {
     let mut h = combine_tab_with_one_file();

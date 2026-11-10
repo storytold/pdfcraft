@@ -89,6 +89,7 @@ pub use pdfcraft_organize::{
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::Standard;
 pub use pdfcraft_organize::check_custom_key;
+pub use pdfcraft_organize::order;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::{Algorithm, civil_from_days};
@@ -166,7 +167,7 @@ use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
+pub use sources::{CombineSource, Combined, SortedSource, combine_order, combine_source_check, in_real_folder, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{

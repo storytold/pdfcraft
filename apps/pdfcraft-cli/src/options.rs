@@ -81,7 +81,11 @@ pub(crate) const AUDIT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password
 pub(crate) const TEXT_OPTIONS: &[OptionSpec] =
     &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
 
-pub(crate) const COMBINE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--out", takes_value: true }];
+pub(crate) const COMBINE_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--sort", takes_value: true },
+    OptionSpec { name: "--descending", takes_value: false },
+];
 
 pub(crate) const EXTRACT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--out", takes_value: true },

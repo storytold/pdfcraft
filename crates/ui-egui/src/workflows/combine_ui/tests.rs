@@ -211,6 +211,36 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
 }
 
+#[test]
+fn a_folder_is_shown_without_the_prefix_windows_resolves_it_to() {
+    assert_eq!(unprefixed(r"\\?\C:\Users\me\scans"), r"C:\Users\me\scans");
+    assert_eq!(unprefixed(r"\\?\UNC\server\share\scans"), r"\\server\share\scans");
+    // A path with no such prefix, or with one that names no drive or share, stays as it is.
+    for path in [r"C:\Users\me", r"\\server\share", "/home/me/scans", r"\\?\Volume{1b2c}\scans", r"\\?\", ""] {
+        assert_eq!(unprefixed(path), path);
+    }
+}
+
+#[test]
+fn the_web_offers_no_sort_on_what_a_browser_does_not_give() {
+    assert_eq!(SortBy::offered(false).collect::<Vec<_>>(), SortBy::MENU);
+    let name_pages_size = [SortKey::Name, SortKey::Pages, SortKey::Size].map(SortBy::Column);
+    assert_eq!(SortBy::offered(true).collect::<Vec<_>>(), name_pages_size);
+}
+
+#[test]
+fn the_sort_menu_leaves_warnings_to_the_column_heading() {
+    for web in [false, true] {
+        assert!(SortBy::offered(web).all(|by| by != SortBy::Column(SortKey::Warnings)));
+    }
+}
+
+#[test]
+fn the_web_does_not_invite_dropping_a_folder() {
+    assert!(view::drop_hint(false).contains("folders"));
+    assert!(!view::drop_hint(true).contains("folder"));
+}
+
 /// #2503 review: a PDF waiting for its password when Combine arrives opens behind the Combine
 /// files tab once unlocked, like one still opening; a prompt that a chosen tool waits on keeps
 /// its focus, since the tool runs on the document in front.
