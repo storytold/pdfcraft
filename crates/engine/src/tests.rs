@@ -5224,6 +5224,26 @@ fn comment_summary_shows_each_commented_page_beside_its_comments() {
     assert_eq!(SummaryLayout::parse("side_by_side"), None);
 }
 
+/// The page layouts list each page's comments together, in the chosen order within the page.
+#[test]
+fn page_layout_summaries_sort_within_each_page() {
+    let (mut s, id) = session_with(3);
+    for (page, author, y) in [(2, "Zed", 200.0), (0, "Mia", 80.0), (2, "Ann", 80.0)] {
+        let Edit::AddAnnotation(mut a) = rect_comment(page, [20.0, y, 40.0, y + 20.0]) else { panic!() };
+        a.author = author.into();
+        s.apply(id, Edit::AddAnnotation(a)).unwrap();
+    }
+    let all = &s.get(id).unwrap().info.annotations;
+    let order = |sort| summary_comments(all, sort).iter().map(|c| (c.page, c.number, c.lines[0].1.clone())).collect::<Vec<_>>();
+    let by_author = order(SummarySort::Author);
+    assert_eq!(by_author.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 2), (2, 1)], "{by_author:?}");
+    assert!(by_author[1].2.contains("Ann") && by_author[2].2.contains("Zed"), "{by_author:?}");
+    // By page: top to bottom on each page, numbered so.
+    let by_page = order(SummarySort::Page);
+    assert_eq!(by_page.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 1), (2, 2)], "{by_page:?}");
+    assert!(by_page[1].2.contains("Zed"), "{by_page:?}");
+}
+
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
 /// page `fitz-A0`, which used to file every reply under page 1's comment. An `/IRT` to the
 /// annotation itself, or to a link (never listed as a comment), leaves it a comment of its own. Both readers (inspect on open, and the

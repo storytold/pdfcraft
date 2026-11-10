@@ -4,7 +4,7 @@
 //! number) tying each box to the comment's place on the page. A page whose comments don't fit
 //! beside it continues on another sheet showing the same page again.
 
-use super::imposition::page_form;
+use super::imposition::{page_form, prints};
 use super::settings::Content;
 use super::{Dict, Document, Matrix, ObjRef, Object, PrintError, Stream};
 use pdfcraft_cos::PdfString;
@@ -18,6 +18,9 @@ pub struct SummaryComment {
     pub page: usize,
     /// Its number on the page, drawn on the page by [`Connect::Numbers`].
     pub number: usize,
+    /// Its position in the page's `/Annots`, when known: a comment that doesn't print (hidden,
+    /// or without the Print flag) isn't drawn on the page, so nothing points at it.
+    pub index: Option<usize>,
     /// Where it is on its page, in user space (`[x0 y0 x1 y1]`).
     pub rect: [f64; 4],
     /// Its colour (`/C`), which its box and connector take; grey without one.
@@ -63,16 +66,22 @@ const GREY: [f64; 3] = [0.45, 0.45, 0.45];
 /// on pages `src` doesn't have are left out. With no comments the summary is one sheet saying so.
 ///
 /// The pages are drawn as they print ([`Content::DocumentAndMarkups`]): with the comments that
-/// have the Print flag, without pop-ups and links.
+/// have the Print flag, without pop-ups and links. A comment that doesn't print still gets its
+/// box, without a connector or number pointing at a place where nothing is drawn.
 pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryComment], connect: Connect) -> Result<Document, PrintError> {
     let pages = pdfcraft_model::pages(src);
     let mut doc = src.clone();
     if doc.trailer().contains(b"Encrypt") {
         doc.remove_encryption();
     }
+    // A new file, not a version of the source: its own identifier.
+    doc.require_full_save_with_new_id();
+    let shown_title = drawn(title).replace(['\n', '\r'], " ");
     let empty = "This document has no comments.";
-    let mut all_text: Vec<&str> = vec![title, empty, "Page", "(continued)"];
-    all_text.extend(comments.iter().flat_map(|c| c.lines.iter().map(|(_, t)| t.as_str())));
+    // Each comment's text as it is laid out and drawn.
+    let texts: Vec<Vec<(usize, String)>> = comments.iter().map(|c| c.lines.iter().map(|(level, t)| (*level, drawn(t))).collect()).collect();
+    let mut all_text: Vec<&str> = vec![&shown_title, empty, "Page", "(continued)", ELLIPSIS];
+    all_text.extend(texts.iter().flatten().map(|(_, t)| t.as_str()));
     let font = SummaryFont::choose(&mut doc, &all_text)?;
 
     let col_x = MARGIN + (SHEET.0 - 2.0 * MARGIN - GAP) / 2.0 + GAP;
@@ -81,11 +90,11 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
     let mut promoted = std::collections::HashMap::new();
     let mut forms: std::collections::HashMap<usize, (ObjRef, Matrix, [f64; 4])> = std::collections::HashMap::new();
     let mut sheets: Vec<Sheet> = Vec::new();
-    let mut groups: Vec<(usize, Vec<&SummaryComment>)> = Vec::new();
-    for c in comments.iter().filter(|c| c.page < pages.len()) {
+    let mut groups: Vec<(usize, Vec<Listed<'_>>)> = Vec::new();
+    for (c, lines) in comments.iter().zip(&texts).filter(|(c, _)| c.page < pages.len()) {
         match groups.last_mut() {
-            Some((page, list)) if *page == c.page => list.push(c),
-            _ => groups.push((c.page, vec![c])),
+            Some((page, list)) if *page == c.page => list.push((c, lines)),
+            _ => groups.push((c.page, vec![(c, lines)])),
         }
     }
     for (page, list) in groups {
@@ -98,17 +107,20 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
                 p
             }
         };
+        let annots = pages.get(page).and_then(|p| p.dict.get(b"Annots")).and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
         let mut sheet = Sheet::new(page, placed, false);
         let mut y = top;
-        for c in list {
+        for (c, lines) in list {
+            let printed = c.index.is_none_or(|i| {
+                annots.get(i).and_then(|a| doc.resolve(a).as_dict().map(|d| prints(&doc, d, Content::DocumentAndMarkups))).unwrap_or(false)
+            });
             let color = c.color.filter(|c| c.iter().all(|v| v.is_finite())).map_or(GREY, |c| c.map(|v| v.clamp(0.0, 1.0)));
             let mut rows: Vec<(usize, String)> = Vec::new();
-            for (level, text) in &c.lines {
+            for (level, text) in lines {
                 // Deep reply chains stop indenting at a quarter of the column.
                 let indent = (*level as f64 * INDENT).min(col_w / 4.0);
                 let width = (col_w - 2.0 * PAD - indent).max(FONT);
-                let text = text.replace('\t', "    ");
-                for row in pdfcraft_fonts::wrap_with(&text, FONT, width, |s, size| font.width(s, size)) {
+                for row in pdfcraft_fonts::wrap_with(text, FONT, width, |s, size| font.width(s, size)) {
                     rows.push((*level, row));
                 }
             }
@@ -143,7 +155,7 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
                 }
                 let (now, later) = rest.split_at(take);
                 let height = now.len() as f64 * LEADING + 2.0 * PAD;
-                sheet.boxes.push(SummaryBox { top: y, height, rows: now.to_vec(), color, anchor: first.then_some((c.rect, c.number)) });
+                sheet.boxes.push(SummaryBox { top: y, height, rows: now.to_vec(), color, anchor: (first && printed).then_some((c.rect, c.number)) });
                 y -= height + BOX_GAP;
                 first = false;
                 rest = later;
@@ -176,7 +188,8 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
     };
     if sheets.is_empty() {
         let mut c: Vec<u8> = Vec::new();
-        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, SHEET.1 - MARGIN - TITLE_FONT, title)?;
+        let fitted = fit(&font, &shown_title, TITLE_FONT, SHEET.0 - 2.0 * MARGIN);
+        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, SHEET.1 - MARGIN - TITLE_FONT, &fitted)?;
         text(&mut c, &font, &[0.0; 3], FONT + 1.5, MARGIN, top - LEADING * 2.0, empty)?;
         kids.push(Object::Ref(draw_sheet(&mut doc, c, Dict::new())));
     }
@@ -186,9 +199,11 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
         let (form, m, frame) = sheet.placed;
         // Header: the title on the left, the page on the right.
         let base = SHEET.1 - MARGIN - TITLE_FONT;
-        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, base, title)?;
         let label = if sheet.continued { format!("Page {} (continued)", sheet.page + 1) } else { format!("Page {}", sheet.page + 1) };
         let label_x = SHEET.0 - MARGIN - font.width(&label, TITLE_FONT);
+        // A long document name is cut short before the page label rather than run under it.
+        let fitted = fit(&font, &shown_title, TITLE_FONT, label_x - MARGIN - GAP);
+        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, base, &fitted)?;
         text(&mut c, &font, &[0.0; 3], TITLE_FONT, label_x, base, &label)?;
         let _ = writeln!(
             c,
@@ -255,7 +270,9 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
                     // A white ring keeps the number apart from a comment of the same colour.
                     let _ = writeln!(c, "q {} {} {} rg 1 G 1.2 w {} b Q", n(r), n(g), n(bl), circle(spot.0, spot.1, radius));
                     let x = spot.0 - font.width(&label, size) / 2.0;
-                    text(&mut c, &font, &[1.0; 3], size, x, spot.1 - size * 0.35, &label)?;
+                    // Black on a light colour (a yellow note), white on a dark one.
+                    let ink = if 0.299 * r + 0.587 * g + 0.114 * bl > 0.6 { [0.0; 3] } else { [1.0; 3] };
+                    text(&mut c, &font, &ink, size, x, spot.1 - size * 0.35, &label)?;
                 }
             }
         }
@@ -285,6 +302,9 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
     doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
     Ok(doc)
 }
+
+/// A comment and its text as drawn ([`drawn`]).
+type Listed<'a> = (&'a SummaryComment, &'a [(usize, String)]);
 
 /// One sheet: a page and the comment boxes beside it.
 struct Sheet {
@@ -344,6 +364,35 @@ fn spot_on_page(m: &Matrix, rect: [f64; 4], frame: [f64; 4], connect: Connect) -
         Connect::Numbers => b[3],
     };
     Some((b[2].clamp(frame[0], frame[2]), y.clamp(frame[1], frame[3])))
+}
+
+/// What is drawn for `s`: tabs as four spaces, a soft hyphen as a hyphen (as Helvetica draws
+/// it; the bundled face has no glyph for it). Line breaks stay: they lay the text out.
+fn drawn(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\t', "    ").replace('\u{ad}', "-")
+}
+
+const ELLIPSIS: &str = "\u{2026}";
+
+/// `s`, cut short with an ellipsis to fit `width` at `size`.
+fn fit(font: &SummaryFont, s: &str, size: f64, width: f64) -> String {
+    if font.width(s, size) <= width {
+        return s.to_string();
+    }
+    let room = width - font.width(ELLIPSIS, size);
+    let mut out = String::new();
+    let mut used = 0.0;
+    let mut buf = [0u8; 4];
+    for ch in s.chars() {
+        let w = font.width(ch.encode_utf8(&mut buf), size);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        out.push(ch);
+    }
+    out.push_str(ELLIPSIS);
+    out
 }
 
 /// A circle of radius `r` around `(x, y)` as a path (four Bézier quarters).
@@ -408,11 +457,14 @@ struct SummaryFont {
 }
 
 impl SummaryFont {
+    /// The font for `text` ([`drawn`] already): line breaks lay it out and are not drawn, so
+    /// each line is checked on its own.
     fn choose(doc: &mut Document, text: &[&str]) -> Result<Self, PrintError> {
-        let helvetica_draws = text.iter().all(|t| pdfcraft_fonts::first_undrawable(t).is_none());
+        let lines = || text.iter().flat_map(|t| t.split(['\n', '\r']));
+        let helvetica_draws = lines().all(|l| pdfcraft_fonts::first_undrawable(l).is_none());
         if !helvetica_draws
             && let Some(face) = pdfcraft_fonts::document_latin_fonts(false).into_iter().next()
-            && text.iter().all(|t| !t.chars().any(char::is_control) && pdfcraft_fonts::embedding::covers(face.bytes, t))
+            && lines().all(|l| !l.chars().any(char::is_control) && pdfcraft_fonts::embedding::covers(face.bytes, l))
         {
             let mut fonts = Dict::new();
             let name = pdfcraft_fonts::embedding::embed(doc, &mut fonts, face.bytes, face.family).map_err(PrintError::Invalid)?;

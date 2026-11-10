@@ -265,6 +265,7 @@ pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort) 
             pdfcraft_print::SummaryComment {
                 page: a.page,
                 number: item.number,
+                index: Some(a.index),
                 rect: a.rect.map(f64::from),
                 color: a.color.map(|c| c.map(f64::from)),
                 lines,

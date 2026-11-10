@@ -14,6 +14,7 @@ fn comment(page: usize, number: usize, lines: &[&str]) -> SummaryComment {
     SummaryComment {
         page,
         number,
+        index: None,
         rect: [10.0, 10.0, 50.0, 50.0],
         color: Some([1.0, 0.0, 0.0]),
         lines: lines.iter().enumerate().map(|(i, l)| (usize::from(i > 1), l.to_string())).collect(),
@@ -98,7 +99,33 @@ fn characters_helvetica_lacks_are_kept() {
     // Cyrillic: the bundled face draws it.
     let doc = summary_with_pages(&src, "S", &[comment(0, 1, &["h", "Проверьте"])], Connect::Lines).unwrap();
     assert!(!sheets(&doc)[0].contains("[U+"));
+    // Line breaks, tabs and soft hyphens lay the text out or are drawn as hyphens: they don't
+    // send it to Helvetica with every letter written as a code point.
+    let doc = summary_with_pages(&src, "S", &[comment(0, 1, &["h", "Проверьте\r\nэто\tco\u{ad}op"])], Connect::Lines).unwrap();
+    assert!(!sheets(&doc)[0].contains("[U+"), "{}", sheets(&doc)[0]);
     // Japanese: no bundled face here, so written as code points, never dropped.
     let doc = summary_with_pages(&src, "S", &[comment(0, 1, &["h", "確認"])], Connect::Lines).unwrap();
     assert!(sheets(&doc)[0].contains("[U+78BA][U+8A8D]"));
+}
+
+#[test]
+fn a_long_title_stops_before_the_page_label() {
+    let src = fixture(1);
+    let title = format!("Summary of Comments on {}.pdf", "x".repeat(300));
+    let doc = summary_with_pages(&src, &title, &[comment(0, 1, &["h"])], Connect::Lines).unwrap();
+    let first = &sheets(&doc)[0];
+    assert!(first.contains("(Page 1)") && !first.contains(&"x".repeat(150)), "{first}");
+}
+
+#[test]
+fn nothing_points_at_a_comment_the_page_does_not_show() {
+    // Page 1's second annotation is a note without the Print flag: drawn nowhere on the page.
+    let src = fixture(1);
+    let mut hidden = comment(0, 1, &["h"]);
+    hidden.index = Some(1);
+    let first = sheets(&summary_with_pages(&src, "S", &[hidden.clone()], Connect::Lines).unwrap()).remove(0);
+    assert_eq!(first.matches(" l S").count(), 1, "only the header rule: {first}");
+    hidden.index = Some(0);
+    let first = sheets(&summary_with_pages(&src, "S", &[hidden], Connect::Lines).unwrap()).remove(0);
+    assert_eq!(first.matches(" l S").count(), 2, "the printing square is pointed at: {first}");
 }
