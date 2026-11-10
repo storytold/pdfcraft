@@ -41,6 +41,8 @@ pub struct Side {
     /// The page the change is on (for a pure insertion or deletion, where the other side's
     /// words would have been).
     pub page: usize,
+    /// The page its last word is on: words changed across a page break are one change.
+    pub last_page: usize,
     pub rects: Vec<[f64; 4]>,
     /// For an empty side (the other side's words were inserted or deleted): the box of the
     /// word next to where they would be.
@@ -245,6 +247,7 @@ fn side(words: &[&Word], neighbour: Option<&Word>) -> Side {
     Side {
         text: words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "),
         page: words.first().or(neighbour.as_ref()).map_or(0, |w| w.page),
+        last_page: words.last().or(neighbour.as_ref()).map_or(0, |w| w.page),
         rects: rects(words),
         near: if words.is_empty() { neighbour.map(|w| w.rect) } else { None },
     }
@@ -350,6 +353,17 @@ mod tests {
     }
 
     #[test]
+    fn a_change_across_a_page_break_knows_both_pages() {
+        let mut old = words("alpha beta", 0);
+        old.extend(words("gamma delta", 1));
+        let mut new = words("alpha one", 0);
+        new.extend(words("two delta", 1));
+        let c = compare(&old, &new);
+        assert_eq!(c.changes.len(), 1);
+        assert_eq!((c.changes[0].new.page, c.changes[0].new.last_page), (0, 1));
+    }
+
+    #[test]
     fn deletions_across_pages_keep_their_pages() {
         let mut old = words("alpha beta gamma", 0);
         old.extend(words("delta epsilon", 1));
@@ -397,6 +411,12 @@ mod tests {
     }
 }
 
+/// Byte offset of pixel (`x`, `y`) in a `w`-wide RGBA buffer, in wide integers so an image past 4 GiB
+/// (its `y * w` or `* 4` would wrap a `u32`) still indexes the right pixel; past `usize` it is out of range.
+fn rgba_index(x: u32, y: u32, w: u32) -> usize {
+    usize::try_from((u128::from(y) * u128::from(w) + u128::from(x)) * 4).unwrap_or(usize::MAX)
+}
+
 /// Visual compare: the regions where two renderings of a page differ, as pixel boxes
 /// `[x0, y0, x1, y1]` (y down) in `a`'s image. Both images are RGBA; `b` is sampled at the
 /// same relative position when sizes differ. Pixels count as different when a channel differs
@@ -407,6 +427,11 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
     if wa == 0 || ha == 0 || wb == 0 || hb == 0 {
         return Vec::new();
     }
+    // Declared sizes the buffers cannot hold (a damaged render) would overflow the u32 index maths.
+    let holds = |px: &[u8], w: u32, h: u32| u128::from(w) * u128::from(h) * 4 <= px.len() as u128;
+    if !holds(pa, wa, ha) || !holds(pb, wb, hb) {
+        return Vec::new();
+    }
     const CELL: u32 = 8;
     let (gw, gh) = (wa.div_ceil(CELL), ha.div_ceil(CELL));
     let mut grid = vec![false; (gw * gh) as usize];
@@ -414,9 +439,8 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
         let yb = (y as u64 * hb as u64 / ha as u64) as u32;
         for x in 0..wa {
             let xb = (x as u64 * wb as u64 / wa as u64) as u32;
-            let ia = ((y * wa + x) * 4) as usize;
-            let ib = ((yb * wb + xb) * 4) as usize;
-            let (Some(ca), Some(cb)) = (pa.get(ia..ia + 3), pb.get(ib..ib + 3)) else { continue };
+            let (ia, ib) = (rgba_index(x, y, wa), rgba_index(xb, yb, wb));
+            let (Some(ca), Some(cb)) = (pa.get(ia..ia.saturating_add(3)), pb.get(ib..ib.saturating_add(3))) else { continue };
             if ca.iter().zip(cb).any(|(p, q)| p.abs_diff(*q) > tolerance) {
                 grid[((y / CELL) * gw + x / CELL) as usize] = true;
             }
@@ -484,5 +508,30 @@ mod visual_tests {
         // Two nearby marks join; distant ones don't.
         let c = image(200, 200, &[[10, 10, 50, 20], [100, 100, 104, 104], [110, 100, 114, 104], [10, 180, 14, 184]]);
         assert_eq!(visual_regions((&a, 200, 200), (&c, 200, 200), 16).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod visual_hostile_tests {
+    use super::*;
+
+    #[test]
+    fn absurd_dimensions_with_short_buffers_return_quickly() {
+        let px = [0u8; 16];
+        let r = visual_regions((&px, u32::MAX, u32::MAX), (&px, 2, 2), 0);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn pixel_offsets_past_four_gib_do_not_wrap() {
+        // A 32768 x 32769 RGBA image is 4,295,098,368 bytes, so a buffer that large passes the size check;
+        // its last pixel sits past u32::MAX and must not wrap back onto an early pixel.
+        let (w, h) = (32768u32, 32769u32);
+        let last = rgba_index(w - 1, h - 1, w);
+        assert_eq!(last as u64, (u64::from(h - 1) * u64::from(w) + u64::from(w - 1)) * 4);
+        assert!(last as u64 > u64::from(u32::MAX));
+        assert_eq!(rgba_index(0, 0, w), 0);
+        // Out of range for any buffer: saturates instead of overflowing.
+        assert_eq!(rgba_index(u32::MAX, u32::MAX, u32::MAX), usize::MAX);
     }
 }
