@@ -914,7 +914,7 @@ fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     let file = tool_open_file("deferred-tool", "pdf", &fixture(1));
     let path = file.0.to_string_lossy().into_owned();
     let mut app = PdfCraftApp::new();
-    app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), then: None, display_override: None });
+    app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), after_open: None, then: None, display_override: None });
     assert_eq!(app.open_path_then(&path, Some("export.text")), crate::OpenOutcome::Pending);
     assert_eq!(app.deferred_opens.len(), 1);
     assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
