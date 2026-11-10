@@ -242,6 +242,18 @@ impl crate::Document {
         self.export_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos))
     }
 
+    /// [`Self::export_pages_checked`] for the pages in `only` (0-based; all when `None`), in document
+    /// order: a page not chosen is not read at all. The truncated pages keep their document index.
+    pub(crate) fn export_selected_pages_checked(
+        &self,
+        images: bool,
+        image_budget: usize,
+        only: Option<&[usize]>,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        let Some(editor) = self.editor.as_ref() else { return (Vec::new(), Vec::new()) };
+        self.export_selected_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos), only)
+    }
+
     /// [`Self::export_pages_checked`], its pictures decoded within `image_work`, which is shared
     /// by the whole export: a picture past it is left out like one past `image_budget`.
     pub(crate) fn export_pages_within(
@@ -249,6 +261,17 @@ impl crate::Document {
         images: bool,
         image_budget: usize,
         image_work: &mut pdfcraft_cos::ImageBudget,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        self.export_selected_pages_within(images, image_budget, image_work, None)
+    }
+
+    /// [`Self::export_pages_within`] for the pages in `only` (see [`Self::export_selected_pages_checked`]).
+    pub(crate) fn export_selected_pages_within(
+        &self,
+        images: bool,
+        image_budget: usize,
+        image_work: &mut pdfcraft_cos::ImageBudget,
+        only: Option<&[usize]>,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
@@ -260,6 +283,7 @@ impl crate::Document {
             .pages
             .iter()
             .enumerate()
+            .filter(|(i, _)| only.is_none_or(|keep| keep.contains(i)))
             .map(|(i, info)| {
                 // Export uses the visible page in points, y up. Raw PDF coordinates include
                 // CropBox offsets and precede /Rotate and /UserUnit.
@@ -364,11 +388,8 @@ impl crate::Document {
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_xlsx_checked(&self, sheets: XlsxSheets, pages: Option<&[usize]>) -> OfficeExport {
         // Excel leaves pictures out, so none is prepared.
-        let (mut all, mut truncated_pages) = self.export_pages_checked(false, 0);
-        if let Some(keep) = pages {
-            all = all.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, p)| p).collect();
-            truncated_pages.retain(|i| keep.contains(i));
-        }
+        // Only the chosen pages are read.
+        let (all, truncated_pages) = self.export_selected_pages_checked(false, 0, pages);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         OfficeExport { bytes: pdfcraft_export::xlsx(&all, &title, sheets), truncated_pages }
     }
