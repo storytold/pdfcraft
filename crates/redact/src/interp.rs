@@ -995,6 +995,22 @@ fn clean_replacements(
     }
 }
 
+/// How far stroked text (`Tr` 1, 2, 5, 6) paints past its outline on the page, across and down: half the
+/// line width, through the transformation (the pen is a circle in user space, so its extent on the page is an
+/// ellipse's). Nothing for text that is only filled.
+fn stroke_pad(gs: &Gs) -> (f64, f64) {
+    if !matches!(gs.render_mode, 1 | 2 | 5 | 6) {
+        return (0.0, 0.0);
+    }
+    let (r, m) = (gs.line_width.abs() / 2.0, &gs.ctm.0);
+    (r * m[0].hypot(m[2]), r * m[1].hypot(m[3]))
+}
+
+/// `b` grown by `pad` on every side.
+fn grow(b: [f64; 4], (px, py): (f64, f64)) -> [f64; 4] {
+    [b[0] - px, b[1] - py, b[2] + px, b[3] + py]
+}
+
 /// The glyph box a mark is measured against, across the line, when the glyph's outline can't be
 /// read ([`Ink::Unknown`]): the font's descent to ascent, scaled down to one em when it is taller. A font's ascent and descent include the gap between
 /// lines, so with lines set solid (spacing = font size) each line's box would reach a few points
@@ -1012,6 +1028,7 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     let f = &gs.font;
     let size = gs.size;
     let (descent, ascent) = em_box(f.descent, f.ascent);
+    let pad = stroke_pad(gs);
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
     scope.shown += 1;
@@ -1053,16 +1070,19 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                             rects = match gs.ink.as_deref().map_or(Ink::Unknown, |ink| ink.ink(f, code)) {
                                 // What the glyph draws is known: it goes when its ink is under a region.
                                 Ink::Box(ink) if matches!(gs.render_mode, 1 | 2 | 5 | 6) => {
-                                    // Stroked text paints past its outline by the line width, which is
-                                    // not tracked here: the one-em box counts too, as before outlines.
+                                    // Stroked text paints past its outline by half the line width: the one-em box
+                                    // counts too, as before outlines, and both are grown by the stroke.
                                     let em = [0.0, descent, w0, ascent];
-                                    scope.glyph_rects(trm.bbox([ink[0].min(em[0]), ink[1].min(em[1]), ink[2].max(em[2]), ink[3].max(em[3])]), origin)
+                                    scope.glyph_rects(
+                                        grow(trm.bbox([ink[0].min(em[0]), ink[1].min(em[1]), ink[2].max(em[2]), ink[3].max(em[3])]), pad),
+                                        origin,
+                                    )
                                 }
                                 Ink::Box(ink) => scope.glyph_rects(trm.bbox(ink), origin),
                                 // Nothing drawn: the one-em box decides, and nothing can stay behind.
                                 Ink::Blank => scope.glyph_rects(trm.bbox([0.0, descent, w0, ascent]), origin),
                                 Ink::Unknown => {
-                                    let r = scope.glyph_rects(trm.bbox([0.0, descent, w0, ascent]), origin);
+                                    let r = scope.glyph_rects(grow(trm.bbox([0.0, descent, w0, ascent]), pad), origin);
                                     if r.is_empty() && !scope.glyph_rects(b, origin).is_empty() {
                                         beside += 1;
                                     }

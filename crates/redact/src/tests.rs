@@ -321,6 +321,27 @@ fn stroked_text_is_measured_beyond_its_outline() {
     }
 }
 
+/// Stroked text paints half the line width past its outline (and past the one-em box): a mark above both boxes,
+/// inside a wide stroke, removes the glyphs; the same mark leaves them when the line is thin, when the text is only
+/// filled, and after `Q` has taken the wide line back. An ExtGState's `LW` sets the width too.
+#[test]
+fn stroked_text_is_measured_by_its_line_width() {
+    // 40 pt at y 100: the one-em box tops out at about 132, so a mark at 140–150 is above both boxes.
+    let removed = |content: &str| {
+        let mut doc = page_with_inter(content.as_bytes());
+        mark(&mut doc, 0, &[[0.0, 140.0, 300.0, 150.0]], "");
+        apply(&mut doc, None).unwrap().glyphs
+    };
+    assert_eq!(removed("BT /F1 40 Tf 1 Tr 40 w 10 100 Td (1234) Tj ET"), 4, "a 40 pt line paints 20 pt past the glyphs");
+    assert_eq!(removed("BT /F1 40 Tf 2 Tr 40 w 10 100 Td (1234) Tj ET"), 4, "fill and stroke");
+    assert_eq!(removed("BT /F1 40 Tf 1 Tr 1 w 10 100 Td (1234) Tj ET"), 0, "a thin line stays inside the boxes");
+    assert_eq!(removed("BT /F1 40 Tf 0 Tr 40 w 10 100 Td (1234) Tj ET"), 0, "filled text has no stroke");
+    assert_eq!(removed("q 40 w Q BT /F1 40 Tf 1 Tr 10 100 Td (1234) Tj ET"), 0, "Q takes the width back");
+    // The width is in user space: scaled by the transformation.
+    assert_eq!(removed("0.1 0 0 0.1 0 0 cm BT /F1 400 Tf 1 Tr 10 w 100 1000 Td (1234) Tj ET"), 0, "a 10 unit line at 0.1 scale paints 0.5 pt");
+    assert_eq!(removed("0.1 0 0 0.1 0 0 cm BT /F1 400 Tf 1 Tr 400 w 100 1000 Td (1234) Tj ET"), 4, "a 400 unit line at 0.1 scale paints 20 pt");
+}
+
 /// #5255 at a small size: 9 pt lines set solid in a 1000 / −200 font (a 10.8 pt glyph box). The
 /// line below reached 1.8 pt into the selection's mark.
 #[test]
