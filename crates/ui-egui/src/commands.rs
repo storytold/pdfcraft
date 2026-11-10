@@ -113,7 +113,7 @@ impl PdfCraftApp {
     /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, id: &str) -> bool {
-        match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
+        let done = match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
                 // A command stopped part way through closing or replacing a tab must not leave
@@ -122,7 +122,9 @@ impl PdfCraftApp {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
-        }
+        };
+        crate::dialogs::discard_inactive_password_drafts(self);
+        done
     }
 
     /// Why the command can't run right now, for the user.
