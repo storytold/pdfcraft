@@ -46,11 +46,11 @@ fn a_long_body_stays_under_the_windows_limit() {
         let (line, stdin) = run_plan(body.clone());
         assert!(line < WINDOWS_LIMIT, "{name}: the command line is {line} characters");
 
-        // The values arrive on standard input: five base64 lines (path, name, subject, body,
-        // recipients), the body's among them whole.
+        // The values arrive on standard input: six base64 lines (path, name, subject, body,
+        // recipients, client), the body's among them whole.
         let input = stdin.unwrap_or_default();
         let lines: Vec<&str> = input.lines().collect();
-        assert_eq!(lines.len(), 5, "{name}: {} lines on standard input", lines.len());
+        assert_eq!(lines.len(), 6, "{name}: {} lines on standard input", lines.len());
         assert!(
             input.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '\n')),
             "{name}: standard input is base64, one value to a line"

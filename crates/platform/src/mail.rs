@@ -281,7 +281,7 @@ pub fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system
                 route: Route::Run {
                     command,
                     args: powershell_args(&mapi_script(std::process::id())),
-                    stdin: Some(mapi_input(compose)),
+                    stdin: Some(mapi_input(compose, name)),
                     watch: Watch::Answers,
                 },
             }),
@@ -722,8 +722,8 @@ fn open_message_file_within(olk: &Path, message: &Path, compose: &Compose, limit
 }
 
 /// Write the message under a folder of its own beside `message` (its name is kept, so the new
-/// Outlook shows it): one folder per send, made with `create_dir`, which fails on anything already
-/// there, and the file made new, so a send never overwrites another's and a planted file or link is
+/// Outlook shows it): one folder per send, made private ([`create_private_dir`]) with `create_dir`'s
+/// failure on anything already there, and the file made new, so a send never overwrites another's and a planted file or link is
 /// never followed. Folders from earlier sends over a day old are removed. Where the file is.
 fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
     use std::hash::BuildHasher;
@@ -737,10 +737,17 @@ fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         let unique = std::hash::RandomState::new().hash_one((std::process::id(), nanos, attempt));
         let folder = root.join(format!("{unique:016x}"));
-        match std::fs::create_dir(&folder) {
+        // Private from the start: the message holds the whole document, so the folder is made for
+        // the current user alone before anything is written, and a send whose folder can't be
+        // protected fails instead of writing it where others may read.
+        match create_private_dir(&folder) {
             Ok(()) => {
                 let file = folder.join(name);
-                std::fs::OpenOptions::new().write(true).create_new(true).open(&file)?.write_all(contents)?;
+                let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&file).and_then(|mut f| f.write_all(contents));
+                if let Err(e) = written {
+                    let _ = std::fs::remove_dir_all(&folder);
+                    return Err(e);
+                }
                 return Ok(file);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
@@ -748,6 +755,44 @@ fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
         }
     }
     Err(last.unwrap_or_else(|| std::io::Error::other("no free folder")))
+}
+
+/// Create `dir` (which must not exist yet) so that only the current user can use it, before anything
+/// is put in it: mode 0700 on Unix; on Windows an access list of the current user and SYSTEM only
+/// (`owner_only`), which every file created in it inherits, so a file is private from the moment
+/// it exists. It fails, and leaves no folder, when that protection can't be set up: a copy of a
+/// document is never written to a folder that other users may read. Where there are no owners
+/// (the web build) the folder is simply created.
+pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)
+    }
+    #[cfg(windows)]
+    {
+        create_private_dir_with(dir, crate::owner_only::current_user_sid, crate::owner_only::create_private_dir)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        std::fs::create_dir(dir)
+    }
+}
+
+/// [`create_private_dir`] on Windows, with its two steps given so a test can run it anywhere: who
+/// the current user is, then creating the folder restricted to that user. Not knowing the user
+/// fails before any folder exists, and so does a folder that can't be restricted (the step removes
+/// it again).
+#[cfg(any(test, windows))]
+fn create_private_dir_with(
+    dir: &Path,
+    user: impl FnOnce() -> std::io::Result<String>,
+    create: impl FnOnce(&Path, &str) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let me = user()
+        .map_err(|e| std::io::Error::other(format!("the current user could not be determined, so the folder could not be restricted to it: {e}")))?;
+    create(dir, &me)
 }
 
 /// Remove the folders in `root` last changed more than `age` ago (best effort: one in use stays).
@@ -864,13 +909,13 @@ fn mapi_script(caller: u32) -> String {
 }
 
 /// What the Simple MAPI script reads from its standard input, one value per line in the order it
-/// reads them: the file's path, its name, the subject, the body and the recipients (one per line
-/// inside the value). Every value is base64 of its UTF-8, so no text (line breaks, quotes of any
+/// reads them: the file's path, its name, the subject, the body, the recipients (one per line
+/// inside the value) and the name the email client is registered under. Every value is base64 of its UTF-8, so no text (line breaks, quotes of any
 /// kind) can end a line early or reach the script as anything but data.
-fn mapi_input(compose: &Compose) -> String {
+fn mapi_input(compose: &Compose, client: &str) -> String {
     let path = compose.path.to_string_lossy();
     let to = compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join("\n");
-    [&*path, file_name(&compose.path).as_str(), compose.subject.as_str(), compose.body.as_str(), to.as_str()]
+    [&*path, file_name(&compose.path).as_str(), compose.subject.as_str(), compose.body.as_str(), to.as_str(), client]
         .iter()
         .map(|value| format!("{}\n", base64(value.as_bytes())))
         .collect()
@@ -909,8 +954,11 @@ fn fill(template: &str, values: &[(&str, String)]) -> String {
 /// (`Add-Type`), which every Windows has: `MAPISendMailW` runs on a thread of its own while the
 /// script looks for a new window, not this program's, whose title carries the subject (Outlook's
 /// "<subject> - Message", Thunderbird's "Write: <subject>"). A client that answers without a
-/// window (an error) is reported by its code. The message's values are read from standard input,
-/// one base64 line each, in the order [`mapi_input`] writes them.
+/// window (an error) is reported by its code. A window counts only when it belongs to the email
+/// client's own program (its file name from the client's registration under
+/// `Software\Clients\Mail`), so another application whose window holds the subject never says a
+/// message opened. The message's values are read from standard input, one base64 line each, in the
+/// order [`mapi_input`] writes them.
 const MAPI_SCRIPT: &str = r##"$ErrorActionPreference = 'Stop'
 trap { 'failed ' + $_.Exception.Message; exit 0 }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -919,6 +967,20 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 $text = { param($b) $utf8.GetString([Convert]::FromBase64String($b)) }
 $path = & $text ([Console]::In.ReadLine()); $name = & $text ([Console]::In.ReadLine()); $subject = & $text ([Console]::In.ReadLine()); $body = & $text ([Console]::In.ReadLine())
 $to = [string[]]@((& $text ([Console]::In.ReadLine())) -split "`n" | Where-Object { $_ -ne '' })
+$client = & $text ([Console]::In.ReadLine())
+# The client's own program, as it registered it (Software\Clients\Mail\<client>\shell\open\command):
+# only one of its windows can say a message opened. Unknown, a window is judged by its title alone.
+$program = ''
+try {
+	foreach ($hive in 'HKCU', 'HKLM') {
+		if ($program -ne '') { break }
+		$key = "Registry::$hive\Software\Clients\Mail\$client\shell\open\command"
+		if (-not (Test-Path -LiteralPath $key)) { continue }
+		$command = [Environment]::ExpandEnvironmentVariables([string](Get-Item -LiteralPath $key).GetValue(''))
+		if ($command -match '^\s*"([^"]+)"') { $program = [IO.Path]::GetFileName($Matches[1]) }
+		elseif ($command -match '^\s*(.+?\.exe)') { $program = [IO.Path]::GetFileName($Matches[1]) }
+	}
+} catch { $program = '' }
 $caller = @@CALLER@@
 $src = @'
 using System;
@@ -940,7 +1002,21 @@ public static class PdfCraftMapi {
 	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int max);
 	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
-	static List<IntPtr> Titled(string title, uint caller) {
+	[DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint process);
+	[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+	// Whether the program running as `process` is the email client's own (its file name, as the
+	// client registered it). A process that can't be looked at is not it.
+	static bool Runs(uint process, string program) {
+		var handle = OpenProcess(0x1000, false, process);
+		if (handle == IntPtr.Zero) return false;
+		try {
+			var name = new StringBuilder(1024);
+			uint size = 1024;
+			return QueryFullProcessImageName(handle, 0, name, ref size) && string.Equals(System.IO.Path.GetFileName(name.ToString()), program, StringComparison.OrdinalIgnoreCase);
+		} finally { CloseHandle(handle); }
+	}
+	static List<IntPtr> Titled(string title, uint caller, string program) {
 		var found = new List<IntPtr>();
 		var self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
 		EnumWindows(delegate(IntPtr w, IntPtr d) {
@@ -948,6 +1024,9 @@ public static class PdfCraftMapi {
 			uint process;
 			GetWindowThreadProcessId(w, out process);
 			if (process == caller || process == self) return true;
+			// A title that holds the subject is not enough (a web page, a document viewer, an
+			// error box can hold it too): the window must be the email client's own.
+			if (program.Length > 0 && !Runs(process, program)) return true;
 			var text = new StringBuilder(512);
 			GetWindowText(w, text, 512);
 			if (text.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) found.Add(w);
@@ -971,8 +1050,8 @@ public static class PdfCraftMapi {
 			return MAPISendMailW(IntPtr.Zero, IntPtr.Zero, ref message, 0x00000008 | 0x00000001, 0);
 		} finally { Marshal.FreeHGlobal(files); if (recips != IntPtr.Zero) Marshal.FreeHGlobal(recips); }
 	}
-	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, int seconds) {
-		var before = Titled(subject, caller);
+	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, string program, int seconds) {
+		var before = Titled(subject, caller, program);
 		uint result = 0;
 		string failure = null;
 		// An exception on this thread would end the process with no answer, so it is caught here.
@@ -988,7 +1067,7 @@ public static class PdfCraftMapi {
 		while (!worker.Join(250)) {
 			if (told) continue;
 			// An empty subject is in every window's title, so no window says the message opened.
-			if (subject.Length > 0) foreach (var w in Titled(subject, caller)) { if (!before.Contains(w)) { told = true; break; } }
+			if (subject.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; break; } }
 			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
 			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
 		}
@@ -998,7 +1077,7 @@ public static class PdfCraftMapi {
 }
 '@
 Add-Type -TypeDefinition $src -Language CSharp
-[PdfCraftMapi]::Run($path, $name, $subject, $body, $to, [uint32]$caller, @@SECONDS@@)
+[PdfCraftMapi]::Run($path, $name, $subject, $body, $to, [uint32]$caller, $program, @@SECONDS@@)
 exit 0
 "##;
 
@@ -1180,7 +1259,7 @@ mod tests {
         let p = plan_for("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap();
         assert_eq!(p.program.as_deref(), Some("Mozilla Thunderbird"));
         let (command, args, stdin, watch) = run_of(&p);
-        assert!(command.to_string_lossy().ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 5) && watch == Watch::Answers);
+        assert!(command.to_string_lossy().ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 6) && watch == Watch::Answers);
         assert_eq!(args[args.len() - 2], "-EncodedCommand");
         let encoded = &args[args.len() - 1];
         assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
@@ -1231,8 +1310,8 @@ mod tests {
         let script = mapi_script(4242);
         assert!(!script.contains("@@"), "every value filled: {script}");
         assert!(!script.contains("Núñez") && !script.contains("invoice"), "no text goes in as text: {script}");
-        assert_eq!(script.matches("[Console]::In.ReadLine()").count(), 5);
-        let lines: Vec<String> = mapi_input(&c).lines().map(str::to_string).collect();
+        assert_eq!(script.matches("[Console]::In.ReadLine()").count(), 6);
+        let lines: Vec<String> = mapi_input(&c, "Mozilla Thunderbird").lines().map(str::to_string).collect();
         assert_eq!(
             lines,
             [
@@ -1241,12 +1320,61 @@ mod tests {
                 base64("Núñez’s 'invoice'".as_bytes()),
                 base64("Hola\nadiós".as_bytes()),
                 base64(b"ap@example.org\nb@example.org"),
+                base64(b"Mozilla Thunderbird"),
             ]
         );
-        assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, {MAPI_SECONDS})")));
+        assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, $program, {MAPI_SECONDS})")));
         assert!(script.contains("MAPISendMailW"));
+        // A window counts only when it is the email client's own: its program is asked of the
+        // registry and each candidate window's process is checked against it.
+        assert!(script.contains("Clients\\Mail\\$client\\shell\\open\\command") && script.contains("QueryFullProcessImageName"), "{script}");
+        assert!(script.contains("program.Length > 0 && !Runs(process, program)"));
+        assert!(script.contains("$caller, $program, "));
         let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
         assert_eq!(base64(&bytes), encode_powershell(&script));
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_restricted_is_never_used() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-private-dir-{}", std::process::id()));
+        // The user can't be told: nothing is created, and the caller gets the error.
+        let made = std::cell::Cell::new(false);
+        let err = create_private_dir_with(
+            &dir,
+            || Err(std::io::Error::other("whoami failed")),
+            |_, _| {
+                made.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(!made.get() && err.to_string().contains("whoami failed"), "{err}");
+        // The restriction fails: the error is the caller's, not swallowed.
+        let err = create_private_dir_with(&dir, || Ok("S-1-5-21-1".into()), |_, _| Err(std::io::Error::other("icacls failed"))).unwrap_err();
+        assert!(err.to_string().contains("icacls failed"));
+        // It is asked for this user's SID and this folder.
+        create_private_dir_with(
+            &dir,
+            || Ok("S-1-5-21-1".into()),
+            |d, me| {
+                assert_eq!((d, me), (dir.as_path(), "S-1-5-21-1"));
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsent_message_folder_is_for_its_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pdfcraft-mail-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = write_message(&root.join("Invoice.eml"), b"x").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(file.parent().unwrap()), 0o700, "the folder is private before the file is written");
+        assert_eq!(create_private_dir(file.parent().unwrap()).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
