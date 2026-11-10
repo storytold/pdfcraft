@@ -9,7 +9,16 @@ use serde_json::{Value, json};
 
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
-    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    fixture_with(n, "")
+}
+
+/// Named destinations for [`fixture_with`]: `chapter` (page 2) in the catalog's /Dests and
+/// `Load Flow` (page 3) in the /Names /Dests tree.
+const NAMED_DESTS: &str = "/Dests << /chapter [6 0 R /Fit] >> /Names << /Dests << /Names [(Load Flow) [8 0 R /XYZ 0 300 0]] >> >>";
+
+/// [`fixture`] with `catalog` added to the catalog dictionary. Page `i` (0-based) is object `4 + 2i`.
+fn fixture_with(n: usize, catalog: &str) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
     objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
@@ -4593,6 +4602,51 @@ fn a_line_split_across_content_streams_is_listed_and_edited() {
 }
 
 #[test]
+fn mixed_script_paragraph_keeps_source_fonts_through_tools_and_reopen() {
+    if pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("skipping mixed-script fallback: build with CRAFT_FONTS_DIR");
+        return;
+    }
+    let dir = workdir("mixed-script-paragraph");
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    cos.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        d.set(b"MediaBox".to_vec(), pdfcraft_cos::Object::Array([0, 0, 612, 792].map(pdfcraft_cos::Object::Int).to_vec()));
+    })
+    .unwrap();
+    let body =
+        b"BT /F1 12 Tf 14.4 TL 72 700 Td (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running through the long field.) Tj ET";
+    cos.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), body)));
+    std::fs::write(dir.join("mixed.pdf"), pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"mixed.pdf"}))["doc"].as_u64().unwrap();
+    let draft = "The quick brown fox jumps over the lazy dog шалом and keeps running through the long field.";
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":draft}));
+    let check = |a: &mut Automation, doc, expected: &str| {
+        let listed = ok(a, "text_lines", json!({"doc":doc,"page":1}));
+        let lines = listed["lines"].as_array().unwrap();
+        assert!(lines.iter().any(|l| l["font"] == "Helvetica" && l["text"].as_str().unwrap().contains("The quick brown fox")), "{listed}");
+        for line in lines.iter().filter(|l| l["text"].as_str().unwrap().chars().any(|c| c.is_ascii_alphabetic())) {
+            assert_eq!(line["font"], "Helvetica", "{line}");
+        }
+        let text = page_text(a, doc).join(" ");
+        assert_eq!(text.split_whitespace().collect::<Vec<_>>(), expected.split_whitespace().collect::<Vec<_>>());
+    };
+    check(&mut a, doc, draft);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert!(!page_text(&mut a, doc).join(" ").contains("шалом"));
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    check(&mut a, doc, draft);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    check(&mut a, doc, draft);
+    let extended = format!("{draft} More Latin.");
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":extended}));
+    check(&mut a, doc, &extended);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn paragraph_bold_without_font_keeps_the_source_family() {
     let dir = workdir("paragraph-bold");
     let mut a = auto(&dir);
@@ -6200,6 +6254,9 @@ fn printing_through_tools() {
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": printed }))["document"]["pages"].as_u64(), Some(n.div_ceil(4)));
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "path": "poster.pdf" }));
     assert!(r["sheets"].as_u64().unwrap() > 1);
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "booklet", "creep": 1.5, "path": "booklet.pdf" }));
+    assert_eq!(r["sheets"].as_u64(), Some(n.div_ceil(4) * 2), "creep keeps the booklet's sheets");
+    assert!(a.call("doc_print", &json!({ "doc": doc, "layout": "booklet", "creep": -1, "path": "x.pdf" })).is_err(), "negative creep");
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
@@ -7410,12 +7467,50 @@ fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
 }
 
 #[test]
+fn doc_open_reads_open_parameters_after_the_file_name() {
+    // #3425: help systems start a PDF reader with `manual.pdf#nameddest=…` or `#page=…`.
+    let (_base, root) = sandbox("open-parameters");
+    std::fs::write(root.join("manual.pdf"), fixture_with(3, NAMED_DESTS)).unwrap();
+    std::fs::write(root.join("odd#page=2.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&root);
+    for (path, kind, page) in [("manual.pdf#page=3", "page", 3), ("manual.pdf#nameddest=Load Flow", "named", 3), ("manual.pdf#chapter", "named", 2)] {
+        let opened = ok(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!((opened["name"].as_str(), opened["pages"].as_u64()), (Some("manual.pdf"), Some(3)), "{path}");
+        assert_eq!(opened["destination_applied"], true, "{path}: {opened}");
+        assert_eq!((opened["destination"]["kind"].as_str(), opened["destination"]["page"].as_u64()), (Some(kind), Some(page)), "{path}");
+    }
+    for (path, warning) in
+        [("manual.pdf#nameddest=Nowhere", "named destination"), ("manual.pdf#page=9", "out of range"), ("manual.pdf#page=99999", "out of range")]
+    {
+        let opened = ok(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!(opened["destination_applied"], false, "{path}");
+        assert!(opened["warning"].as_str().is_some_and(|w| w.contains(warning)), "{path}: {opened}");
+    }
+    // A parameter that can't be applied isn't a failure: the file opens at its default view.
+    let opened = ok(&mut a, "doc_open", json!({ "path": "manual.pdf#page=0" }));
+    assert_eq!(opened["pages"].as_u64(), Some(3));
+    assert_eq!((opened["destination_applied"].as_bool(), opened["destination"]["kind"].as_str()), (Some(true), Some("default")), "{opened}");
+    assert!(opened["warning"].is_null(), "{opened}");
+    // A file whose own name has a `#` opens as itself, and a plain path reports no destination.
+    let opened = ok(&mut a, "doc_open", json!({ "path": "odd#page=2.pdf" }));
+    assert_eq!((opened["name"].as_str(), opened["pages"].as_u64()), (Some("odd#page=2.pdf"), Some(1)));
+    assert!(opened.get("destination").is_none(), "{opened}");
+    // The file before the `#` must exist, inside --root.
+    let before = a.session().docs().len();
+    for path in ["missing.pdf#page=2", "../outside/secret.pdf#page=1"] {
+        err(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!(a.session().docs().len(), before, "{path}");
+    }
+}
+
+#[test]
 fn local_gotor_link_open_applies_destinations_and_honors_root() {
     let root = local_gotor_fixtures();
     let mut a = auto(&root);
     assert_relative_gotor_destination(&mut a);
     assert_absolute_gotor_policy(&mut a);
     assert_unapplied_gotor_destinations(&mut a);
+    assert_named_gotor_destination(&mut a);
     assert_encrypted_gotor_passwords(&mut a);
     assert_unsupported_gotor_targets(&mut a);
     assert_gotor_root_boundaries(&mut a);
@@ -7430,6 +7525,8 @@ fn local_gotor_fixtures() -> PathBuf {
     std::fs::write(root.join("sub/source.pdf"), remote_link_pdf("../target.pdf", Some("[2 /FitH 180]"))).unwrap();
     std::fs::write(root.join("sub/escape.pdf"), remote_link_pdf("../../outside/secret.pdf", Some("[0 /Fit]"))).unwrap();
     std::fs::write(root.join("named.pdf"), remote_link_pdf("target.pdf", Some("(chapter)"))).unwrap();
+    std::fs::write(root.join("named-target.pdf"), fixture_with(3, NAMED_DESTS)).unwrap();
+    std::fs::write(root.join("named-found.pdf"), remote_link_pdf("named-target.pdf", Some("(chapter)"))).unwrap();
     std::fs::write(root.join("range.pdf"), remote_link_pdf("target.pdf", Some("[99 /Fit]"))).unwrap();
     std::fs::write(root.join("url.pdf"), remote_link_pdf("https://example.org/target.pdf", Some("[0 /Fit]"))).unwrap();
     std::fs::write(root.join("missing-source.pdf"), remote_link_pdf("does-not-exist.pdf", Some("[0 /Fit]"))).unwrap();
@@ -7476,6 +7573,14 @@ fn assert_unapplied_gotor_destinations(a: &mut Automation) {
         assert_eq!(opened["destination_applied"], false);
         assert!(opened["warning"].as_str().unwrap().contains(warning), "{opened}");
     }
+}
+
+fn assert_named_gotor_destination(a: &mut Automation) {
+    // A name the target defines is looked up there, as the app does.
+    let source = ok(a, "doc_open", json!({ "path": "named-found.pdf" }))["doc"].as_u64().unwrap();
+    let opened = ok(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+    assert_eq!(opened["destination_applied"], true, "{opened}");
+    assert_eq!(opened["destination"], json!({ "kind": "named", "name": "chapter", "page": 2, "view": { "kind": "fit" } }));
 }
 
 fn assert_encrypted_gotor_passwords(a: &mut Automation) {

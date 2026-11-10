@@ -412,7 +412,9 @@ pub(crate) fn rendered_content(out: &pdfcraft_render::RenderedPage, page: usize)
 fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
     use pdfcraft_render::RenderWarning;
     match warning {
-        RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+        RenderWarning::ContentTruncated => {
+            "content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+        }
         RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
         RenderWarning::MalformedIndexedImage => "an image with a malformed Indexed colour table may be drawn wrongly or not at all",
         RenderWarning::Type3WidthsMissing => "a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give",
