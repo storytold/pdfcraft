@@ -216,6 +216,7 @@ impl PdfCraftApp {
             extract_draft: ExtractDraft::default(),
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
+            summary_layout: Default::default(),
             sign_draft: None,
             presign: None,
             digital_ids: Vec::new(),

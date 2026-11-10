@@ -4658,6 +4658,7 @@ dependencies = [
  "craft-print",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-fonts",
  "pdfcraft-model",
  "pdfcraft-render",
  "skrifa 0.44.0",

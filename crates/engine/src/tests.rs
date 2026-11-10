@@ -1447,7 +1447,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
     );
     let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
-    let summary = s.summarize_comments(id, SummarySort::Page).unwrap();
+    let summary = s.summarize_comments(id, SummarySort::Page, SummaryLayout::CommentsOnly).unwrap();
     let id = s.open_new("summary.pdf", summary).unwrap();
     let shown = page_texts(&s, id).join("\n");
     assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
@@ -1681,7 +1681,9 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(s.compare(oid, oid).is_ok());
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
     // The comment summary copies comment text out like the exports do.
-    assert_eq!(s.summarize_comments(id, SummarySort::Page).map(|_| ()), refused());
+    for layout in SummaryLayout::ALL {
+        assert_eq!(s.summarize_comments(id, SummarySort::Page, layout).map(|_| ()), refused());
+    }
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
@@ -5176,10 +5178,50 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(text.contains("Page: 2\nNumber: 1  Author: Reviewer  Subject: Rectangle"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
-    let pdf = s.summarize_comments(id, SummarySort::Author).unwrap();
+    let pdf = s.summarize_comments(id, SummarySort::Author, SummaryLayout::CommentsOnly).unwrap();
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
+}
+
+/// Summarize Comments ▸ Document and comments (#6791): each page with comments, beside them,
+/// on a landscape sheet; with connector lines or with the comments' numbers on the page.
+#[test]
+fn comment_summary_shows_each_commented_page_beside_its_comments() {
+    let (mut s, id) = session_with(3);
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Agreed".into(), author: "Ada".into() }).unwrap();
+    for layout in [SummaryLayout::DocumentAndCommentsWithLines, SummaryLayout::DocumentAndComments] {
+        let pdf = s.summarize_comments(id, SummarySort::Page, layout).unwrap();
+        let n = s.open_new("summary.pdf", pdf).unwrap();
+        let info = &s.get(n).unwrap().info;
+        assert_eq!(info.pages.len(), 1, "{layout:?}: only page 2 has comments");
+        assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
+        let text = page_texts(&s, n).join("\n");
+        for want in ["Summary of Comments on fixture.pdf", "Page 2", "1. Rectangle  Reviewer", "Look here", "Reply  Ada", "Agreed"] {
+            assert!(text.contains(want), "{layout:?}: {want:?} in {text}");
+        }
+        assert!(!text.contains("Page 1") && !text.contains("Page 3"), "{layout:?}: pages without comments are left out: {text}");
+        // The comment shows red on the page (left half) and as its box's border (right half).
+        let doc = s.get(n).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let red = |x0: u32, x1: u32| {
+            (0..out.height)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let i = ((y * out.width + x) * 4) as usize;
+                    out.rgba[i] > 200 && out.rgba[i + 1] < 120 && out.rgba[i + 2] < 120
+                })
+                .count()
+        };
+        assert!(red(0, 384) > 400, "{layout:?}: the comment is drawn on the page");
+        assert!(red(408, out.width) > 100, "{layout:?}: its box");
+    }
+    // The names comments_summarize takes.
+    assert_eq!(SummaryLayout::parse("Document_And_Comments"), Some(SummaryLayout::DocumentAndComments));
+    assert_eq!(SummaryLayout::parse("side_by_side"), None);
 }
 
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every

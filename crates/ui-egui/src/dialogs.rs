@@ -1299,7 +1299,9 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     ui.label(egui::RichText::new(tl!("Summarize Options")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.label(tl!("Choose a layout:"));
-    let _ = ui.add(widgets::radio(true, tl!("Comments only")));
+    for layout in pdfcraft_engine::SummaryLayout::ALL {
+        widgets::radio_value(ui, &mut app.summary_layout, layout, tl!(layout.name()));
+    }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Sort comments by:"));

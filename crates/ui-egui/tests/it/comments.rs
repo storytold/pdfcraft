@@ -2197,6 +2197,24 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     let s = h.state();
     assert_eq!(s.views.len(), 2);
     assert!(s.session.get(s.views[1].id).unwrap().name.starts_with("Summary of comments on text"));
+    assert_eq!(s.session.get(s.views[1].id).unwrap().info.pages[0].width, 612.0, "comments only: portrait text pages");
+
+    // The layout with each page beside its comments (#6791): a landscape sheet showing the page.
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Document and comments with connector lines on single pages").click();
+    h.run_steps(1);
+    h.get_by_label("Create PDF Comment Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.views.len(), 3);
+    assert_eq!(s.summary_layout, pdfcraft_engine::SummaryLayout::DocumentAndCommentsWithLines, "the choice is kept for next time");
+    let info = &s.session.get(s.views[2].id).unwrap().info;
+    assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
 }
 
 #[test]

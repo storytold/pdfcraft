@@ -32,6 +32,7 @@ mod error;
 mod imposition;
 mod settings;
 mod sheets;
+mod summary;
 
 pub use error::{PrintError, WORDINGS, Words, in_english};
 #[cfg(test)]
@@ -46,6 +47,7 @@ use sheets::text_direction;
 pub use sheets::{
     LABEL_MARGIN, MARGIN, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
 };
+pub use summary::{Connect, SummaryComment, summary_with_pages};
 
 /// The names of the Print dialog's choices, shared by the `doc_print` tool and the settings
 /// file, so a saved preference reads like a tool argument and there is one vocabulary to keep.

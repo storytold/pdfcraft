@@ -1073,10 +1073,10 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
-        t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
+        t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type. layout: comments_only (default) lists them grouped by page; document_and_comments_with_lines shows each page that has comments beside them, with a connector line from each comment to its entry; document_and_comments does the same with each comment's number marked on the page instead of a line.")
             .cmd("comment.summarize")
             .with(schema(
-                json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
+                json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "layout": { "type": "string", "enum": ["comments_only", "document_and_comments_with_lines", "document_and_comments"], "default": "comments_only" }, "out": save_out, "open": open }),
                 &["doc"],
             )),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(

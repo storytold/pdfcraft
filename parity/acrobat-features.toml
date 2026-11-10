@@ -4418,8 +4418,8 @@ milestone = "M5"
 status = "partial"
 commands = ["comment.summarize"]
 tools = ["comments_summarize"]
-evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools"]
-notes = "Comments only layout, sorted by page, author, date or type; the layouts with the document and connector lines not yet"
+evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/engine/src/tests.rs::comment_summary_shows_each_commented_page_beside_its_comments", "crates/print/src/tests/summary.rs::a_summary_shows_each_commented_page_beside_its_comments", "crates/print/src/tests/summary.rs::comments_that_do_not_fit_continue_beside_the_same_page", "crates/print/src/tests/summary.rs::the_mark_follows_the_comment_on_a_turned_page", "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools"]
+notes = "Three of Acrobat's four layouts, sorted by page, author, date or type (within each page for the page layouts): Comments only; Document and comments with connector lines on single pages; Document and comments on single pages (each comment's number on the page). The page layouts put each page that has comments, as it prints, on the left of a landscape Letter sheet and its comments with their replies in boxes on the right, continuing on another sheet with the same page when they don't fit (comments_summarize layout). Not yet: connector lines on separate pages, and the font size, paper size, page range and pages-without-comments options."
 
 [[feature]]
 id = "comment.flatten"

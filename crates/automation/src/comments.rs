@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use pdfcraft_engine::{
-    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
+    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummaryLayout, SummarySort,
 };
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -746,7 +746,14 @@ impl Automation {
             Some(s) => SummarySort::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown sort {s:?}")))?,
             None => SummarySort::Page,
         };
-        let bytes = self.session.summarize_comments(id, sort).map_err(failed)?;
+        let layout = match a.opt_str("layout")? {
+            Some(s) => SummaryLayout::parse(s).ok_or_else(|| {
+                let allowed: Vec<&str> = SummaryLayout::ALL.iter().map(|l| l.key()).collect();
+                ToolError::InvalidArgs(format!("unknown layout {s:?}; use one of {}", allowed.join(", ")))
+            })?,
+            None => SummaryLayout::CommentsOnly,
+        };
+        let bytes = self.session.summarize_comments(id, sort, layout).map_err(failed)?;
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 

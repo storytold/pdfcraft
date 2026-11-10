@@ -1,6 +1,7 @@
 use super::{
-    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummaryLayout,
+    SummarySort, apply_layer_state, comment_summary, display_config, guard, local_utc_offset, outline_rows, parse_ymd, render_threads,
+    summary_comments, use_layer_choices,
 };
 
 impl Session {
@@ -341,14 +342,40 @@ impl Session {
         Some(self.get(id)?.config.clone())
     }
 
-    /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment
-    /// with its number, author, type, date, text and replies, grouped by page.
-    pub fn summarize_comments(&self, id: DocId, sort: SummarySort) -> Result<Arc<Vec<u8>>, EditError> {
+    /// Acrobat's Summarize Comments: a new PDF listing every comment with its number, author,
+    /// type, date, text and replies. [`SummaryLayout::CommentsOnly`] lists them grouped by page;
+    /// the other layouts show each page that has comments beside them, tied to their places on
+    /// the page by connector lines or by their numbers.
+    pub fn summarize_comments(&self, id: DocId, sort: SummarySort, layout: SummaryLayout) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         // The summary copies the comments' text out into a new document.
         doc.check_copying()?;
-        let text = comment_summary(&doc.name, &doc.info.annotations, sort);
-        self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
+        let title = format!("Summary of Comments on {}", doc.name);
+        let connect = match layout {
+            SummaryLayout::CommentsOnly => {
+                let text = comment_summary(&doc.name, &doc.info.annotations, sort);
+                return self.create_report(&title, &text);
+            }
+            SummaryLayout::DocumentAndCommentsWithLines => pdfcraft_print::Connect::Lines,
+            SummaryLayout::DocumentAndComments => pdfcraft_print::Connect::Numbers,
+        };
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        // Comments without an appearance show as the page shows them, as printing does.
+        if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
+            cos = displayed;
+        }
+        let comments = summary_comments(&doc.info.annotations, sort);
+        // The pages are drawn from the document's own content: a panic in that code must not take
+        // the app down.
+        let summary = guard(|| pdfcraft_print::summary_with_pages(&cos, &title, &comments, connect))
+            .map_err(|_| EditError::Write("the comment summary could not be made".into()))?
+            .map_err(|e| EditError::Write(e.to_string()))?;
+        self.write_new(&summary)
     }
 
     pub fn close(&mut self, id: DocId) {

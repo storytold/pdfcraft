@@ -7719,6 +7719,22 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let found = ok(&mut a, "text_find", json!({ "doc": text, "query": "Sticky" }));
     assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "sort": "colour" })), Err(ToolError::InvalidArgs(_))));
+    // Each page with comments beside them (#6791): one landscape sheet for page 1, its comments
+    // listed beside it.
+    for layout in ["document_and_comments_with_lines", "document_and_comments"] {
+        ok(&mut a, "comments_summarize", json!({ "doc": doc, "layout": layout, "out": "pages.pdf" }));
+        let pages = ok(&mut a, "doc_open", json!({ "path": "pages.pdf" }))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({ "doc": pages }));
+        assert_eq!(info["pages"].as_array().unwrap().len(), 1, "{layout}: {info}");
+        assert_eq!((info["pages"][0]["width"].as_f64(), info["pages"][0]["height"].as_f64()), (Some(792.0), Some(612.0)), "{layout}");
+        let text = page_text(&mut a, pages).join("\n");
+        assert!(text.contains("Page 1") && text.contains("Sticky Note  Ada") && text.contains("Sticky"), "{layout}: {text}");
+        ok(&mut a, "doc_close", json!({ "doc": pages }));
+    }
+    match a.call("comments_summarize", &json!({ "doc": doc, "layout": "side_by_side" })) {
+        Err(ToolError::InvalidArgs(e)) => assert!(e.contains("document_and_comments_with_lines"), "says what is allowed: {e}"),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Text the standard fonts can't draw is never written as `?` silently, through the tools. A form
