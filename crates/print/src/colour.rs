@@ -135,12 +135,19 @@ pub fn profile_folders() -> Vec<PathBuf> {
 /// The RGB and grey profiles in `folders` and their immediate subfolders that pages can be
 /// printed into, sorted by name. Files that aren't such a profile are skipped.
 pub fn installed_profiles_in(folders: &[PathBuf]) -> Vec<InstalledProfile> {
+    installed_profiles_where(folders, &|_| true)
+}
+
+/// [`installed_profiles_in`], reading only the files `allow` passes (a caller confined to some
+/// folders checks each file, links followed, before it is opened).
+pub fn installed_profiles_where(folders: &[PathBuf], allow: &dyn Fn(&Path) -> bool) -> Vec<InstalledProfile> {
     let mut files: Vec<PathBuf> = Vec::new();
     for dir in folders {
         collect(dir, 1, &mut files);
     }
     let mut out: Vec<InstalledProfile> = files
         .into_iter()
+        .filter(|path| allow(path))
         .filter_map(|path| {
             let p = PrinterProfile::read(&path).ok()?;
             let name = if p.name().is_empty() { path.file_name()?.to_string_lossy().into_owned() } else { p.name().to_string() };
