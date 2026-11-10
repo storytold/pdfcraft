@@ -446,13 +446,6 @@ impl Stream {
         self.decoded_strict_within(MAX_DECODED)
     }
 
-    /// Like [`Stream::decoded_strict`], bounded by `max` (and [`MAX_DECODED`]): for data that
-    /// will be copied elsewhere, where a damaged stream must not pass for a shorter one.
-    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
-        let decode = |chain: &[(Filter, Params)], data: &[u8], max| pdfcraft_filters::decode(chain, data, max).map(|v| (v, 0)).map_err(|e| (e, 0));
-        self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
-    }
-
     /// [`Stream::decoded_strict`] for a caller with less than [`MAX_DECODED`] left to spend:
     /// decoding past `max` bytes (in any filter stage) is an error.
     pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
