@@ -866,9 +866,13 @@ pub(crate) fn rewrite_block_from(
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
+    // The editor asks for bold as the paragraph's own family with another weight. For the Arabic
+    // fallback, which keeps each run's family, that is a weight alone.
+    let weight = blocks.get(block).and_then(|b| weight_only(style, b));
+    let shaped_style = weight.as_ref().unwrap_or(style);
     let fallback = blocks.get(block).filter(|b| {
         let members: Vec<&TextLine> = b.lines.iter().filter_map(|i| lines.get(*i)).collect();
-        shaped::eligible(&members, text.unwrap_or(&b.editor_text), style)
+        shaped::eligible(&members, text.unwrap_or(&b.editor_text), shaped_style)
     });
     let Some(b) = fallback.cloned() else {
         return rewrite_block_source(doc, page, lines, block, text, style, max_glyphs);
@@ -878,7 +882,7 @@ pub(crate) fn rewrite_block_from(
     match rewrite_block_source(doc, page, lines.clone(), block, text, style, max_glyphs) {
         Err(source) => {
             *doc = before;
-            shaped::rewrite(doc, page, &b, &lines, text.unwrap_or(&b.editor_text), style).map_err(|fallback| match fallback {
+            shaped::rewrite(doc, page, &b, &lines, text.unwrap_or(&b.editor_text), shaped_style).map_err(|fallback| match fallback {
                 // The fallback's own refusal names what it cannot keep; otherwise say why the source fonts failed.
                 EditError::Invalid(_) => fallback,
                 _ => source,
@@ -886,6 +890,17 @@ pub(crate) fn rewrite_block_from(
         }
         done => done,
     }
+}
+
+/// `style` with its family taken as a weight alone, when the family asked for is the paragraph's
+/// own with its slant (what the editor sends for Bold): `None` when it asks for anything else.
+fn weight_only(style: &BlockStyle, block: &TextBlock) -> Option<BlockStyle> {
+    let (family, bold, italic) = style.family?;
+    (style.bold.is_none() && family == source_family(&block.base_font) && italic == block.italic).then(|| BlockStyle {
+        family: None,
+        bold: Some(bold),
+        ..style.clone()
+    })
 }
 
 /// [`rewrite_block_from`] with the source fonts (or the up-front Arabic fallback for a uniform

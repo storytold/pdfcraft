@@ -16128,6 +16128,26 @@ fn a_tightened_full_face_arabic_row_is_kept_when_another_row_is_edited() {
     assert!(content.contains(first), "the tightened row keeps its own show {first}: {content}");
 }
 
+/// The editor asks for bold as the paragraph's own family with the weight changed (Format text's
+/// B button), not as a bare weight: on an Arabic paragraph that too takes the fallback's bold
+/// instance. It failed with "the BIZ UDPGothic fallback font has no glyph", so Bold never worked on
+/// Arabic in the app though it did from the automation tools.
+#[test]
+fn bold_asked_for_as_the_paragraphs_own_family_takes_the_arabic_fallback_too() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || !pdfcraft_fonts::arabic_bold_available() {
+        return;
+    }
+    let mut doc = arabic_ligature_page("BT /F1 12 Tf 300 700 Td (BYA) Tj ET BT /F1 12 Tf 300 500 Td (AB) Tj ET", false);
+    let block = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    // The fixture's font (FakeArabic) reads as a sans face: Helvetica's family.
+    let bold = text::BlockStyle { family: Some((added::Family::Helvetica, true, block.italic)), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, None, &bold).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), "سلام");
+    let faces = shown_faces(&doc, 0);
+    assert!(faces.contains("NotoSansArabic-Bold"), "{faces:?}");
+}
+
 /// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
 /// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
 /// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
