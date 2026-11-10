@@ -1,5 +1,6 @@
 use super::setups::{self, PrinterSetup};
-use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
+use super::{Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, print, spool};
+use pdfcraft_engine::print::PAPERS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -71,7 +72,12 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
+    /// Paper sizes added with Custom…, kept with the settings.
+    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
+    /// The custom paper being added: name, width and height as typed (the preferences' unit).
+    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// Whether the user has explicitly chosen or overridden the paper size.
@@ -150,6 +156,8 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_papers: Vec::new(),
+            custom_new: None,
             paper_before_label: None,
             paper_overridden: false,
             papers: default_papers(),
@@ -178,16 +186,6 @@ pub fn default_papers() -> Vec<(String, (f64, f64))> {
 }
 
 impl PrintDraft {
-    /// The display name of the currently selected paper.
-    pub fn paper_name(&self) -> &str {
-        self.papers.get(self.paper).map(|p| p.0.as_str()).or_else(|| PAPERS.get(self.paper).map(|p| p.0)).unwrap_or(PAPERS[0].0)
-    }
-
-    /// The dimensions in points `(width, height)` of the currently selected paper.
-    pub fn paper_size(&self) -> (f64, f64) {
-        self.papers.get(self.paper).map(|p| p.1).or_else(|| PAPERS.get(self.paper).map(|p| p.1)).unwrap_or(PAPERS[0].1)
-    }
-
     /// Find the index of a paper in `self.papers` matching `size`, allowing for orientation.
     pub fn matching_paper(&self, size: (f64, f64)) -> Option<usize> {
         print::matching_paper(size).or_else(|| {
@@ -243,7 +241,11 @@ impl PrintDraft {
 
     /// Apply driver-reported media sizes to `self.papers`, preserving the current selection.
     pub fn apply_printer_papers(&mut self, detected: Vec<(String, (f64, f64))>) {
-        let before_label = self.paper_before_label.and_then(|idx| self.papers.get(idx).cloned());
+        let custom_paper_idx = self.paper.checked_sub(self.papers.len());
+        let before_label_custom = self.paper_before_label.and_then(|idx| idx.checked_sub(self.papers.len()));
+        let before_label = if before_label_custom.is_some() { None } else { self.paper_before_label.and_then(|idx| self.papers.get(idx).cloned()) };
+        let current_name = self.paper_name().to_string();
+        let current_size = self.paper_size();
         let mut papers = default_papers();
         for (name, size) in detected {
             if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
@@ -257,10 +259,14 @@ impl PrintDraft {
                 papers.push((name, size));
             }
         }
-        let current_name = self.paper_name().to_string();
-        let current_size = self.paper_size();
         self.papers = papers;
-        if let Some(pos) =
+        if let Some(c_idx) = custom_paper_idx {
+            if c_idx < self.custom_papers.len() {
+                self.paper = self.papers.len() + c_idx;
+            } else {
+                self.paper = 0;
+            }
+        } else if let Some(pos) =
             self.papers.iter().position(|(n, s)| n == &current_name && (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5)
         {
             self.paper = pos;
@@ -270,16 +276,24 @@ impl PrintDraft {
             self.papers.push((current_name, current_size));
             self.paper = self.papers.len() - 1;
         }
-        self.paper_before_label = before_label.map(|(name, size)| {
-            if let Some(pos) = self.papers.iter().position(|(n, s)| n == &name && (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
-                pos
-            } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
-                pos
+        if let Some(c_idx) = before_label_custom {
+            if c_idx < self.custom_papers.len() {
+                self.paper_before_label = Some(self.papers.len() + c_idx);
             } else {
-                self.papers.push((name, size));
-                self.papers.len() - 1
+                self.paper_before_label = None;
             }
-        });
+        } else {
+            self.paper_before_label = before_label.map(|(name, size)| {
+                if let Some(pos) = self.papers.iter().position(|(n, s)| n == &name && (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
+                    pos
+                } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
+                    pos
+                } else {
+                    self.papers.push((name, size));
+                    self.papers.len() - 1
+                }
+            });
+        }
     }
 
     /// Auto-select the printer's configured default paper (from DEVMODE / driver settings).
@@ -380,24 +394,28 @@ impl PrintDraft {
         let Some(printer) = self.printer.clone() else { return };
         // Label's stock is that job's; the printer keeps the paper Label replaced.
         let paper = if self.handling == Handling::Label { self.paper_before_label.unwrap_or(self.paper) } else { self.paper };
-        let setup = PrinterSetup { paper, size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
+        // By name, so a custom paper is found again however the list changes.
+        let setup =
+            PrinterSetup { paper: self.paper_name_at(paper).to_string(), size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
         setups::record(&mut self.setups, &printer, setup);
     }
 
     /// Bring back what the chosen printer was last printed with, when it has been printed to
     /// (#2001); a printer never printed to keeps the dialog's choices. While Label holds the
-    /// label stock, the printer's paper is what leaving Label gives back.
+    /// label stock, the printer's paper is what leaving Label gives back. A custom paper taken
+    /// off the list since leaves the paper as it is.
     pub fn apply_setup(&mut self) {
         let Some(printer) = self.printer.as_deref() else { return };
-        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| *s) else { return };
+        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| s.clone()) else { return };
         self.size = setup.size;
         self.custom_scale = setup.custom_scale;
         self.duplex = setup.duplex;
-        let paper = setup.paper.min(PAPERS.len() - 1);
-        if self.handling == Handling::Label {
-            self.paper_before_label = Some(paper);
-        } else {
-            self.paper = paper;
+        if let Some(paper) = self.paper_index(&setup.paper) {
+            if self.handling == Handling::Label {
+                self.paper_before_label = Some(paper);
+            } else {
+                self.paper = paper;
+            }
         }
         self.sheet = 0;
     }
@@ -496,7 +514,7 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(Some(print::paper_media_option(Some(self.paper_name()), self.paper_size())))
+            .chain(Some(print::paper_media_option(Some(&self.paper_name()), self.paper_size())))
             .collect(),
         }
     }

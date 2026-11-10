@@ -226,12 +226,14 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = d.paper_name().to_string();
+                d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
                 let mut paper_clicked = false;
                 let detecting = d.papers_loading();
                 ui.horizontal(|ui| {
-                    craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(&paper_name)).width(180.0).show_ui(ui, |ui| {
+                    // A standard size's name is translated; a custom paper keeps the name it was given.
+                    let shown = if d.paper_is_custom() { d.paper_name().to_string() } else { tl!(&d.paper_name()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(180.0).show_ui(ui, |ui| {
                         if detecting {
                             ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
                         }
@@ -240,11 +242,30 @@ pub(crate) fn body(
                                 paper_clicked = true;
                             }
                         }
+                        if !d.custom_papers.is_empty() {
+                            ui.separator();
+                        }
+                        for (i, p) in d.custom_papers.iter().enumerate() {
+                            let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
+                            if ui.selectable_value(&mut d.paper, d.papers.len() + i, label).clicked() {
+                                paper_clicked = true;
+                            }
+                        }
                     })
                     .response
                     .labelled_by(paper_label.id);
                     if detecting {
                         ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
+                    }
+                    if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
+                        d.custom_new = match d.custom_new {
+                            Some(_) => None,
+                            None => Some((String::new(), String::new(), String::new())),
+                        };
+                    }
+                    if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
+                        d.remove_custom_paper();
+                        paper_clicked = true;
                     }
                     let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
                         tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
@@ -281,6 +302,11 @@ pub(crate) fn body(
                     d.sheet = 0;
                 }
                 ui.end_row();
+                if d.custom_new.is_some() {
+                    ui.label("");
+                    custom_paper_row(ui, d, t);
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
@@ -648,6 +674,33 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+/// The row that adds a custom paper: name, width and height in the preferences' unit.
+fn custom_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let unit = d.units;
+    let Some((name, width, height)) = d.custom_new.as_mut() else { return };
+    let side = |s: &str| s.trim().replace(',', ".").parse::<f64>().ok().map(|v| v / unit.per_point());
+    let paper = match (side(width), side(height)) {
+        (Some(w), Some(h)) => crate::print_paper::CustomPaper::new(name, w, h),
+        _ => None,
+    };
+    let (mut add, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).hint_text(tl!("Name")).desired_width(110.0)).accessible_name(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(width).hint_text(tl!("Width")).desired_width(52.0)).accessible_name(tl!("Width"));
+        ui.label("×");
+        ui.add(egui::TextEdit::singleline(height).hint_text(tl!("Height")).desired_width(52.0)).accessible_name(tl!("Height"));
+        ui.label(egui::RichText::new(unit.label()).color(t.text_muted));
+        add = ui.add_enabled(paper.is_some(), egui::Button::new(tl!("Add"))).clicked();
+        cancel = ui.button(tl!("Cancel")).clicked();
+    });
+    if add && let Some(paper) = paper {
+        d.add_custom_paper(paper);
+        d.custom_new = None;
+    } else if cancel {
+        d.custom_new = None;
+    }
 }
 
 #[cfg(test)]

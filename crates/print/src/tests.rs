@@ -1660,6 +1660,45 @@ fn printer_papers_and_default_paper_api() {
     }
 }
 
+/// Overlapping driver discovery, queue queries, and paper detection run concurrently across
+/// worker threads without deadlocking or racing the PrintTicket provider.
+#[test]
+fn overlapping_paper_discovery_two_sided_and_queue_queries() {
+    let queues = crate::spool::printer_queues();
+    let name = queues.first().map(|p| p.name.clone()).unwrap_or_else(|| "Microsoft Print to PDF".to_string());
+
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let printer = name.clone();
+            std::thread::spawn(move || {
+                for _ in 0..5 {
+                    match i % 5 {
+                        0 => {
+                            let _ = crate::spool::printer_papers(&printer);
+                        }
+                        1 => {
+                            let _ = crate::spool::printer_default_paper(&printer);
+                        }
+                        2 => {
+                            let _ = crate::spool::two_sided(&printer);
+                        }
+                        3 => {
+                            let _ = crate::spool::printers();
+                        }
+                        _ => {
+                            let _ = crate::spool::printer_paper_info(&printer);
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in threads {
+        handle.join().unwrap();
+    }
+}
+
 #[test]
 fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
     let mut doc = fixture(2);

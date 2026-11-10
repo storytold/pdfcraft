@@ -6,7 +6,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::file_filter::AddFilterAnyCase as _;
 use egui::{Color32, Pos2, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
+use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, spool};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -247,6 +247,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            custom_new: None,
             ..keep
         };
         if changed {
@@ -695,6 +696,9 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
+            // Large pictures become tiles on Windows (#5131): work on the whole file, kept off the
+            // UI thread with the rest.
+            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
             // The receiver may be gone (the app quit): nothing to report to then.
             let result = match &spooler {
                 Some(submit) => submit(&bytes, &job),

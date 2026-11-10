@@ -52,7 +52,7 @@ fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
 
 /// `doc_print`'s `paper`, by its name, short form, driver-detected paper name, or custom dimensions.
 /// Returns `((width, height), media_name)`.
-fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64), String)> {
+fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64), Option<String>)> {
     if let Some(p) = name {
         // 1. Match standard PAPERS presets.
         for (index, (n, size)) in PAPERS.iter().enumerate() {
@@ -60,7 +60,7 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
                 || n.replace("US ", "").eq_ignore_ascii_case(p)
                 || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(p))
             {
-                let media = print::cups_media(index).unwrap_or("Letter").to_string();
+                let media = print::cups_media(index).map(String::from);
                 return Ok((*size, media));
             }
         }
@@ -68,15 +68,19 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
         if let Some(printer_name) = printer {
             let driver_papers = spool::printer_papers(printer_name);
             if let Some((name, size)) = driver_papers.iter().find(|(n, _)| n.eq_ignore_ascii_case(p)) {
-                return Ok((*size, print::paper_media(Some(name), *size)));
+                return Ok((*size, Some(print::paper_media(Some(name), *size))));
             }
         }
         // 3. Match custom dimensions ("<w>x<h>").
         if let Some(size) = parse_custom_dimensions(p) {
-            return Ok((size, print::paper_media(None, size)));
+            return Ok((size, Some(print::paper_media(None, size))));
+        }
+        // 4. A size of its own: "8.5x14in", "210x297mm", "10x15cm". It names no media.
+        if let Some(size) = paper_size(p) {
+            return Ok((size, None));
         }
         return Err(bad(format!(
-            "unknown paper {p:?}; choose one of {}, a paper from printer_papers, or dimensions \"<w>x<h>\"",
+            "unknown paper {p:?}; choose one of {}, a paper from printer_papers, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
             PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
         )));
     }
@@ -85,11 +89,12 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
     if let Some(printer_name) = printer
         && let Some((name, size)) = spool::printer_default_paper(printer_name)
     {
-        return Ok((size, print::paper_media(Some(&name), size)));
+        return Ok((size, Some(print::paper_media(Some(&name), size))));
     }
 
-    // Default fallback: US Letter.
-    Ok((PAPERS[0].1, "Letter".to_string()))
+    let (name, size) = PAPERS[0];
+    let media = print::paper_media(Some(name), size);
+    Ok((size, Some(media)))
 }
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
@@ -334,13 +339,27 @@ impl Automation {
             }
             (None, Some(printer)) => {
                 let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
-                let job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, Some(&media), settings.raster, &laid_out)?;
+                let job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, media.as_deref(), settings.raster, &laid_out)?;
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }
         Ok(out)
     }
+}
+
+/// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
+/// inches (PDF's own page limit).
+fn paper_size(spec: &str) -> Option<(f64, f64)> {
+    let s = spec.trim().to_ascii_lowercase();
+    let (body, per_point) = [("in", 1.0 / 72.0), ("mm", 25.4 / 72.0), ("cm", 2.54 / 72.0), ("pt", 1.0)]
+        .into_iter()
+        .find_map(|(unit, per_point)| s.strip_suffix(unit).map(|b| (b, per_point)))?;
+    let (w, h) = body.split_once('x')?;
+    let side = |t: &str| t.trim().parse::<f64>().ok().map(|v| v / per_point).filter(|v| (72.0..=14_400.0).contains(v));
+    let (w, h) = (side(w)?, side(h)?);
+    Some((w.min(h), w.max(h)))
 }
 
 #[cfg(test)]
@@ -397,7 +416,7 @@ mod tests {
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
             let (_, media) = resolve_paper(paper_name, None).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, Some(&media), None, &[]).unwrap()
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, media.as_deref(), None, &[]).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -406,7 +425,7 @@ mod tests {
         assert_eq!((letter.printer.as_deref(), letter.title.as_str()), (Some("Office"), "a.pdf"));
         // Every paper, by its full name, goes out as its own media name.
         for (i, (name, size)) in PAPERS.iter().enumerate() {
-            assert_eq!(resolve_paper(Some(name), None).ok(), Some((*size, print::cups_media(i).unwrap().to_string())), "{name}");
+            assert_eq!(resolve_paper(Some(name), None).ok(), Some((*size, Some(print::cups_media(i).unwrap().to_string()))), "{name}");
             assert_eq!(job(json!({}), Some(name)).options, print::media_option(i).into_iter().collect::<Vec<_>>(), "{name}");
         }
         // Short forms find the same paper.
@@ -421,6 +440,9 @@ mod tests {
         assert_eq!(job(json!({}), Some("Custom.300x500pt")).options, [media("Custom.300x500")]);
 
         assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
+        // A size of its own is laid out as asked and names no media.
+        assert_eq!(resolve_paper(Some("8.5x14in"), None).ok(), Some(((612.0, 1008.0), None)));
+        assert!(job(json!({}), Some("8.5x14in")).options.is_empty());
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter"), None, &[]).ok().map(|j| j.printer), Some(None));
         assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some("Letter"), None, &[]).is_err());
     }
@@ -438,5 +460,14 @@ mod tests {
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
         assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
         assert!(!job(json!({}), None));
+    }
+
+    #[test]
+    fn a_paper_size_reads_its_numbers_and_needs_a_unit() {
+        assert_eq!(paper_size("8.5 x 14 in"), Some((612.0, 1008.0)));
+        assert_eq!(paper_size("1e3x1e3pt"), Some((1000.0, 1000.0)));
+        for spec in ["0x0mm", "-5x10cm", "5x-10cm", "10x15"] {
+            assert_eq!(paper_size(spec), None, "{spec}");
+        }
     }
 }

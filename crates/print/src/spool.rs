@@ -53,6 +53,19 @@ fn unavailable(dll: &str) -> crate::PrintError {
     crate::PrintError::Spool(format!("printing needs {dll}, which this Windows installation lacks; use Save as PDF instead"))
 }
 
+/// Keeps two threads of this process out of the Windows PrintTicket provider (`PTOpenProvider`
+/// and the calls on its handle) at the same time. When two threads make the process's first calls
+/// together, winspool can keep a pointer to a device capabilities cache it has freed, and a later
+/// call crashes the process. All entry points in this process that query driver capabilities
+/// or submit jobs share this process-wide lock.
+#[cfg(windows)]
+static PRINT_TICKET_PROVIDER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(windows)]
+pub(crate) fn print_ticket_provider() -> std::sync::MutexGuard<'static, ()> {
+    PRINT_TICKET_PROVIDER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The system's printers; none on a Windows installation without the print DLLs.
 pub fn printers() -> Vec<Printer> {
     if missing_print_dll().is_some() {
@@ -60,6 +73,8 @@ pub fn printers() -> Vec<Printer> {
     }
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     craft_print::printers()
 }
 
@@ -83,6 +98,8 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     }
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     craft_print::two_sided(printer)
 }
 
@@ -392,6 +409,8 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
         return Err(unavailable(dll));
     }
     #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    #[cfg(windows)]
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
     let job = resolved.as_ref();
@@ -405,6 +424,8 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     if let Some(dll) = missing_print_dll() {
         return Err(unavailable(dll));
     }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     #[cfg(windows)]
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
@@ -439,6 +460,12 @@ pub type Paper = (String, (f64, f64));
 /// Empty when the printer reports none or on platforms where driver capabilities are not queried.
 #[cfg(windows)]
 pub fn printer_papers(printer: &str) -> Vec<Paper> {
+    let _provider = print_ticket_provider();
+    printer_papers_internal(printer)
+}
+
+#[cfg(windows)]
+fn printer_papers_internal(printer: &str) -> Vec<Paper> {
     use winprint::ticket::{FeatureOptionPack as _, FeatureOptionPackWithPredefined as _};
     let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
     let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
@@ -490,6 +517,11 @@ pub fn printer_default_paper(printer: &str) -> Option<Paper> {
 
 /// Reads the supported paper sizes and the default paper size configured for `printer`.
 pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    #[cfg(windows)]
+    let papers = printer_papers_internal(printer);
+    #[cfg(not(windows))]
     let papers = printer_papers(printer);
     #[cfg(windows)]
     let default_paper = {
