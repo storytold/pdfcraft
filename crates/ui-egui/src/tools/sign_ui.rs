@@ -639,15 +639,29 @@ impl PdfCraftApp {
     /// it vouches for every certificate it may issue, as an imported CA does.
     pub fn trust_root(&mut self, cert: Certificate) {
         let mut trust = self.session.trust().clone();
-        // A root is trusted as a signer too, so it needs no second entry.
+        // A root is trusted as a signer and, when issued for time stamping, as a timestamp
+        // authority too, so it needs no second entry.
         trust.signers.retain(|c| c.raw != cert.raw);
+        trust.tsas.retain(|c| c.raw != cert.raw);
         if !trust.certs.iter().any(|c| c.raw == cert.raw) {
             trust.certs.push(cert);
         }
         self.apply_trust(trust);
     }
 
-    /// Replace the trusted roots, keeping the trusted signers; see [`PdfCraftApp::apply_trust`].
+    /// Trust a certificate as a timestamp authority only (Certificate Viewer ▸ Trust ▸ Trust for
+    /// timestamps), revalidating: the timestamps signed with exactly this certificate are trusted
+    /// time, and it is trusted for nothing else (#6786).
+    pub fn trust_tsa(&mut self, cert: Certificate) {
+        let mut trust = self.session.trust().clone();
+        if !trust.tsas.iter().any(|c| c.raw == cert.raw) {
+            trust.tsas.push(cert);
+        }
+        self.apply_trust(trust);
+    }
+
+    /// Replace the trusted roots, keeping the trusted signers and timestamp authorities; see
+    /// [`PdfCraftApp::apply_trust`].
     pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
         let mut trust = self.session.trust().clone();
         trust.certs = certs;

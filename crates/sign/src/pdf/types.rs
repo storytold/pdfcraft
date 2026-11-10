@@ -14,12 +14,22 @@ pub struct TrustStore {
     /// say, and is never a timestamp authority (#6758). "Add to trusted certificates" on a
     /// signature stores the signer here.
     pub signers: Vec<Certificate>,
+    /// Timestamp authorities trusted for time alone: each makes the RFC 3161 timestamps signed
+    /// with exactly that certificate trusted time, when it is issued for time stamping and was
+    /// valid when it stamped. It is never a signer's identity and never vouches for another
+    /// certificate (#6786).
+    pub tsas: Vec<Certificate>,
 }
 
 impl TrustStore {
     /// Whether `c` is a trust anchor: trusted as a root.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
         self.certs.iter().any(|t| t.raw == c.raw)
+    }
+
+    /// Whether `c` is trusted as a timestamp authority in its own right, not through a root.
+    pub(super) fn trusts_tsa(&self, c: &Certificate) -> bool {
+        self.tsas.iter().any(|t| t.raw == c.raw)
     }
 
     /// Whether signatures made with exactly `c` are trusted: it is a trusted signer or an anchor.

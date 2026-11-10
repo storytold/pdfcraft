@@ -146,14 +146,16 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
                 } else {
                     // Only a token from a trusted authority (valid when it stamped) is trusted
                     // time; otherwise its time is reported but validation uses the signer's
-                    // own claimed time, as without a timestamp. Only anchors are trusted
-                    // authorities: a certificate trusted as a signer alone is not one (#6758).
+                    // own claimed time, as without a timestamp. A trusted authority is one
+                    // trusted as such, or whose chain reaches an anchor: a certificate trusted
+                    // as a signer alone is not one (#6758), and one trusted as an authority
+                    // vouches for no other certificate, so it never joins the pool (#6786).
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
                     let tsa = t.signer_certificate();
-                    let trusted_tsa = tsa
-                        .as_ref()
-                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
+                    let trusted_tsa = tsa.as_ref().is_some_and(|c| {
+                        c.valid_at(t.gen_time) && (trust.trusts_tsa(c) || build_chain(c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)))
+                    });
                     if !trusted_tsa {
                         unverified_time = Some(t.gen_time);
                     } else if tsa.as_ref().is_some_and(Certificate::may_timestamp) {
@@ -574,15 +576,18 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     }
     if info.status != Status::Invalid {
         // An untrusted TSA is not proof of anything: the verdict stays Unknown, like an
-        // ordinary signature from an unknown signer. Only anchors are trusted authorities: a
-        // certificate trusted as a signer alone is not one (#6758).
+        // ordinary signature from an unknown signer. A trusted authority is one trusted as such,
+        // or whose chain reaches an anchor: a certificate trusted as a signer alone is not one
+        // (#6758), and one trusted as an authority vouches for no other certificate (#6786).
         let mut pool = crate::timestamp::token_certs(&contents);
         pool.extend(trust.certs.iter().cloned());
         // A trusted authority whose certificate was not valid at the time it stamped proves
         // nothing either (its detail is already recorded above): never upgrade that to Valid.
         // Nor does one whose certificate is not issued for time stamping.
         let may_stamp = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time) && c.may_timestamp());
-        let trusted_tsa = token.signer_certificate().is_some_and(|c| build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x)));
+        let trusted_tsa = token
+            .signer_certificate()
+            .is_some_and(|c| trust.trusts_tsa(&c) || build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x)));
         if trusted_tsa && may_stamp {
             info.status = Status::Valid;
             info.details.push(Detail::plain("The timestamp token is valid and its authority is trusted."));

@@ -377,16 +377,21 @@ impl Automation {
     }
 
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
-        // What the certificates are trusted for (#6758): as roots, which vouch for every
-        // certificate they may issue and are timestamp authorities, or as signers only, as the
-        // Signatures panel's "Add to trusted certificates" trusts them.
-        let as_signers = match a.opt_str("scope")?.unwrap_or("root") {
-            "root" => false,
-            "signer" => true,
-            other => return Err(bad(format!("scope must be \"root\" or \"signer\", not {other:?}"))),
-        };
+        // What the certificates are trusted for: as roots, which vouch for every certificate
+        // they may issue and are timestamp authorities; as signers only, as the Signatures panel's
+        // "Add to trusted certificates" trusts them (#6758); or as timestamp authorities only
+        // (#6786).
+        let scope = a.opt_str("scope")?.unwrap_or("root");
+        if !matches!(scope, "root" | "signer" | "tsa") {
+            return Err(bad(format!("scope must be \"root\", \"signer\" or \"tsa\", not {scope:?}")));
+        }
+        let as_root = scope == "root";
         let mut trust = if a.opt_bool("clear")?.unwrap_or(false) { pdfcraft_engine::TrustStore::default() } else { self.session.trust().clone() };
-        let certs: &mut Vec<Certificate> = if as_signers { &mut trust.signers } else { &mut trust.certs };
+        let certs: &mut Vec<Certificate> = match scope {
+            "signer" => &mut trust.signers,
+            "tsa" => &mut trust.tsas,
+            _ => &mut trust.certs,
+        };
         // Which certificates are already in, by their bytes: a set, so a bundle of many distinct
         // certificates isn't compared against every one before it.
         let mut known: std::collections::HashSet<Vec<u8>> = certs.iter().map(|c| c.raw.clone()).collect();
@@ -415,16 +420,18 @@ impl Automation {
                 }
             }
         }
-        if !as_signers {
-            // A root is trusted as a signer too, so it needs no second entry.
-            let roots: std::collections::HashSet<&[u8]> = trust.certs.iter().map(|c| c.raw.as_slice()).collect();
-            let signers = trust.signers.iter().filter(|c| !roots.contains(c.raw.as_slice())).cloned().collect();
-            trust.signers = signers;
+        if as_root {
+            // A root is trusted as a signer and, when issued for time stamping, as a timestamp
+            // authority too, so it needs no second entry.
+            let roots: std::collections::HashSet<Vec<u8>> = trust.certs.iter().map(|c| c.raw.clone()).collect();
+            trust.signers.retain(|c| !roots.contains(&c.raw));
+            trust.tsas.retain(|c| !roots.contains(&c.raw));
         }
         self.session.set_trust(trust);
         Ok(json!({
             "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(),
             "trusted_signers": self.session.trusted_signers().iter().map(cert_json).collect::<Vec<_>>(),
+            "trusted_tsas": self.session.trusted_tsas().iter().map(cert_json).collect::<Vec<_>>(),
         }))
     }
 }

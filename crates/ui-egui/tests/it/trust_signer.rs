@@ -102,13 +102,14 @@ fn trust_from_older_settings_is_read_as_signers_and_scopes_persist() {
         let p12 = format!("{}/../sign/tests/data/{name}", env!("CARGO_MANIFEST_DIR"));
         pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate
     };
-    let (signer, root) = (cert("rsa-aes.p12"), cert("ec-p256.p12"));
+    let (signer, root, tsa) = (cert("rsa-aes.p12"), cert("ec-p256.p12"), cert("ec-p384.p12"));
     let pem = pdfcraft_engine::sign::x509::to_pem;
     let mut old = PdfCraftApp::new();
     old.restore(&serde_json::json!({ "trusted": [pem(&signer)] }).to_string());
     assert!(old.session.trusted_certificates().is_empty(), "an old entry is not a root");
     assert_eq!(old.session.trusted_signers().iter().map(|c| c.raw.clone()).collect::<Vec<_>>(), std::slice::from_ref(&signer.raw));
     old.trust_root(root.clone());
+    old.trust_tsa(tsa.clone());
     let saved = old.persist();
     let saved_json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert!(saved_json.get("trusted").is_none(), "the unscoped list is no longer written");
@@ -117,4 +118,5 @@ fn trust_from_older_settings_is_read_as_signers_and_scopes_persist() {
     let raws = |c: &[pdfcraft_engine::sign::Certificate]| c.iter().map(|c| c.raw.clone()).collect::<Vec<_>>();
     assert_eq!(raws(fresh.session.trusted_certificates()), std::slice::from_ref(&root.raw));
     assert_eq!(raws(fresh.session.trusted_signers()), std::slice::from_ref(&signer.raw));
+    assert_eq!(raws(fresh.session.trusted_tsas()), std::slice::from_ref(&tsa.raw), "timestamp authorities persist apart (#6786)");
 }

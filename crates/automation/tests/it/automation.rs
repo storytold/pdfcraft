@@ -8296,8 +8296,15 @@ fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Pat
     assert_eq!((t["trusted"].as_array().unwrap().len(), t["trusted_signers"].as_array().unwrap().len()), (0, 1));
     assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
     assert!(matches!(a.call("sign_trust", &json!({ "scope": "issuer" })), Err(ToolError::InvalidArgs(_))));
+    // Trusted for timestamps only (#6786): the certificate is neither a root nor a signer, so the
+    // signature it made is not trusted by that.
+    ok(a, "sign_trust", json!({ "clear": true }));
+    let t = ok(a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12", "scope": "tsa" }));
+    let lens = |t: &Value, k: &str| t[k].as_array().unwrap().len();
+    assert_eq!((lens(&t, "trusted"), lens(&t, "trusted_signers"), lens(&t, "trusted_tsas")), (0, 0, 1));
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
     let t = ok(a, "sign_trust", json!({ "clear": true }));
-    assert_eq!((t["trusted"].as_array().unwrap().len(), t["trusted_signers"].as_array().unwrap().len()), (0, 0));
+    assert_eq!((lens(&t, "trusted"), lens(&t, "trusted_signers"), lens(&t, "trusted_tsas")), (0, 0, 0));
     assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
     // The same certificate from a PKCS #7 bundle (.p7b), as Windows, Acrobat and CAs export one.
     use pdfcraft_engine::sign::{cms, der, pkcs12};

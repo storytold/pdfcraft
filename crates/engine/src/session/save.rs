@@ -259,10 +259,18 @@ impl Session {
         &self.trust.signers
     }
 
-    /// Replace the trusted roots, keeping the trusted signers; see [`Session::set_trust`].
+    /// The certificates trusted as timestamp authorities only: each makes the timestamps signed
+    /// with exactly that certificate trusted time, and is trusted for nothing else (#6786).
+    pub fn trusted_tsas(&self) -> &[pdfcraft_sign::Certificate] {
+        &self.trust.tsas
+    }
+
+    /// Replace the trusted roots, keeping the trusted signers and timestamp authorities; see
+    /// [`Session::set_trust`].
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
-        let signers = self.trust.signers.clone();
-        self.set_trust(TrustStore { certs, signers });
+        let mut trust = TrustStore::clone(&self.trust);
+        trust.certs = certs;
+        self.set_trust(trust);
     }
 
     /// Replace the whole trust store, revalidate every open document's signatures, and

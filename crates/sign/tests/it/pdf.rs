@@ -2589,13 +2589,39 @@ fn a_trusted_signer_is_not_a_trusted_timestamp_authority() {
     assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()], signers: vec![tsa.id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], signers: vec![tsa.id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!((s.status, s.timestamp_time), (Status::Valid, None), "{:?}", s.details);
     // As a root, the same authority's time is trusted.
     let trust = TrustStore { certs: vec![id.certificate.clone(), tsa.id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.timestamp_time, Some(tsa.time), "{:?}", s.details);
+}
+
+/// #6786: a certificate trusted as a timestamp authority only gives trusted time, for a document
+/// timestamp and for a signature's embedded token, and nothing else: a signature made with it
+/// stays Unknown, though the same certificate trusted as a signer makes it Valid.
+#[test]
+fn a_certificate_trusted_for_timestamps_only_gives_trusted_time_and_nothing_else() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let as_tsa = TrustStore { tsas: vec![tsa.id.certificate.clone()], ..TrustStore::default() };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let s = signatures(&open(&stamped), &stamped, &as_tsa).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    let trust = TrustStore { signers: vec![id.certificate.clone()], tsas: vec![tsa.id.certificate.clone()], ..TrustStore::default() };
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
+    // A certificate issued for time stamping and for signing documents, trusted for timestamps
+    // only, is not a trusted signer.
+    let both = tsa_id_with(&["1.3.6.1.5.5.7.3.8", "1.3.6.1.5.5.7.3.36"]);
+    let signed_by_tsa = pdfcraft_sign::sign(&open(&fixture()), &both, &opts()).unwrap();
+    let check = |trust: &TrustStore| signatures(&open(&signed_by_tsa), &signed_by_tsa, trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&TrustStore { tsas: vec![both.certificate.clone()], ..TrustStore::default() });
+    assert_eq!(s.status, Status::Unknown, "trusted for timestamps only: {:?}", s.details);
+    let s = check(&TrustStore { signers: vec![both.certificate.clone()], ..TrustStore::default() });
+    assert_eq!(s.status, Status::Valid, "the same certificate trusted as a signer: {:?}", s.details);
 }
 
 /// A trusted timestamp authority whose certificate was not yet valid when it stamped proves

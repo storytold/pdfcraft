@@ -76,7 +76,8 @@ impl PdfCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let pems = |certs: &[pdfcraft_engine::sign::Certificate]| certs.iter().map(pdfcraft_engine::sign::x509::to_pem).collect::<Vec<String>>();
-        let (trusted_roots, trusted_signers) = (pems(self.session.trusted_certificates()), pems(self.session.trusted_signers()));
+        let (trusted_roots, trusted_signers, trusted_tsas) =
+            (pems(self.session.trusted_certificates()), pems(self.session.trusted_signers()), pems(self.session.trusted_tsas()));
         // The Print dialog's choices that describe how this computer prints (#2001), named as
         // `doc_print` names them. Copies, pages, layout and orientation are one job's.
         let print = serde_json::json!({
@@ -162,6 +163,7 @@ impl PdfCraftApp {
             // read once and no longer written.
             "trusted_roots": trusted_roots,
             "trusted_signers": trusted_signers,
+            "trusted_tsas": trusted_tsas,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
@@ -534,16 +536,20 @@ impl PdfCraftApp {
                 pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect::<Vec<_>>()
             })
         };
-        let (roots, signers) = (certs("trusted_roots"), certs("trusted_signers"));
-        if roots.is_some() || signers.is_some() {
-            self.apply_trust(pdfcraft_engine::TrustStore { certs: roots.unwrap_or_default(), signers: signers.unwrap_or_default() });
+        let (roots, signers, tsas) = (certs("trusted_roots"), certs("trusted_signers"), certs("trusted_tsas"));
+        if roots.is_some() || signers.is_some() || tsas.is_some() {
+            self.apply_trust(pdfcraft_engine::TrustStore {
+                certs: roots.unwrap_or_default(),
+                signers: signers.unwrap_or_default(),
+                tsas: tsas.unwrap_or_default(),
+            });
         } else if let Some(legacy) = certs("trusted") {
             // Settings from before trust had a scope (#6758) kept one list, filled by "Add to
             // trusted certificates" on a signer or in the Certificate Viewer, and each entry
             // there vouched for whatever it could issue. They are read as trusted signers: a
             // signature made with one stays valid, and a certificate one issued is no longer
             // trusted until the user trusts its issuer as a root.
-            self.apply_trust(pdfcraft_engine::TrustStore { certs: Vec::new(), signers: legacy });
+            self.apply_trust(pdfcraft_engine::TrustStore { signers: legacy, ..pdfcraft_engine::TrustStore::default() });
         }
     }
 }

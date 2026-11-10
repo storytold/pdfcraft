@@ -6511,8 +6511,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = ["sign_trust"]
-evidence = ["crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool, as roots (the default) or as signers only (scope); a separate timestamp-authority scope, and the other per-certificate trust settings, not yet"
+evidence = ["crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/pdf.rs::a_certificate_trusted_for_timestamps_only_gives_trusted_time_and_nothing_else"]
+notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool, as roots (the default), as signers only, or as timestamp authorities only (scope); the Certificate Viewer trusts a certificate as a signer, a root or a timestamp authority. Other per-certificate trust settings (certified documents, dynamic content, scripts) not yet"
 
 [[feature]]
 id = "sign.eutl"

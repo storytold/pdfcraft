@@ -258,6 +258,8 @@ pub(crate) enum CertAction {
     TrustSigner(Box<Certificate>),
     /// Trust it as a root: it vouches for every certificate it may issue.
     TrustRoot(Box<Certificate>),
+    /// Trust the timestamps signed with it, and nothing else.
+    TrustTsa(Box<Certificate>),
     Export(Box<Certificate>),
 }
 
@@ -334,11 +336,14 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trust: &pdfcraf
                 CertTab::Trust => {
                     let root = trust.certs.iter().any(|x| x.raw == c.raw);
                     let signer = trust.signers.iter().any(|x| x.raw == c.raw);
+                    let tsa = trust.tsas.iter().any(|x| x.raw == c.raw);
                     let anchored = v.chain.iter().any(|x| trust.certs.iter().any(|y| y.raw == x.raw));
                     ui.label(if root {
                         tl!("This certificate is in your list of trusted certificates.")
                     } else if signer {
                         tl!("You trust signatures made with this certificate. It does not vouch for any other certificate.")
+                    } else if tsa {
+                        tl!("You trust timestamps made with this certificate. It is not trusted as a signer and does not vouch for any other certificate.")
                     } else if anchored {
                         tl!("This certificate is trusted through a certificate above it in the chain.")
                     } else {
@@ -347,6 +352,21 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trust: &pdfcraf
                     ui.add_space(8.0);
                     if !root && !signer && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
                         action = Some(CertAction::TrustSigner(Box::new(c.clone())));
+                    }
+                    // Trusting an authority's timestamps is its own choice too (#6786), offered
+                    // for a certificate issued for time stamping.
+                    if !root && !tsa && c.may_timestamp() {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Trusting this certificate for timestamps makes the times it stamps trusted, so signatures it timestamped are judged at that time. It does not make it a trusted signer or vouch for other certificates."
+                            ))
+                            .color(t.text_muted),
+                        );
+                        ui.add_space(4.0);
+                        if widgets::pill_button(ui, tl!("Trust for Timestamps"), false).clicked() {
+                            action = Some(CertAction::TrustTsa(Box::new(c.clone())));
+                        }
                     }
                     // Trusting a certificate as a root is its own choice, made after reading what it
                     // implies (#6758), and offered only where it means something: one that may issue.
