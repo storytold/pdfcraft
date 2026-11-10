@@ -1,26 +1,32 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-10 | **Last updated:** 2026-11-10 | **Change:** patch (M7, PR #5003: reconcile main 3bcaacc27 and shared font decode allowances; estimates unchanged)
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M7, PR #5003: synchronize main d2139e58, retaining Type 1 subset checks and upstream XFA/Thai behavior; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
-
+>
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7, PR #5003: reconcile main c3c36f77; preserve Type 1 subset checks and upstream progress; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
-
-
+>
+>
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** patch (M7, PR #5003: reconcile with main d3384340; preserve Type 1 subset regression coverage and both progress histories; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -31,12 +37,13 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
+>
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (M7, #2750: Single-style Keep source fonts edits retain source glyphs and batch only missing glyphs in fallback fonts. Per-rewrite character eligibility and widths are cached; source and fallback edge spaces stay extractable. Estimates unchanged.)
-
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (M1, #1143: repaired aliases survive preflight, snapshots and normalized saves; retained materialized revisions report generation disagreements; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M1, #1143: explicit live xref/header generation repair policy and bounded diagnostics; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -47,6 +54,7 @@
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector-print appearance transforms retain small coefficients; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M7 #4966: Type 1 subset fix reconciled with current main; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (web: same-document host mode on the canvas, `data-host="page"`; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M10: vector printing resolves annotation rectangle coordinates; estimates unchanged)
@@ -250,10 +258,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-10 (M7, PR #5003):** Integrate main 3bcaacc27, preserve upstream font decode allowances and source/fallback behavior, and charge Type 1 program reads to the shared allowance. Budget exhaustion is not cached as a malformed program; regression coverage added. Estimates unchanged.
+- **2026-11-09 (M7, PR #5003):** Reconciled main d2139e58 while preserving Type 1 CharSet checks, bounded built-in encoding reuse, indirect Differences handling, upstream zero-width-space/Thai behavior and all automation modules. Scoped fonts/automation suites: 633 passed, zero failed or ignored; formatting, scoped all-target Clippy/WASM, layers, assets and parity passed. A root-confined 13-step CLI run visibly restores missing P/b outlines; undo/redo/save/reopen rasters agree. Estimates unchanged.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-31 (M6, PR #4166/#4088 integration):** Integrated main f137a289 (0.16.1), preserving upstream progress entries and automatic-field Print suppression with its console diagnostic. ShowPanel/SaveAs filtering, explicit button/console printing, field effects and document-error provenance remain intact, together with all three engine regressions and the headless automation regression. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
-
 - **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.
 - **2026-10-27 (M10, annotation print precision):** Vector printing preserves small placement coefficients for existing form, comment and stamp appearances with large bounding boxes or matrices.
   Synthetic render and save/reopen regressions cover the change; estimates unchanged.
@@ -267,16 +276,21 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-05 (M2, #5889):** A non-embedded Arial set as a TrueType CID font (`CIDFontType2`, `Identity-H`, as Word and PDFMaker write it) draws the glyphs its codes name. Those codes are glyph indexes in the author's Arial, whose first 258 glyphs follow the standard Macintosh order, so the standard substitute now draws each glyph by name (vendored hayro-interpret patch 76). Before, it took each code as one of its own glyph indexes, and "Low Power" drew as "@ck 'Dck Yf". Arial Narrow, Black and Unicode MS, and `CIDFontType0` fonts, are not read this way. Copying or searching those runs still needs a `/ToUnicode`.
 
 - **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
+- **2026-11-05 (M7, PR #5003):** Reconciled with main c3c36f77; preserved Type 1 subset checks, all automation regression modules and both roadmap histories. Validation: 482 fonts/automation tests, scoped all-target Clippy with -D warnings, scoped WASM checks, formatting, layers, assets and parity passed. Behavior scope and estimates unchanged.
+
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-07 (M10, `ocr.ocr-web`, port onto #977):** Web OCR rebuilt on main's engines and preprocessing (#977). `OcrJob::run` is now `OcrJob::steps` a page at a time: the page renders, crops to the region and cleans each page, a Web Worker runs ocrs on the result, and `OcrShot::place` maps the words back through the region and preprocessing. Every strategy reads like this when only one engine is present, and the web build has only ocrs. The downloaded models are installed into the engine cache (`ocr::install`), so the Verify screen and the engine-status checks see them too. The batch keeps main's skipped-files bucket, low-confidence notes and cancel. The translations moved to craft-i18n (storytold/craft-i18n#141). The Verify screen starts the model download itself and runs once the models land; before, on a fresh page it failed with the desktop's "set PDFCRAFT_MODELS" message. Known limits: the cleaning steps, and the Verify screen's Run OCR and re-reads, run on the page. Estimates unchanged.
 
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
+- **2026-11-03 (M7, PR #5003 follow-up):** Integrated main ecdd1e65 after it advanced during validation; retained upstream typewriter and automation changes alongside Type 1 subset regressions. Validation: 463 fonts/automation tests, scoped all-target Clippy with -D warnings, scoped WASM, formatting, layers, assets and parity passed. Behavior scope and estimates unchanged.
 
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
 
 - **2026-11-03 (community, M7, Thai word breaking):** Thai rows end between words, found with ICU4X's dictionary line segmenter (`icu_segmenter` 2.3, compiled dictionary data, no LSTM model; Unicode-3.0), instead of only at spaces when rewrapping and at any cluster in Add text. A row never starts with a following vowel, tone or other mark, Mai Yamok or Paiyannoi, nor ends with a leading vowel; a word wider than the row still breaks between clusters, and the spaces where an Add text row ends are dropped as in Latin text. Rewrapping existing text works out the breaks once per run of non-space characters. Rewriting a paragraph into Thai still needs a source font with the Thai glyphs (there is no Thai fallback face for it yet). The compiled dictionaries (Thai, Lao, Khmer, Burmese) add about 1.8 MB to a stripped release binary. Estimates unchanged.
+- **2026-11-03 (M7, PR #5003):** Reconciled with main eb696a3f; preserved Type 1 subset glyph checks, automation regressions and both roadmap histories. Validation: 461 fonts/automation tests, scoped all-target Clippy with -D warnings, scoped WASM checks, formatting, layers, assets and parity passed. Behavior scope and estimates unchanged.
+
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
 - **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings in its denominator, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
@@ -286,6 +300,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-02 (M3, #5708):** Pages shorter than the window sit in its middle, one page or row at a time and when scrolling continuously with every page in view.
 - **2026-11-02 (M3, #5716):** A snapshot is drawn at 300 ppi, or at the zoom if that is finer, so one taken zoomed out stays readable; an area too large for one 4096-pixel tile comes out as fine as a tile allows (about 147 ppi for 2000 pt). A choice of resolution and a selection that stays active remain.
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
+- **2026-11-02 (M7, PR #5003):** Reconciled with main d3384340. Retained both roadmap histories, all automation regression modules, and Type 1 subset plus upstream text-editing parity evidence. Validation: 461 fonts/automation tests, scoped all-target Clippy with -D warnings, fonts/automation WASM checks, formatting and layers/assets/parity passed. Behavior scope and estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
@@ -308,6 +323,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-28 (M2, PR #4172):** Integrated main 5af10276, preserving both roadmap histories and reviewing auto-merged export tests and accessibility UI changes. Validation: 488 scoped tests passed (18 engine, 412 renderer unit, 43 renderer integration, 15 Combine; one existing renderer integration test ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Viewer-only CJK fallback and print/output font policy remain unchanged; estimates unchanged.
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
+- **2026-10-28 (M7, #4966):** Reconciled the Type 1 subset glyph-availability fix with current main. A bounded weak-identity cache reuses built-in encodings and failed reads for live font-program aliases without retaining PDF data; stream replacement invalidates it. Scope and estimates unchanged.
+
+- **2026-10-27 (M7, #4966):** Type 1 subsets with valid CharSet metadata no longer reuse absent glyphs solely because Widths and ToUnicode describe them. Encoding names and readable built-in Type 1 encodings determine glyph availability; missing letters follow existing fallback. Exact face completion and legacy editor previews remain limited; estimates unchanged.
 
 - **2026-10-27 (M10, `ocr.ocr-web`, rebase fix):** The web build loads OCR models only when their SHA-256 matches `ATTRIBUTION.toml`. With ONNX loading now on, rten's parser spins forever on some bytes that aren't a model (a corrupt or wrong download), so a bad file now fails at once instead of hanging a worker.
 - **2026-10-27 (M3, #3425):** A file named with open parameters, as help systems start a PDF reader (`manual.pdf#nameddest=Intro`, `#page=12` or `#Intro`), opens at that destination instead of failing to read `manual.pdf#…`: at launch, when another launch hands it over, and in its tab when it is already open. Other parameters are ignored. The app and `link_open` now also apply a GoToR link's named destination, looked up in the target's /Names /Dests or catalog /Dests, instead of warning that it wasn't applied; the app looks names up off the UI thread. `doc_open` reports the destination of a path with open parameters. Estimates unchanged.
@@ -874,8 +892,11 @@ Estimates unchanged.
 | 2026-11-07 | patch | M10 #6514: load Windows PDF print jobs on demand through a read-only file stream, avoiding StorageFile access denial, whole-file buffering and per-chunk async waits; approved dependencies retain the #5006 crash fix. Regression tests pass; physical output remains unqualified; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
+| 2026-11-02 | patch | M7, PR #5003: integrate main d3384340, retaining Type 1 subset checks, upstream automation regressions and parity evidence; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
+| 2026-10-28 | patch | M7 #4966: reconcile the Type 1 subset glyph fix with current main; behavior scope and estimates unchanged. |
+| 2026-10-27 | patch | M7 #4966: Type 1 subset glyph checks prevent missing letters after edit commit; estimates unchanged. |
 | 2026-10-28 | minor | M10: Recognize text widens each found line by fractions of its word height before reading it, so the first and last letters are no longer clipped at 300 dpi (word errors on synthetic 150–400 dpi pages 3.8 % → 0.3 %); word boxes keep their size. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-20 | minor | M9 #79 review, M2, M8: /ActualText that marks no glyph extracts where it paints, as far as it is visible; redaction strips /ActualText around paint it clips; named-layer recognition needs the layer form to draw n1 and n3. Estimates unchanged. |

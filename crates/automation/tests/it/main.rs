@@ -21,4 +21,5 @@ mod redact_after_stray_q_form;
 mod redact_text_after_q;
 mod render_warnings;
 mod text_copy;
+mod type1_subset;
 mod unreadable_objects;

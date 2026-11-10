@@ -1,5 +1,9 @@
 # Editing existing text and source subsets
 
+> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** patch (PR #5003: integrate current main and clarify bounded cache ownership)
+>
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (#4966: Type 1 subset checks and bounded alias lookup cache)
+
 In **Edit text and images**, text drawn inside a Form XObject (grouped artwork) is edited
 with one click: clicking its text prepares that page in an undoable **Prepare grouped text**
 step and opens the paragraph clicked for typing. Nothing is prepared while pages are only
@@ -55,6 +59,16 @@ Cyrillic letters they lack (Uzbek `қизил`, Kazakh `әже`): that face need
 these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
 no open-licence declaration are refused. Interface fallback fonts are never exported.
+
+For Type 1 subsets that declare a valid `/CharSet`, new text only reuses glyphs listed there.
+A width or ToUnicode mapping alone does not prove that the subset contains the outline (#4966).
+Glyph names come from the PDF encoding (including Differences) or a readable Type 1 program's
+built-in encoding, independently of the text used for extraction. Missing glyphs use the existing
+fallback path; mixed-style regions retain source glyphs that are still available. The fallback
+can differ in appearance from the original face. Missing, malformed or oversized CharSet data,
+unsupported encodings, and unavailable built-in encodings retain the previous lenient handling.
+Built-in encoding lookups share a bounded cache while aliases resolve to the same live font
+program. Replacing that stream invalidates the cached result; the cache does not keep the document or decoded font program alive.
 
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again
@@ -213,3 +227,11 @@ them, a page of an affected document is refused until it is listed again, instea
 numbers as positions. Without a listing, a number is a position in the page's current
 paragraphs, as before. The inline editor holds the paragraph a switching click asked for the
 same way. What is still missing is an identity that survives save and reopen (design: #2508).
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-09 | Patch: integrate main d2139e58 while retaining Type 1 subset checks and clarify that cached glyph-name tables do not retain whole documents or decoded programs. |
+| 2026-10-28 | Patch: reconcile with current main and deduplicate built-in Type 1 parsing for live program aliases. |
+| 2026-10-27 | Patch: document Type 1 subset glyph checks for #4966 and the remaining fallback limitations. |
