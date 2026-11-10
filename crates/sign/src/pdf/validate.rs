@@ -770,6 +770,7 @@ mod lock_level_tests {
     const FIELD: &str = "<< /FT /Sig /T (Approval) >>";
     const VALUE: &str = "<< /Type /Sig >>";
 
+    /// A signature field whose `/Lock` is `lock`, as written.
     fn locked_field(lock: &str) -> String {
         format!("<< /FT /Sig /T (Approval) /Lock {lock} >>")
     }
@@ -783,6 +784,8 @@ mod lock_level_tests {
         format!("<< /Type /Sig /Reference [{}] >>", entries.join(" "))
     }
 
+    /// `/P` of the field's `/Lock` is the level, also through references; a lock without `/P` sets
+    /// none.
     #[test]
     fn the_fields_lock_sets_the_level() {
         assert_eq!(level(&[FIELD, VALUE]), None, "no lock");
@@ -798,6 +801,8 @@ mod lock_level_tests {
         assert_eq!(level(&[&locked_field("4 0 R"), VALUE, "<< /Type /SigFieldLock /Action /All /P 5 0 R >>", "1"]), Some(1));
     }
 
+    /// `/P` in a FieldMDP reference's parameters is the level, also through references; a DocMDP
+    /// reference is not a lock.
     #[test]
     fn a_fieldmdp_reference_in_the_value_sets_the_level() {
         assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /All /P 1 /V /1.2")])]), Some(1));
@@ -818,6 +823,7 @@ mod lock_level_tests {
         assert_eq!(level(&[FIELD, &value_with(&[("DocMDP", "/P 1 /V /1.2")])]), None);
     }
 
+    /// With a level in both places, or in two references, the lowest one counts.
     #[test]
     fn the_stricter_level_counts() {
         let lock = |p: u8| locked_field(&format!("<< /Type /SigFieldLock /Action /All /P {p} >>"));
@@ -827,6 +833,8 @@ mod lock_level_tests {
         assert_eq!(level(&[FIELD, &value_with(&[("FieldMDP", "/Action /All /P 3"), ("FieldMDP", "/Action /All /P 2")])]), Some(2), "two references");
     }
 
+    /// A number outside 1 to 3 is clamped, as a DocMDP level is; anything that is not a number, and
+    /// a `/Lock` or `/Reference` of the wrong type, sets no level.
     #[test]
     fn a_level_out_of_range_is_the_nearest_and_what_is_not_a_number_sets_none() {
         let lock = |p: &str| locked_field(&format!("<< /Type /SigFieldLock /Action /All /P {p} >>"));
