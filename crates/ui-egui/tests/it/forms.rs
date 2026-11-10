@@ -215,6 +215,34 @@ fn a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full() {
     assert!(tb.fits(&kept) && !tb.fits(&format!("{kept}\nline")), "as many lines as fit at 4 pt: {lines}");
 }
 
+/// #4296: a field turned a quarter (`/MK /R` 90) is typed into where it is, with its text running
+/// up the field as the page draws it: a click near the field's top puts the caret at the end of
+/// the text, where the turned text ends, not at its start.
+#[test]
+fn a_turned_field_places_the_caret_along_its_turned_text() {
+    let mut h = harness();
+    // Tall and narrow, with room up it for the text.
+    let props = pdfcraft_engine::FieldProps { rect: Some((0, [240.0, 20.0, 260.0, 170.0])), font_size: Some(10.0), ..Default::default() };
+    set_city(&mut h, props);
+    set_city(&mut h, pdfcraft_engine::FieldProps { rotation: Some((0, 90)), ..Default::default() });
+    click_field(&mut h, "city", 0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
+    h.event(egui::Event::Text("Paris".into()));
+    h.run_steps(2);
+    let field = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "city").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    click_at(&mut h, field.left_top() + egui::vec2(3.0, 2.0));
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "city"), ["ParisX"]);
+}
+
 #[test]
 fn typing_into_a_text_field_and_tabbing_on() {
     let mut h = harness();
@@ -1738,6 +1766,120 @@ fn mode_tabs_keep_the_hand_over_a_text_field_scrolled_under_them() {
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the field's editor");
 }
 
+/// The one-page PDF `guide_fixture` attaches as `Guide.pdf`.
+const GUIDE_INNER: &str = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+
+/// A page with a push button `go`, and three attached files: a one-page PDF filed under the key
+/// `Guide.pdf` (its own file name `inner.pdf`), `notes.txt`, and `fake.pdf`, which holds text.
+fn guide_fixture() -> Vec<u8> {
+    let inner = GUIDE_INNER;
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> /Names << /EmbeddedFiles << /Names [(Guide.pdf) 5 0 R (fake.pdf) 9 0 R (notes.txt) 7 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [20 20 120 50] /P 3 0 R >>".into(),
+        "<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 6 0 R >> >>".into(),
+        format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n{inner}\nendstream", inner.len()),
+        "<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /EF << /F 8 0 R >> >>".into(),
+        "<< /Type /EmbeddedFile /Length 5 >>\nstream\nhello\nendstream".into(),
+        "<< /Type /Filespec /F (fake.pdf) /UF (fake.pdf) /EF << /F 10 0 R >> >>".into(),
+        "<< /Type /EmbeddedFile /Length 12 >>\nstream\nnot a PDF at\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// An attachment opens in a tab only when its bytes are a PDF, whatever its name says: a
+/// `fake.pdf` holding text is offered to save instead. A request goes back to the tab opened from
+/// that attachment, and not to another open PDF of the same name whose bytes start with it.
+#[test]
+fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, guide_fixture()).unwrap();
+        // Another document named like the attachment, its bytes the attachment's and an update.
+        app.open_bytes("inner.pdf", None, format!("{GUIDE_INNER}\n% updated later\n").into_bytes()).unwrap();
+        app.active = Some(0);
+        app
+    });
+    h.run_steps(4);
+    let tabs = |h: &Harness<'static, PdfCraftApp>| h.state().views.len();
+    let id = h.state().views[0].id;
+    // A text file named .pdf is offered to save, not opened.
+    let saved = std::env::temp_dir().join(format!("pdfcraft-fake-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&saved);
+    h.state_mut().pick_override = Some(vec![saved.to_string_lossy().into_owned()]);
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
+    h.run_steps(6);
+    assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", h.state().toast);
+    assert_eq!(std::fs::read(&saved).ok().as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
+    let _ = std::fs::remove_file(&saved);
+    // The real attached PDF opens in a tab of its own, though another inner.pdf starts with it.
+    h.state_mut().active = Some(0);
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    h.run_steps(4);
+    assert_eq!(tabs(&h), 3, "a tab of its own");
+    assert_eq!(h.state().active, Some(2));
+    // Asked again, it goes back to the tab it opened.
+    h.state_mut().active = Some(0);
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    h.run_steps(4);
+    assert_eq!((tabs(&h), h.state().active), (3, Some(2)), "the tab it opened, not the other inner.pdf");
+}
+
+/// A button script's `exportDataObject` opens the attached PDF in a new tab, goes back to that
+/// tab when asked again, and names a missing file in a toast, a long name shortened.
+#[test]
+fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, guide_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let tabs = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.views.iter().filter_map(|v| s.session.get(v.id)).map(|d| d.name.clone()).collect::<Vec<_>>()
+    };
+    let id = h.state().views[0].id;
+    // By its key in the document's attached files, as forms name it.
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    h.run_steps(4);
+    assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "the attached PDF opens in its own tab");
+    // Asked again from the form, it goes back to that tab rather than opening another.
+    h.state_mut().active = Some(0);
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    h.run_steps(4);
+    assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "no second copy");
+    assert_eq!(h.state().active, Some(1), "its tab is shown");
+    // A file the document doesn't have is said so.
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'nope.pdf', nLaunch: 2});");
+    h.run_steps(2);
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains("nope.pdf")), "{:?}", h.state().toast);
+    assert_eq!(tabs(&h).len(), 2);
+    // A name of the form's own is shortened in the message, keeping its end. (Past a line's
+    // length, the script engine cuts it first, as it cuts every name a script passes.)
+    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: new Array(3001).join('x') + '.pdf', nLaunch: 2});");
+    h.run_steps(2);
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains('…') && toast.contains("x.pdf"), "{toast}");
+    assert!(toast.chars().count() < 200, "{} characters", toast.chars().count());
+}
+
 /// Two combo boxes of Apple and Banana: `fruit` editable (Combo and Edit, ISO 32000-2 Table 233),
 /// `veg` a drop-down list only.
 fn combo_form() -> Vec<u8> {
@@ -1802,6 +1944,45 @@ fn an_editable_combo_box_takes_a_typed_value() {
     h.run_steps(2);
     assert_eq!(value(&h, "fruit"), ["Banana"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4296: an editable combo box turned a quarter (`/MK /R` 90, ISO 32000-2 Table 192) is typed
+/// into as a turned text field is: a click near the field's top puts the caret at the end of the
+/// text, where the text running up the field ends, not at its start.
+#[test]
+fn a_turned_editable_combo_box_places_the_caret_along_its_turned_text() {
+    let pdf = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (fruit) /Ff 393216 /Opt [(Apple) (Banana)] /Rect [240 20 260 170] /MK << /R 90 >> /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("turned-combo.pdf", None, pdf.clone()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)));
+    h.event(egui::Event::Text("Paris".into()));
+    h.run_steps(2);
+    let field = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "fruit").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    click_at(&mut h, field.left_top() + egui::vec2(3.0, 2.0));
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["ParisX"]);
 }
 
 /// A combo box without the Edit flag is a drop-down list only: typing changes nothing.

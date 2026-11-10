@@ -31,6 +31,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Insert pages from {name} — fields renamed",
     "Attach {name}",
     "Delete attachment {key}",
+    "Edit attachment description",
     "Add bookmark",
     "Rename bookmark",
     "Delete bookmark",
@@ -87,6 +88,9 @@ pub const EDIT_LABELS: &[&str] = &[
     "Unlock comment",
     "Move comment",
     "Reshape comment",
+    "Open comment pop-up",
+    "Close comment pop-up",
+    "Move comment pop-up",
     "Resize comment",
     "Change comment properties",
     "Fill in {name}",
@@ -163,8 +167,16 @@ pub const EDIT_LABELS: &[&str] = &[
 /// The names of the batches built below L7, which an interface shows in the same places as
 /// [`EDIT_LABELS`] and so translates the same way. A batch built in the interface itself arrives
 /// already worded in the interface's language.
-pub const BATCH_LABELS: &[&str] =
-    &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
+pub const BATCH_LABELS: &[&str] = &[
+    "Set document title",
+    "Mark differences",
+    "Detect form fields",
+    "Run JavaScript",
+    "Recognize text",
+    field_table::LABEL,
+    "Style",
+    crate::find_replace::REPLACE_ALL,
+];
 
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
@@ -232,6 +244,9 @@ impl Edit {
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
+            Edit::SetAnnotationPopup { rect: Some(_), .. } => Label::of("Move comment pop-up"),
+            Edit::SetAnnotationPopup { open: Some(true), .. } => Label::of("Open comment pop-up"),
+            Edit::SetAnnotationPopup { .. } => Label::of("Close comment pop-up"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. }
             | Edit::FillAnnotation { .. }
@@ -253,6 +268,8 @@ impl Edit {
             Edit::FixHairlines { .. } => Label::of("Fix hairlines"),
             Edit::AddAttachment { name, .. } => Label::with("Attach {name}", name.as_str()),
             Edit::DeleteAttachment { key } => Label::with("Delete attachment {key}", key.as_str()),
+            Edit::ConvertColours { .. } => Label::of("Convert colours"),
+            Edit::EditAttachmentDescription { .. } => Label::of("Edit attachment description"),
             Edit::AutoTagText => Label::of("Automatically tag text"),
             Edit::SetAltText { .. } => Label::of("Set alternate text"),
             Edit::AutoTagFormFields => Label::of("Tag form fields"),
@@ -301,6 +318,8 @@ impl Edit {
             Edit::RemoveMarks { kind: MarkKind::HeaderFooter } => Label::of("Remove header & footer"),
             Edit::RemoveMarks { kind: MarkKind::Watermark } => Label::of("Remove watermark"),
             Edit::RemoveMarks { kind: MarkKind::Background } => Label::of("Remove background"),
+            Edit::RemoveMarks { kind: MarkKind::PrinterMarks } => Label::of("Remove printer marks"),
+            Edit::AddPrinterMarks { .. } => Label::of("Add printer marks"),
             Edit::AddText { .. } => Label::of("Add text"),
             Edit::AddImage { .. } => Label::of("Add image"),
             Edit::UpdateContent { .. } => Label::of("Edit content"),

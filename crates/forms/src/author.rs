@@ -21,7 +21,7 @@ pub(crate) use tree::ancestor_sets;
 pub use edit::set_props;
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
-pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, check_styles, look, redraw_field, set_button_icon};
+pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, check_styles, look, redraw_field, redraw_fields, set_button_icon};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};
 
 /// The smallest width and height of a field's widget, in points: a smaller one is refused.
@@ -122,8 +122,9 @@ pub struct FieldProps {
     /// Each widget has its own mark (`/MK /CA`), so the others keep theirs.
     pub check_style_widget: Option<usize>,
     /// Position tab: rotate one widget (`/MK /R`) to 0, 90, 180 or 270 degrees counterclockwise.
-    /// Changing between horizontal and vertical swaps that widget's width and height around its
-    /// center, unless [`Self::rect`] is also set.
+    /// The widget keeps its rectangle: `/R` turns the appearance inside it (ISO 32000-2 Table 192
+    /// turns the annotation relative to the page, and its `/Rect` stays in default user space), so
+    /// a tall field turned 90 degrees holds text running up its long side.
     pub rotation: Option<(usize, i64)>,
 }
 
