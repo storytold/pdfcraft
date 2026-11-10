@@ -147,8 +147,9 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
             })
             .collect();
         // The comments that become annotations on the page's first sheet, drawn there by
-        // themselves rather than as part of the page.
-        let copied = with_replies(&doc, &annots, list.iter().filter_map(|(c, _)| c.index));
+        // themselves rather than as part of the page: those the page draws, as it prints, with
+        // their threads. One that doesn't print stays a box with nothing pointing at it.
+        let copied = with_replies(&doc, &annots, list.iter().filter(|(c, _)| printed(c)).filter_map(|(c, _)| c.index));
         let bare = page_form_where(&mut doc, &pages, page, Content::DocumentAndMarkups, &|i| !copied.contains(&i), &mut promoted)?;
         shown.insert(page, ShownPage { bare, full: copied.is_empty().then_some(bare), annots, copied });
         match opts.layout {
@@ -542,28 +543,30 @@ fn draw_page(c: &mut Vec<u8>, m: &Matrix, frame: [f64; 4]) {
 }
 
 /// The positions in `annots` of the comments at `listed`, with their replies and the replies to
-/// those (an annotation whose `/IRT` is one of them), so a comment comes with its thread.
+/// those (an annotation whose `/IRT` is one of them), so a comment comes with its thread. One pass
+/// gathers each annotation's replies; the walk visits each annotation once.
 fn with_replies(doc: &Document, annots: &[Object], listed: impl Iterator<Item = usize>) -> std::collections::BTreeSet<usize> {
-    let mut set: std::collections::BTreeSet<usize> = listed.filter(|i| *i < annots.len()).collect();
-    let in_reply_to = |a: &Object| doc.resolve(a).as_dict().and_then(|d| d.get(b"IRT").cloned()).and_then(|r| r.as_ref());
-    // Each round adds at least one, so this ends within `annots.len()` rounds.
-    loop {
-        let refs: std::collections::HashSet<ObjRef> = set.iter().filter_map(|i| annots.get(*i).and_then(Object::as_ref)).collect();
-        let more: Vec<usize> = annots
-            .iter()
-            .enumerate()
-            .filter(|(i, a)| !set.contains(i) && in_reply_to(a).is_some_and(|r| refs.contains(&r)))
-            .map(|(i, _)| i)
-            .collect();
-        if more.is_empty() {
-            return set;
+    let mut replies: std::collections::HashMap<ObjRef, Vec<usize>> = std::collections::HashMap::new();
+    for (i, a) in annots.iter().enumerate() {
+        if let Some(parent) = doc.resolve(a).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref)) {
+            replies.entry(parent).or_default().push(i);
         }
-        set.extend(more);
     }
+    let mut set = std::collections::BTreeSet::new();
+    let mut todo: Vec<usize> = listed.filter(|i| *i < annots.len()).collect();
+    while let Some(i) = todo.pop() {
+        if !set.insert(i) {
+            continue;
+        }
+        if let Some(r) = annots.get(i).and_then(Object::as_ref) {
+            todo.extend(replies.get(&r).into_iter().flatten().filter(|j| !set.contains(j)));
+        }
+    }
+    set
 }
 
 /// The annotations at `copied` in `annots`, as new annotations on sheet `page` where the page
-/// placed with `m` shows them: their rectangle and points moved there, their normal appearance
+/// placed with `m` shows them (a NoRotate one upright): their rectangle and points moved there, their normal appearance
 /// drawn there by a form placing the original, a reply's `/IRT` pointing at its comment's copy.
 /// Pop-ups, actions and structure links, which would point back into the original, are left
 /// out. An annotation without a usable rectangle is skipped.
@@ -596,7 +599,17 @@ fn copy_annotations(
         };
         let Some(rect) = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4) else { continue };
         let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-        let Some(placed) = on_sheet(m, rect) else { continue };
+        // A NoRotate annotation (a note's icon) stays upright where its top-left corner is, as a
+        // viewer shows it on a turned page (ISO 32000-2 §12.5.3): scaled and moved, not turned.
+        const NO_ROTATE: i64 = 16;
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        let place = if flags & NO_ROTATE != 0 {
+            let (x, y) = m.apply(rect[0], rect[3]);
+            Matrix([scale, 0.0, 0.0, scale, x - rect[0] * scale, y - rect[3] * scale])
+        } else {
+            *m
+        };
+        let Some(placed) = on_sheet(&place, rect) else { continue };
         let normal = appearance(doc, &d);
         for key in [&b"P"[..], b"Popup", b"Parent", b"StructParent", b"A", b"AA", b"AP", b"AS"] {
             d.remove(key);
@@ -631,7 +644,7 @@ fn copy_annotations(
             // A form the size of the new rectangle, drawing the original appearance as the page
             // drew it, then placed as the page is on the sheet.
             let ap = form_xobject(doc, ap, promoted);
-            let [a0, b0, c0, d0, e0, f0] = fit.then(m).0;
+            let [a0, b0, c0, d0, e0, f0] = fit.then(&place).0;
             let body = format!("q {} {} {} {} {} {} cm /A Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0));
             let mut xobjects = Dict::new();
             xobjects.set(b"A".to_vec(), Object::Ref(ap));

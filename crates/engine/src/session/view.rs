@@ -355,25 +355,28 @@ impl Session {
         // the document, as "Match the document" does.
         let usable = |v: f64| v.is_finite() && (144.0..=14_400.0).contains(&v);
         let paper = opts.paper.filter(|p| usable(p.0) && usable(p.1)).unwrap_or_else(|| self.summary_paper(id).1);
+        let source = || match doc.editor.as_ref() {
+            Some(e) => Ok(e.cos.clone()),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))
+            }
+        };
         // Sorting by date reads each comment's full date, not the minute the list shows.
-        let dates = match (opts.sort, doc.editor.as_ref()) {
-            (crate::SummarySort::Date, Some(e)) => guard(|| summary_dates(&e.cos)).unwrap_or_default(),
-            _ => Default::default(),
+        let dated = |cos: &pdfcraft_cos::Document| {
+            if opts.sort == crate::SummarySort::Date { guard(|| summary_dates(cos)).unwrap_or_default() } else { Default::default() }
         };
         let layout = match opts.layout {
             SummaryLayout::CommentsOnly => {
+                // Without a readable source the dates as listed still sort it.
+                let dates = source().map(|cos| dated(&cos)).unwrap_or_default();
                 let text = comment_summary_with(&doc.name, &doc.info.annotations, opts.sort, &dates);
                 return self.create_report_on(&title, &text, paper);
             }
             SummaryLayout::DocumentAndCommentsWithLines => pdfcraft_print::PageLayout::LinesOnSinglePages,
             SummaryLayout::DocumentAndCommentsWithNumbers => pdfcraft_print::PageLayout::NumbersOnSeparatePages,
         };
-        let mut cos = match doc.editor.as_ref() {
-            Some(e) => e.cos.clone(),
-            None => {
-                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
-            }
-        };
+        let mut cos = source()?;
+        let dates = dated(&cos);
         // Comments without an appearance show as the page shows them, as printing does.
         if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
             cos = displayed;

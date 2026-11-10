@@ -177,9 +177,48 @@ fn nothing_points_at_a_comment_the_page_does_not_show() {
     hidden.index = Some(1);
     let first = sheets(&summary_with_pages(&src, &[hidden.clone()], &opts("S", PageLayout::LinesOnSinglePages)).unwrap()).remove(0);
     assert_eq!(first.matches(" l S").count(), 1, "only the header rule: {first}");
+    // Nor is it put on the sheet as an annotation, where it would show with nothing pointing at it.
+    let doc = summary_with_pages(&src, &[hidden.clone()], &opts("S", PageLayout::LinesOnSinglePages)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc)[0].dict.get(b"Annots"), None);
     hidden.index = Some(0);
     let first = sheets(&summary_with_pages(&src, &[hidden], &opts("S", PageLayout::LinesOnSinglePages)).unwrap()).remove(0);
     assert_eq!(first.matches(" l S").count(), 2, "the printing square is pointed at: {first}");
+}
+
+#[test]
+fn a_note_stays_upright_on_a_turned_page() {
+    // Page 1 turned a quarter clockwise, its second annotation a NoRotate, printing note at
+    // 60..80 × 10..30 (`/F 28`: Print, NoZoom, NoRotate).
+    let mut src = fixture(1);
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let mut annots = src.resolve(pdfcraft_model::pages(&src)[0].dict.get(b"Annots").unwrap()).as_array().cloned().unwrap();
+    if let Object::Dict(note) = &mut annots[1] {
+        note.set(b"F".to_vec(), Object::Int(28));
+    }
+    src.update_dict(page, |d| {
+        d.set(b"Rotate".to_vec(), Object::Int(90));
+        d.set(b"Annots".to_vec(), Object::Array(annots));
+    })
+    .unwrap();
+    let mut c = comment(0, 1, &["1. Sticky Note"]);
+    (c.index, c.rect) = (Some(1), [60.0, 10.0, 80.0, 30.0]);
+    let doc = summary_with_pages(&src, &[c], &opts("S", PageLayout::LinesOnSinglePages)).unwrap();
+    let sheet = &pdfcraft_model::pages(&doc)[0];
+    let copies = doc.resolve(sheet.dict.get(b"Annots").unwrap()).as_array().cloned().unwrap();
+    let copy = doc.resolve(&copies[0]).as_dict().cloned().unwrap();
+    let rect: Vec<f64> = copy.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    // As shown the page is 300 × 200, 348 pt wide on the sheet (1.16 ×) from x = 36, its top at
+    // 410. Turned clockwise, the note's top-left corner (60, 30) is 30 from the left as shown
+    // and 60 down: there the icon hangs, upright and 20 × 1.16 square.
+    let s = 348.0 / 300.0;
+    let (x, y) = (36.0 + 30.0 * s, 410.0 - 60.0 * s);
+    let want = [x, y - 20.0 * s, x + 20.0 * s, y];
+    assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{rect:?} {want:?}");
+    let ap = doc.resolve(copy.get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(form) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("an appearance stream") };
+    let body = String::from_utf8(form.decoded().unwrap()).unwrap();
+    let m: Vec<f64> = body.trim_start_matches("q ").split(' ').take(6).map(|v| v.parse().unwrap()).collect();
+    assert_eq!((m[1], m[2]), (0.0, 0.0), "scaled, not turned: {body}");
 }
 
 /// The sheets' page labels, in order.
@@ -247,8 +286,12 @@ fn the_comments_are_annotations_on_the_first_sheet() {
     reply.set(b"Subtype".to_vec(), Object::name("Text"));
     reply.set(b"IRT".to_vec(), Object::Ref(square));
     reply.set(b"Rect".to_vec(), Object::Array([10, 10, 30, 30].map(Object::Int).to_vec()));
-    let reply = src.add(Object::Dict(reply));
-    let list = vec![Object::Ref(square), annots[1].clone(), annots[2].clone(), Object::Ref(reply)];
+    let mut reply_to = reply.clone();
+    let reply = src.add(Object::Dict(reply.clone()));
+    // A reply to the reply comes with the thread too.
+    reply_to.set(b"IRT".to_vec(), Object::Ref(reply));
+    let deeper = src.add(Object::Dict(reply_to));
+    let list = vec![Object::Ref(square), annots[1].clone(), annots[2].clone(), Object::Ref(deeper), Object::Ref(reply)];
     src.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(list))).unwrap();
 
     let mut c = comment(0, 1, &["1. Rectangle", "word ".repeat(1500).as_str()]);
@@ -260,7 +303,7 @@ fn the_comments_are_annotations_on_the_first_sheet() {
     assert!(sheets.len() > 1, "the comment runs onto a second sheet");
     let annots_of = |p: &pdfcraft_model::Page| p.dict.get(b"Annots").map(|a| doc.resolve(a).as_array().cloned().unwrap()).unwrap_or_default();
     let copies = annots_of(&sheets[0]);
-    assert_eq!(copies.len(), 2, "the square and its reply");
+    assert_eq!(copies.len(), 3, "the square, its reply and the reply to that");
     let copy = doc.resolve(&copies[0]).as_dict().cloned().unwrap();
     let rect: Vec<f64> = copy.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
     // The page (200 × 300) fills the left half's height, 516 pt: 1.72 ×, centred in 348 pt from
@@ -276,8 +319,11 @@ fn the_comments_are_annotations_on_the_first_sheet() {
     let Object::Stream(form) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("an appearance stream") };
     assert_eq!(form.dict.get(b"BBox"), copy.get(b"Rect"));
     assert!(String::from_utf8(form.decoded().unwrap()).unwrap().ends_with("cm /A Do Q\n"));
-    let reply = doc.resolve(&copies[1]).as_dict().cloned().unwrap();
+    // In `/Annots` order: the square, the reply to the reply, the reply.
+    let deeper = doc.resolve(&copies[1]).as_dict().cloned().unwrap();
+    let reply = doc.resolve(&copies[2]).as_dict().cloned().unwrap();
     assert_eq!(reply.get(b"IRT").and_then(Object::as_ref), copies[0].as_ref(), "the reply answers the copy");
+    assert_eq!(deeper.get(b"IRT").and_then(Object::as_ref), copies[2].as_ref(), "and the reply to it answers the reply's copy");
     // The first sheet's drawing of the page leaves the square to its annotation (only the stamp
     // is drawn); the next sheet, without annotations, draws both.
     let drawn = |p: &pdfcraft_model::Page| {

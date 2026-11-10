@@ -5290,6 +5290,8 @@ fn page_layout_summaries_sort_within_each_page() {
     let by_author = order(SummarySort::Author);
     assert_eq!(by_author.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(2, 1), (2, 2), (0, 1)], "{by_author:?}");
     assert!(by_author[0].2.contains("Ann") && by_author[1].2.contains("Zed"), "{by_author:?}");
+    // The number in each box is the one on the page.
+    assert!(by_author.iter().all(|(_, n, heading)| heading.starts_with(&format!("{n}. "))), "{by_author:?}");
     // By page: top to bottom on each page, numbered so.
     let by_page = order(SummarySort::Page);
     assert_eq!(by_page.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 1), (2, 2)], "{by_page:?}");
@@ -5340,6 +5342,8 @@ trailer << /Root 1 0 R >>
         .collect();
     let want: Vec<(usize, usize, String)> = [(0, 1, "A"), (1, 1, "C"), (1, 2, "B"), (2, 1, "D")].map(|(p, n, a)| (p, n, a.to_string())).to_vec();
     assert_eq!(order, want);
+    let headings: Vec<String> = summary_comments(all, SummarySort::Date, &dates).iter().map(|c| c.lines[0].1.clone()).collect();
+    assert!(headings[1].starts_with("1. ") && headings[2].starts_with("2. "), "numbered as listed: {headings:?}");
     // Comments only sorts by the same dates.
     let text = comment_summary_with("dates.pdf", all, SummarySort::Date, &dates);
     let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();

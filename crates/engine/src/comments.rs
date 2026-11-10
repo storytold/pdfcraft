@@ -356,7 +356,7 @@ pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort, 
             let a = item.comment;
             let mut lines = vec![(
                 0,
-                format!("{}. {}  {}  {}", item.number, comment_kind(a), a.author.as_deref().unwrap_or(""), a.modified.as_deref().unwrap_or(""))
+                format!("{number}. {}  {}  {}", comment_kind(a), a.author.as_deref().unwrap_or(""), a.modified.as_deref().unwrap_or(""))
                     .trim_end()
                     .to_string(),
             )];
