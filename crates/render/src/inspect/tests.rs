@@ -392,12 +392,12 @@ fn info_in_object_stream_pdf(first: &[u8]) -> Vec<u8> {
     let xref_offset = pdf.len() as u32;
     offsets[6] = xref_offset;
     let mut records = Vec::new();
-    for id in 0..7_usize {
+    for (id, &offset) in offsets.iter().enumerate() {
         let (kind, field, index) = match id {
             0 => (0_u8, 0_u32, 0xffff_u16),
             4 => (2, 3, 1),
             5 => (2, 3, 0),
-            _ => (1, offsets[id], 0),
+            _ => (1, offset, 0),
         };
         records.push(kind);
         records.extend_from_slice(&field.to_be_bytes());
