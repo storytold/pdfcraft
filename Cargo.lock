@@ -1187,7 +1187,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1146cdc4f92e6c5c4fc3d67efbf0e1cec436a10c#1146cdc4f92e6c5c4fc3d67efbf0e1cec436a10c"
+source = "git+https://github.com/storytold/craft-libs?rev=1ee01a4c58729d781638b8afbd8982726dbdefcb#1ee01a4c58729d781638b8afbd8982726dbdefcb"
 dependencies = [
  "rayon",
 ]
@@ -1251,7 +1251,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1146cdc4f92e6c5c4fc3d67efbf0e1cec436a10c#1146cdc4f92e6c5c4fc3d67efbf0e1cec436a10c"
+source = "git+https://github.com/storytold/craft-libs?rev=1ee01a4c58729d781638b8afbd8982726dbdefcb#1ee01a4c58729d781638b8afbd8982726dbdefcb"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -1732,6 +1732,10 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "edit-session"
+version = "0.1.0-alpha.2"
 
 [[package]]
 name = "eframe"
@@ -4785,6 +4789,7 @@ dependencies = [
  "craft-quit",
  "craft-ui",
  "craft-update",
+ "edit-session",
  "eframe",
  "egui",
  "egui_extras",

@@ -1221,6 +1221,34 @@ fn cached_papers_apply_immediately_and_refresh_in_background() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
+/// #2001 with #5861: a printer keeps the paper it was last printed on (A3 here) when its driver's
+/// default paper (A4) arrives from the background read afterwards; before, the default replaced
+/// the remembered paper each time the dialog opened.
+#[test]
+fn a_printers_remembered_paper_wins_over_its_drivers_default() {
+    use pdfcraft_engine::print::{SizeMode, spool};
+    use pdfcraft_ui_egui::PrinterSetup;
+    use std::sync::Arc;
+
+    let mut h = harness();
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(|_| vec![("A4".into(), (595.28, 841.89)), ("A3".into(), (841.89, 1190.55))]));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| Some(("A4".into(), (595.28, 841.89)))));
+    let setup = PrinterSetup { paper: "A3".into(), size: SizeMode::Fit, custom_scale: 100.0, duplex: None };
+    h.state_mut().print_draft.setups = vec![("Office".into(), setup)];
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(4);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office"));
+    assert_eq!(h.state().print_draft.paper_name(), "A3", "the remembered paper, not the driver's default");
+}
+
 #[test]
 fn uncached_printer_switch_resets_driver_papers_to_standard_presets() {
     use pdfcraft_engine::print::spool;
