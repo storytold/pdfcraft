@@ -70,7 +70,9 @@ fontconfig-parser = "0.5.8"
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2", "NSApplication", "NSResponder", "NSMenu"] }
+# The Edit menu a system file panel needs for ⌘V and the like (panel_menu.rs), behind a safe API.
+muda = { version = "0.21", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
 block2 = "0.6"
 plist = "1.10"
@@ -111,5 +113,10 @@ serde_json = { workspace = true }
 toml = "1"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem"] }
 # Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
 xattr = "1.6"
+
+[[test]]
+name = "mac_panel_menu_appkit"
+harness = false

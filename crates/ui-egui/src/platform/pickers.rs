@@ -93,6 +93,9 @@ pub struct Pickers {
     /// until the pick's closure starts.
     showing: Arc<AtomicBool>,
     done: Arc<Mutex<Vec<Picked>>>,
+    /// The Edit menu a showing panel's text boxes need for ⌘V and the like.
+    #[cfg(target_os = "macos")]
+    panel_menu: super::panel_menu::PanelMenu,
 }
 
 /// Clears `showing` if the worker ends without queueing a pick (it panicked).
@@ -124,6 +127,15 @@ impl Pickers {
     /// A picker is showing or its result is waiting for the frame.
     pub(crate) fn pending(&self) -> bool {
         self.showing.load(Ordering::SeqCst)
+    }
+
+    /// Keep the panel's menu bar in step with the picker (macOS).
+    fn sync_panel_menu(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            let showing = self.pending();
+            self.panel_menu.sync(showing);
+        }
     }
 
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
@@ -245,6 +257,7 @@ impl PdfCraftApp {
             self.pickers.showing.store(false, Ordering::SeqCst);
             self.notify_tr("Couldn't show the file picker. Please try again.");
         }
+        self.pickers.sync_panel_menu();
         started
     }
 
@@ -259,9 +272,11 @@ impl PdfCraftApp {
 
     /// Use the picks that finished since the last frame. Called every frame.
     pub(crate) fn process_picked(&mut self) {
+        self.pickers.sync_panel_menu();
         for Picked { target, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
+            self.pickers.sync_panel_menu();
             // Opens were polled before this pick was consumed. Wake their retained replies
             // once, including after cancellation, without polling while a picker waits.
             if !self.pending_opens.is_empty()
