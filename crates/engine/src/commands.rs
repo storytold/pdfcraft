@@ -198,6 +198,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
@@ -231,6 +234,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
     // a tab's right-click menu also splits right or down with any tab.
     c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.
@@ -406,6 +419,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
+    c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
     c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
     c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
