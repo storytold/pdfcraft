@@ -2,17 +2,29 @@
 use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
-    Close(DocId),
+    /// Close a tab, by its view key (`DocView::view_key`: split view can show one document in two
+    /// tabs).
+    Close(u64),
     Reopen,
     Reveal(DocId),
+    /// Split right (or down) with a tab, by its view key.
+    Split {
+        tab: u64,
+        down: bool,
+    },
 }
 
 impl crate::PdfCraftApp {
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
-            Action::Close(id) => {
-                if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            Action::Close(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
                     self.request_close_tab(i);
+                }
+            }
+            Action::Split { tab, down } => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.split_tab(i, down);
                 }
             }
             Action::Reopen => {
@@ -162,15 +174,15 @@ mod tests {
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
         let mut app = crate::PdfCraftApp::new();
         app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
-        let first = app.views[0].id;
+        let (first, first_tab) = (app.views[0].id, app.views[0].view_key());
         app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
         app.session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         assert_eq!(app.views.len(), 2);
         assert!(app.closed_tabs.is_empty());
         app.resolve_close(&egui::Context::default(), None);
         assert!(app.closed_tabs.is_empty());
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         app.resolve_close(&egui::Context::default(), Some(false));
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.closed_tabs, ["/tmp/first.pdf"]);
