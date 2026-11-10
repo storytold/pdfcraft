@@ -1,4 +1,4 @@
-use super::draft::{Handling, PrintDraft, Which};
+use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
     Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
@@ -95,6 +95,20 @@ pub(crate) fn body(
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
+    // Cap the settings+preview area to the screen's available height (#4252, #5317):
+    // on a short screen, or with the driver's own Properties… panel expanded below, this row can
+    // otherwise grow taller than the display and push the Print/Cancel buttons off both edges.
+    // The title and the button row stay outside, so they are always reachable.
+    // `viewport_rect()` is egui's own idea of the current viewport, kept from the latest
+    // `RawInput::screen_rect` it was handed — unlike reading `raw.screen_rect` directly, it
+    // does not go blank on a frame where the backend didn't resend it.
+    let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
+    let max_h = (screen_h - 220.0).max(300.0);
+    // The viewport is `max_h` itself, not what the modal offers this frame: when a different
+    // dialog was shown before, the shared modal remeasures from a height of zero (#5118) and
+    // offers less, which would size this area by the dialog shown before. `auto_shrink` still
+    // shrinks it to contents that fit.
+    egui::ScrollArea::vertical().max_height(max_h).min_scrolled_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
     ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
@@ -158,6 +172,8 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    // What this printer was last printed with (#2001).
+                    d.apply_setup();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -222,7 +238,7 @@ pub(crate) fn body(
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
             if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
-                && p.two_sided == Some(false)
+                && p.two_sided.or_else(|| d.two_sided.get(&p.name).copied().flatten()) == Some(false)
             {
                 ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
             }
@@ -315,7 +331,7 @@ pub(crate) fn body(
                         if ui.add(widgets::radio(custom, tl!("Custom scale:"))).clicked() {
                             d.size = SizeMode::Custom(d.custom_scale);
                         }
-                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"))
+                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(CUSTOM_SCALE).suffix(" %"))
                             .accessible_name(tl!("Custom scale"));
                     });
                 }
@@ -557,6 +573,7 @@ pub(crate) fn body(
             }
         });
     });
+    }); // end ScrollArea (#4252, #5317)
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -570,4 +587,32 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use crate::{Dialog, PdfCraftApp};
+
+    /// #4252, #5317: on a short screen the settings+preview area used to grow past
+    /// both the top and bottom of the screen (centered modals overflow both edges equally),
+    /// taking the Cancel button with it. It must now stay reachable, scrolling instead.
+    #[test]
+    fn the_print_dialog_keeps_its_buttons_within_a_short_screen() {
+        let screen = egui::vec2(1000.0, 480.0); // shorter than the settings+preview column alone
+        let mut h = Harness::builder().with_size(screen).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+            app.open_bytes("one-page.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.dialog = Some(Dialog::Print);
+            app
+        });
+        h.run_steps(4);
+
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(cancel.min.y >= 0.0 && cancel.max.y <= screen.y, "Cancel must stay within the {}×{} screen, got {cancel:?}", screen.x, screen.y);
+    }
 }

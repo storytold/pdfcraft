@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7ee35a9fbd47af572d55fd63dbf0333d1f00da17#7ee35a9fbd47af572d55fd63dbf0333d1f00da17"
+source = "git+https://github.com/storytold/craft-libs?rev=b6b8a55b2c52bb83d0580216cbecb532af01970d#b6b8a55b2c52bb83d0580216cbecb532af01970d"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -5045,10 +5045,12 @@ name = "pdfcraft-print"
 version = "0.18.1"
 dependencies = [
  "craft-print",
+ "log",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
  "pdfcraft-render",
+ "skrifa 0.44.0",
  "thiserror 2.0.21",
 ]
 
