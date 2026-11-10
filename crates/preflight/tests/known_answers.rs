@@ -22,7 +22,8 @@ use pdfcraft_preflight::{Level, convert, declared, icc, verify};
 /// A document from hand-written objects and extra trailer entries (copied from the crate's unit
 /// tests).
 fn build(objs: &[&str], trailer_extra: &str) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
+    // ISO 19005-2 6.1.2: the header line is followed by a comment of four bytes above 127.
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
@@ -33,7 +34,10 @@ fn build(objs: &[&str], trailer_extra: &str) -> Document {
     for o in offsets {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    // ISO 19005-2 6.1.3: the trailer names a file identifier; a test about another clause gets one
+    // unless it gives its own.
+    let id = if trailer_extra.contains("/ID") { "" } else { "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]" };
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {id} {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     Document::open(std::sync::Arc::new(out)).unwrap()
 }
 
