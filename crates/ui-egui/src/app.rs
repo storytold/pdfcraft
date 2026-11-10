@@ -322,6 +322,7 @@ impl PdfCraftApp {
             unmarked_page: Default::default(),
             export_draft: Default::default(),
             export_status: None,
+            export_size: Default::default(),
             signature: None,
             initials: None,
             signature_draft: Default::default(),

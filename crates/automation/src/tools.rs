@@ -1273,6 +1273,18 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "folder"],
             )),
+        t("doc_export_size", "Estimate the size of an image export", "Estimate the bytes doc_export_images would write for pages at a resolution (default 150 dpi) and format, without writing anything. Up to three pages (the first, the middle and the last) are drawn and encoded, and their bytes per pixel estimate every page, so the total is close to the files' size but not exact. Returns the estimate per page (in the order asked), the total, and the 1-based pages measured. Includes unsaved edits.")
+            .ro()
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "format": { "type": "string", "enum": ["png", "jpeg", "tiff"] },
+                    "quality": { "type": "integer", "minimum": 1, "maximum": 100, "description": "JPEG quality (default 85)." },
+                    "dpi": { "type": "number", "minimum": 18, "maximum": 1200 },
+                    "pages": pages("to estimate (default: all)"),
+                }),
+                &["doc"],
+            )),
         t("accessibility_autotag_preview", "Preview automatic tags", "Propose paragraph and heading tags for visible text blocks on one page. Returns page bounds, tentative roles and reasons. Does not change the PDF or claim accessibility compliance. Images, tables, lists, annotations and existing structure require separate review.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),

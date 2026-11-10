@@ -7292,9 +7292,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["export.image"]
-tools = ["doc_export_images", "page_render"]
-evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/engine/src/tests.rs::export_images_and_text_follow_the_working_file", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools"]
-notes = "PNG at 72–600 dpi, page ranges; includes unsaved edits; background thread with progress"
+tools = ["doc_export_images", "page_render", "doc_export_size"]
+evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/engine/src/tests.rs::export_images_and_text_follow_the_working_file", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools", "crates/ui-egui/tests/it/export.rs::the_export_dialog_estimates_the_size_of_the_files", "crates/engine/src/tests.rs::export_size_estimate_tracks_the_files_written", "crates/automation/tests/it/automation.rs::estimating_an_export_size_through_tools"]
+notes = "PNG at 72–600 dpi, page ranges; includes unsaved edits; background thread with progress; the dialog shows the estimated size of the files before exporting (#2819), measured by drawing and encoding up to three pages and scaling their bytes per pixel to every page, so it is close but not exact"
 
 [[feature]]
 id = "create.export-jpeg-tiff"
@@ -7304,9 +7304,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["export.image"]
-tools = ["doc_export_images"]
+tools = ["doc_export_images", "doc_export_size"]
 evidence = ["crates/engine/src/tests.rs::pages_export_as_png_jpeg_and_tiff", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools", "crates/engine/src/export.rs::rasters_of_the_wrong_length_are_rejected"]
-notes = "JPEG with quality, TIFF; flattened onto white; a raster that is not exactly its width × height in pixels is refused, as for PNG"
+notes = "JPEG with quality, TIFF; flattened onto white; a raster that is not exactly its width × height in pixels is refused, as for PNG; the same pre-export size estimate as PNG (#2819)"
 
 [[feature]]
 id = "create.export-jpeg2000"
