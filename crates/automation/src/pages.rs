@@ -361,6 +361,14 @@ impl Automation {
     /// The page text is searched too (as `text_find` does), so matches no paragraph holds are
     /// counted as not editable and the counts add up to what `text_find` reports.
     pub(crate) fn text_replace(&mut self, a: &Args) -> Result<Value> {
+        self.text_replace_with(a, &mut extract_parallel)
+    }
+
+    pub(crate) fn text_replace_with(
+        &mut self,
+        a: &Args,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let pages = match a.opt_ints("pages")? {
@@ -374,19 +382,61 @@ impl Automation {
             whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
         };
         let all = a.opt_bool("all")?.unwrap_or(true);
-        let which = if all { pdfcraft_engine::find_replace::Which::All } else { pdfcraft_engine::find_replace::Which::First };
-        let found = if all {
+        let mut pages = pages;
+        pages.sort_unstable();
+        pages.dedup();
+        // Pages whose text the find bar couldn't read, reported with the plan, not dropped.
+        let mut unreadable: Vec<(usize, String)> = Vec::new();
+        let (which, found) = if all {
             let mut found = std::collections::BTreeMap::new();
-            for (p, text) in self.page_text_results(id, &pages, &mut extract_parallel)? {
-                if let Ok(text) = text {
-                    found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+            for (p, text) in self.page_text_results(id, &pages, &mut *extract)? {
+                match text {
+                    Ok(text) => {
+                        found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+                    }
+                    Err(e) => unreadable.push((p, e)),
                 }
             }
-            Some(found)
+            unreadable.sort();
+            (Some(pdfcraft_engine::find_replace::Which::All), Some(found))
         } else {
-            None
+            // The first match the find bar shows, and that one only: pages are read in order until
+            // one holds a match, and a page that can't be read stops the search there.
+            let mut texts = Vec::new();
+            let (mut start, mut batch) = (0, FIND_FIRST_BATCH.max(1));
+            'search: while start < pages.len() {
+                let end = pages.len().min(start.saturating_add(batch));
+                let mut results: std::collections::HashMap<usize, _> =
+                    self.page_text_results(id, &pages[start..end], &mut *extract)?.into_iter().collect();
+                for p in &pages[start..end] {
+                    match results.remove(p) {
+                        Some(Ok(text)) if text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).is_empty() => {}
+                        Some(Ok(text)) => {
+                            texts.push((*p, text));
+                            break 'search;
+                        }
+                        Some(Err(e)) => {
+                            unreadable.push((*p, e));
+                            break 'search;
+                        }
+                        None => {}
+                    }
+                }
+                start = end;
+                batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
+            }
+            (pdfcraft_engine::find_replace::Which::first_in(texts.iter().map(|(p, t)| (*p, t.as_ref())), &query), None)
         };
-        let plan = self.doc(a)?.plan_replace(&pages, &query, which, found.as_ref()).map_err(failed)?;
+        let mut plan = match which {
+            Some(which) => self.doc(a)?.plan_replace(&pages, &query, which, found.as_ref()).map_err(failed)?,
+            None => {
+                // Nothing to replace: still the permission and query checks of a plan.
+                self.doc(a)?.plan_replace(&[], &query, pdfcraft_engine::find_replace::Which::All, None).map_err(failed)?
+            }
+        };
+        for (p, e) in &unreadable {
+            plan.unreadable_page(*p, e);
+        }
         let mut out = match plan.edit.clone() {
             Some(edit) => self.apply(a, edit)?,
             None => summary(self.doc(a)?),

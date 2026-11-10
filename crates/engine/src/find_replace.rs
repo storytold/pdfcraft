@@ -41,11 +41,24 @@ pub struct Replace {
 pub enum Which {
     /// Every match on the pages.
     All,
-    /// The first match in document order (a match that can't be replaced is reported, not passed).
-    First,
     /// The match the find bar highlights on `page`: the centres of its first and last glyphs, in
     /// view space (points from the top-left of the displayed page, y down: the text layer's).
     At { page: usize, start: [f32; 2], end: [f32; 2] },
+}
+
+impl Which {
+    /// The first match the find bar shows (page text order: pages in order, then reading order),
+    /// as an [`Which::At`] on its first and last glyphs, or `None` when no page has one. `texts`
+    /// are the pages' text, in page order. Replacing "the first match" is replacing this one: if
+    /// no paragraph holds it, [`Document::plan_replace`] reports it as not editable and replaces
+    /// nothing, rather than passing it for a later match that is.
+    pub fn first_in<'a>(texts: impl IntoIterator<Item = (usize, &'a pdfcraft_render::PageText)>, query: &Replace) -> Option<Which> {
+        texts.into_iter().find_map(|(page, text)| {
+            let found = text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).into_iter().next()?;
+            let centre = |g: usize| text.glyphs.get(g).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0]);
+            Some(Which::At { page, start: centre(found.start)?, end: centre(found.end.saturating_sub(1))? })
+        })
+    }
 }
 
 /// Why a match was left as it is.
@@ -114,6 +127,12 @@ impl Replacement {
         self.skipped.values().fold(0, |a, b| a.saturating_add(*b))
     }
 
+    /// Say that `page`'s text could not be read for the find bar (`why`): its matches can't be
+    /// counted, so one is counted as [`Skip::Refused`] and the page is named in the refusals.
+    pub fn unreadable_page(&mut self, page: usize, why: &str) {
+        refused(self, 1, page, format!("its text could not be read: {why}"));
+    }
+
     fn skip(&mut self, why: Skip, n: usize) {
         if n > 0 {
             let count = self.skipped.entry(why).or_insert(0);
@@ -178,11 +197,6 @@ impl Document {
                     }
                     chosen.extend(matches.into_iter().enumerate().filter(|(_, m)| !m.is_empty()));
                 }
-                Which::First => {
-                    if let Some((k, m)) = matches.into_iter().enumerate().find_map(|(k, m)| m.into_iter().next().map(|m| (k, m))) {
-                        chosen.insert(k, vec![m]);
-                    }
-                }
                 Which::At { start, end, .. } => match at(self, &work, page, &blocks, &matches, start, end) {
                     Ok((k, m)) => {
                         chosen.insert(k, vec![m]);
@@ -236,15 +250,12 @@ impl Document {
                     Err(panic) => refused(&mut out, count, page, panic),
                 }
             }
-            if which == Which::First && (out.replaced > 0 || out.skipped_total() > 0) {
-                break;
-            }
         }
         out.pages.sort_unstable();
         out.edit = match (which, edits.len()) {
             (_, 0) => None,
             (Which::All, _) => Some(Edit::Batch { label: REPLACE_ALL.into(), edits }),
-            _ => edits.pop(),
+            (Which::At { .. }, _) => edits.pop(),
         };
         Ok(out)
     }

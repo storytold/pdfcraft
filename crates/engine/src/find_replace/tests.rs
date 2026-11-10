@@ -306,10 +306,32 @@ fn the_highlighted_match_is_the_one_replaced() {
 #[test]
 fn first_replaces_only_the_first_match_in_document_order() {
     let (mut s, id) = open(crate::tests::fixture(2));
-    let plan = s.get(id).unwrap().plan_replace(&[0, 1], &query("page", "Sheet"), Which::First, None).unwrap();
+    let q = query("page", "Sheet");
+    let texts_of: Vec<_> = (0..2).map(|p| page_text(&s, id, p)).collect();
+    let which = Which::first_in(texts_of.iter().enumerate(), &q).expect("the find bar has a match");
+    assert!(matches!(which, Which::At { page: 0, .. }));
+    let plan = s.get(id).unwrap().plan_replace(&[0, 1], &q, which, None).unwrap();
     assert_eq!((plan.replaced, plan.pages.clone()), (1, vec![0]));
     s.apply(id, plan.edit.unwrap()).unwrap();
     assert_eq!((texts(&s, id, 0), texts(&s, id, 1)), (vec!["Sheet 1".to_string()], vec!["Page 2".to_string()]));
+    assert!(Which::first_in(texts_of.iter().enumerate(), &query("absent", "x")).is_none());
+}
+
+/// The first match is the find bar's, not the first one a paragraph holds: when it is a match no
+/// paragraph holds (a word split by a line-end hyphen), it is reported and nothing is replaced,
+/// not the later paragraph that has the word whole.
+#[test]
+fn first_does_not_skip_a_match_no_paragraph_holds_for_a_later_one() {
+    let content = "BT /F1 12 Tf 14 TL 72 700 Td (An EXAM-) Tj T* (PLE to end) Tj ET BT /F1 12 Tf 72 400 Td (a second example) Tj ET";
+    let (s, id) = open(pdf(content));
+    let q = query("example", "sample");
+    let text = page_text(&s, id, 0);
+    assert_eq!(text.find_opts("example", false, false).len(), 2, "the find bar has both");
+    let which = Which::first_in([(0, &text)], &q).unwrap();
+    let plan = s.get(id).unwrap().plan_replace(&[0], &q, which, None).unwrap();
+    assert_eq!((plan.replaced, plan.edit.is_none()), (0, true), "{plan:?}");
+    assert_eq!(plan.skipped, BTreeMap::from([(Skip::NotEditable, 1)]));
+    assert_eq!(texts(&s, id, 0).last().unwrap(), "a second example");
 }
 
 #[test]
