@@ -11,6 +11,15 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -72,13 +81,13 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel or open Save As, which is noted on the console
-    /// and dropped.
+    /// except a request to show a side panel, open Save As, or open or save an attached file,
+    /// which is noted on the console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, or open Save As.
+        // button's may show or hide a side panel, open Save As, or open or save an attached file.
         // The warnings go through `say` like any other console line, so they count against the
         // line and byte caps instead of growing the console past them.
         let mut notes = Vec::new();
@@ -86,6 +95,9 @@ impl JsOutput {
             match r {
                 Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
+                Request::OpenAttachment { name, .. } => {
+                    notes.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
+                }
                 r => self.requests.push(r.clone()),
             }
         }
@@ -117,6 +129,49 @@ impl JsOutput {
                 self.doc_errors.push(e.clone());
             }
             self.errors.push(e);
+        }
+    }
+
+    /// Takes out the alerts, console lines, requests and errors. The record of the document
+    /// scripts' errors stays, so they are still reported once.
+    fn set_aside(&mut self) -> JsOutput {
+        JsOutput {
+            alerts: std::mem::take(&mut self.alerts),
+            console: std::mem::take(&mut self.console),
+            requests: std::mem::take(&mut self.requests),
+            errors: std::mem::take(&mut self.errors),
+            doc_errors: Vec::new(),
+        }
+    }
+
+    /// Puts back what [`JsOutput::set_aside`] took out and returns what was added since.
+    fn put_back(&mut self, waiting: JsOutput) -> JsOutput {
+        let own = self.set_aside();
+        self.alerts = waiting.alerts;
+        self.console = waiting.console;
+        self.requests = waiting.requests;
+        self.errors = waiting.errors;
+        own
+    }
+}
+
+impl Session {
+    /// Runs `f` and returns its value with the script output `f` added to document `id`. The
+    /// output limits count that output alone, and the output that was waiting stays for
+    /// [`Session::take_js_output`]. When `f` fails, its output joins the waiting output.
+    pub fn with_own_js_output<T, E>(&mut self, id: DocId, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<(T, JsOutput), E> {
+        let waiting = self.docs.iter_mut().find(|d| d.id == id).map(|d| d.js_output.set_aside());
+        let result = f(self);
+        let mut doc = self.docs.iter_mut().find(|d| d.id == id);
+        let own = doc.as_mut().zip(waiting).map(|(d, w)| d.js_output.put_back(w)).unwrap_or_default();
+        match result {
+            Ok(value) => Ok((value, own)),
+            Err(e) => {
+                if let Some(d) = doc {
+                    d.js_output.append(own);
+                }
+                Err(e)
+            }
         }
     }
 }
@@ -212,11 +267,18 @@ pub struct JsRunner {
 
 impl JsRunner {
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
-    /// an XFA form) and its document-level scripts, read once.
-    pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
+    /// an XFA form) and its document-level scripts, read once. `highlight`: whether the viewer
+    /// highlights form fields (`app.runtimeHighlight`).
+    pub fn new(cos: &pdfcraft_cos::Document, file_name: &str, highlight: bool) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
-        let doc =
-            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        let doc = pdfcraft_js::DocInfo {
+            file_name: file_name.to_string(),
+            num_pages: pdfcraft_model::pages(cos).len(),
+            page: 0,
+            info: info(cos),
+            highlight,
+            xfa,
+        };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
         // AcroForm context with them: a viewer-compatibility alert would be misleading.
@@ -225,6 +287,14 @@ impl JsRunner {
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
         JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
     }
+}
+
+/// The field highlight the last of `requests` that sets it asks for (`app.runtimeHighlight`).
+fn last_highlight(requests: &[Request]) -> Option<bool> {
+    requests.iter().rev().find_map(|r| match r {
+        Request::Highlight(on) => Some(*on),
+        _ => None,
+    })
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -277,6 +347,10 @@ impl JsRunner {
         if log {
             self.output.absorb(&o);
         }
+        // The edit's later scripts read the field highlight this one set.
+        if let Some(on) = last_highlight(&o.requests) {
+            self.doc.highlight = on;
+        }
         if o.error.is_some() {
             return None;
         }
@@ -312,19 +386,122 @@ impl crate::Document {
     }
 }
 
+/// When a signature field's XFA signing scripts run ([`Session::run_sign_event`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignEvent {
+    /// Just before the field is signed (`preSign`): what it changes is signed too.
+    Before,
+    /// Once the field is signed (`postSign`).
+    After,
+}
+
+impl SignEvent {
+    /// The template's name for the event.
+    pub fn activity(self) -> &'static str {
+        match self {
+            SignEvent::Before => "preSign",
+            SignEvent::After => "postSign",
+        }
+    }
+}
+
 impl Session {
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
     pub fn set_javascript(&mut self, on: bool) {
         self.js_off = !on;
     }
 
+    /// Whether JavaScript is on (Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript).
     pub fn javascript(&self) -> bool {
         !self.js_off
+    }
+
+    /// Whether the viewer highlights form fields (Highlight fields), which forms' scripts read as
+    /// `app.runtimeHighlight`. A script that changes it asks for [`Request::Highlight`]; the
+    /// viewer then calls this with the new setting.
+    pub fn set_field_highlight(&mut self, on: bool) {
+        self.field_highlight = on;
     }
 
     /// What scripts printed or asked for since the last call (alerts, console, print, …).
     pub fn take_js_output(&mut self, id: DocId) -> JsOutput {
         self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output)).unwrap_or_default()
+    }
+
+    /// The last field-highlight change (`app.runtimeHighlight`) scripts asked for in document
+    /// `id`, taken out of its waiting output; the rest stays for [`Session::take_js_output`].
+    pub fn take_js_highlight(&mut self, id: DocId) -> Option<bool> {
+        let doc = self.docs.iter_mut().find(|d| d.id == id)?;
+        let mut last = None;
+        doc.js_output.requests.retain(|r| match r {
+            Request::Highlight(on) => {
+                last = Some(*on);
+                false
+            }
+            _ => true,
+        });
+        last
+    }
+
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        if !crate::xfa::has_event(cos, &tpl, &som, activity) {
+            doc.xfa_exited.remove(&som);
+            return Ok(false);
+        }
+        // Gaining focus starts afresh; losing it runs the exit unless the change just did.
+        if doc.xfa_exited.remove(&som) && focus == FieldFocus::Exit {
+            return Ok(false);
+        }
+        let before = doc.generation;
+        self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
+    /// Run signature field `field`'s XFA signing scripts for `event` in document `id`: `preSign`
+    /// before it is signed, `postSign` after, as one undoable step, as a form's signing events run
+    /// (DA 31's dates the signature and locks the date). `Ok(false)`, with nothing changed, when
+    /// there are none: not a laid-out XFA form, JavaScript off, no such field, or no such script.
+    /// What the scripts said or asked for is in [`Session::take_js_output`].
+    pub fn run_sign_event(&mut self, id: DocId, field: &str, event: SignEvent) -> Result<bool, EditError> {
+        if self.get(id).is_none() {
+            return Err(EditError::NoDocument);
+        }
+        let Some(som) = self.sign_event_som(id, field, event) else { return Ok(false) };
+        self.apply(id, Edit::XfaEvent { som, activity: event.activity().into() })?;
+        Ok(true)
+    }
+
+    /// Whether signature field `field` of document `id` has XFA signing scripts for `event` that
+    /// [`Session::run_sign_event`] would run, without running them.
+    pub fn sign_event_scripted(&self, id: DocId, field: &str, event: SignEvent) -> bool {
+        self.sign_event_som(id, field, event).is_some()
+    }
+
+    /// The SOM path of signature field `field` when it has scripts for `event` to run.
+    fn sign_event_som(&self, id: DocId, field: &str, event: SignEvent) -> Option<String> {
+        if self.js_off {
+            return None;
+        }
+        let doc = self.get(id)?;
+        let (tpl, editor) = (doc.xfa_template.as_ref()?, doc.editor.as_ref()?);
+        let f = doc.form.iter().find(|f| f.name == field)?;
+        crate::xfa::scripted_som(&editor.cos, tpl, f, event.activity())
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
@@ -336,14 +513,16 @@ impl Session {
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        // A button PdfCraft generated from an XFA template runs its XFA click script.
+        // A button PdfCraft generated from an XFA template runs its XFA click script (the app runs
+        // click scripts for buttons only, so other fields' click events don't run here either).
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && field.kind == crate::FormFieldKind::PushButton
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
-            self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
-            let out = self.take_js_output(id);
+            // The click returns only the output of its own edit; output from opening or from earlier edits stays.
+            let ((), out) = self.with_own_js_output(id, |s| s.apply(id, Edit::XfaEvent { som, activity: "click".into() }))?;
             return Ok(Outcome {
                 rc: true,
                 alerts: out.alerts,
@@ -353,7 +532,7 @@ impl Session {
                 ..Default::default()
             });
         }
-        let runner = JsRunner::new(&cos, &doc.name);
+        let runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
         let event = match target {
@@ -371,6 +550,10 @@ impl Session {
             })
             .collect();
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        // The calculations the script's changes set off read the field highlight it asked for.
+        if let Some(on) = last_highlight(&o.requests) {
+            self.field_highlight = on;
+        }
         let mut edits = Vec::new();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
@@ -570,6 +753,56 @@ mod review_tests {
         assert_eq!(reset_targets(&names, &requests), None, "a call without names resets the whole form");
     }
 
+    /// A click returns its own alert when the output waiting in the document is full, and the
+    /// waiting output stays.
+    #[test]
+    fn a_click_returns_its_alert_when_the_waiting_output_is_full() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output.alert(vec![Message::plain("waiting"); MAX_ALERTS]);
+        let o = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+        let out = s.take_js_output(id);
+        assert_eq!(out.alerts, vec![Message::plain("waiting"); MAX_ALERTS]);
+    }
+
+    /// With the console full and closed, an operation still gets its own lines. Output of an
+    /// operation that fails joins the waiting output.
+    #[test]
+    fn output_limits_count_only_the_operations_own_output() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        fn output(s: &mut Session, id: DocId) -> &mut JsOutput {
+            &mut s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output
+        }
+        output(&mut s, id).say(vec!["waiting".to_string(); MAX_CONSOLE_LINES + 1]);
+        let waiting = output(&mut s, id).console.clone();
+        assert!(waiting.last().unwrap().starts_with("more console lines were left out"));
+        let ((), own) = s
+            .with_own_js_output::<_, ()>(id, |s| {
+                output(s, id).say(["mine".to_string()]);
+                output(s, id).errors.push("own error".into());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(own.console, ["mine"]);
+        assert_eq!(own.errors, ["own error"]);
+        assert_eq!(output(&mut s, id).console, waiting);
+        assert!(output(&mut s, id).errors.is_empty());
+        let failed = s.with_own_js_output::<(), _>(id, |s| {
+            output(s, id).errors.push("failed edit".into());
+            Err("no")
+        });
+        assert_eq!(failed.unwrap_err(), "no");
+        let out = s.take_js_output(id);
+        assert_eq!(out.console, waiting);
+        assert_eq!(out.errors, ["failed edit"]);
+    }
+
     /// A form of many calculated fields, each printing its own cap of console lines, keeps a
     /// bounded console: past the budget, lines are left out and one closing line says so.
     #[test]
@@ -604,7 +837,8 @@ mod review_tests {
         };
         let mut glyphs: Vec<_> = (0..n).map(|i| glyph(i, "_")).collect();
         glyphs.push(glyph(n, "x"));
-        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs };
+        // Built by hand, not read from a page the renderer cut short, so the text is complete.
+        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs, truncated: false };
         UNDERSCORE_CHARS_READ.with(|c| c.set(0));
         let words = words_with(&text, |x, y| [x, y]);
         assert_eq!(words.iter().map(|(w, _)| w.len()).collect::<Vec<_>>(), [n, 1]);
