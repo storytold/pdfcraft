@@ -20,8 +20,8 @@ let doc = Document::open(bytes)?;                               // Arc<Vec<u8>>
 let doc = Document::open_with_password(bytes, Some("owner"))?;  // encrypted files
 
 let root = doc.root();                               // Option<ObjRef> — the catalog
-let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Object>
-let real = doc.resolve(&obj);                        // follow one indirect reference
+let obj  = doc.get(ObjRef::new(12, 0));             // load (and cache): Arc<Object>
+let real = doc.resolve(&obj);                        // follow a bounded reference chain
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
 let data = stream.decoded()?;                        // filters applied on demand
 let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too
@@ -62,7 +62,9 @@ another. Edits never touch the original bytes.
   not expand compact xref ranges; the winning xref entry remains authoritative for free
   slots. Compressed objects require generation zero. Explicit `set` overlays accept only the
   supplied generation; `set_existing` and `update_dict` retain both accepted generations of a
-  damaged live slot, including through snapshots, and require full rewrite. Headers beyond
+  damaged live slot, including through snapshots, and require full rewrite.
+  `accepted_generations(num)` lists the generations a slot accepts, so code comparing two
+  revisions can tell whether a reference still reaches the same slot. Headers beyond
   this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
   diagnosed before folding, so a newer row does not hide a retained disagreement.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
@@ -89,6 +91,14 @@ into compressed object streams with a cross-reference stream (PDF 1.5+); turning
 classic table any reader accepts. Both forms map accepted xref/header aliases to one output
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
 
+A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
+`Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are
+regenerated, and `SaveOptions::id_entropy` can supply entropy for reproducible output (tests pin
+output this way). Without it the identifier mixes in fresh entropy from the host — the browser's
+`crypto.getRandomValues` on the web, the operating system's random hash seed on the desktop — so a
+fresh copy of the program cannot reproduce it. An encrypted file keeps the first string, because its
+key is derived from it.
+
 `SaveOptions::linearize` makes `write_full` write a linearized file for Fast Web View (ISO 32000-2
 Annex F, `writer/linearize.rs`): the linearization dictionary, the first-page cross-reference
 section, the primary hint stream (page offset, shared object and outline tables), the first
@@ -101,6 +111,7 @@ to a linearized file keeps it valid but no longer linearized, as in any reader, 
 `is_linearized(bytes)` says which it is. `qpdf --check-linearization` finds no errors on
 synthetic files, encrypted ones included. The thumbnail hint table, the generic ones other than
 the outlines' and the overflow hint stream are not written (`core.linearization`, partial).
+A linearized save that needs a new identifier writes the same one in both trailers.
 
 Dictionaries keep their key order and streams keep their *encoded* bytes, so rewritten objects stay
 recognisable in a diff and byte-stable when re-serialized.

@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::Write;
 
 use super::{
-    SaveOptions, collect_refs, prepared, renumber, reread, rewritten_trailer, stamp_mod_date, trailer_roots, write_dict, write_indirect,
+    SaveOptions, collect_refs, full_save_trailer, prepared, renumber, reread, stamp_mod_date, trailer_roots, write_dict, write_indirect,
     write_xref_table,
 };
 use crate::CosError;
@@ -613,7 +613,11 @@ pub(super) fn write(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosEr
     let first: Vec<Vec<u8>> = plan.first.iter().map(|&i| body(i)).collect::<Result<_, _>>()?;
     let rest: Vec<Vec<u8>> = main.iter().map(|&i| body(i)).collect::<Result<_, _>>()?;
 
-    let mut trailer = rewritten_trailer(&reader.document, &trailer_in, &map, opts);
+    // A redacted or sanitized copy gets a new identifier, hashed from the objects written, and
+    // the same one in both trailers.
+    let written: Vec<u8> =
+        if reader.document.new_id_required() { document.iter().chain(&first).chain(&rest).flatten().copied().collect() } else { Vec::new() };
+    let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &written);
     trailer.set(b"Size".to_vec(), Object::Int(i64::from(size)));
     let version = reader.document.version().chars().take(3).collect::<String>();
     let mut header = format!("%PDF-{version}\n").into_bytes();

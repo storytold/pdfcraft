@@ -473,3 +473,38 @@ fn restoring_explicit_sets_removes_old_generation_aliases() {
         }
     }
 }
+
+/// `accepted_generations` lists exactly the generations `get` resolves, for every kind of slot:
+/// a clean file slot, a damaged one (row and header disagree), a repair-aware edit, a plain
+/// edit, a freed slot, a free row, an object stream member and an unknown number.
+#[test]
+fn accepted_generations_are_the_generations_get_resolves() {
+    let agrees = |doc: &Document, num: u32, expected: &[u16]| {
+        assert_eq!(doc.accepted_generations(num), expected, "object {num}");
+        for generation in 0..8 {
+            let live = !matches!(*doc.get(ObjRef::new(num, generation)), Object::Null);
+            assert_eq!(live, expected.contains(&generation), "object {num} generation {generation}");
+        }
+    };
+    let doc = Document::open(contradictory_entry(false)).unwrap();
+    agrees(&doc, 1, &[0]);
+    agrees(&doc, 3, &[0, 1]);
+    agrees(&doc, 9, &[]);
+    let mut repaired = doc.clone();
+    repaired.set_existing(ObjRef::new(3, 0), Object::Int(77)).unwrap();
+    agrees(&repaired, 3, &[0, 1]);
+    let mut narrowed = doc.clone();
+    narrowed.set(ObjRef::new(3, 2), Object::Int(99));
+    agrees(&narrowed, 3, &[2]);
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(3, 0));
+    agrees(&freed, 3, &[]);
+    agrees(&Document::open(contradictory_entry(true)).unwrap(), 3, &[]);
+    let mut doc =
+        Document::open(object_file(&[(1, 0, "<< /Type /Catalog /Pages 2 0 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>")])).unwrap();
+    let member = doc.add(Object::Dict(Default::default()));
+    doc.update_dict(ObjRef::new(1, 0), |c| c.set(b"Extra".to_vec(), Object::Ref(member))).unwrap();
+    let packed = Document::open(Arc::new(write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() }).unwrap())).unwrap();
+    assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
+    agrees(&packed, member.num, &[0]);
+}

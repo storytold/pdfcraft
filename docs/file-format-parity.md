@@ -81,7 +81,7 @@ features total).
 
 | Target | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
-| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and borderless inferred tables; positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
+| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and inferred tables (bordered only along the grid lines the page draws); positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
 | Word 97–2003 (`.doc`) | yes | no | none | |
 | Excel (`.xlsx`), XML Spreadsheet 2003 | yes | no | none | `create.export-xlsx` planned |
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |

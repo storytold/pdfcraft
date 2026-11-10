@@ -305,3 +305,33 @@ fn an_update_on_top_opens_but_is_no_longer_linearized() {
         Some("test")
     );
 }
+
+/// The `/ID` of each trailer in `bytes`, as written.
+fn trailer_ids(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    text.match_indices("trailer")
+        .filter_map(|(at, _)| {
+            let rest = text.get(at..)?;
+            let id = rest.find("/ID")?;
+            let end = rest.get(id..)?.find(']')?;
+            rest.get(id..=id + end).map(str::to_string)
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_identifier_is_the_same_in_both_trailers() {
+    let mut doc = open(fixture(false));
+    doc.require_full_save_with_new_id();
+    let save = |entropy| write_full(&doc, &SaveOptions { id_entropy: Some([entropy; 16]), ..linearized() }).unwrap();
+    let (one, two) = (save(1), save(2));
+    assert!(is_linearized(&one));
+    let (ids, other) = (trailer_ids(&one), trailer_ids(&two));
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert_eq!(ids[0], ids[1]);
+    assert_eq!(other.len(), 2, "{other:?}");
+    assert_eq!(other[0], other[1]);
+    // A new identifier, not the source's: other entropy gives another one.
+    assert_ne!(ids[0], other[0]);
+    assert_eq!(title(&open(one)), "Fast");
+}
