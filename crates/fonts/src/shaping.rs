@@ -31,6 +31,16 @@ pub enum ShapedScript {
     ArabicBold,
     Hebrew,
     Thai,
+    /// Devanagari, with the craft-fonts `Deva` face.
+    Devanagari,
+    /// Cyrillic, Greek and the Latin letters outside WinAnsiEncoding, with the bundled Inter.
+    Latin,
+    /// Han and kana with the Japanese document face (BIZ UDPGothic), and Han with the Simplified
+    /// Chinese one (Noto Sans CJK SC) for Chinese text ([`han_script`]).
+    Japanese,
+    Chinese,
+    /// Hangul, with the craft-fonts `Kore` face (Nanum Gothic).
+    Korean,
 }
 
 impl ShapedScript {
@@ -40,8 +50,48 @@ impl ShapedScript {
             Self::ArabicBold => crate::document_arabic_font().filter(|_| bold_instance().is_some()),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Devanagari => crate::document_devanagari_font(),
+            Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
+            Self::Japanese => crate::document_japanese_font_for_style(false, false),
+            // The sans face (Noto Sans CJK SC) before a calligraphic one (LXGW WenKai).
+            Self::Chinese => {
+                let hans = || crate::CRAFT_FONTS.iter().filter(|f| f.covers("Hans"));
+                hans().find(|f| f.family.contains("Sans")).or_else(|| hans().find(|f| f.style == "Regular")).or_else(|| hans().next())
+            }
+            Self::Korean => crate::CRAFT_FONTS.iter().find(|f| f.covers("Kore")),
         }
     }
+
+    /// The script's name, for a face without a family of its own.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Arabic | Self::ArabicBold => "Arabic",
+            Self::Hebrew => "Hebrew",
+            Self::Thai => "Thai",
+            Self::Devanagari => "Devanagari",
+            Self::Latin => "Latin",
+            Self::Japanese => "Japanese",
+            Self::Chinese => "Chinese",
+            Self::Korean => "Korean",
+        }
+    }
+}
+
+/// The face for Han characters in `text`: Japanese when the text has kana (or there is no
+/// Chinese face), Chinese otherwise.
+pub fn han_script(text: &str) -> ShapedScript {
+    let kana = text.chars().any(|c| matches!(u32::from(c), 0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F));
+    if kana || ShapedScript::Chinese.font().is_none() { ShapedScript::Japanese } else { ShapedScript::Chinese }
+}
+
+/// Whether the face of `kind` has a glyph for `c` (false without the face).
+pub fn script_has(kind: ShapedScript, c: char) -> bool {
+    face(kind).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Shape one directional run of `text` with the face of `kind`, clusters in drawing order.
+pub fn shape(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, rtl, kind)
 }
 
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
@@ -52,10 +102,20 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static DEVANAGARI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static LATIN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static JAPANESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static CHINESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static KOREAN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic | ShapedScript::ArabicBold => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Devanagari => &DEVANAGARI,
+        ShapedScript::Latin => &LATIN,
+        ShapedScript::Japanese => &JAPANESE,
+        ShapedScript::Chinese => &CHINESE,
+        ShapedScript::Korean => &KOREAN,
     };
     cache
         .get_or_init(|| {
@@ -147,15 +207,20 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str(text);
     buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-    buffer.set_script(match kind {
-        ShapedScript::Arabic | ShapedScript::ArabicBold => script::ARABIC,
-        ShapedScript::Hebrew => script::HEBREW,
-        ShapedScript::Thai => script::THAI,
-    });
-    // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
+    match kind {
+        ShapedScript::Arabic | ShapedScript::ArabicBold => buffer.set_script(script::ARABIC),
+        ShapedScript::Hebrew => buffer.set_script(script::HEBREW),
+        ShapedScript::Thai => buffer.set_script(script::THAI),
+        ShapedScript::Devanagari => buffer.set_script(script::DEVANAGARI),
+        ShapedScript::Korean => buffer.set_script(script::HANGUL),
+        ShapedScript::Japanese | ShapedScript::Chinese => buffer.set_script(script::HAN),
+        // Cyrillic, Greek or Latin: the shaper reads it from the text.
+        ShapedScript::Latin => buffer.guess_segment_properties(),
+    }
+    // Preserve the historical Arabic per-character mapping; other scripts' marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic | ShapedScript::ArabicBold => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        _ => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.

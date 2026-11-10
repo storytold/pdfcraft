@@ -1,6 +1,6 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, line_extents, norm, shaped_layout_bidi, text_rect, thai_error,
-    wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, line_extents, norm, other_script, script_error,
+    shaped_layout_bidi, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family, Ink};
 use super::{
@@ -108,6 +108,7 @@ pub(super) fn draw_laid_shaped(
             ShapedScript::Arabic | ShapedScript::ArabicBold => arabic_error(e, &c.text),
             ShapedScript::Hebrew => hebrew_error(e, &c.text),
             ShapedScript::Thai => thai_error(e, &c.text),
+            other => script_error(other, e, &c.text),
         })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
@@ -199,6 +200,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
                 || (t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable) && pdfcraft_fonts::appearance_text::can_shape(&t.text))
+                || t.text.chars().any(|c| other_script(c, &t.text).is_some())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));

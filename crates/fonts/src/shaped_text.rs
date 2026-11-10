@@ -356,14 +356,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
     // The face's family when every glyph comes from one script; without the face, the script's
     // name (as Arabic items were always named).
     let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
-        Some(script) => script.font().map_or(
-            match script {
-                ShapedScript::Arabic | ShapedScript::ArabicBold => "Arabic",
-                ShapedScript::Hebrew => "Hebrew",
-                ShapedScript::Thai => "Thai",
-            },
-            |f| f.family,
-        ),
+        Some(script) => script.font().map_or(script.name(), |f| f.family),
         None => "PdfCraft Shaped Text",
     };
     let mut descriptor = Dict::new();
