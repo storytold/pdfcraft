@@ -1,9 +1,10 @@
 //! Work regressions for the forms a redaction's unlinking check reads, when their `/DecodeParms`
-//! is given by reference: each is decoded through a view that shares its data and copies no more
-//! of its dictionary than its filters and parameters, not through a copy of the whole stream, and
-//! once in the check however many pages draw it. A test binary of its own, so that none of the
-//! crate's other tests shares its process. Each test compares two timings of its own, the least of
-//! three runs each, with the parameters by reference and direct, not a fixed time.
+//! is given by reference: each is read once in the check however many pages draw it. With one
+//! read, these no longer tell a copy of the stream from a view of it;
+//! `the_reads_besides_the_walk_decode_through_a_view` (in `src/tests.rs`) holds the reads to the
+//! view. A test binary of its own, so that none of the crate's other tests shares its process.
+//! Each test compares two timings of its own, the least of three runs each, with the parameters by
+//! reference and direct, not a fixed time.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -61,14 +62,15 @@ fn redaction(pages: usize, numbers: usize, by_reference: bool) -> Duration {
         .unwrap_or_default()
 }
 
-/// Written when the unlinking check read the form for each of the 256 pages that draw it: through a
-/// copy of the stream, each read copied the array, a quarter of a million numbers, again, and with
-/// its parameters by reference the redaction took about 550 ms against 20 ms with them direct (test
-/// profile). The check now looks each form up once (below), so this times one read of it, by
-/// reference against direct; `the_reads_besides_the_walk_decode_through_a_view` holds the reads to
-/// the view.
+/// A smoke test of the whole redaction, 256 pages drawing one form. Written when the unlinking check
+/// read the form for each page: through a copy of the stream, each read copied the array, a quarter
+/// of a million numbers, again, and with its parameters by reference the redaction took about 550 ms
+/// against 20 ms with them direct (test profile). The check now looks each form up once (below), so
+/// the redaction it times, by reference against direct, reads the form once in the check, and it
+/// no longer tells a copy from a view: `the_reads_besides_the_walk_decode_through_a_view` holds the
+/// reads to the view.
 #[test]
-fn a_form_read_for_each_page_is_not_copied_for_each_page() {
+fn a_form_drawn_on_every_page_costs_about_as_much_by_reference_as_direct() {
     let (direct, by_reference) = (redaction(256, 1 << 18, false), redaction(256, 1 << 18, true));
     assert!(by_reference < direct * 3, "by reference {by_reference:?}, direct {direct:?}");
 }

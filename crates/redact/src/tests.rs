@@ -6871,11 +6871,18 @@ fn a_layer_a_view_rule_turns_off_is_hidden() {
 /// are decoded through `Document::decoding_view`, not `Document::with_direct_parms`: with
 /// `/DecodeParms` given by reference that copies the whole stream, and some of these read one stream
 /// again for each page or Type 3 font that draws it, so a dictionary made large would be copied
-/// again each time. `tests/stream_views.rs` measures the unlinking check's case; this holds all nine.
+/// again each time. This holds all nine to the view; `tests/stream_views.rs` times the unlinking
+/// check's single read of each form.
 #[test]
 fn the_reads_besides_the_walk_decode_through_a_view() {
     for (file, source) in [("src/interp/prune.rs", include_str!("interp/prune.rs")), ("src/type3.rs", include_str!("type3.rs"))] {
-        let copies: Vec<usize> = source.lines().enumerate().filter(|(_, line)| line.contains("with_direct_parms(")).map(|(n, _)| n + 1).collect();
+        // Any mention on a line that isn't a `//` comment, however the call is spaced.
+        let copies: Vec<usize> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && line.contains("with_direct_parms"))
+            .map(|(n, _)| n + 1)
+            .collect();
         assert!(copies.is_empty(), "{file} reads through a copy of the stream at lines {copies:?}: use `Document::decoding_view`");
     }
 }
