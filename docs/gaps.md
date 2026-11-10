@@ -98,7 +98,8 @@ update the numbers.
 
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
   needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
-  structure tags, find and replace in edit mode; vector and object editing; arrange and align.
+  structure tags, find and replace beyond plain paragraphs (form fields, comments, matches across
+  paragraphs); vector and object editing; arrange and align.
 - **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
   `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
   `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
@@ -433,6 +434,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |
+| 2026-10-15 | minor | Gap 3: find and replace in Edit text mode (the Find box's Replace row, `text_replace`); each match is rewritten inside its own paragraph, and matches in form fields, comments or across paragraphs are left and counted. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-13 | minor | Gap 6: Organize Pages selects and reveals the current page on open, including after an earlier grid selection elsewhere (#1910). Estimates unchanged. |
 | 2026-10-13 | minor | gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain. |
