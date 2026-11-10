@@ -105,6 +105,16 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
+        self.schedule_open_with_priority(request, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn schedule_open_priority(&mut self, request: OpenRequest) -> Result<u64, String> {
+        self.schedule_open_with_priority(request, true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn schedule_open_with_priority(&mut self, request: OpenRequest, priority: bool) -> Result<u64, String> {
         if self.open_worker.is_none() {
             self.open_worker = Some(
                 open_worker::OpenWorker::new(
@@ -119,8 +129,11 @@ impl PdfCraftApp {
         if let Some(ctx) = &self.ctx {
             worker.set_context(ctx);
         }
-        let receiver =
-            worker.submit(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?;
+        let receiver = if priority {
+            worker.submit_priority(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?
+        } else {
+            worker.submit(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?
+        };
         self.next_open_token = token;
         self.pending_opens.push(PendingOpen {
             token,
@@ -497,7 +510,7 @@ impl PdfCraftApp {
         };
         #[cfg(not(target_arch = "wasm32"))]
         if self.ctx.is_some() && !self.run_inline {
-            let result = self.schedule_open(OpenRequest {
+            let result = self.schedule_open_priority(OpenRequest {
                 name: p.name.clone(),
                 path: p.path.clone(),
                 stamp: p.stamp,
