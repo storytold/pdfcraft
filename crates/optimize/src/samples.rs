@@ -37,7 +37,7 @@ pub enum NotDecoded {
     BitDepth(i64),
     #[error("its decode array remaps the samples")]
     Decode,
-    #[error("it is compressed in a format PdfCraft cannot read back yet (JPEG 2000, JBIG2 or CCITT fax)")]
+    #[error("it is compressed in a format PdfCraft cannot read back yet (JBIG2 or CCITT fax)")]
     Filter,
     #[error("its JPEG colour transform is ambiguous, so readers may disagree about its colours")]
     Ambiguous,
@@ -56,6 +56,9 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
     }
     // The filter first: a JPEG 2000 image may leave its colour space and bit depth to the data,
     // and the report should name the format, not the missing entries.
+    if is_jpx(s) {
+        return jpx_samples(doc, s, budget);
+    }
     let jpeg = is_dct(s).ok_or(NotDecoded::Filter)?;
     let n = d.get(b"ColorSpace").and_then(|cs| components(doc, cs)).ok_or(NotDecoded::ColourSpace)?;
     let bpc = d.get(b"BitsPerComponent").map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(0);
@@ -94,6 +97,73 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
     }
     let data = pixels(doc, s, n, budget).ok_or(NotDecoded::Corrupt)?;
     Ok(Samples { width, height, components: n, data, jpeg, bilevel: false, inverted: false })
+}
+
+/// Whether `s` is a JPEG 2000 image: `/JPXDecode` as its only filter.
+fn is_jpx(s: &Stream) -> bool {
+    match s.dict.get(b"Filter") {
+        Some(Object::Name(n)) => n.as_slice() == b"JPXDecode",
+        Some(Object::Array(a)) => matches!(a.as_slice(), [f] if f.as_name() == Some(b"JPXDecode")),
+        _ => false,
+    }
+}
+
+/// The samples of a JPEG 2000 image: 8-bit grey or RGB without an alpha channel, whose size is the
+/// dictionary's. Written back as a JPEG, since the pages' scans are JPEG 2000 only for size and
+/// PdfCraft has no JPEG 2000 encoder.
+fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Samples, NotDecoded> {
+    use hayro_jpeg2000::{ColorSpace, DecodeSettings, Image};
+    let d = &s.dict;
+    // The data's colour space is the image's unless the dictionary names one, which must agree.
+    let image = Image::new(&s.raw, &DecodeSettings::default()).map_err(|_| NotDecoded::Corrupt)?;
+    let (width, height) = (image.width(), image.height());
+    if width == 0 || height == 0 {
+        return Err(NotDecoded::Corrupt);
+    }
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > MAX_PIXELS {
+        return Err(NotDecoded::TooLarge);
+    }
+    // The decoder makes a structure a tile before it reads any: a tile index is 16 bits, so more
+    // tiles than that are no real image, only a small file asking for a great deal of memory.
+    if jpx_tiles(&s.raw).is_none_or(|t| t > u64::from(u16::MAX)) {
+        return Err(NotDecoded::TooLarge);
+    }
+    let n = match image.color_space() {
+        ColorSpace::Gray => 1,
+        ColorSpace::RGB => 3,
+        _ => return Err(NotDecoded::ColourSpace),
+    };
+    if image.has_alpha() || image.original_bit_depth() > 8 {
+        return Err(NotDecoded::BitDepth(i64::from(image.original_bit_depth())));
+    }
+    if d.get(b"ColorSpace").is_some_and(|cs| components(doc, cs) != Some(n)) {
+        return Err(NotDecoded::ColourSpace);
+    }
+    let dict_side = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_int());
+    if [(b"Width".as_slice(), width), (b"Height", height)].iter().any(|(k, v)| dict_side(k).is_some_and(|x| x != i64::from(*v))) {
+        return Err(NotDecoded::Corrupt);
+    }
+    if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n)) {
+        return Err(NotDecoded::Decode);
+    }
+    if !budget.pay_pixels(pixels.saturating_mul(n as u64)) {
+        return Err(NotDecoded::TooLarge);
+    }
+    let data = image.decode().map_err(|_| NotDecoded::Corrupt)?;
+    if Some(data.len()) != usize::try_from(pixels).ok().and_then(|p| p.checked_mul(n)) {
+        return Err(NotDecoded::Corrupt);
+    }
+    Ok(Samples { width, height, components: n, data, jpeg: true, bilevel: false, inverted: false })
+}
+
+/// How many tiles the JPEG 2000 codestream in `raw` (bare, or inside a JP2 file) says it has, from
+/// its SIZ segment: the image's far corner, less the tile grid's origin, over the tile size.
+fn jpx_tiles(raw: &[u8]) -> Option<u64> {
+    let siz = raw.windows(4).position(|w| w == [0xff, 0x4f, 0xff, 0x51])?.checked_add(8)?;
+    let word = |i: usize| Some(u64::from(u32::from_be_bytes(raw.get(siz + 4 * i..siz + 4 * i + 4)?.try_into().ok()?)));
+    let along = |end: u64, tile: u64, origin: u64| (tile > 0 && end > origin).then(|| (end - origin).div_ceil(tile));
+    along(word(0)?, word(4)?, word(6)?)?.checked_mul(along(word(1)?, word(5)?, word(7)?)?)
 }
 
 /// `[1 0]`: a bi-level image whose 1 bits are black.
@@ -161,6 +231,10 @@ pub fn encode_samples(old: &Stream, samples: &Samples, quality: u8) -> Option<St
     let mut d = old.dict.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
         d.remove(k);
+    }
+    // A JPEG 2000 image may leave its colour space to the data: the new encoding needs it said.
+    if d.get(b"ColorSpace").is_none() {
+        d.set(b"ColorSpace".to_vec(), Object::name(if n == 1 { "DeviceGray" } else { "DeviceRGB" }));
     }
     if *bilevel {
         if n != 1 {
@@ -292,11 +366,11 @@ mod tests {
         assert_eq!(base(&[("ColorSpace", Object::name("DeviceCMYK"))], vec![0; 64]), Err(NotDecoded::ColourSpace));
         assert_eq!(base(&[("BitsPerComponent", Object::Int(4))], vec![0; 8]), Err(NotDecoded::BitDepth(4)));
         assert_eq!(base(&[("Filter", Object::name("JBIG2Decode"))], vec![0; 8]), Err(NotDecoded::Filter));
-        // JPEG 2000 may leave the colour space and bit depth to its data: the format is the reason.
+        // JPEG 2000 data that is no JPEG 2000 is corrupt, whatever its dictionary says.
         let jpx = |dict: &[(&str, Object)]| decode_samples(&doc(), &image(dict, vec![0; 8]), &mut ImageBudget::with_work(u64::MAX));
         let size = [("Width", Object::Int(4)), ("Height", Object::Int(4)), ("Filter", Object::name("JPXDecode"))];
-        assert_eq!(jpx(&size), Err(NotDecoded::Filter));
-        assert_eq!(jpx(&[size[0].clone(), size[1].clone(), size[2].clone(), ("ColorSpace", Object::name("DeviceRGB"))]), Err(NotDecoded::Filter));
+        assert_eq!(jpx(&size), Err(NotDecoded::Corrupt));
+        assert_eq!(jpx(&[size[0].clone(), size[1].clone(), size[2].clone(), ("ColorSpace", Object::name("DeviceRGB"))]), Err(NotDecoded::Corrupt));
         assert_eq!(base(&[("ImageMask", Object::Bool(true))], vec![0; 8]), Err(NotDecoded::StencilMask));
         assert_eq!(base(&[("Decode", Object::Array(vec![Object::Int(1), Object::Int(0)]))], vec![0; 16]), Err(NotDecoded::Decode));
         // Too short, a huge size, a broken JPEG, no size at all.
@@ -308,5 +382,63 @@ mod tests {
         let s = image(&[("Width", Object::Int(4)), ("Height", Object::Int(4))], vec![0; 16]);
         let wrong = Samples { width: 4, height: 4, components: 1, data: vec![0; 15], jpeg: false, bilevel: false, inverted: false };
         assert!(encode_samples(&s, &wrong, 90).is_none());
+    }
+
+    /// Contributor-original JPEG 2000: a 1 × 1 image of `components` 8-bit components, every
+    /// sample 128 (an empty packet decodes to the midpoint).
+    fn jpx_codestream(components: u16) -> Vec<u8> {
+        let mut c = vec![0xff, 0x4f, 0xff, 0x51];
+        c.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+        c.extend_from_slice(&0_u16.to_be_bytes());
+        for v in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+            c.extend_from_slice(&v.to_be_bytes());
+        }
+        c.extend_from_slice(&components.to_be_bytes());
+        for _ in 0..components {
+            c.extend_from_slice(&[7, 1, 1]);
+        }
+        c.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        c.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        c.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]);
+        c.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+        c.extend_from_slice(&[0, 1, 0xff, 0x93]);
+        c.extend(std::iter::repeat_n(0, usize::from(components)));
+        c.extend_from_slice(&[0xff, 0xd9]);
+        c
+    }
+
+    #[test]
+    fn jpeg_2000_scans_are_read_and_written_back_as_jpegs_with_a_colour_space() {
+        let budget = || ImageBudget::with_work(u64::MAX);
+        for (n, space) in [(1_u16, "DeviceGray"), (3, "DeviceRGB")] {
+            // The data names its colour space: the dictionary may leave it out.
+            let s = image(&[("Width", Object::Int(1)), ("Height", Object::Int(1)), ("Filter", Object::name("JPXDecode"))], jpx_codestream(n));
+            let got = decode_samples(&doc(), &s, &mut budget()).unwrap();
+            assert_eq!((got.width, got.height, got.components, got.jpeg, got.bilevel), (1, 1, usize::from(n), true, false));
+            assert_eq!(got.data, vec![128; usize::from(n)]);
+            let back = encode_samples(&s, &got, 90).unwrap();
+            assert_eq!(back.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
+            assert_eq!(back.dict.name(b"ColorSpace"), Some(space.as_bytes()));
+            assert_eq!(decode_samples(&doc(), &back, &mut budget()).unwrap().components, usize::from(n));
+        }
+        // A dictionary that contradicts the data is refused, not trusted.
+        let mut d = vec![("Filter", Object::name("JPXDecode")), ("Width", Object::Int(1)), ("Height", Object::Int(1))];
+        let rgb = |extra: (&str, Object)| {
+            let mut d = d.clone();
+            d.push(extra);
+            decode_samples(&doc(), &image(&d, jpx_codestream(3)), &mut budget())
+        };
+        assert_eq!(rgb(("ColorSpace", Object::name("DeviceGray"))), Err(NotDecoded::ColourSpace));
+        assert_eq!(rgb(("Decode", Object::Array(vec![Object::Int(1); 6]))), Err(NotDecoded::Decode));
+        d[1] = ("Width", Object::Int(2));
+        assert_eq!(decode_samples(&doc(), &image(&d, jpx_codestream(3)), &mut budget()), Err(NotDecoded::Corrupt));
+        // 1024 × 1024 in tiles of one pixel: a million tiles, refused before any is made.
+        let mut tiled = jpx_codestream(1);
+        tiled[8..16].copy_from_slice(&[0, 0, 4, 0, 0, 0, 4, 0]);
+        assert_eq!(jpx_tiles(&tiled), Some(1 << 20));
+        assert_eq!(decode_samples(&doc(), &image(&[("Filter", Object::name("JPXDecode"))], tiled), &mut budget()), Err(NotDecoded::TooLarge));
+        // Out of budget.
+        let s = image(&[("Filter", Object::name("JPXDecode"))], jpx_codestream(1));
+        assert_eq!(decode_samples(&doc(), &s, &mut ImageBudget::with_work(0)), Err(NotDecoded::TooLarge));
     }
 }

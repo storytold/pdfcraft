@@ -21,6 +21,8 @@ thiserror.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # The same JPEG decoder, used directly to read samples untransformed (/ColorTransform 0).
 zune-jpeg = "0.5"
+# JPEG 2000 decoding, to read scans stored that way; already in the tree through hayro.
+hayro-jpeg2000 = { version = "0.3.5", default-features = false, features = ["std"] }
 
 # Lets other programs go first while a copy is being made.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

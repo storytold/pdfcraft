@@ -4585,6 +4585,7 @@ dependencies = [
 name = "pdfcraft-optimize"
 version = "0.18.1"
 dependencies = [
+ "hayro-jpeg2000",
  "image",
  "pdfcraft-annot",
  "pdfcraft-content",

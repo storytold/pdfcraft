@@ -175,9 +175,9 @@ update the numbers.
 
 - **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
   despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
-  the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
-  reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
-  and leaves them as they are); MRC compression;
+  the background and edge shadows on grey and RGB scans, JPEG 2000 ones included, and despeckles
+  those and 1-bit ones; it reports CMYK, indexed, JBIG2 and CCITT scans and scans drawn inside
+  Form XObjects and leaves them as they are); MRC compression;
   pluggable engines; OCR in the
   browser; scanner input.
 - **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without

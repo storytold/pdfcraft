@@ -5,13 +5,14 @@
 //! image object**, at the same size and in the same colour space. So everything else on the
 //! page stays as it was: an invisible OCR text layer, comments, links, form fields, other
 //! content, and the image's own soft mask, `/Interpolate` and other entries. A JPEG stays a JPEG
-//! (at quality 90), any other grey or RGB image is stored losslessly (Flate), and a black and
-//! white (1-bit) image stays 1-bit. An image several pages draw is cleaned once.
+//! (at quality 90), a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000),
+//! any other grey or RGB image is stored losslessly (Flate), and a black and white (1-bit) image
+//! stays 1-bit. An image several pages draw is cleaned once.
 //!
 //! A page is a scan when its pictures cover at least half of it (as for Recognize text); the
 //! pictures each covering at least a tenth of the page are its scan. What is not cleaned is
 //! reported, never skipped silently: pages that are no scan, and scan images in a form PdfCraft
-//! can't rewrite yet (CMYK, indexed, JPEG 2000, JBIG2, CCITT fax, a stencil mask, a remapping
+//! can't rewrite yet (CMYK, indexed, JBIG2, CCITT fax, a stencil mask, a remapping
 //! decode array, a scan drawn inside grouped Form artwork) or whose data is broken.
 //!
 //! Like Optimize, the work is a job: [`Session::scan_clean_job`] captures the document,
