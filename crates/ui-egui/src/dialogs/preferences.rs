@@ -755,33 +755,62 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     if app.always_default_view && (always_changed || layout_changed || continuous_changed || gaps_changed || fit_changed || zoom_changed) {
         let defaults = app.view_defaults;
         for view in &mut app.views {
-            view.set_display(defaults.layout, defaults.continuous);
             view.set_page_gaps(defaults.show_page_gaps);
-            match defaults.fit {
-                Fit::None => view.set_zoom(defaults.zoom),
-                fit if view.fit != fit => view.set_fit(fit),
-                _ => {}
+            if let Some(saved) = view.saved_display_mut() {
+                saved.layout = defaults.layout;
+                saved.continuous = defaults.continuous;
+                saved.fit = defaults.fit;
+                if defaults.fit == Fit::None {
+                    saved.zoom = defaults.zoom;
+                }
+            } else {
+                view.set_display(defaults.layout, defaults.continuous);
+                match defaults.fit {
+                    Fit::None => view.set_zoom(defaults.zoom),
+                    fit if view.fit != fit => view.set_fit(fit),
+                    _ => {}
+                }
             }
         }
     } else if let Some(i) = app.active {
-        if layout_changed {
-            app.views[i].set_layout(layout_choice);
-        }
-        if continuous_changed {
-            app.views[i].set_continuous(continuous);
-        }
+        let view = &mut app.views[i];
         if gaps_changed {
-            app.views[i].set_page_gaps(show_page_gaps);
+            view.set_page_gaps(show_page_gaps);
         }
-        if fit_changed {
-            match app.view_defaults.fit {
-                Fit::None => app.views[i].set_zoom(app.view_defaults.zoom),
-                fit if app.views[i].fit != fit => app.views[i].set_fit(fit),
-                _ => {}
+        if let Some(saved) = view.saved_display_mut() {
+            if layout_changed {
+                saved.layout = layout_choice;
             }
-        }
-        if zoom_changed {
-            app.views[i].set_zoom(app.view_defaults.zoom);
+            if continuous_changed {
+                saved.continuous = continuous;
+            }
+            if fit_changed {
+                saved.fit = app.view_defaults.fit;
+                if app.view_defaults.fit == Fit::None {
+                    saved.zoom = app.view_defaults.zoom;
+                }
+            }
+            if zoom_changed {
+                saved.fit = Fit::None;
+                saved.zoom = app.view_defaults.zoom;
+            }
+        } else {
+            if layout_changed {
+                view.set_layout(layout_choice);
+            }
+            if continuous_changed {
+                view.set_continuous(continuous);
+            }
+            if fit_changed {
+                match app.view_defaults.fit {
+                    Fit::None => view.set_zoom(app.view_defaults.zoom),
+                    fit if view.fit != fit => view.set_fit(fit),
+                    _ => {}
+                }
+            }
+            if zoom_changed {
+                view.set_zoom(app.view_defaults.zoom);
+            }
         }
     }
     ctx.checkbox(ui, &mut app.text_links, tl!("Open web and email addresses written in the page text"), t);

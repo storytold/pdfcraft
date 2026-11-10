@@ -1297,6 +1297,85 @@ fn preferences_toggle_continuous_scrolling_updates_active_document() {
 }
 
 #[test]
+fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_exit() {
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_ui_egui::canvas::Fit;
+
+    let mut h = harness(&[("continuous", "off"), ("zoom", "50")]);
+    let v0 = &h.state().views[0];
+    assert!(!v0.continuous());
+    assert_eq!(v0.fit, Fit::None);
+    assert_eq!(v0.zoom, 0.5);
+
+    h.state_mut().views[0].enter_presentation();
+    assert!(h.state().views[0].presenting());
+    assert!(!h.state().views[0].continuous());
+    assert_eq!(h.state().views[0].fit, Fit::Page);
+
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Always use my default zoom and page layout").click();
+    h.run_steps(2);
+    assert!(h.state().always_default_view);
+
+    {
+        let v = &h.state().views[0];
+        assert!(v.presenting(), "presentation display is preserved");
+        assert!(!v.continuous(), "presentation display is not continuous");
+        assert_eq!(v.fit, Fit::Page, "presentation display stays fitted to page");
+        assert!(v.normal_display().continuous, "saved normal display updated to continuous");
+        assert_eq!(v.normal_display().fit, Fit::Width, "saved normal display updated to default fit width");
+    }
+
+    h.state_mut().views[0].leave_presentation();
+    {
+        let v = &h.state().views[0];
+        assert!(!v.presenting());
+        assert!(v.continuous(), "continuous scrolling restored from updated preferences");
+        assert_eq!(v.fit, Fit::Width, "fit width restored from updated preferences");
+    }
+}
+
+#[test]
+fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display() {
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_ui_egui::canvas::Fit;
+
+    let mut h = harness(&[("default-continuous", "off"), ("continuous", "off")]);
+    assert!(!h.state().views[0].continuous());
+
+    h.state_mut().views[0].enter_presentation();
+    assert!(h.state().views[0].presenting());
+    assert!(!h.state().views[0].continuous());
+    assert_eq!(h.state().views[0].fit, Fit::Page);
+
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    h.get_by_label("Continuous scrolling").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Continuous scrolling").click();
+    h.run_steps(2);
+
+    assert!(h.state().view_defaults.continuous);
+    {
+        let v = &h.state().views[0];
+        assert!(v.presenting(), "presentation display is preserved");
+        assert!(!v.continuous(), "presentation display is not continuous");
+        assert_eq!(v.fit, Fit::Page, "presentation display stays fitted to page");
+        assert!(v.normal_display().continuous, "saved normal display updated to continuous");
+    }
+
+    h.state_mut().views[0].leave_presentation();
+    {
+        let v = &h.state().views[0];
+        assert!(!v.presenting());
+        assert!(v.continuous(), "continuous scrolling restored on exit");
+    }
+}
+
+#[test]
 fn preferences_set_the_default_zoom() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
