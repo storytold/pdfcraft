@@ -35,6 +35,8 @@ const STROKE: Contour = &[(120, 300), (340, 420), (340, 460), (120, 340)];
 const SUPERIOR: Contour = &[(100, 400), (300, 400), (300, 700), (100, 700)];
 /// A `t`'s stem, and the apostrophe beside it that `ť` has for a caron.
 const T_STEM: Contour = &[(150, 0), (250, 0), (250, 600), (150, 600)];
+/// A slash through a letter, from below the baseline.
+const SLASH: Contour = &[(20, -120), (80, -120), (480, 520), (420, 520)];
 const APOSTROPHE: Contour = &[(330, 620), (370, 620), (400, 780), (360, 780)];
 
 /// Each accented letter's contours, by the character it draws.
@@ -45,6 +47,10 @@ fn drawing(c: char) -> &'static [Contour] {
         'ť' => &[T_STEM, APOSTROPHE],
         // A cedilla alone, below the baseline.
         '¸' => &[OGONEK],
+        // A spacing double acute, all of it above the baseline.
+        '˝' => &[ACUTE_LEFT, ACUTE_RIGHT],
+        // An `O` whose slash reaches below the baseline.
+        'Ø' | 'ø' => &[BODY, SLASH],
         // Three marks: no letter's.
         '*' => &[BODY, DOT_LEFT, DOT, DOT_RIGHT],
         'ő' | 'ű' => &[BODY, ACUTE_LEFT, ACUTE_RIGHT],
@@ -194,10 +200,11 @@ fn read(font: &Font<'_>) -> (String, Option<String>, RecoveryCounters) {
 /// and the strict text keeps WinAnsi.
 #[test]
 fn windows_1250_letters_drawn_at_winansi_codes_are_read_as_drawn() {
-    let glyphs = [(b'k', 'k'), (0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű'), (0xB3, 'ł'), (0xBD, '½')];
+    let glyphs = [(b'k', 'k'), (0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű'), (0xB3, 'ł'), (0xBD, '˝')];
     let (strict, recovered, cost) = read(&Font::new("ABCDEF+TimesNewRomanCE", &glyphs));
     assert_eq!(strict, "kèõû³½");
-    // Only letters are read: Windows-1250's `˝` at 0xBD, a spacing accent, would replace a `½`.
+    // A floating `˝` is no vote for WinAnsi's `½` (whose denominator reaches the baseline), and
+    // only letters are read: Windows-1250's `˝` at 0xBD, a spacing accent, would replace a `½`.
     assert_eq!(recovered.as_deref(), Some("kčőűł½"));
     assert!(cost.outlines_classified <= 5, "only the high codes are classified: {cost:?}");
 }
@@ -521,4 +528,14 @@ fn undefined_codes_are_read_only_where_their_glyphs_draw_the_letter() {
     let modes: Vec<RecoveryMode> = r.recovery.iter().flatten().map(|x| x.mode).collect();
     assert_eq!(modes.len(), 4, "{modes:?}");
     assert!(modes.iter().all(|m| matches!(m, RecoveryMode::Override { .. })), "{modes:?}");
+}
+
+/// A slashed `O` whose slash reaches below the baseline is no ogonek: `Ø` and `ø` at 0xD8 and 0xF8
+/// (a diameter sign in a German catalogue) don't read as Windows-1257's `Ų` and `ų`.
+#[test]
+fn a_slashed_o_reaching_below_the_baseline_is_not_an_ogonek() {
+    let glyphs = [(0xD8, 'Ø'), (0xF8, 'ø'), (b'k', 'k')];
+    let (strict, recovered, _) = read(&Font::new("ABCDEF+MetaNormal-Roman", &glyphs));
+    assert_eq!(strict, "Øøk");
+    assert_eq!(recovered, None);
 }
