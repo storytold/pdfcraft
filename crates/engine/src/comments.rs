@@ -45,6 +45,7 @@ pub enum SummarySort {
 
 impl SummarySort {
     pub const ALL: [SummarySort; 4] = [SummarySort::Page, SummarySort::Author, SummarySort::Date, SummarySort::Type];
+    /// The name shown in the dialog, also accepted by the tools and saved in the preferences.
     pub fn name(self) -> &'static str {
         match self {
             SummarySort::Page => "Page",
@@ -53,6 +54,7 @@ impl SummarySort {
             SummarySort::Type => "Type",
         }
     }
+    /// The sort order a [`name`](Self::name) stands for, ignoring case; `None` for any other text.
     pub fn parse(s: &str) -> Option<SummarySort> {
         Self::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
     }
@@ -126,6 +128,7 @@ impl SummaryLayout {
             SummaryLayout::DocumentAndCommentsWithNumbers => "document_and_comments_with_numbers",
         }
     }
+    /// The layout a [`key`](Self::key) stands for, ignoring case; `None` for any other text.
     pub fn parse(s: &str) -> Option<SummaryLayout> {
         Self::ALL.into_iter().find(|k| k.key().eq_ignore_ascii_case(s))
     }
@@ -187,11 +190,11 @@ pub fn summary_items(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> 
             children.entry(parent).or_default().push(r);
         }
     }
-    // A comment's replies, a level deeper each. A reply to a reply keeps its `/IRT` on the
-    // direct parent, so following one level would leave the deeper replies out of the summary.
-    // A group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) is part of the comment, not a
-    // reply: it is not listed, and replies to it are listed at its level, as the comment's.
-    // `depth` bounds the walk; `level` is the reply's depth.
+    /// A comment's replies, a level deeper each. A reply to a reply keeps its `/IRT` on the
+    /// direct parent, so following one level would leave the deeper replies out of the summary.
+    /// A group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) is part of the comment, not a
+    /// reply: it is not listed, and replies to it are listed at its level, as the comment's.
+    /// `depth` bounds the walk; `level` is the reply's depth.
     fn replies<'a>(
         out: &mut Vec<(usize, &'a pdfcraft_render::Annotation)>,
         children: &Children<'a>,

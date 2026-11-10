@@ -193,6 +193,7 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
 
 const NO_COMMENTS: &str = "This document has no comments.";
 
+/// The error for a summary that would pass [`MAX_SHEETS`].
 fn too_many() -> PrintError {
     PrintError::Invalid("the comment summary would have too many pages".into())
 }
@@ -233,6 +234,7 @@ struct Out {
 }
 
 impl Out {
+    /// Adds a sheet, or fails once the summary would pass [`MAX_SHEETS`].
     fn push(&mut self, sheet: Sheet) -> Result<(), PrintError> {
         if self.sheets.len() >= MAX_SHEETS {
             return Err(too_many());
@@ -548,6 +550,7 @@ fn text(c: &mut Vec<u8>, font: &SummaryFont, rgb: &[f64; 3], size: f64, x: f64, 
     Ok(())
 }
 
+/// A number for a content stream: three decimals at most, without trailing zeros.
 fn n(v: f64) -> String {
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -605,6 +608,7 @@ impl SummaryFont {
         std::borrow::Cow::Owned(out)
     }
 
+    /// The width of `s` at `size` points, as [`show`](Self::show) draws it.
     fn width(&self, s: &str, size: f64) -> f64 {
         match &self.inter {
             None => pdfcraft_fonts::helvetica_width(&Self::escaped(s), size),

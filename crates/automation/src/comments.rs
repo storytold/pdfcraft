@@ -740,6 +740,8 @@ impl Automation {
         Ok(json!({ "hidden": hidden }))
     }
 
+    /// `comments_summarize`: makes the comment summary in the chosen layout, paper and sort order,
+    /// and delivers it as [`deliver`](Self::deliver) does.
     pub(crate) fn comments_summarize(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, stem) = (doc.id, std::path::Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
