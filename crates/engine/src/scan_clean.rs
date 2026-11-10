@@ -6,7 +6,8 @@
 //! page stays as it was: an invisible OCR text layer, comments, links, form fields, other
 //! content, and the image's own soft mask, `/Interpolate` and other entries. A JPEG stays a JPEG
 //! (at quality 90), a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000;
-//! 8-bit grey or RGB up to 40 million pixels, without a palette or an alpha channel),
+//! 8-bit grey up to 40 million pixels or RGB up to 20 million, without a palette or an alpha
+//! channel),
 //! any other grey or RGB image is stored losslessly (Flate), and a black and white (1-bit) image
 //! stays 1-bit. An image several pages draw is cleaned once.
 //!
