@@ -50,12 +50,14 @@ impl PdfString {
         Self { bytes, hex: false }
     }
 
-    /// Decode a text string: UTF-16BE (BOM), UTF-8 (BOM, PDF 2.0) or PDFDocEncoding.
+    /// Decode a text string: UTF-16BE or UTF-16LE (BOM), UTF-8 (BOM, PDF 2.0) or PDFDocEncoding.
     ///
     /// Lenient beyond the spec, as readers are: invalid sequences after a BOM decode lossily
-    /// instead of dropping the string, a BOM-less string whose bytes are valid UTF-8 with
-    /// non-ASCII bytes (written by some producers) is read as UTF-8 rather than as
-    /// PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are removed.
+    /// instead of dropping the string, UTF-16LE strings with a `FF FE` BOM (written by some GIS
+    /// and CAD producers for OCG layer names and metadata) decode as UTF-16LE, a BOM-less string
+    /// whose bytes are valid UTF-8 with non-ASCII bytes (written by some producers) is read as
+    /// UTF-8 rather than as PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are
+    /// removed.
     pub fn to_text(&self) -> String {
         self.text_chars().collect()
     }
@@ -65,6 +67,10 @@ impl PdfString {
         let decode = match self.bytes.as_slice() {
             [0xFE, 0xFF, rest @ ..] => {
                 let units: fn(&[u8; 2]) -> u16 = |c| u16::from_be_bytes(*c);
+                Decode::Utf16(char::decode_utf16(rest.as_chunks::<2>().0.iter().map(units)))
+            }
+            [0xFF, 0xFE, rest @ ..] => {
+                let units: fn(&[u8; 2]) -> u16 = |c| u16::from_le_bytes(*c);
                 Decode::Utf16(char::decode_utf16(rest.as_chunks::<2>().0.iter().map(units)))
             }
             [0xEF, 0xBB, 0xBF, rest @ ..] => Decode::Utf8Lossy { chunks: rest.utf8_chunks(), valid: "".chars(), replace: false },
@@ -90,7 +96,7 @@ pub struct TextChars<'a> {
     leading: bool,
 }
 
-/// The UTF-16BE code units after a BOM (an odd last byte is left out).
+/// The UTF-16 code units after a BOM (an odd last byte is left out).
 type Utf16Units<'a> = std::iter::Map<std::slice::Iter<'a, [u8; 2]>, fn(&[u8; 2]) -> u16>;
 
 enum Decode<'a> {
@@ -823,5 +829,33 @@ mod tests {
             assert!(matches!(stream.decoded_first_filter_strict(inner.len() - 1), Err(CosError::Filter(_))));
             assert!(matches!(Stream::from_raw(dict, corrupt.to_vec()).decoded_first_filter_strict(usize::MAX), Err(CosError::Filter(_))));
         }
+    }
+
+    #[test]
+    fn utf16le_text_strings_decode_cleanly() -> Result<(), Box<dyn std::error::Error>> {
+        let utf16le = |s: &str| [0xFF, 0xFE].into_iter().chain(s.encode_utf16().flat_map(u16::to_le_bytes)).collect::<Vec<u8>>();
+        for expected in ["Other 3", "AREA_CONSOLIDADA", "SITUAÇÃO ATUAL", "第一章 概述", "emoji 📄"] {
+            let s = PdfString::literal(utf16le(expected));
+            if s.to_text() != expected {
+                return Err(format!("expected {expected:?}, got {:?}", s.to_text()).into());
+            }
+            if !s.text_eq(expected) || s.text_eq(&format!("{expected}x")) {
+                return Err(format!("text_eq mismatch for {expected:?}").into());
+            }
+        }
+        // Doubled UTF-16LE BOMs, odd trailing bytes, lone surrogates, and empty BOM-only strings.
+        if PdfString::literal(vec![0xFF, 0xFE, 0xFF, 0xFE, b'A', 0x00]).to_text() != "A" {
+            return Err("doubled UTF-16LE BOM was not stripped".into());
+        }
+        if PdfString::literal(vec![0xFF, 0xFE, b'A', 0x00, 0x00]).to_text() != "A" {
+            return Err("odd trailing byte in UTF-16LE was not ignored".into());
+        }
+        if PdfString::literal(vec![0xFF, 0xFE, 0x00, 0xD8, b'A', 0x00]).to_text() != "\u{FFFD}A" {
+            return Err("unpaired surrogate in UTF-16LE was not replaced".into());
+        }
+        if !PdfString::literal(vec![0xFF, 0xFE]).to_text().is_empty() {
+            return Err("BOM-only UTF-16LE string should decode to empty".into());
+        }
+        Ok(())
     }
 }
