@@ -14,8 +14,9 @@
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exited 0 at
   `0c57e2271`; it was not re-run at this pass's head, and no rebase was done in
   this pass, so the base stays `ba28458ad`.
-- Local head before this STATUS commit: `5bad54c40` (feat: share several
-  selections, per-line quads and the caret) on `38d0bf56d` (docs(collab):
+- Local head before this STATUS commit: `21aaf357a` (feat: publish an
+  unpublished base after a restart and on resolve) on `5bad54c40` (feat: share
+  several selections, per-line quads and the caret) on `38d0bf56d` (docs(collab):
   record the pop-up window operation and reconcile the STATUS head) on
   `0c57e2271` (feat: open, close and move
   a comment's pop-up window as one operation) on `199076765` (docs(collab):
@@ -33,10 +34,10 @@
   on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
   `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
   `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
-  clippy complexity limit) — **88 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD` at `5bad54c40`), **48 behind** and
-  **8 ahead** of the PR head; the STATUS record makes 89 and the follow-up note
-  on top of it 90 (`git rev-list --count origin/main..HEAD` at this docs head). The numbers the
+  clippy complexity limit) — **92 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD` at this docs head; 91 at
+  `21aaf357a`), **48 behind** and **12 ahead** of the PR head (11 at
+  `21aaf357a`, this STATUS record being the twelfth). The numbers the
   earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
   86/11/6 at `0c57e2271` — were right when they were measured; `origin/main`
   kept moving (`ba28458ad` → `a71b5124b` → `274b7a042`) and each slice added
@@ -46,28 +47,30 @@
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
   2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the eight local commits above it are in it
+  through the Split/Combine record; the twelve local commits above it are in it
   only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
   and their record (`3f3bbedb0`), the parts/move/geometry operation
   (`22d29d070`) and its record (`199076765`), the pop-up operation
-  (`0c57e2271`) and its record (`38d0bf56d`), and this pass's selection
-  operation (`5bad54c40`) and its record (this STATUS commit). `UNSTABLE` is
+  (`0c57e2271`) and its record (`38d0bf56d`), the selection operation
+  (`5bad54c40`) and its two records (`b6244142c`, `dc773c609`), and this pass's
+  publication restore (`21aaf357a`) and its record (this STATUS commit). `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `5bad54c40` for the crates this pass touched
-  (proto, client, ws, server, hub, `ui-egui` with `collab`, and the wasm shell);
-  the whole-suite gates named earlier were run at their own heads (`157f4d239`,
+  §4 are green at the local head `21aaf357a` for the crates this pass touched
+  (collab-server, collab-ws, collab-pdf and the daemon); the whole-suite gates
+  named earlier were run at their own heads (`5bad54c40`, `157f4d239`,
   `22d29d070`, `0c57e2271`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
   (`999da5ec`), the commit publication outside the hub lock (`a47641fb`),
   restyle and status replies (`ce5c38798`), the publication queue
-  (`a639f30c0`), presence selections (`b4e9179d8`) and their second slice —
+  (`a639f30c0`) and its recovery after a restart plus the resolve's own
+  publication (`21aaf357a`, §4), presence selections (`b4e9179d8`) and their second slice —
 several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-resolution
   endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
   replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
@@ -82,10 +85,13 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   (§4, first table). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
-- Known gaps before production are listed in §5, the plan in §6. The one this
-  pass leaves explicitly open: a kill between the base write and the `CURRENT`
-  rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
-  SIGKILL test covers the journal→base window.
+- Known gaps before production are listed in §5, the plan in §6. This pass
+  closes both open ends of limitation 6 — the in-process publication queue and
+  the resolve that did not republish (§5 p.6, §4) — and leaves `https` without a
+  reverse proxy, the in-process `conflict` flag and the journal tail (published
+  by the next commit) as they were. A kill between the base write and the
+  `CURRENT` rename is covered at the `Store` level only (§5 p.1, §6.1); the
+  real-process SIGKILL test covers the journal→base window.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -101,11 +107,11 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
 | `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert, restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`), its parts (`PartsUpdate`), its move (`MoveUpdate`) and its geometry (`GeometryUpdate`) and their before/expect CAS; the review-state names of a status reply |
-| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter |
+| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256/HS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter (which publishes the refused base), the publication queue and its recovery of restored publications |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_conflicts_resolved_total`) |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
@@ -394,6 +400,102 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Publications that outlive the process — §5 p.6 / limitation 6 (2026-11-10, local; not pushed)
+
+`21aaf357a` on `dc773c609`. Limitation 6 had two open ends: the publication
+queue lived only in memory, so a restart fell back to the next commit, join or
+leave; and `POST /v1/sessions/{fileId}/resolve` re-armed the room without
+publishing the base the cabinet had refused, so a room that then went quiet
+waited forever. Both are closed with no new wire verb. The publication *is* the
+committed base, its payload is fixed, and its idempotency key is derived from
+that payload, so a later process can send exactly what the dead one would have
+sent.
+
+- **A restart finds the unpublished base in the store.** `Store` already keeps
+  `CURRENT` (the base the room loads, its version and epoch) and `CABINET` (the
+  base the cabinet took, with both numberings). A room is unpublished when the
+  first is ahead of the second — a commit wrote its base and the POST either
+  failed retryably or was in flight when the process went away.
+  `rooms::restore_publications` walks `<data>/`, reads only `CURRENT` and
+  `CABINET` per room, and opens the unpublished ones from the base plus the
+  journal, exactly as `POST /v1/sessions` would, so a client that connects
+  afterwards sees the same head. One directory that cannot be opened is skipped
+  (its session request reports it) instead of stopping the daemon. The journal
+  tail beyond that base is not this path's work: it becomes a base at the next
+  commit.
+- **The base, not a new commit.** `Adapter::pending_publication` (default
+  `None`; `CabinetAdapter` implements it) builds the POST of the committed base:
+  `fileId`, the version `CURRENT` names, the bytes read back from
+  `versions/<N>/file.pdf` through `PdfAdapter::committed_base`, and
+  `expectedVersion` from the marker (the cabinet's numbering, which a resolve
+  may have moved). `Room::republish` takes it and makes the room `publishing`,
+  so a client commit in the meantime is `busy` rather than a newer base
+  overtaking the restored one. `Room::finish_retry` records the outcome against
+  `base_version`, the version that was written — the same path a queued retry
+  takes.
+- **The same key, so one version.** The publication carries
+  `fileId:version:sha256` of that base in the body (`idempotencyKey`) and in the
+  `Idempotency-Key` header. A cabinet that took the bytes before the process
+  died recognises the duplicate instead of creating a second version; the next
+  commit's `expectedVersion` proves the marker moved.
+- **Queued at once, not after a backoff.** `Shared::queue_restored` puts a
+  restored publication due *now* (no attempt of this process failed yet);
+  `retry_publications` runs it on the next 100 ms tick. The daemon seeds the
+  queue before it binds the WebSocket listener, so nothing can overtake it.
+  `publication_retries_total` counts only publications that failed at least
+  once, so a restored first attempt is not reported as a retry.
+- **The resolve publishes.** `WsServer::resolve_conflict` moves the marker,
+  clears the flag, and then calls `Room::republish` and queues the result — no
+  commit, join or leave is needed. A resolve with nothing to publish (the marker
+  already names the base) queues nothing; a base that cannot be read back leaves
+  the resolve standing and the next commit publishes, which is what happened
+  before this change. The refresh is counted separately from the resolution.
+- **The tail follows, in order.** After a successful restored publication the
+  queue applies its existing rule: the room is dirty if it also has a journal
+  tail beyond that base, nobody is connected, so it commits the tail and
+  publishes it as the next version — the same thing the last-leave commit would
+  have done had the process lived. The base still goes first (a newer base never
+  overtakes it), and each publication carries its own derived key.
+- **A `409` still stops the queue.** A restored or resolve-queued publication
+  goes through `Room::finish_retry` like any other: a `409` flags the room,
+  releases it and drops the entry (retrying the same `expectedVersion` cannot
+  succeed); a retryable failure keeps the room `publishing` and schedules the
+  next attempt with the same body and key; a `retryable: false` failure is
+  dropped. The `conflict` flag itself is still in-process — a restart
+  re-discovers it by publishing, which is exactly the state that produces it.
+- `/metrics` gains
+  `pdfcraft_collab_publications_restored_total` and
+  `pdfcraft_collab_publications_after_resolve_total`
+  (`Metrics::publications_restored`, `::publications_after_resolve`); `/health`
+  is unchanged. The start-up line names the restored count.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-server` | `a_restored_base_is_published_without_a_commit_and_blocks_newer_ones` (resume at 3 with the cabinet at 1: `republish` returns one attempt, `commit_now`/`republish` are `busy`, `finish_retry` makes the room clean and leaves nothing to publish); `a_restored_base_the_cabinet_refuses_flags_the_room_and_stops` (409 → conflict, not `publishing`, still dirty); `a_restored_base_that_failed_retryably_keeps_the_room_publishing`; `an_adapter_with_nothing_unpublished_republishes_nothing` |
+| `collab-ws` | unit `a_restored_publication_is_queued_at_once_and_counted` (queued, not run under the lock; one attempt on the next tick; `publications_restored` 1, `publication_retries` 0; a success is not queued again) and `a_restored_base_is_followed_by_the_journal_tail` (a room resumed at base 1 with an acknowledged operation after it and nobody connected: the base is published first, then the tail as its own commit, and the room ends clean at version 2) |
+| daemon | `tests/restore_publication.rs` `a_restart_publishes_the_base_the_previous_process_left`: the real daemon with `--control` (no `--documents`), a cabinet that is down for the first commit, `SIGKILL`; the second process publishes `version 1, expectedVersion 0` with the derived key **with no client connected**, `publications_restored_total 1`, `publication_retries_total 0`, one delivery (not repeated after 1.5 s), and the next commit sends `version 2, expectedVersion 1`. `a_restored_publication_the_cabinet_refuses_stops_and_a_resolve_publishes_it`: the restored publication gets `409` (cabinet at 5), the room is flagged, nothing is retried for 1.5 s, then `resolve(5)` returns 200 and the base is published once with the same sha/key and `expectedVersion 5`, `publications_after_resolve_total 1`, and the next commit expects 6 |
+| daemon | `tests/conflict_resolve.rs` now asserts the new loop: a `409` is not queued (no delivery and no retry for 1.5 s), the resolve publishes the refused base once with the same derived key, and the next commits expect the cabinet's answer (8, then 9) |
+
+Gates on the host `agents` (rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass, EXIT 0 |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-server -p pdfcraft-collab-ws --all-targets -- -D warnings` | pass, EXIT 0 (also `-p pdfcraft-collab-daemon -p pdfcraft-collab-pdf`) |
+| Tests, protocol crates | `cargo test -p pdfcraft-collab-server` | 33 passed, 0 failed, 0 ignored, EXIT 0 |
+| Tests, transport e2e | `cargo test -p pdfcraft-collab-ws --test e2e` | 28 passed, 0 failed, 0 ignored, EXIT 0 |
+| Tests, transport unit + pdf | `cargo test -p pdfcraft-collab-ws -p pdfcraft-collab-pdf` | 16 + 51 passed, 0 failed, 0 ignored, EXIT 0 |
+| Tests, daemon | `cargo test -p pdfcraft-collab-daemon` | 34 unit + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1 + `restore_publication` 2, 0 failed, 0 ignored, EXIT 0 |
+
+What this does **not** cover: the start-up recovery runs only for a room whose
+base the cabinet does not have — a room that is clean on disk and whose journal
+tail already became a published base is not re-published (there is nothing to
+send); `publishing` and `conflict` are still in-process flags, so a restart
+recomputes them from `CURRENT`/`CABINET` and, where the base is unpublished, by
+publishing; and `https` without a reverse proxy is still open (limitation 7).
 
 ### Cabinet HS256 tickets — auth/lease (2026-11-10, local; not pushed)
 
@@ -831,6 +933,10 @@ callback body, and a cabinet that reuses numbers would need an adapter; a
 conflict caused by the dev-mode mirror changing needs the operator to name the
 mirror file's etag (the source file is the cabinet there); and nothing was run
 against a real cabinet.
+
+What this section still said was open — a resolve that only lets the *next*
+commit publish — is closed in `21aaf357a` (§4): the resolve publishes the refused
+base itself, and a restart republishes it from the store.
 
 ### Presence selections — §5 p.4 / limitation 4 (2026-11-09, local; not pushed)
 
@@ -2336,26 +2442,28 @@ Ordered by the risk they pose to production.
    copy fits `MAX_RESTORE_PAGE_BYTES` (160 KiB); a larger page is deleted without
    a copy. Copies are memory-bounded (64 / 64 MiB) and are rebuilt by replay, not
    persisted on their own.
-6. **The cabinet contract is implemented, the retry queue is in place, the
-   production loop is still open.** `POST /v1/sessions`, the commit callback,
-   the background publication queue and `409` exist (RFC §8.2, §4). A failed
-   POST (network error, `429`, `5xx`) is retried by the daemon with an
-   exponential backoff (1 s doubling to 60 s) under a derived idempotency key,
-   without waiting for the next commit or the last-client-leave commit; a
-   retry publishes the same version, never a second one, and a `409` stops the
-   queue until an operator re-seeds the room (§4). The operator's way out is
-   `POST /v1/sessions/{fileId}/resolve` (`62d48d30a`, §4): it names the
-   cabinet's current version and etag, clears the flag and lets the next commit
-   publish again; a repeat, a wrong version, another file or a role without
-   write access is refused without a change. What is still missing: the queue is
-   in-process, so a restart falls back to the next commit/join/leave; the
-   resolve does not republish by itself (a room that then goes quiet waits for a
-   commit, a join or the last leave); and `https` without a proxy. The shared
-   cabinet contract also lets the cabinet number versions and return its own
-   `{version, etag}` from the callback; the daemon now adopts that body as the
-   copy it holds (falling back to `expectedVersion + 1`) and keeps both numbers
-   in `CABINET`, so a cabinet with its own numbering works as long as that
-   number is per file and monotonic.
+6. **The cabinet contract is implemented, the queue survives a restart, `https`
+   is still open.** `POST /v1/sessions`, the commit callback, the background
+   publication queue and `409` exist (RFC §8.2, §4). A failed POST (network
+   error, `429`, `5xx`) is retried by the daemon with an exponential backoff
+   (1 s doubling to 60 s) under a derived idempotency key, without waiting for
+   the next commit or the last-client-leave commit; a retry publishes the same
+   version, never a second one, and a `409` stops the queue until an operator
+   re-seeds the room (§4). The queue is no longer in-process-only (`21aaf357a`,
+   §4): at start-up the daemon walks the store and queues every base `CURRENT`
+   names that `CABINET` does not, so a room left `publishing` by a dead process
+   reaches the cabinet with no commit, join or leave — the same base, the same
+   `fileId:version:sha256` key, one version. The operator's way out,
+   `POST /v1/sessions/{fileId}/resolve` (`62d48d30a`), names the cabinet's
+   current version and etag, clears the flag and now publishes the refused base
+   at once instead of waiting for the room to speak again; a repeat, a wrong
+   version, another file or a role without write access is refused without a
+   change. What is still missing: `https` without a proxy.
+   The shared cabinet contract also lets the cabinet number versions and return
+   its own `{version, etag}` from the callback; the daemon now adopts that body
+   as the copy it holds (falling back to `expectedVersion + 1`) and keeps both
+   numbers in `CABINET`, so a cabinet with its own numbering works as long as
+   that number is per file and monotonic.
 7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
@@ -2389,8 +2497,9 @@ Ordered by the risk they pose to production.
     publishing gets `busy` (retryable), so two versions cannot reach the
     cabinet out of order. ~~What is still missing is a publication *queue*.~~
     Closed in §4: a retryable failure stays `publishing` and is retried by the
-    daemon's queue with a backoff; the queue is in-process, so a restart falls
-    back to the next commit, join or leave.
+    daemon's queue with a backoff, and a restart recovers the queue from the
+    store (`21aaf357a`, §4), so it no longer falls back to the next commit, join
+    or leave.
 12. **The legacy annotation payload lives until the flag ships.** A payload
     without `shape` is read as a sticky note; RFC §16 p. 10 sets the deadline —
     the first release with `collab` on by default makes `shape` mandatory.
@@ -2448,7 +2557,8 @@ still compacts itself, and the compaction counts in the same metric.
 
 What is still open here: a room that is dirty only because its base was written
 and never published is not idle-eligible (its journal is empty) — the next
-commit, join, leave or the queued publication republishes it; and a kill between
+commit, join, leave, the queued publication or the start-up recovery
+(`21aaf357a`, §4) republishes it; and a kill between
 the base write and the `CURRENT` rename is still covered at the `Store` level
 only (`Store::tests`; §5 p.1). The fault injection limitation 1 asked for is done
 for the real process in the journal→base window
@@ -2586,8 +2696,10 @@ has to be repeated for PdfCraft's origin/CSP.
 - **Done since:** the `conflict`-resolution endpoint
   (`POST /v1/sessions/{fileId}/resolve`, §4, `62d48d30a`) and the callback's
   `{version, etag}` answer (the marker keeps the room's and the cabinet's
-  numbering). Still open here: `https` without a proxy (limitation 7). The
-  publication queue is done in §4 (in-process).
+  numbering). The publication queue is done in §4 (in-process) and its two open
+  ends are closed in `21aaf357a` (§4): the restart recovers it from the store
+  and the resolve publishes by itself. Still open here: `https` without a proxy
+  (limitation 7).
 
 ### 6.5 Presence cursors and undo — done in this branch
 
@@ -2697,9 +2809,9 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   `apps/pdfcraft-collab-server/tests/publication_retry.rs` (lost answer →
   retry → the cabinet sees a duplicate and stores one version). **The
   `conflict`-resolution endpoint is done in `62d48d30a`** (`POST
-  /v1/sessions/{fileId}/resolve`, §4). Still open: the queue is in-process (a
-  restart falls back to the next commit/join/leave), and a resolved room waits
-  for the next commit/join/leave to republish.
+  /v1/sessions/{fileId}/resolve`, §4), and its two open ends are closed in
+  `21aaf357a` (§4): a restart recovers the queue from the store, and a resolve
+  publishes the refused base at once — no commit, join or leave needed.
 - **Rebase onto `origin/main`.** The branch had already been rebased onto
   `43f24aa1` (2026-11-08; that rebase had one conflict in
   `crates/engine/src/session/editing.rs` — main's
@@ -2863,9 +2975,10 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   `publication_backoff_max` (1 s / 60 s by default; tests pass 20 ms). A
   `retryable: false` failure is never queued: that is the difference between
   "the cabinet did not answer" and "the cabinet refused the body", and queueing
-  the second would spin forever. The queue does not survive a restart: the
-  room comes back dirty and the next commit, join or leave republishes it with
-  the same derived `idempotencyKey`.
+  the second would spin forever. The queue's entries do not survive a restart,
+  but the work does: `rooms::restore_publications` re-derives them from
+  `CURRENT` vs `CABINET` and publishes with the same derived `idempotencyKey`
+  (§3.1 of `server.md`, §4).
 - The idempotency key is `fileId:version:sha256`, in the body
   (`idempotencyKey`) and the `Idempotency-Key` header. It names the payload, so
   a retry of the same version carries the same key and the cabinet can answer
