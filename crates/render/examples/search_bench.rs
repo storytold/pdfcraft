@@ -13,7 +13,7 @@ fn main() {
         let glyphs: Vec<_> =
             text.chars().map(|c| TextGlyph { text: c.to_string(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] }).collect();
         let n = glyphs.len();
-        let page = PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] };
+        let page = PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n], truncated: false };
         black_box(page.find(&query));
         let mut times = Vec::new();
         for _ in 0..7 {
