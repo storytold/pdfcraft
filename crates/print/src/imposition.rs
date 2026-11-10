@@ -182,6 +182,56 @@ pub(crate) fn form_xobject(doc: &mut Document, ap: ObjRef, promoted: &mut std::c
     copy
 }
 
+/// Resolve optional-content resources without turning a loading failure or reference cycle
+/// into an absent entry. Keep the terminal object's identity for catalog OCG state.
+fn optional_object(doc: &Document, value: &Object) -> Result<(Option<ObjRef>, std::sync::Arc<Object>), PrintError> {
+    let mut object = std::sync::Arc::new(value.clone());
+    let mut reference = None;
+    let mut seen = std::collections::HashSet::new();
+    while let Object::Ref(r) = &*object {
+        if seen.len() >= 64 || !seen.insert(*r) {
+            return Err(PrintError::Invalid("an optional-content resource has a cyclic reference or more than 64 references".into()));
+        }
+        reference = Some(*r);
+        object = doc.try_get(r.num)?;
+    }
+    Ok((reference, object))
+}
+
+/// Preserve the complete membership rather than evaluating visibility here. The reader owns
+/// policy/VE evaluation; the annotation and its appearance can have independent memberships.
+fn annotation_membership(doc: &mut Document, annotation: &Dict) -> Result<Option<ObjRef>, PrintError> {
+    let Some(value) = annotation.get(b"OC") else { return Ok(None) };
+    let (reference, object) = optional_object(doc, value)?;
+    let dict = match &*object {
+        Object::Null => return Ok(None), // Null and undefined references are absent PDF dictionary entries.
+        Object::Dict(dict) => dict,
+        _ => return Err(PrintError::Invalid("an annotation's optional-content entry is not an OCG or OCMD dictionary".into())),
+    };
+    let kind = dict.get(b"Type").map(|value| optional_object(doc, value)).transpose()?;
+    match kind.as_ref().and_then(|(_, object)| object.as_name()) {
+        Some(b"OCG") => reference.map(Some).ok_or_else(|| PrintError::Invalid("an annotation's optional-content group must be indirect".into())),
+        Some(b"OCMD") => {
+            // Named Properties are indirect for interoperable OCG identity and for the renderer's
+            // resource path. An OCMD has no group identity; promoting its intact dict is harmless.
+            Ok(Some(reference.unwrap_or_else(|| doc.add(Object::Dict(dict.clone())))))
+        }
+        _ => Err(PrintError::Invalid("an annotation's optional-content dictionary must have Type OCG or OCMD".into())),
+    }
+}
+
+/// Clone existing marked-content properties, including unrelated entries. Never replace an
+/// unreadable map with an empty one: doing so can expose the page's own optional content.
+fn optional_properties(doc: &Document, resources: &Dict) -> Result<Dict, PrintError> {
+    let Some(value) = resources.get(b"Properties") else { return Ok(Dict::new()) };
+    let (_, object) = optional_object(doc, value)?;
+    match &*object {
+        Object::Null => Ok(Dict::new()),
+        Object::Dict(dict) => Ok(dict.clone()),
+        _ => Err(PrintError::Invalid("cannot preserve annotation layers: page Properties is not a dictionary".into())),
+    }
+}
+
 /// ISO 32000-1 section 12.5.3: counterrotate the fitted appearance about Rect's upper-left
 /// corner in default user space. Crop, UserUnit and sheet transforms remain outside it.
 fn no_rotate_placement(placement: Matrix, rect: [f64; 4], rotation: i64) -> Option<Matrix> {
@@ -221,7 +271,8 @@ pub(crate) fn page_form_where(
 ) -> Result<ObjRef, PrintError> {
     let page = pages.get(index).ok_or_else(|| PrintError::Invalid(format!("there is no page {}", index.saturating_add(1))))?;
     let crop = page.crop(doc);
-    let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let resources = page.dict.get(b"Resources").map(|value| optional_object(doc, value)).transpose();
+    let mut res = resources.as_ref().ok().and_then(|value| value.as_ref()).and_then(|(_, object)| object.as_dict()).cloned().unwrap_or_default();
     let mut body = if content == Content::FormFieldsOnly {
         Vec::new()
     } else {
@@ -237,6 +288,8 @@ pub(crate) fn page_form_where(
     }
     let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
     let mut xobjects = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+    let mut properties = None;
+    let mut property_index = 0usize;
     let mut k = 0usize;
     for (i, a) in annots.into_iter().enumerate() {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
@@ -264,6 +317,31 @@ pub(crate) fn page_form_where(
         } else {
             m
         };
+        let membership = annotation_membership(doc, &d)?;
+        let property = if let Some(membership) = membership {
+            if properties.is_none() {
+                match &resources {
+                    Err(error) => return Err(PrintError::Invalid(format!("cannot preserve annotation layers: {error}"))),
+                    Ok(Some((_, object))) if !matches!(&**object, Object::Null | Object::Dict(_)) => {
+                        return Err(PrintError::Invalid("cannot preserve annotation layers: page Resources is not a dictionary".into()));
+                    }
+                    _ => {}
+                }
+                properties = Some(optional_properties(doc, &res)?);
+            }
+            let properties = properties.get_or_insert_with(Dict::new);
+            let name = loop {
+                let name = format!("PCPrOC{property_index}");
+                property_index = property_index.checked_add(1).ok_or_else(|| PrintError::Invalid("too many annotation layer resources".into()))?;
+                if !properties.contains(name.as_bytes()) {
+                    break name;
+                }
+            };
+            properties.set(name.as_bytes().to_vec(), Object::Ref(membership));
+            Some(name)
+        } else {
+            None
+        };
         let ap = form_xobject(doc, ap, promoted);
         // Keep the page's own XObjects, including names previous print operations generated.
         // Check the growing map so each appearance also keeps the name just assigned to it.
@@ -275,6 +353,9 @@ pub(crate) fn page_form_where(
             }
         };
         let [a0, b0, c0, d0, e0, f0] = m.0;
+        if let Some(name) = &property {
+            body.extend(format!("/OC /{name} BDC\n").bytes());
+        }
         body.extend(
             format!(
                 "q {} {} {} {} {} {} cm /{name} Do Q\n",
@@ -287,15 +368,22 @@ pub(crate) fn page_form_where(
             )
             .bytes(),
         );
+        if property.is_some() {
+            body.extend_from_slice(b"EMC\n");
+        }
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
     // With no appearance added the form keeps the page's own Resources, shared by reference,
-    // rather than a deep copy per printed page.
+    // rather than a deep copy per printed page. An appearance in a layer (#5005) adds its
+    // membership to the copy's Properties, so a page with one is never shared.
     let resources = match page.dict.get(b"Resources") {
-        Some(r) if k == 0 && doc.resolve(r).as_dict().is_some() => r.clone(),
+        Some(r) if k == 0 && properties.is_none() && doc.resolve(r).as_dict().is_some() => r.clone(),
         _ => {
             if !xobjects.is_empty() {
                 res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            }
+            if let Some(properties) = properties {
+                res.set(b"Properties".to_vec(), Object::Dict(properties));
             }
             Object::Dict(res)
         }
