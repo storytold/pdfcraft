@@ -42,9 +42,12 @@ pub struct FieldChange {
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
-    /// Acrobat `textColor` / `fillColor` colour arrays. Only RGB arrays are writable.
+    /// Acrobat `textColor` / `fillColor` colour arrays: transparent `["T"]`, gray `["G", g]`,
+    /// `["RGB", r, g, b]` or `["CMYK", c, m, y, k]`, components between 0 and 1.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Move/resize the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 /// What a script did.
@@ -54,6 +57,8 @@ pub struct ScriptResult {
     pub rc: bool,
     /// `event.value` afterwards.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub changes: Vec<FieldChange>,
     /// Why it rejected the value (its alert), for the error shown.
     pub message: Option<String>,
@@ -62,7 +67,7 @@ pub struct ScriptResult {
 /// Runs field scripts (JavaScript).
 pub trait Scripts {
     /// Run `script` for `event` on `target`, whose value is `value`; `fields` is the whole form.
-    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &Document) -> ScriptResult;
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult;
 
     /// [`Self::run`] again for an appearance, with dates written in English names (`util.printd`)
     /// because no font of the field can draw the date language's (#5303); what it logs was
@@ -84,8 +89,8 @@ pub trait Scripts {
 pub struct NoScripts;
 
 impl Scripts for NoScripts {
-    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
-        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
+        ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None }
     }
 }
 
@@ -100,7 +105,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
     ] {
         let Some(js) = script else { continue };
         let all = fields(doc);
-        let r = scripts.run(event, js, f, &v, &all, doc);
+        let r = scripts.run(event, js, f, &v, &all);
         refresh_field |= r.changes.iter().any(|change| change.name == f.name);
         apply_changes(doc, &r.changes, &f.name)?;
         if !r.rc {
@@ -114,7 +119,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
 /// The text a custom Format script shows for `value`, if the field has one.
 pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
     let js = f.actions.scripts.format.as_ref()?;
-    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc), doc);
+    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc));
     Some(r.value)
 }
 
@@ -135,7 +140,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
     // Validate every colour before applying any part of the script's changes.
     for c in changes {
         for color in [&c.text_color, &c.fill_color].into_iter().flatten() {
-            js_rgb(color)?;
+            js_color(color)?;
         }
     }
     let all = fields(doc);
@@ -147,7 +152,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         {
             let value = match f.kind {
                 FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => FieldValue::Check(!v.is_empty()),
+                FieldKind::CheckBox => f.check_box_value(v.first().map(String::as_str)),
                 FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
                 FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
                 _ => continue,
@@ -184,39 +189,48 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 }
             }
         }
-        if c.text_color.is_some() || c.fill_color.is_some() {
+        // Text can't be transparent: `["T"]` leaves its colour as it is. A transparent fill
+        // clears the background.
+        let text = c.text_color.as_deref().map(js_color).transpose()?.flatten();
+        let fill = c.fill_color.as_deref().map(js_color).transpose()?;
+        if text.is_some() || fill.is_some() {
             crate::set_props(
                 doc,
                 &c.name,
-                &crate::FieldProps {
-                    appearance: Some(crate::LookPatch {
-                        text: c.text_color.as_deref().map(js_rgb).transpose()?,
-                        fill: c.fill_color.as_deref().map(|v| js_rgb(v).map(Some)).transpose()?,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
+                &crate::FieldProps { appearance: Some(crate::LookPatch { text, fill, ..Default::default() }), ..Default::default() },
             )?;
+        }
+        if let Some(rect) = c.rect {
+            crate::set_props(doc, &c.name, &crate::FieldProps { rect: Some((0, rect)), ..Default::default() })?;
         }
     }
     Ok(())
 }
 
-fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
-    let [space, red, green, blue] = values else {
-        return Err(FormError::Invalid("JavaScript field colours must be RGB arrays with three components".into()));
-    };
-    if space != "RGB" {
-        return Err(FormError::Invalid("JavaScript field colours must use the RGB colour space".into()));
+/// An Acrobat colour array as the RGB the look model stores, `None` for transparent (`["T"]`).
+/// Gray and CMYK convert as Acrobat's `color.convert` does. Anything else (an unknown colour
+/// space, the wrong number of components, or a component that is not a finite number between
+/// 0 and 1) is refused, and with it the script's changes.
+fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
+    let invalid = || FormError::Invalid("JavaScript field colours must be T, G, RGB or CMYK arrays with finite values between 0 and 1".into());
+    let (space, parts) = values.split_first().ok_or_else(invalid)?;
+    let mut numbers = [0.0; 4];
+    if parts.len() > numbers.len() {
+        return Err(invalid());
     }
-    let mut rgb = [0.0; 3];
-    for (slot, value) in rgb.iter_mut().zip([red, green, blue]) {
-        *slot = value.parse::<f64>().map_err(|_| FormError::Invalid("JavaScript field colours must be finite RGB values between 0 and 1".into()))?;
-        if !slot.is_finite() || !(0.0..=1.0).contains(slot) {
-            return Err(FormError::Invalid("JavaScript field colours must be finite RGB values between 0 and 1".into()));
+    for (slot, part) in numbers.iter_mut().zip(parts) {
+        *slot = part.trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid)?;
+    }
+    match (space.as_str(), parts.len()) {
+        ("T", 0) => Ok(None),
+        ("G", 1) => Ok(Some([numbers[0]; 3])),
+        ("RGB", 3) => Ok(Some([numbers[0], numbers[1], numbers[2]])),
+        ("CMYK", 4) => {
+            let [c, m, y, k] = numbers;
+            Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)]))
         }
+        _ => Err(invalid()),
     }
-    Ok(rgb)
 }
 
 /// Apply what a button or console script changed (values, read-only, required, visibility),
@@ -233,6 +247,9 @@ pub fn document_scripts(doc: &Document) -> Vec<String> {
     document_scripts_named(doc).into_iter().map(|(_, js)| js).collect()
 }
 
+/// Most `/Kids` entries the document JavaScript name tree walk reads in all.
+const MAX_QUEUED_KIDS: usize = 1 << 20;
+
 /// [`document_scripts`] with their names.
 pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(root) = doc.root() else { return Vec::new() };
@@ -241,41 +258,70 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
     let mut scripts = crate::script_budget();
-    // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
-    // or among its own kids, must not multiply the work.
+    // Kids are indirect references (ISO 32000-2 §7.9.6), queued unresolved, each the first time
+    // it is listed: a node listed many times, or among its own kids, must not multiply the work,
+    // and the stack holds only references (a direct object there would be copied whole, once
+    // for every node listing it). Only the root may be direct. Nodes are told apart by object
+    // number, as `Document::get` finds them, so `5 0 R` and `5 1 R` are one node.
+    let mut seen: HashSet<u32> = tree.as_ref().map(|r| r.num).into_iter().collect();
+    // The `/Names` arrays read, by object number: nodes sharing one would otherwise each list
+    // all its scripts again.
+    let mut names_read: HashSet<u32> = HashSet::new();
     let mut stack = vec![tree];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
     let mut visited = 0;
+    // Every `/Kids` entry read, over the whole walk. Nodes sharing one long `/Kids` array would
+    // otherwise read all of it once per node.
+    let mut queued = 0usize;
     while let Some(raw) = stack.pop() {
-        if let Object::Ref(r) = raw
-            && !seen.insert(r)
-        {
-            continue;
-        }
         visited += 1;
         if visited > 10_000 {
             break;
         }
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            stack.extend(kids);
+        if let Some(kids) = d.get(b"Kids") {
+            in_array(doc, kids, |kids| {
+                // Past the limit nothing more is read, but the nodes already queued still are.
+                // Pushed in reverse, so the kids are read in the order listed.
+                let room = MAX_QUEUED_KIDS.saturating_sub(queued);
+                queued = queued.saturating_add(kids.len().min(room));
+                let new: Vec<ObjRef> = kids.iter().take(room).filter_map(Object::as_ref).filter(|r| seen.insert(r.num)).collect();
+                stack.extend(new.into_iter().rev().map(Object::Ref));
+            });
         }
-        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
-            for pair in pairs.chunks(2) {
-                let [k, v] = pair else { continue };
-                let key = match &*doc.resolve(k) {
-                    Object::String(s) => s.to_text(),
-                    _ => continue,
-                };
-                if let Some(js) = crate::script(doc, v, &mut scripts) {
-                    out.push((key, js));
+        if let Some(pairs) = d.get(b"Names")
+            && pairs.as_ref().is_none_or(|r| names_read.insert(r.num))
+        {
+            in_array(doc, pairs, |pairs| {
+                for pair in pairs.chunks(2) {
+                    let [k, v] = pair else { continue };
+                    let key = match &*doc.resolve(k) {
+                        Object::String(s) => s.to_text(),
+                        _ => continue,
+                    };
+                    if let Some(js) = crate::script(doc, v, &mut scripts) {
+                        out.push((key, js));
+                    }
                 }
-            }
+            });
         }
     }
     out.sort();
     out
+}
+
+/// Call `f` on the array `o` is, or refers to, read in place: resolving a direct array would
+/// copy it.
+fn in_array(doc: &Document, o: &Object, f: impl FnOnce(&[Object])) {
+    match o {
+        Object::Ref(r) => {
+            if let Some(a) = doc.get(*r).as_array() {
+                f(a);
+            }
+        }
+        Object::Array(a) => f(a),
+        _ => {}
+    }
 }
 
 /// Add (or replace) a document-level JavaScript named `name`.
