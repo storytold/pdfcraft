@@ -6754,6 +6754,90 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
 }
 
 #[test]
+fn automatic_field_scripts_cannot_print() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+        let result = runner.run(
+            event,
+            "console.println('before'); this.print(); app.execMenuItem('SaveAs'); app.execMenuItem('ShowHideFileAttachment'); \
+             this.pageNum = 0; this.print(); app.alert('ok'); event.value = '4';",
+            target,
+            "2",
+            &fields,
+        );
+        assert!(result.rc, "{event:?}: {result:?}");
+        assert_eq!(result.value, "4");
+        assert_eq!(runner.output.requests, [js::Request::GoToPage(0)], "{event:?}: {:?}", runner.output);
+        assert_eq!(runner.output.alerts, [js::Message::plain("ok")]);
+        assert!(runner.output.console.contains(&"before".to_string()));
+        assert!(runner.output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{:?}", runner.output);
+        assert_eq!(runner.output.console.iter().filter(|line| line.contains("only a button may")).count(), 2, "{:?}", runner.output);
+        assert!(runner.output.errors.is_empty());
+
+        runner.output = js::JsOutput::default();
+        runner.run(event, "this.print(); throw new Error('broken script');", target, "2", &fields);
+        assert!(runner.output.requests.is_empty(), "{event:?}: {:?}", runner.output);
+        assert!(runner.output.errors.iter().any(|e| e.contains("broken script")));
+    }
+}
+
+#[test]
+fn automatic_print_suppression_preserves_document_errors() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "failure", Some("throw new Error('document failure');")).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        runner.run(event, "this.print(); throw new Error('field failure');", target, "2", &fields);
+    }
+    let out = runner.output;
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert_eq!(out.console.iter().filter(|line| line.contains("Print") && line.contains("ignored")).count(), 4, "{out:?}");
+    assert_eq!(out.doc_errors.len(), 1, "the document script's error is reported once: {out:?}");
+    assert!(out.doc_errors[0].contains("document failure"), "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("document failure")).count(), 1, "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("field failure")).count(), 4, "each field script's error is retained: {out:?}");
+}
+
+#[test]
+fn form_calculations_cannot_print_but_buttons_and_console_can() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldScript {
+            name: "total".into(),
+            event: "calculate".into(),
+            script: Some("this.print(); event.value = times(getField('price').value, getField('qty').value);".into()),
+        },
+    )
+    .unwrap();
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert!(out.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert!(page_texts(&s, id)[0].contains("USD 10.00"));
+
+    for (target, qty, formatted) in [(Some("go"), 6, "USD 15.00"), (None, 8, "USD 20.00")] {
+        let out = s.run_javascript(id, &format!("getField('qty').value = {qty}; this.print();"), target).unwrap();
+        assert_eq!(out.requests, [js::Request::Print]);
+        let automatic = s.take_js_output(id);
+        assert!(automatic.requests.is_empty(), "{automatic:?}");
+        assert!(automatic.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{automatic:?}");
+        assert!(automatic.errors.is_empty(), "{automatic:?}");
+        assert!(page_texts(&s, id)[0].contains(formatted));
+    }
+}
+
+#[test]
 fn edit_history_does_not_replay_field_script_side_effects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
@@ -8548,6 +8632,20 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     assert!(field(&s, "leave").is_some_and(|f| f.flags & 1 == 0), "opened before the error");
     assert!(field(&s, "details").is_some(), "shown before the error");
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
+}
+
+/// A laid-out XFA form tabs the way its template's traversal says: the probe form, which
+/// another viewer tabs `start A2 A3 A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`.
+#[test]
+fn xfa_forms_tab_in_their_templates_traversal_order() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::traversal_template()));
+    let mut s = Session::new();
+    let id = s.open("tab.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut tabs: Vec<(usize, &str)> = doc.form.iter().flat_map(|f| f.widgets.iter().map(move |w| (w.tab, f.name.as_str()))).collect();
+    tabs.sort_unstable();
+    let names: Vec<&str> = tabs.iter().map(|t| t.1).filter(|n| !["log", "D5"].contains(n)).collect();
+    assert_eq!(names, ["start", "A2", "A3", "A4", "A1", "B1", "B3", "B2", "B4", "C3", "D1", "D4", "D6", "finish", "C1", "C2"]);
 }
 
 /// A scripted form end to end: initialize and calculate on open, recalculation after a change,
@@ -11338,6 +11436,61 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+/// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
+/// field with a click event of its own, named as the target, asks to open no attached file.
+#[test]
+fn run_javascript_runs_xfa_click_scripts_only_for_buttons() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("guide")).unwrap();
+    assert_eq!(o.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "the button's click: {o:?}");
+    let o = s.run_javascript(id, "", Some("note")).unwrap();
+    assert!(o.requests.is_empty(), "a text field's click script doesn't run here: {o:?}");
+}
+
+/// In an XFA form a button's click script may open an attached file; the same request from a
+/// text field's exit script is noted in the console and not made.
+#[test]
+fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="exit"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].guide[0]".into(), activity: "click".into() }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "{out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "only a click opens a file: {out:?}");
+    assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
+}
+
 /// A field whose layout:ready script only reads the page count keeps the value its script gives
 /// it: only a field the script gives the page call's result is numbered by the layout.
 #[test]
@@ -13237,8 +13390,33 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    // Optimize writes the parameters direct, so a stream that names the dictionary holds the key.
+    let names = |s: &Stream| {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
+        bytes.windows(12).any(|w| w == b"JBIG2Globals")
+    };
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if names(s))).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
+}
+
+#[test]
+fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
+    let original = s.get(id).unwrap().added()[0].obj;
+    let target = [10.0, 10.0, 60.0, 60.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(target) }).unwrap();
+    let added = s.get(id).unwrap().added();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].obj, original);
+    assert_eq!(added[0].content.rect(), target);
 }
 
 #[test]

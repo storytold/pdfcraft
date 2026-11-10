@@ -26,19 +26,39 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   Headless: `doc_print` with `layout: "multiple"`, `order: "cut-stack"` and
   `per_sheet: 4` (or any supported grid size), plus `path` or `printer`.
 - **Booklet**: saddle-stitch imposition padded to a multiple of 4; both sides, front or back
-  only; left or right binding.
+  only; left or right binding; creep compensation, which moves each sheet's pages toward the
+  fold by its place from the outside times the creep (points per sheet, up to `MAX_CREEP`),
+  clipped at the fold. Headless: `doc_print` with `layout: "booklet"` and `creep`.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).
+  Existing Link appearances are document content in the first three modes; Link appearances
+  are not synthesized when absent, and form fields only excludes them.
 - **Properties… on CUPS** reads the queue's PPD and its current defaults (`lpoptions -l`) off
   the GUI thread, and gives `lpoptions` ten seconds: a CUPS that has stopped answering leaves
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`
   kills and reaps the command at the deadline).
+- **Remembered choices** (#2001): the dialog keeps two-sided (including leaving it to the
+  printer), grayscale, collate, page sizing (with its custom percent), Comments & forms and a
+  booklet's binding side across restarts, in the settings file under `print` with the names
+  `doc_print` takes (`names::duplex`, `names::content`, `names::size_mode` and their `parse_*`
+  counterparts are the one vocabulary). The paper is saved by its own setting (#2156).
+- **Each job starts afresh**: copies, pages (the choice, the range, odd/even and reverse), the
+  layout with its own options (pages per sheet, order, borders, booklet subset, poster scale,
+  overlap and cut marks) and orientation reset to the defaults each time Print opens, in the
+  same session too; ISO 32000-2 Table 147 initialises them per document when the print dialog
+  opens. Picked thumbnails still open it on Selected pages. The printer picked last carries over
+  within a session (#3537) but is not saved.
 
 Each source page becomes a Form XObject (its content wrapped in q/Q, plus the printable
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
+Appearance placement keeps the full PDF number precision, including small coefficients needed by large appearance bounding boxes or matrices.
+Existing printable NoRotate appearances keep their orientation and upper-left rectangle anchor when the source page is rotated.
+Text annotations use this upright placement even with the NoRotate flag clear (ISO 32000-1 section 12.5.6.4).
+Crop origins, UserUnit, sheet scaling, and later imposition rotations still apply; NoZoom does not cancel printing scale.
+Missing or unusable appearance streams still cannot be printed.
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
@@ -59,6 +79,35 @@ orientation, zero added margins and hardware-edge clipping. Long-edge and short-
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
 are removed on success and failure. Other targets offer the print-ready PDF instead.
 
+A thermal label printer on Windows (`craft_print::is_label_printer`: a driver that offers only
+monochrome output, with the stock in the user's settings at most 4.5 in on its short side, such
+as a Zebra ZDesigner queue) is printed through `src/label.rs` instead: each sheet is rendered at
+the printer's resolution, made black and white, and sent pixel for pixel through GDI with the
+user's own Printing Preferences, so QR codes and seals come out without dither and the label's
+stock, cutter, shift and darkness are the user's, as in Acrobat.
+
+On Windows, **Printer default** reads the selected driver's current `DEVMODEW` duplex
+setting immediately before submission and carries that binding explicitly into the job
+(#5130). This also applies to `doc_print` with `duplex: "printer"`; its omitted-argument
+default remains `off`. Explicit Off/Long Edge/Short Edge choices, booklet binding and
+single-sided cut-and-stack bypass this lookup. Drivers without `DM_DUPLEX` retain the
+unspecified setting. Two-sided defaults also stay unspecified when the driver does not
+confirm automatic two-sided support, preserving manual duplex preferences (#5772).
+A failed lookup, settings read or invalid declared duplex value is
+logged and falls back to leaving duplex unspecified, so the driver can still choose its default.
+If the queue was resolved before the settings failure, the job remains pinned to that queue. CUPS still leaves the choice to the queue. The Windows backend
+selects `JobDuplexAllDocumentsContiguously`, falling back to `DocumentDuplex` when
+the driver exposes only document-level duplex, and validates the retained binding before submission
+([craft-libs #411](https://github.com/storytold/craft-libs/pull/411)).
+
+Before a job reaches the Windows spooler, every embedded TrueType or OpenType program is
+renamed `PdfCraftPrint<n>` in its `name` table and in the PDF (`/BaseFont`, `/FontName`; a
+subset keeps its tag). Windows otherwise draws a subset's renumbered glyphs with the installed
+font of the same name, so ReportLab's Arial subsets printed as shifted letters (#3132). Glyphs,
+encodings and `/ToUnicode` are unchanged, and CUPS and Save as PDF get the PDF as it was. A
+program PdfCraft can't read and rewrite keeps its old name in the PDF too, so a viewer that
+can't load it either still picks its substitute by that name.
+
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
 The desktop UI discovers printers and submits jobs on workers, so neither operation blocks
@@ -69,7 +118,7 @@ In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) dra
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.
 
-Not yet: print as image, poster labels, PostScript output, colour conversion for
+Not yet: poster labels, PostScript output, colour conversion for
 grayscale.
 
 ## Architectural sheets and scale
@@ -81,25 +130,11 @@ Automation accepts short names such as `"ARCH D"` (case-insensitive) or the full
 For example, `doc_print` with `paper: "ARCH D"`, `layout: "actual"`,
 `orientation: "auto"` and `path: "plan.pdf"` writes a print-ready PDF at 100%.
 
-**The printer's own sizes.** After the standard sizes, the Paper menu lists the sizes the
-chosen printer's driver offers (`spool::printer_papers`: on CUPS the queue PPD's
-`*PaperDimension` entries, named by their `*PageSize` labels), each under the driver's name
-with its size, a standard size too. The dialog starts on the printer's default size when the
-driver reports one (`*DefaultPageSize`: the stock a label printer is set up for), reading the
-sizes again each time it opens. The job names the chosen sheet as its `media`
-by the printer's own keyword (`w288h432` for a label printer's 4 × 6 in; `Letter` for a
-standard size the printer has), else by the CUPS name of the standard size, so the spooler
-feeds that sheet rather than the queue's default. Headless: `printer_papers` lists them and
-`doc_print` takes a key or label as `paper`. On Windows the sizes are the driver's page media
-sizes (`craft_print::printer_papers`; a Zebra label driver offers its one "User defined"
-stock), the default marked: the driver's own sizes, so a form added only in Windows' Print
-Server Properties is listed only if the driver offers it; the web lists none.
-
 **Match page at 100%** uses the currently viewed document page to choose a standard
-sheet or one of the printer's own (either orientation, within 0.5 pt for rounded metric
-dimensions), Actual size and Auto orientation. It leaves the selected page range intact.
-It is disabled for a custom page size with no matching sheet. One sheet applies to the
-whole job; this is not per-page paper-source selection.
+sheet (either orientation, within 0.5 pt for rounded metric dimensions), Actual size
+and Auto orientation. It leaves the selected page range intact. It is disabled
+for a custom page size with no matching preset. One preset applies to the whole job;
+this is not per-page paper-source selection.
 
 **PDF scale** describes the source-to-sheet transform in the previewed print-ready
 PDF, not measured physical output. Fit reserves an 18 pt margin and can reduce even
@@ -107,3 +142,10 @@ a matching page. On Windows craft-print sends the sheets as vectors with a Print
 for the sheet's exact paper and no scaling (#599's approach), validated by the driver:
 a job is refused, not shrunk, when the driver lacks the paper or would change it. Verify
 the driver's paper settings and physical calibration before relying on drawing scale.
+
+Vector printing resolves direct and indirect annotation rectangle coordinates before placing existing appearances.
+Rectangles must contain exactly four finite numbers; malformed rectangles are skipped.
+For an appearance-state dictionary, direct or indirect `AS` names select the existing artwork.
+Rectangle arrays, individual coordinates and `AS` names follow up to 64 indirect references with cycle detection.
+Missing, invalid, unresolved, cyclic, overly deep, or unknown state names leave that annotation unprinted; a single normal appearance stream does not require `AS`.
+The print content mode still controls whether a field or comment prints, and printing preserves the source objects.
