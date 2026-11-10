@@ -511,6 +511,8 @@ fn bar_placement(
     let props = props_of(page, index).filter(|p| p.restylable && !p.locked)?;
     let a = info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply())?;
     let xf = view.page_xform(page)?;
+    // Only converts the comment's rectangles: the pointer, the keys (none) and the redaction look
+    // are unused.
     let cx = PageCx {
         page,
         xf: &xf,
@@ -521,6 +523,7 @@ fn bar_placement(
         allowed,
         hidden: false,
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
+        keys: crate::page_keys::PageKeys::new(true),
     };
     let bounds = cx.screen_rects(a).reduce(|u, r| u.union(r))?;
     view.viewport_rect().intersects(bounds).then_some((page, index, props, bounds))

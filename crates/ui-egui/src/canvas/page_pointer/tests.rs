@@ -824,7 +824,7 @@ const RAW_KEY_READS: [&str; 17] = [
 /// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
 /// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
 /// hold, any key stopping a glide, the clipboard's hand-off to text fields): (file, function, why).
-const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
+const NOT_PAGE_KEYS: [(&str, &str, &str); 18] = [
     (
         "app/clipboard.rs",
         "clipboard_keys",
@@ -855,6 +855,11 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     ("tools/prepare/properties.rs", "body", "the field properties' own Enter, while one of their fields has the focus"),
     ("tools/redact_ui.rs", "search_body", "the redaction search field's own Enter, while it has the focus"),
     ("tools/sign_ui/dialog.rs", "sign_as", "the signing dialog's own Enter"),
+    (
+        "tools/comments/menu.rs",
+        "opacity_slider",
+        "Escape cancels the drag on the style bar's opacity slider, a popup over the pages, whose keys `PageKeys` would hide",
+    ),
 ];
 
 /// The files whose key reads the key guard checks, relative to `src`: every file under `canvas/`
