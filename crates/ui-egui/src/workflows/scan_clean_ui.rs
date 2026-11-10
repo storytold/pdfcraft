@@ -494,8 +494,11 @@ impl PdfCraftApp {
                 }
                 let msg = summary(&report);
                 self.notify(msg);
-                // A restored halftone scan opens the result dialog, with the sliders to tune it.
-                if report.halftone.is_empty() {
+                // A restored halftone scan opens the result dialog, with the sliders to tune it. Not
+                // after a slider's run whose window was closed while it went on: that stays closed,
+                // and would come back with the dialog's values on its sliders, not the pages' own.
+                let closed = retune.is_some() && !self.scan_clean_result.as_ref().is_some_and(|o| o.doc == doc);
+                if report.halftone.is_empty() || closed {
                     self.scan_clean_result = None;
                     if self.dialog == Some(crate::Dialog::EnhanceScanResult) {
                         self.dialog = None;
@@ -546,6 +549,49 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use pdfcraft_engine::scan_clean::SkippedImage;
+
+    /// The result window opens after a run that restored a halftone, but not after a slider's run
+    /// whose window was closed while it went on: that one stays closed.
+    #[test]
+    fn a_window_closed_while_its_run_went_on_stays_closed() {
+        // 96 x 96, one bit a pixel: grey paper as 20 % dots, a darker block as 70 % dots.
+        let mut bits = vec![0u8; 12 * 96];
+        for (y, x) in (0..96usize).flat_map(|y| (0..96usize).map(move |x| (y, x))) {
+            let ink = (30..66).contains(&x) && (30..66).contains(&y);
+            if (x * 7 + y * 3) % 10 >= if ink { 7 } else { 2 } {
+                bits[y * 12 + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+            3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 96 96] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >> endobj\n\
+            4 0 obj << /Type /XObject /Subtype /Image /Width 96 /Height 96 /ColorSpace /DeviceGray /BitsPerComponent 1 /Length 1152 >> stream\n"
+            .to_vec();
+        pdf.extend_from_slice(&bits);
+        pdf.extend_from_slice(
+            b"\nendstream endobj\n5 0 obj << /Length 28 >> stream\nq 96 0 0 96 0 0 cm /Im0 Do Q\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        );
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("dots.pdf", None, pdf).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        // A run that restored the page has just finished: as a first run, then as a slider's.
+        let finish = |app: &mut PdfCraftApp, retune: Option<u64>| {
+            let cleaned = app.session.scan_clean_job(doc, &[], ScanCleanSettings::default()).unwrap().run(|_, _| true).unwrap();
+            assert_eq!(cleaned.report.halftone.len(), 1);
+            let progress = Arc::new(Mutex::new(ScanCleanProgress { result: Some(Ok(cleaned)), ..Default::default() }));
+            app.scan_clean_run = Some(ScanCleanRun { doc, pages: Vec::new(), retune, progress });
+            app.poll_scan_clean();
+        };
+        finish(&mut app, None);
+        assert_eq!(app.dialog, Some(crate::Dialog::EnhanceScanResult), "a first run opens the window");
+        assert!(app.scan_clean_result.is_some());
+        // The slider's run: the step is undone, and the window is closed before the run ends.
+        app.session.undo(doc).unwrap();
+        let undone = app.session.get(doc).unwrap().edit_generation();
+        (app.dialog, app.scan_clean_result) = (None, None);
+        finish(&mut app, Some(undone));
+        assert!(app.dialog.is_none() && app.scan_clean_result.is_none(), "it does not come back");
+        assert_eq!(app.session.get(doc).unwrap().undo_depth(), 1, "and the run's work is kept");
+    }
 
     /// A slider's run undoes the enhancement first: one that is then cancelled puts it back.
     #[test]
