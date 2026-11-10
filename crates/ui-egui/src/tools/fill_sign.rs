@@ -1234,7 +1234,10 @@ mod tests {
         let mut draft = ImageImportDraft::new(source);
         let mut image = None;
         let previous = crate::i18n::current();
-        crate::i18n::set_current(crate::i18n::Lang::from_code("it").unwrap());
+        crate::i18n::set_current(crate::i18n::fixture_lang(
+            "it",
+            "\tNo signature was found. Adjust the ink sensitivity or keep the original image.\tNessuna firma trovata. Regola la sensibilità all’inchiostro o mantieni l’immagine originale.\n",
+        ));
         draft.apply(&mut image, result);
         crate::i18n::set_current(previous);
         assert_eq!(draft.problem.as_deref(), Some("Nessuna firma trovata. Regola la sensibilità all’inchiostro o mantieni l’immagine originale."));
@@ -1254,7 +1257,10 @@ mod tests {
         draft.worker.running = Some((draft.options, rx));
         let mut image = None;
         let previous = crate::i18n::current();
-        crate::i18n::set_current(crate::i18n::Lang::from_code("it").unwrap());
+        crate::i18n::set_current(crate::i18n::fixture_lang(
+            "it",
+            "\tSignature cleanup stopped unexpectedly.\tLa pulizia della firma si è interrotta in modo imprevisto.\n",
+        ));
         draft.poll(&mut image, &egui::Context::default());
         crate::i18n::set_current(previous);
         assert_eq!(draft.problem.as_deref(), Some("La pulizia della firma si è interrotta in modo imprevisto."));
