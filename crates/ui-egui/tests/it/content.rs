@@ -272,7 +272,8 @@ fn typing_moving_styling_and_deleting_added_content() {
 #[test]
 fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     use pdfcraft_ui_egui::Clip;
-    let mut h = harness();
+    // Three frames between modifier releases represent a short real key gesture.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
     let v = |pressed, modifiers| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers };
     let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
     // Text on the clipboard: egui gets a Paste event instead of the press; nothing lands on the page.
@@ -288,9 +289,8 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 0, "a plain V doesn't paste");
-    // A picture alone: egui-winit sends no Paste event and swallows the press, so only the
-    // release of V arrives.
-    h.event(v(false, egui::Modifiers::COMMAND));
+    // The integration delivers image pixels and consumes the native shortcut keys.
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     let a = added(&h);
     assert_eq!(a.len(), 1);
@@ -301,14 +301,17 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add image"));
     }
-    // Ctrl let go a moment before V: the release comes without the modifier, and still pastes.
+    // Modifier release order does not change delivery of the next image paste.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Ctrl released first");
     // A text field with the keyboard keeps ⌘V for itself.
     assert!(h.state_mut().execute("edit.find"));
     h.run_steps(3);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "the Find field has the keyboard");
     h.key_press(egui::Key::Escape);
@@ -317,7 +320,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("page.organize"));
     h.run_steps(4);
     assert!(h.state().views[0].organize);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Organize Pages pastes pages");
     h.state_mut().views[0].organize = false;
@@ -326,7 +329,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("form.prepare"));
     h.run_steps(3);
     assert!(h.state().is_preparing());
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
@@ -699,7 +702,7 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     let combo = |h: &Harness<'static, PdfCraftApp>, value: &str| {
         h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(value)).map(|n| n.rect()).expect(value)
     };
-    let (font, size) = (combo(&h, "Helvetica"), combo(&h, "12"));
+    let (font, size) = (combo(&h, "Helvetica"), h.get_by_label("Font size:").rect());
     let middle = |r: egui::Rect| r.center().y;
     for label in ["Colour", "Alignment"] {
         let other = h.get_by_label(label).rect();
@@ -716,8 +719,70 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     for r in &scale_row {
         assert!((middle(*r) - middle(scale_row[0])).abs() < 0.5, "{scale_row:?}");
     }
-    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row) {
+    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row).chain([size, h.get_by_label("Font size").rect()]) {
         assert!(r.right() <= font.right() + 0.5, "{r:?} reaches past the panel ({font:?})");
+    }
+}
+
+/// The Tools pane can't be dragged narrower than Format text needs: at its smallest width no
+/// control reaches past the font list, which spans the panel.
+#[test]
+fn format_text_fits_the_tools_pane_at_its_narrowest() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    // At the largest interface size too: it scales points to pixels, and the layout is in points.
+    h.state_mut().set_option("ui-scale", "300").unwrap();
+    h.state_mut().side_panels.tools_width = 0.0;
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+    let rects = ["Alignment", "Colour", "Font size", "Character spacing", "Horizontal scale", "Line spacing", "Paragraph spacing"]
+        .into_iter()
+        .flat_map(|l| h.query_all_by_label(l).map(move |n| (l, n.rect())))
+        .chain(h.query_all_by_role(Role::ComboBox).map(|n| ("list", n.rect())))
+        .collect::<Vec<_>>();
+    for (label, r) in rects {
+        assert!(r.right() <= font.right() + 0.5, "{label} {r:?} reaches past the font list ({font:?})");
+    }
+    // The font list ends where the pane's own content does: the header's Close button is its right edge.
+    let close = h.get_by_label("Close panel").rect();
+    assert!((font.right() - close.right()).abs() < 1.5, "the font list {font:?} is not at the pane's content edge ({close:?})");
+    // The rows below scroll, and the scrollbar floats over their right edge: they stop short of it.
+    let image = h.get_by_label("Image").rect();
+    assert!(image.right() <= font.right() - 17.0, "the Image row {image:?} runs under the scrollbar ({font:?})");
+    // The right-hand column ends where the font list does, as the left one starts where it does.
+    for label in ["Paragraph spacing", "Character spacing"] {
+        let right = h.query_all_by_label(label).map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+        assert!((right - font.right()).abs() < 1.5, "{label} ends at {right}, the font list at {}", font.right());
+    }
+}
+
+/// The lists and the size row in Format text fit the narrowest Tools pane in every interface
+/// language: "Auto" in the line spacing list and "Mixed" in the size field are translated, and in
+/// Czech or French they are much longer. The font list spans the pane, so nothing may end past it.
+#[test]
+fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
+    use egui::accesskit::Role;
+    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
+        let mut h = harness();
+        // A script with no face on this machine (Lao without system fonts) can't be drawn at all.
+        if !h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), lang.name())) {
+            continue;
+        }
+        h.state_mut().set_option("language", lang.code()).unwrap();
+        h.state_mut().side_panels.tools_width = 0.0;
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let lists: Vec<egui::Rect> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
+        // Found by its value (a font name, never translated), not as the widest list: an overrun
+        // could make another list the widest.
+        let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+        for r in &lists {
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
+        }
+        // The size row too: its field reserves room for a translated "Mixed".
+        let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
     }
 }
 
@@ -809,6 +874,33 @@ fn format_text_sets_character_spacing_for_added_text() {
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
     assert_eq!(h.state().text_style.char_spacing, 2.5);
+}
+
+/// The same when the line is right-aligned on its own while the box keeps Left: all its lines
+/// share one alignment, so the editor keeps the box's right edge for them.
+#[test]
+fn the_text_editor_aligns_a_narrow_box_whose_lines_share_an_alignment() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let rect = [40.0, 195.0, 60.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Hi".into(), aligns: vec![Some(pdfcraft_engine::TextAlign::Right)], ..Default::default() };
+    assert_eq!(text.align, pdfcraft_engine::TextAlign::Left);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 50.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.run_steps(3);
+    let r = item_on_screen(&h, rect);
+    let pixels = h.render().unwrap();
+    let inside = ink(&pixels, r);
+    let edge = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() - r.width() * 0.25, r.min.y), r.max));
+    let past = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() + 2.0, r.min.y), pos2(r.right() + 40.0, r.max.y)));
+    assert!(
+        inside > 20 && edge > 0 && past == 0,
+        "the text is drawn in its box, up to its right edge ({inside} dark pixels in it, {edge} in its last quarter, {past} past it)"
+    );
 }
 
 /// Where a mode bar tab is, by its label.
@@ -945,4 +1037,736 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");
+}
+
+/// #4477, #3938: in Edit a PDF, an added image can be resized repeatedly by its corner handles
+/// (including the outer part of the handle circle and when a corner reaches past the page edge)
+/// without losing selection to the object marquee, and dragging an out-of-bounds image back onto
+/// the page does not smear edge pixels across the out-of-bounds half.
+#[test]
+fn added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_smear() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 60, 60);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
+    }
+    h.state_mut().add_image("red.png".into(), png);
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+
+    // 1. Grab the outer part of the lower-right corner handle (where the resize cursor is shown,
+    // outside r.expand(2.0)) and drag inward along one axis to shrink the image.
+    let rect0 = added(&h)[0].content.rect();
+    let r0 = item_on_screen(&h, rect0);
+    let grip1 = r0.expand(1.0).right_bottom() + egui::vec2(2.0, 2.0);
+    h.hover_at(grip1);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe);
+    let to1 = grip1 + egui::vec2(-30.0, 0.0);
+    h.drag_at(grip1);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip1 + (to1 - grip1) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to1);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the added image stays selected after releasing a corner resize");
+    let rect1 = added(&h)[0].content.rect();
+    assert!(rect1[2] - rect1[0] < (rect0[2] - rect0[0]) - 10.0, "first corner resize shrinks the image: {rect0:?} -> {rect1:?}");
+
+    // 2. Immediately resize again right after letting go, stretching past the right page edge,
+    // then shrink back from the out-of-bounds corner handle.
+    let r1 = item_on_screen(&h, rect1);
+    let page_right = h.state().views[0].page_screen_rect(0).unwrap().right();
+    let grip2 = r1.expand(1.0).right_bottom();
+    let to2 = pos2(page_right + 12.0, grip2.y);
+    h.hover_at(grip2);
+    h.run_steps(1);
+    h.drag_at(grip2);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip2 + (to2 - grip2) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to2);
+    h.run_steps(3);
+    let rect2 = added(&h)[0].content.rect();
+    assert!(rect2[2] > 300.0, "second resize reaches past the page edge: {rect2:?}");
+
+    // Grab the corner handle that now sits outside the page rect and shrink it back inside.
+    let r2 = item_on_screen(&h, rect2);
+    let grip3 = r2.expand(1.0).right_bottom();
+    assert!(!h.state().views[0].page_screen_rect(0).unwrap().contains(grip3), "corner handle lies outside the page rect");
+    let to3 = pos2(page_right - 40.0, grip3.y);
+    h.hover_at(grip3);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe);
+    h.drag_at(grip3);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip3 + (to3 - grip3) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to3);
+    h.run_steps(3);
+    let rect3 = added(&h)[0].content.rect();
+    assert!(rect3[2] < 300.0, "out-of-bounds corner handle still resizes the image back inside: {rect2:?} -> {rect3:?}");
+
+    // 3. Place the image half below the bottom edge of the page (y = -30..30), wait for the page
+    // raster, then drag it up into the page: the out-of-bounds bottom half must not smear the
+    // page edge's red texels across the lower half during the drag preview.
+    let img = match &added(&h)[0].content {
+        pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [120.0, -30.0, 180.0, 30.0], ..i.clone() },
+        _ => panic!(),
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(img) }));
+    crate::support::settle(&mut h);
+    let from = item_on_screen(&h, [120.0, -30.0, 180.0, 30.0]);
+    let grab = pos2(from.center().x, from.top() + 10.0);
+    let shift = egui::vec2(0.0, -120.0);
+    h.hover_at(grab);
+    h.run_steps(1);
+    h.drag_at(grab);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grab + shift * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    crate::support::settle(&mut h);
+    let moved = from.translate(shift);
+    let upper_half = egui::Rect::from_min_max(moved.min + egui::vec2(4.0, 4.0), pos2(moved.max.x - 4.0, moved.center().y - 4.0));
+    let lower_half = egui::Rect::from_min_max(pos2(moved.min.x + 4.0, moved.center().y + 4.0), moved.max - egui::vec2(4.0, 4.0));
+    let pixels = h.render().unwrap();
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        pixels.save(format!("{dir}/added-image-outside-page-drag.png")).unwrap();
+    }
+    assert!(red(&pixels, upper_half) > 100, "the in-bounds half of the picture follows the drag");
+    assert_eq!(red(&pixels, lower_half), 0, "the out-of-bounds half must not smear edge texels across the lower half");
+    h.drop_at(grab + shift);
+    crate::support::settle(&mut h);
+}
+
+/// A short page leaves empty window under the scroll content. A handle dragged into that
+/// margin has to start another resize after the pointer is released.
+#[test]
+fn a_handle_in_the_viewport_below_a_short_page_starts_another_resize() {
+    let _gpu = gpu();
+    let mut h = harness();
+    h.state_mut().set_option("zoom", "50").unwrap();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 60, 60);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
+    }
+    h.state_mut().add_image("red.png".into(), png);
+    h.run_steps(3);
+    let img = match &added(&h)[0].content {
+        pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [40.0, 0.0, 100.0, 40.0], ..i.clone() },
+        _ => panic!("added an image"),
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(img) }));
+    h.run_steps(3);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let grip = item_on_screen(&h, [40.0, 0.0, 100.0, 40.0]).expand(1.0).right_bottom();
+    let below = pos2(grip.x, page.bottom() + 80.0);
+    assert!(below.y < 880.0, "the margin point stays in the window: {below:?}");
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip + (below - grip) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(below);
+    h.run_steps(3);
+    let pulled = added(&h)[0].content.rect();
+    assert!(pulled[1] < -5.0, "the first drag leaves the page: {pulled:?}");
+    let grip2 = item_on_screen(&h, pulled).expand(1.0).right_bottom();
+    assert!(grip2.y > page.bottom() + 40.0, "the handle is below the page margin: grip {grip2:?} page {page:?}");
+    let to = pos2(grip2.x, grip2.y - 36.0);
+    h.hover_at(grip2);
+    h.run_steps(1);
+    h.drag_at(grip2);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip2 + (to - grip2) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    let again = added(&h)[0].content.rect();
+    assert!(again[1] > pulled[1] + 5.0, "the second press never started a resize: {pulled:?} -> {again:?}");
+}
+
+/// Bug A for added text: with one line of the box selected, an alignment applies to that line
+/// only, as does a second one, the box stays open, and Undo puts it back and closes the box.
+#[test]
+fn aligning_a_selected_line_of_added_text_aligns_only_that_line() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 220.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Line one\nLine two".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Home);
+    h.run_steps(2);
+    let button = h.get_by_label("Alignment").rect().center();
+    click(&mut h, button);
+    let item = h.get_by_label("Align right").rect().center();
+    click(&mut h, item);
+    let aligns = |h: &Harness<'static, PdfCraftApp>| match &added(h)[0].content {
+        pdfcraft_engine::AddedContent::Text(t) => (t.align, t.aligns.clone()),
+        _ => panic!(),
+    };
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Right)]));
+    assert!(h.state().views[0].content.draft.is_some(), "the box stays open");
+    // A second choice, the line still selected, is for that line again.
+    let button = h.get_by_label("Alignment").rect().center();
+    click(&mut h, button);
+    let item = h.get_by_label("Centre").rect().center();
+    click(&mut h, item);
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Center)]));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Right)]), "Undo puts it back");
+    assert!(h.state().views[0].content.draft.is_none(), "and closes the box");
+    assert!(h.state_mut().execute("edit.undo"));
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![]));
+}
+
+/// Two lines of added text with the same words, each aligned its own way: deleting the first line
+/// with its break leaves the second line's alignment, not the deleted one's (CodeRabbit on
+/// 648dd428).
+#[test]
+fn deleting_the_first_of_two_same_lines_keeps_the_second_lines_alignment() {
+    use pdfcraft_engine::TextAlign::{Center, Right};
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 220.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Same\nSame".into(), aligns: vec![Some(Center), Some(Right)], ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 120.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    // Select the first line with its break, and delete it.
+    h.key_press(egui::Key::ArrowUp);
+    h.key_press(egui::Key::Home);
+    // "Same" and its line break.
+    for _ in 0..5 {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowRight);
+    }
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(2);
+    let d = h.state().views[0].content.draft.as_ref().expect("still typing");
+    assert_eq!((d.text.as_str(), d.style.aligns.clone()), ("Same", vec![Some(Right)]), "the second line's alignment stays");
+}
+
+/// The same with the alignment controls reached by keyboard or a screen reader (focused, then
+/// pressed, with no pointer): the box stays open when the focus leaves it for the Format text
+/// panel, and both choices are for the selected line.
+#[test]
+fn aligning_a_selected_line_of_added_text_by_keyboard_keeps_the_box_open() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 220.0];
+    let text = pdfcraft_engine::AddedText {
+        rect,
+        text: "Line one
+Line two"
+            .into(),
+        ..Default::default()
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Home);
+    h.run_steps(2);
+    let align_by_focus = |h: &mut Harness<'static, PdfCraftApp>, choice: &str| {
+        for label in ["Alignment", choice] {
+            h.get_by_label(label).focus();
+            h.run_steps(2);
+            h.get_by_label(label).click();
+            h.run_steps(3);
+        }
+    };
+    let aligns = |h: &Harness<'static, PdfCraftApp>| match &added(h)[0].content {
+        pdfcraft_engine::AddedContent::Text(t) => (t.align, t.aligns.clone()),
+        _ => panic!(),
+    };
+    align_by_focus(&mut h, "Align right");
+    assert!(h.state().views[0].content.draft.is_some(), "the box stays open");
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Right)]));
+    align_by_focus(&mut h, "Centre");
+    assert!(h.state().views[0].content.draft.is_some(), "the box is still open");
+    assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Center)]));
+}
+
+/// The same in an added text box: Redo after Undo puts the typing back in the box, and the
+/// document's own Redo stays waiting.
+#[test]
+fn redo_after_undoing_typing_in_added_text_puts_it_back() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Reviewed".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text: text.clone() }));
+    let bold = pdfcraft_engine::AddedText { bold: true, ..text };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Text(bold) }));
+    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"));
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed twice"), "Redo puts the typing back");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_redo(), Some("Edit content"), "the document's Redo still waits");
+}
+
+/// Redo from the menu with retyping the page doesn't have yet in an added text box: the typing
+/// stays in the box and the document's Redo waits (closing the box first wrote the typing, which
+/// dropped that Redo). After Undo in the box, Redo from the menu puts the typing back there.
+#[test]
+fn redo_from_the_menu_with_retyping_in_the_box_keeps_the_documents_redo() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Reviewed".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text: text.clone() }));
+    let bold = pdfcraft_engine::AddedText { bold: true, ..text };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Text(bold) }));
+    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed twice"), "the typing stays in the box");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "Undo takes it back in the box");
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed twice"), "Redo from the menu puts it back");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_redo(), Some("Edit content"), "the document's Redo still waits");
+}
+
+/// Undo from the menu with retyping the page doesn't have yet in an added text box: the box takes
+/// it back and stays open, and the document's waiting Redo stays.
+#[test]
+fn undo_from_the_menu_takes_back_retyping_in_the_added_text_box() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Reviewed".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text: text.clone() }));
+    let bold = pdfcraft_engine::AddedText { bold: true, ..text };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Text(bold) }));
+    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Home);
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.as_ref().unwrap().selection.is_some());
+    h.event(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("test-menu")));
+    assert!(h.state_mut().execute("edit.undo"));
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().selection, None, "menu history clears the old byte range before the next frame");
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "Undo takes it back in the box");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_redo(), Some("Edit content"), "the document's Redo still waits");
+}
+
+/// Redo from the menu after Undo in an added text box, with nothing for the document to redo: the
+/// menu item follows the box's own Redo too, and puts the typing back.
+#[test]
+fn redo_from_the_menu_is_enabled_for_the_added_text_boxs_own_typing() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Reviewed".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "Undo takes it back in the box");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_redo(), None, "the document has nothing to redo");
+    // A range retained while the unfocused editor still showed its previous text.
+    h.state_mut().views[0].content.draft.as_mut().unwrap().selection = Some(0..1);
+    h.event(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("test-menu")));
+    assert!(h.state_mut().execute("edit.redo"), "Redo is enabled for the box's own step");
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().selection, None, "menu history clears the old byte range before the next frame");
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed twice"), "Redo puts it back");
+}
+
+/// Saved added text of three lines aligned Left, Centre and Right: the centred line deleted
+/// with its line break, then brought back with Ctrl+Z, is centred again, and Ctrl+Shift+Z deletes
+/// it again. The box's history keeps only text, so the restored line took the first line's
+/// alignment, and finishing the box would have saved that.
+#[test]
+fn undo_brings_a_deleted_line_of_added_text_back_with_its_alignment() {
+    use pdfcraft_engine::TextAlign::{Center, Right};
+    let mut h = harness();
+    let rect = [40.0, 170.0, 240.0, 215.0];
+    let aligns = vec![None, Some(Center), Some(Right)];
+    let text = pdfcraft_engine::AddedText { rect, text: "A\nB\nC".into(), aligns: aligns.clone(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    // On the first line, at the top of the box.
+    let point = at(&h, 45.0, 205.0);
+    click(&mut h, point);
+    let draft = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].content.draft.clone().expect("the box is open");
+    assert_eq!((draft(&h).text, draft(&h).style.aligns), ("A\nB\nC".to_string(), aligns.clone()), "the editor opened on the text");
+    // Select the second line with its line break, and delete it.
+    h.run_steps(2);
+    // To the start of the first line, wherever the click put the caret.
+    for _ in 0..3 {
+        h.key_press(egui::Key::ArrowUp);
+    }
+    h.key_press(egui::Key::Home);
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowDown);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(2);
+    assert_eq!((draft(&h).text, draft(&h).style.aligns), ("A\nC".to_string(), vec![None, Some(Right)]), "the centred line is gone");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!((draft(&h).text, draft(&h).style.aligns), ("A\nB\nC".to_string(), aligns), "Undo brings it back centred");
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!((draft(&h).text, draft(&h).style.aligns), ("A\nC".to_string(), vec![None, Some(Right)]), "Redo deletes it again");
+}
+
+/// Typing in tab A's added text box, the same text opened in tab B, then back to A: Edit ▸ Undo
+/// takes the typing back in A's box, which stays open.
+#[test]
+fn undo_after_a_round_trip_through_another_tab_takes_back_added_text_typing() {
+    let mut h = harness();
+    h.state_mut().open_bytes("copy.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(4);
+    let text = pdfcraft_engine::AddedText { rect: [40.0, 195.0, 240.0, 210.0], text: "Reviewed".into(), ..Default::default() };
+    let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
+        h.state_mut().active = Some(tab);
+        h.run_steps(2);
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let r = h.state().views[tab].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 300.0;
+        click(h, r.min + egui::vec2(45.0 * k, 195.0 * k));
+        assert_eq!(h.state().views[tab].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    };
+    for tab in [0, 1] {
+        h.state_mut().active = Some(tab);
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text: text.clone() }));
+    }
+    open_in(&mut h, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    open_in(&mut h, 1);
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    let draft = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
+    assert_eq!(draft(&h).as_deref(), Some("Reviewed twice"), "A's box is still open with the typing");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(draft(&h).as_deref(), Some("Reviewed"), "Undo takes the typing back in A's box");
+}
+
+/// Edit ▸ Undo chosen in the same frame as the switch back to tab A's added text box, before it
+/// is drawn again: the shared text box still holds tab B's history, from a box on other text, so
+/// A's box claims its own back before stepping.
+#[test]
+fn undo_in_the_frame_of_the_switch_back_takes_back_added_text_typing() {
+    let mut h = harness();
+    h.state_mut().open_bytes("copy.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(4);
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    for (tab, text) in [(0, "Reviewed"), (1, "Approved")] {
+        h.state_mut().active = Some(tab);
+        let text = pdfcraft_engine::AddedText { rect, text: text.into(), ..Default::default() };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    }
+    let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
+        h.state_mut().active = Some(tab);
+        h.run_steps(2);
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let r = h.state().views[tab].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 300.0;
+        click(h, r.min + egui::vec2(45.0 * k, 195.0 * k));
+        assert_eq!(h.state().views[tab].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    };
+    open_in(&mut h, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" twice".into()));
+    h.run_steps(2);
+    open_in(&mut h, 1);
+    // Back to A and Undo at once: no frame draws A's box in between.
+    h.state_mut().active = Some(0);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "Undo takes the typing back in A's box");
+}
+
+/// Retyping taken back with Ctrl+Z, then Bold picked with the added text box still open: the
+/// restyle is applied in place and the page has the box's text, so neither Ctrl+Shift+Z nor the
+/// menu's Redo may bring the undone retyping back on top of the bold (CodeRabbit on a33a8bba).
+#[test]
+fn redo_after_restyling_open_added_text_never_brings_back_typing_undone_before_it() {
+    for route in ["key", "menu"] {
+        let mut h = harness();
+        let rect = [40.0, 195.0, 240.0, 210.0];
+        let text = pdfcraft_engine::AddedText { rect, text: "Reviewed".into(), ..Default::default() };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let point = at(&h, 45.0, 195.0);
+        click(&mut h, point);
+        assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+        h.event(egui::Event::Text(" twice".into()));
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "{route}: taken back");
+        h.get_by_label("Bold").click();
+        h.run_steps(4);
+        let pdfcraft_engine::AddedContent::Text(now) = &added(&h)[0].content else { panic!() };
+        assert!(now.bold, "{route}: the bold is applied to the item");
+        assert!(h.state().views[0].content.draft.is_some(), "{route}: the box stays open");
+        if route == "key" {
+            h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+        } else {
+            // The menu item is off: neither the document nor the box has a Redo.
+            assert!(!h.state_mut().execute("edit.redo"), "menu: Redo is refused, there is nothing to redo");
+        }
+        h.run_steps(3);
+        let draft = h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
+        assert_eq!(draft.as_deref(), Some("Reviewed"), "{route}: the retyping undone before the bold comes back in the box");
+        let pdfcraft_engine::AddedContent::Text(now) = &added(&h)[0].content else { panic!() };
+        assert_eq!(now.text, "Reviewed", "{route}: nor in the document");
+    }
+}
+
+/// Redo with an added text box open and unchanged reaches the document's waiting Redo, even when
+/// the box's text ends in a space: closing the unchanged box writes nothing, so it can't clear
+/// that Redo first.
+#[test]
+fn redo_with_an_unchanged_box_open_redoes_the_document() {
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Reviewed ".into(), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    let pdfcraft_engine::AddedContent::Text(saved) = added(&h)[0].content.clone() else { panic!() };
+    assert_eq!(saved.text, "Reviewed ", "the trailing space is kept");
+    let bold = pdfcraft_engine::AddedText { bold: true, ..saved };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Text(bold) }));
+    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 45.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(4);
+    let pdfcraft_engine::AddedContent::Text(now) = &added(&h)[0].content else { panic!() };
+    assert!(now.bold, "the waiting Redo was redone");
+    assert!(h.state().views[0].content.draft.is_none(), "the box closed with the step");
+}
+
+/// Two copies of a document, the same added text open in each: the boxes share one Undo history,
+/// so typing taken back with Undo in one tab came back with Redo in the other.
+#[test]
+fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
+    let mut h = harness();
+    h.state_mut().open_bytes("copy.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(4);
+    let text = pdfcraft_engine::AddedText { rect: [40.0, 195.0, 240.0, 210.0], text: "Reviewed".into(), ..Default::default() };
+    let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
+        h.state_mut().active = Some(tab);
+        h.run_steps(2);
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let r = h.state().views[tab].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 300.0;
+        click(h, r.min + egui::vec2(45.0 * k, 195.0 * k));
+        assert_eq!(h.state().views[tab].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    };
+    for tab in [0, 1] {
+        h.state_mut().active = Some(tab);
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text: text.clone() }));
+    }
+    open_in(&mut h, 1);
+    open_in(&mut h, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.event(egui::Event::Text(" secret".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "taken back");
+    h.state_mut().active = Some(1);
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
+}
+
+/// Out-of-page editing grips do not turn the invisible image body into a context-menu target.
+#[test]
+fn image_context_menu_requires_visible_body_even_when_the_frame_crosses_the_page() {
+    for visible in [false, true] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(20, 20, image::Rgb([200, 30, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        h.state_mut().add_image("edge.png".into(), png);
+        h.run_steps(3);
+        let image = match &added(&h)[0].content {
+            pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [260.0, 150.0, 340.0, 230.0], ..i.clone() },
+            _ => panic!("added an image"),
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent {
+            page: 0,
+            index: 0,
+            content: pdfcraft_engine::AddedContent::Image(image),
+        }));
+        h.run_steps(3);
+        h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+        let x = if visible { 280.0 } else { 320.0 };
+        let point = item_on_screen(&h, [x, 190.0, x, 190.0]).center();
+        assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().contains(point), visible);
+        h.hover_at(point);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+        // Flip horizontal also appears in the persistent sidebar; Arrange image is menu-only.
+        assert_eq!(h.query_all_by_label("Arrange image").next().is_some(), visible, "image menu requires visible body");
+    }
+}
+
+/// The rail's page and zoom fields are the same size, and each sits wholly inside the rail, so
+/// neither box is cut off at the edge (the page box lost its right side once the rail's contents
+/// changed width).
+#[test]
+fn rail_page_and_zoom_fields_match_and_fit_the_rail() {
+    let mut h = harness();
+    h.run_steps(3);
+    // The rail is 49 pt wide at the window's right edge (1400 pt wide), inside a 1 pt border.
+    let (rail_left, rail_right) = (1400.0 - 49.0 + 1.0, 1400.0 - 1.0);
+    let rail = h.get_by_label("Bookmarks").rect();
+    let (page, zoom) = (h.get_by_label("Current page").rect(), h.get_by_label("Zoom").rect());
+    assert_eq!((page.width(), page.height()), (zoom.width(), zoom.height()), "{page:?} vs {zoom:?}");
+    // The size `RAIL_FIELD_SIZE` sets: wide enough for "6400%", the largest zoom.
+    assert_eq!((page.width(), page.height()), (42.0, 22.0), "{page:?}");
+    for r in [page, zoom] {
+        assert!(r.left() >= rail_left && r.right() <= rail_right, "{r:?} is cut off by the rail ({rail_left}..{rail_right})");
+        assert!((r.center().x - rail.center().x).abs() < 1.0, "{r:?} is off the rail's centre ({rail:?})");
+    }
+}
+
+/// Added text, typed and selected with Done.
+fn selected_added_text() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(5);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    h
+}
+
+/// Delete and Escape with a dialog open are the dialog's: the added text selected behind it stays
+/// and stays selected. Delete removed it, and Escape deselected it as it closed the dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_added_text() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = selected_added_text();
+        h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(added(&h).len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "{key:?}: still selected");
+        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
+}
+
+/// The Escape that closes a dialog opened from a menu while added text is being typed is the
+/// dialog's: the typing stays, in the editor or added to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.is_some(), "the editor is open");
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].content.draft.as_ref().is_some_and(|d| d.text.contains("Reviewed"));
+    let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
+    assert!(open || added, "the typing stays");
 }
