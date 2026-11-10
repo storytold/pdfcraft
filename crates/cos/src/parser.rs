@@ -283,8 +283,9 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'/') => {
                     self.pos += 1;
-                    let key = self.name_body();
+                    let mut key = self.name_body();
                     self.skip_ws();
+                    self.spaced_key_words(&mut key);
                     // A key directly followed by `>>` has no value: treat as null. (A following
                     // `/` is a name *value*, so it cannot signal a missing value.)
                     if self.peek() == Some(b'>') && self.data.get(self.pos + 1) == Some(&b'>') {
@@ -306,6 +307,23 @@ impl<'a> Lexer<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// The rest of a key written with raw spaces, as in `/Universal PDF(...)` (seen in Info
+    /// dictionaries): a bare word after a key cannot be its value, so it is part of the name.
+    /// Without this the whole dictionary fails at that word. `true`, `false` and `null` are values.
+    fn spaced_key_words(&mut self, key: &mut Vec<u8>) {
+        while self.peek().is_some_and(|b| is_regular(b) && !matches!(b, b'+' | b'-' | b'.' | b'0'..=b'9')) {
+            let start = self.pos;
+            if matches!(self.token(), b"true" | b"false" | b"null") {
+                self.pos = start;
+                return;
+            }
+            self.pos = start;
+            key.push(b' ');
+            key.extend(self.name_body());
+            self.skip_ws();
         }
     }
 
@@ -594,6 +612,24 @@ fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key written with raw spaces reads as one key, and the rest of the dictionary reads.
+    #[test]
+    fn a_key_with_raw_spaces_keeps_the_dictionary() {
+        let Ok(Object::Dict(d)) =
+            Lexer::new(b"<< /Title (Report) /Universal PDF(Acme) /A B  C#41 /D /Author (Ken) /On true /Off null >>", 0).object()
+        else {
+            panic!("the dictionary did not parse")
+        };
+        let text = |k: &[u8]| d.get(k).and_then(|v| v.as_string().map(|s| s.to_text()));
+        assert_eq!(text(b"Title").as_deref(), Some("Report"));
+        assert_eq!(text(b"Universal PDF").as_deref(), Some("Acme"));
+        assert_eq!(d.get(b"A B CA"), Some(&Object::name("D")));
+        assert_eq!(text(b"Author").as_deref(), Some("Ken"));
+        assert_eq!(d.get(b"On"), Some(&Object::Bool(true)), "true is a value");
+        assert_eq!(d.get(b"Off"), Some(&Object::Null), "null is a value");
+        assert_eq!(d.len(), 6);
+    }
 
     #[test]
     fn numbers_with_multibyte_garbage_do_not_panic() {

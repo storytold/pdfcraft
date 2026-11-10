@@ -823,7 +823,7 @@ fn an_entry_that_misses_its_object_is_found_by_searching_but_is_not_exact() {
 /// edit of that number still answers for it.
 #[test]
 fn an_unreadable_object_is_searched_for_once() {
-    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd Key(x) >>"];
+    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd ) >>"];
     let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R /Info 3 0 R"))).unwrap();
     FILE_SCANS.with(|scans| scans.set(0));
     let first = doc.try_get(3);
