@@ -936,6 +936,8 @@ fn a_dead_options_read_wakes_an_idle_dialog() {
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    assert!(!h.state().print_draft.printers_loading, "printer discovery finished before the idle assertion");
+    assert!(!h.state().render_pending(), "the preview finished before the idle assertion");
     h.run();
     assert!(!h.ctx.has_requested_repaint(), "the dialog is idle while the read waits");
     drop(hold);
