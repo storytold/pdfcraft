@@ -726,11 +726,16 @@ fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
     use skrifa::MetadataProvider;
     use skrifa::instance::{LocationRef, Size};
     let metrics = program.glyph_metrics(Size::unscaled(), LocationRef::default());
-    let width = |gid: u16| {
-        metrics
-            .advance_width(GlyphId::new(u32::from(gid)))
-            .filter(|w| w.is_finite() && *w > 0.0)
-    };
+    accents_as_wide_as_bases(drawn, |gid| {
+        metrics.advance_width(GlyphId::new(u32::from(gid)))
+    })
+}
+
+/// [`accents_match_bases`] with the widths `width` gives (by glyph id, or by CID for a CID-keyed
+/// CFF font whose CIDs are glyph ids in the order); widths that aren't finite and positive are
+/// left out.
+fn accents_as_wide_as_bases(drawn: &[u32], width: impl Fn(u16) -> Option<f32>) -> bool {
+    let width = |gid: u16| width(gid).filter(|w| w.is_finite() && *w > 0.0);
     ACCENTED_BASES
         .iter()
         .filter(|(accented, _)| drawn.contains(&u32::from(*accented)))
@@ -943,7 +948,10 @@ fn cid_cff_in_mac_order(font: &FontFacts<'_>) -> Option<MacSource> {
     if font.has_to_unicode && !to_unicode_agrees(font, &cids) {
         return None;
     }
-    if renumbered_block(&cids) || !plausible(&cids) {
+    if renumbered_block(&cids)
+        || !plausible(&cids)
+        || !accents_as_wide_as_bases(&cids, |cid| width(u32::from(cid)))
+    {
         return None;
     }
     widths::widths_agree(&widths::read_widths(&cids, mac_glyph_char, width))

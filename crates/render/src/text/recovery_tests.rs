@@ -1446,3 +1446,42 @@ fn an_order_shifted_like_skias_is_not_read_in_the_mac_order() {
     let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &shifted, &mac_widths(text, 29), Some(""))));
     assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
 }
+
+/// The CID-keyed CFF path asks what #6733 asks of a TrueType program: the glyph its CIDs read as
+/// an accented letter (`é`, Macintosh glyph 112) is as wide as the one read as its base letter
+/// (`e`, 72). As wide, the font reads, the accent too; wider, nothing is read.
+#[test]
+fn a_cid_cff_font_in_the_mac_order_has_its_accents_as_wide_as_their_bases() {
+    let text = "Indicadores de estudiantes";
+    let page = |eacute: u32| {
+        let mut unique: Vec<char> = text.chars().collect();
+        unique.sort_unstable();
+        unique.dedup();
+        let mut cids: Vec<u16> = unique.iter().map(|&c| sid(c) + 2).collect();
+        cids.push(112);
+        let w: String = unique.iter().map(|&c| format!("{} [{}] ", sid(c) + 2, helvetica_width(c))).collect::<String>() + &format!("112 [{eacute}]");
+        let shown: String = text.chars().map(|c| format!("{:04X}", sid(c) + 2)).collect::<String>() + "0070";
+        page_with_font(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+            &format!("<{shown}>"),
+            false,
+            &[
+                (
+                    &format!(
+                        "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    "<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                    Vec::new(),
+                ),
+                ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+            ],
+        )
+    };
+    let (_, recovered, _) = layers(&parse(page(556)));
+    assert_eq!(recovered.map(|r| r.text.plain_text()), Some(format!("{text}\u{e9}")));
+    let (_, recovered, _) = layers(&parse(page(700)));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
