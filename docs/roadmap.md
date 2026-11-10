@@ -165,6 +165,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 | 2026-10-27 | patch | M2, PR #4172: integrate main 1dd2737b; preserve viewer-only CJK fallback and regression coverage across engine, renderer and Combine module splits; estimates unchanged. |
 | 2026-10-27 | patch | M2, PR #4172: integrate main 9a9813bf and migrate viewer-only CJK configuration to the split engine modules; estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged. |
+| 2026-10-27 | minor | M10: vector printing retains small appearance placement coefficients. Synthetic rendering and save/reopen regressions cover the change. Estimates unchanged. |
 | 2026-10-26 | minor | M11: lossless JBIG2 symbol coding (`pdfcraft_filters::encode_jbig2`): each distinct mark stored once in a symbol dictionary and its exact copies placed by a text region, larger and lone marks in a generic region, used when smaller than the generic coding; on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's. Scans gain little until refinement coding; `/JBIG2Globals` and lossy coding not yet. Estimates unchanged. |
 | 2026-10-26 | patch | M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged. |
 | 2026-10-26 | patch | M2, PR #4172: document installed-font helpers and regression contracts; behavior and estimates unchanged. |
