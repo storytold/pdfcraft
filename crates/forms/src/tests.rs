@@ -1726,6 +1726,70 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
 }
 
+/// The `/JS` string of field `name`'s `/AA /C` action, as stored.
+fn calculate_action_js(doc: &Document, name: &str) -> Option<PdfString> {
+    let f = field(&fields(doc), name).obj;
+    let aa = doc.get(f).as_dict().and_then(|d| d.get(b"AA").cloned()).map(|a| doc.resolve(&a))?;
+    let c = aa.as_dict().and_then(|aa| aa.get(b"C").cloned()).map(|c| doc.resolve(&c))?;
+    Some(c.as_dict().and_then(|c| c.get(b"JS")).and_then(|s| s.as_string()).expect("/JS is a string").clone())
+}
+
+/// Field Properties ▸ Calculate ▸ Custom calculation script (#6630): the script is written as
+/// given, as a text string, and reads back as the field's custom script, in the calculation
+/// order; a blank one removes the script and the field's place in the order.
+#[test]
+fn a_custom_calculation_script_is_written_as_given_and_a_blank_one_removes_it() {
+    use crate::af::Calculate;
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("codice")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("barcode")).unwrap();
+    let js = "// Code 39: tra asterischi, così\r\nevent.value = \"*\" + this.getField(\"codice\").value + \"*\";";
+    let custom = |js: &str| FieldProps { calculate: Some(Calculate::Custom(js.into())), ..FieldProps::default() };
+    set_props(&mut doc, "barcode", &custom(js)).unwrap();
+    for doc in [doc.clone(), reopen(&doc)] {
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, Some(js)), "read back as a script");
+        assert!(actions.unsupported.contains(&"calculate"));
+        let stored = calculate_action_js(&doc, "barcode").expect("an /AA /C action");
+        assert_eq!(stored.bytes, pdfcraft_cos::PdfString::text(js).bytes, "a text string, so ì isn't UTF-8 bytes another viewer reads as ì's pieces");
+        let order = calculation_order(&doc, &all);
+        assert_eq!(order.fields.iter().map(|f| (f.name.as_str(), f.listed)).collect::<Vec<_>>(), [("barcode", true)]);
+        assert_eq!(order.fields[0].reads, ["codice"]);
+    }
+    for blank in ["", " \n\t"] {
+        let mut doc = doc.clone();
+        set_props(&mut doc, "barcode", &custom(blank)).unwrap();
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, None), "{blank:?}");
+        assert!(calculate_action_js(&doc, "barcode").is_none(), "{blank:?} writes no /C");
+        assert!(calculation_order(&doc, &all).fields.is_empty(), "{blank:?} leaves the calculation order");
+    }
+}
+
+/// A sum and a notation are still written as the AF calls they are, byte for byte, beside the
+/// custom script that is written as a text string (#6630).
+#[test]
+fn a_sum_and_a_notation_are_written_as_their_af_calls() {
+    use crate::af::{CalcOp, Calculate, calculate_js};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["a", "b", "total"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let sum = Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] };
+    for c in [sum, Calculate::Notation("a * b".into())] {
+        set_props(&mut doc, "total", &FieldProps { calculate: Some(c.clone()), ..FieldProps::default() }).unwrap();
+        let js = calculate_js(&c).unwrap();
+        assert_eq!(calculate_action_js(&doc, "total").map(|s| s.bytes), Some(js.into_bytes()), "{c:?}");
+        let all = fields(&reopen(&doc));
+        assert_eq!((&field(&all, "total").actions.calculate, &field(&all, "total").actions.scripts.calculate), (&c, &None));
+    }
+}
+
 /// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
 #[test]
 fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
@@ -5719,6 +5783,34 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+}
+
+/// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
+/// form with a thousand rows holds thousands of fields, and reading them all again for each one
+/// took 15 s a relayout. The fields `keep` turns down keep the appearance they had.
+#[test]
+fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
+    for n in [250u32, 1000] {
+        let mut objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        ];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")));
+        objs.push(format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")));
+        for i in 0..n {
+            objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /V (v{i}) /Rect [50 0 250 10] /P 3 0 R >>"));
+        }
+        let mut doc = document(&objs);
+        let before = form_reads();
+        redraw_fields(&mut doc, |_, f| f.name != "f0").unwrap();
+        assert_eq!(form_reads() - before, 1, "{n} fields");
+        let all = fields(&doc);
+        let has_ap = |name: &str| field(&all, name).widgets.iter().all(|w| doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP")));
+        assert!(!has_ap("f0"), "turned down: left as it was");
+        assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
+        assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
+    }
 }
 
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
