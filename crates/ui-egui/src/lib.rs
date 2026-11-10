@@ -59,7 +59,9 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Spooler, Which as PrintWhich, system_printers};
+pub use print_ui::{
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, Which as PrintWhich, system_printers,
+};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;

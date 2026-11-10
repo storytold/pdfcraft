@@ -1,3 +1,4 @@
+use super::setups::{self, PrinterSetup};
 use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,12 @@ pub enum Handling {
     /// Shipping label: cut to the printed area, turned upright, one per sheet.
     Label,
 }
+
+/// The percent a custom scale can be (the dialog's field and a saved setting).
+pub const CUSTOM_SCALE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
+
+/// The resolutions the Print dialog offers for Print as image, in dots per inch.
+pub const IMAGE_DPI: [f64; 3] = [150.0, 300.0, 600.0];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
@@ -87,6 +94,9 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// The paper, sizing and two-sided choice each printer was last printed with, the printer
+    /// printed to last first; kept across restarts (#2001).
+    pub setups: Vec<(String, PrinterSetup)>,
 }
 
 impl Default for PrintDraft {
@@ -138,6 +148,7 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            setups: Vec::new(),
         }
     }
 }
@@ -161,6 +172,40 @@ impl PrintDraft {
         {
             self.paper = paper;
         }
+    }
+
+    /// Remember this draft's paper, sizing and two-sided choice for its printer, after printing
+    /// to it (#2001). Save as PDF has none to remember.
+    pub fn remember_setup(&mut self) {
+        let Some(printer) = self.printer.clone() else { return };
+        // Label's stock is that job's; the printer keeps the paper Label replaced.
+        let paper = if self.handling == Handling::Label { self.paper_before_label.unwrap_or(self.paper) } else { self.paper };
+        let setup = PrinterSetup { paper, size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
+        setups::record(&mut self.setups, &printer, setup);
+    }
+
+    /// Bring back what the chosen printer was last printed with, when it has been printed to
+    /// (#2001); a printer never printed to keeps the dialog's choices. While Label holds the
+    /// label stock, the printer's paper is what leaving Label gives back.
+    pub fn apply_setup(&mut self) {
+        let Some(printer) = self.printer.as_deref() else { return };
+        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| *s) else { return };
+        self.size = setup.size;
+        self.custom_scale = setup.custom_scale;
+        self.duplex = setup.duplex;
+        let paper = setup.paper.min(PAPERS.len() - 1);
+        if self.handling == Handling::Label {
+            self.paper_before_label = Some(paper);
+        } else {
+            self.paper = paper;
+        }
+        self.sheet = 0;
+    }
+
+    /// The printer printed to last, while `printers` still lists it (#2001).
+    pub fn last_printer<'a>(&self, printers: &'a [spool::Printer]) -> Option<&'a spool::Printer> {
+        let (last, _) = self.setups.first()?;
+        printers.iter().find(|p| p.name == *last)
     }
 
     /// The engine settings for this draft (page count and labels from the document).
@@ -210,9 +255,14 @@ impl PrintDraft {
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            raster: self.raster(),
             crops: self.crops.clone(),
         })
+    }
+
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    fn raster(&self) -> Option<print::Raster> {
+        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale })
     }
 
     fn cut_and_stack(&self) -> bool {
@@ -236,7 +286,7 @@ impl PrintDraft {
                 self.duplex
             },
             scaling: spool::Scaling::Exact,
-            grayscale: self.grayscale,
+            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {
