@@ -286,6 +286,30 @@ fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str)
     assert_eq!(value(h, name), [expected]);
 }
 #[test]
+/// Every native script prompt identifies its document, even with misleading or empty titles.
+fn native_script_prompts_show_an_app_owned_caption() {
+    for (script, body, title) in [
+        ("app.response({cQuestion:'Type a value',cTitle:'PdfCraft security',bPassword:true});", "Type a value", Some("PdfCraft security")),
+        ("app.response({cQuestion:'Empty title prompt',cTitle:''});", "Empty title prompt", None),
+        ("app.alert({cMsg:'Script message',cTitle:'PdfCraft security'});", "Script message", Some("PdfCraft security")),
+        ("app.alert({cMsg:'Untitled alert',cTitle:''});", "Untitled alert", None),
+        ("app.popUpMenuEx({cName:'Pick a value',cReturn:'yes'});", "Pick a value", None),
+    ] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        h.state_mut().run_button_script(id, "hello", script);
+        wait_for(&mut h, body);
+        assert!(h.query_by_label("Document JavaScripts").is_some(), "{script}");
+        assert!(h.query_by_label("Document: form.pdf").is_some(), "{script}");
+        if let Some(title) = title {
+            assert!(h.query_by_label(title).is_some(), "{script}");
+        }
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+    }
+}
+
+#[test]
 /// A real UI menu followed by input resumes once and does not leak the menu click into the next modal.
 fn native_button_popup_and_response_resume_without_replaying_the_script() {
     for typed in [false, true] {
@@ -338,10 +362,18 @@ fn native_popup_completion_is_discarded_after_the_document_is_edited() {
         .session
         .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
         .unwrap();
-    assert!(h.state_mut().session.run_javascript(id, "var afterEdit='kept';", None).unwrap().error.is_none());
     h.run_steps(5);
     assert!(h.query_by_label("Wait").is_none(), "the stale prompt must be dismissed");
     assert_eq!(value(&h, "greeting"), ["current"]);
+    // The document's worker remains reserved until the abandoned prompt exits.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let out = h.state_mut().session.run_javascript(id, "var afterEdit='kept';", None).unwrap();
+        let Some(error) = out.error else { break };
+        assert!(out.execution_refused && error.contains("another script is active"), "{error}");
+        assert!(std::time::Instant::now() < deadline, "the abandoned worker did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(h.state_mut().session.run_javascript(id, "afterEdit", None).unwrap().result.as_deref(), Some("kept"));
 }
 

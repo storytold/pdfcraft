@@ -134,6 +134,14 @@ impl PdfCraftApp {
     pub(crate) fn show_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = self.script_pending.as_mut() else { return };
         let Some((prompt, _)) = pending.prompt.as_ref() else { return };
+        let Some(doc) = self.session.get(pending.run.id) else { return };
+        // Keep the filename in a separate, single-line label. It is document data too.
+        let document_name: String = doc
+            .name
+            .chars()
+            .filter(|c| !c.is_control() && !matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+            .take(160)
+            .collect();
         let mut answer = None;
         let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let prompt_modal = crate::widgets::modal(ctx, ("document-script-prompt", pending.run.id.0, pending.serial));
@@ -142,12 +150,17 @@ impl PdfCraftApp {
         ctx.move_to_top(prompt_modal.area.layer());
         let modal = prompt_modal.show(ctx, |ui| {
             ui.set_width(360.0);
+            ui.heading(tl!("Document JavaScripts"));
+            ui.add(egui::Label::new(format!("{}: {document_name}", tl!("Document"))).truncate());
+            ui.separator();
             match prompt {
                 Prompt::Menu(items) => {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| menu(ui, items, &mut answer));
                 }
                 Prompt::Text { title, question, password, label, .. } => {
-                    ui.heading(title);
+                    if !title.is_empty() {
+                        ui.label(title);
+                    }
                     ui.label(question);
                     if !label.is_empty() {
                         ui.label(label);
@@ -163,7 +176,7 @@ impl PdfCraftApp {
                 }
                 Prompt::Alert(message) => {
                     if let Some(title) = &message.title {
-                        ui.heading(title);
+                        ui.label(title);
                     }
                     ui.label(&message.text);
                     use pdfcraft_engine::js::MessageButtons as B;

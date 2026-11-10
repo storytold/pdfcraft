@@ -326,6 +326,25 @@ pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Opti
         .into_iter()
         .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
         .ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    redraw_widgets_of(doc, &f, only)
+}
+
+/// [`redraw_field`] for each field [`fields`] lists that `keep` accepts. The form's fields are
+/// read once: drawing a field changes only its own widgets' appearances, so the list stays true
+/// for the rest. Looking each one up by name instead reads the whole form again for every field,
+/// which grows with the square of the field count (a laid out XFA form with a thousand rows holds
+/// thousands of fields). A failure names the field it stopped at.
+pub fn redraw_fields(doc: &mut Document, mut keep: impl FnMut(&Document, &Field) -> bool) -> Result<(), FormError> {
+    for f in fields(doc) {
+        if keep(doc, &f) {
+            redraw_widgets_of(doc, &f, None).map_err(|e| FormError::Invalid(format!("{}: {e}", f.name)))?;
+        }
+    }
+    Ok(())
+}
+
+/// [`redraw_widgets`] for the field `f`, as `fields(doc)` read it.
+fn redraw_widgets_of(doc: &mut Document, f: &Field, only: Option<usize>) -> Result<(), FormError> {
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -334,7 +353,7 @@ pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Opti
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (mut s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (mut s, m) = appearance::field_appearance_drawn(doc, f, w, &f.value, true);
                 missing = m;
                 // Thai glyphs are streams of their own.
                 pdfcraft_fonts::shaped_text::store_streams(doc, &mut s.dict);

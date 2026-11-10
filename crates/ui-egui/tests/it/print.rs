@@ -519,6 +519,46 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
     assert_eq!(h.state().print_draft.size, before.size);
 }
 
+/// Windows' printer list doesn't say which drivers take two-sided settings: reading a printer
+/// Windows can't reach takes it about 48 s (#2192). The dialog lists every printer at once and
+/// asks only about the one picked, in the background, so a printer nobody picks is never waited on.
+#[test]
+fn two_sided_support_is_read_only_for_the_printer_picked() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: None, description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: None, description: String::new() },
+            Printer { name: "Away WSD".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        Some(name != "Office PS")
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let settle = |h: &mut Harness<'static, PdfCraftApp>, done: &dyn Fn(&PdfCraftApp) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(h.state()) && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(2);
+    };
+    settle(&mut h, &|a| a.print_draft.two_sided.contains_key("Office PCL"));
+    assert_eq!(h.state().print_draft.printers.len(), 3);
+    let note = "doesn't take two-sided settings";
+    assert!(h.query_by_label_contains(note).is_none(), "a driver that prints two-sided as asked");
+    h.state_mut().print_draft.printer = Some("Office PS".into());
+    settle(&mut h, &|a| a.print_draft.two_sided.contains_key("Office PS"));
+    h.get_by_label_contains(note);
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL", "Office PS"], "each picked printer once, never the others");
+}
+
 /// A driver Windows reports without two-sided printing keeps its own setting whatever Two-sided
 /// says (some print both sides with it Off), so the dialog says where to change it.
 #[test]
@@ -543,6 +583,92 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
     h.state_mut().print_draft.printer = Some("Office PS".into());
     h.run_steps(2);
     h.get_by_label_contains(note);
+}
+
+/// A list that already says which drivers take two-sided settings is used as it is: no driver is
+/// asked again, whichever printer is picked.
+#[test]
+fn a_listed_two_sided_answer_is_not_asked_again() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        None
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h.state_mut().print_draft.printer = Some("Office PS".into());
+    h.run_steps(4);
+    h.get_by_label_contains("doesn't take two-sided settings");
+    assert!(asked.lock().unwrap().is_empty(), "the list's answers are used: {:?}", asked.lock().unwrap());
+}
+
+/// Reads that hang (printers Windows can't reach) don't pile up as the user picks printer after
+/// printer: at most four run at once, and the printer picked is asked once one finishes.
+#[test]
+fn hanging_two_sided_reads_are_capped() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let names: Vec<String> = (1..=6).map(|i| format!("Away WSD {i}")).collect();
+    let listed = names.clone();
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(move || {
+        listed.iter().enumerate().map(|(i, n)| Printer { name: n.clone(), default: i == 0, two_sided: None, description: String::new() }).collect()
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let released = Arc::new(AtomicBool::new(false));
+    let (log, gate) = (asked.clone(), released.clone());
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        // Hold the read like an unreachable printer, until the test lets it go (10 s at most).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !gate.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Some(true)
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for name in &names {
+        h.state_mut().print_draft.printer = Some(name.clone());
+        h.run_steps(2);
+    }
+    let started = |a: &Arc<Mutex<Vec<String>>>| a.lock().unwrap().len();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while started(&asked) < 4 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    let mut first = asked.lock().unwrap().clone();
+    first.sort();
+    assert_eq!(first, names[..4], "four reads at once, the rest wait");
+    released.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !h.state().print_draft.two_sided.contains_key(&names[5]) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.two_sided.get(&names[5]), Some(&Some(true)), "the printer picked is asked once a read finishes");
+    assert!(!h.state().print_draft.two_sided.contains_key(&names[4]), "a printer no longer picked isn't asked");
 }
 
 /// Print as image (Acrobat's Advanced Print Setup) is a choice in the Print dialog's Advanced
@@ -981,6 +1107,95 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     std::fs::remove_file(out).unwrap();
 }
 
+/// After the Print dialog opens: frames until its printer list has loaded (its arrival changes
+/// the dialog's rows, even an empty list, which adds the "no printers" line), then a few more so
+/// the dialog has settled where it stays. A click before then can land where a control was
+/// (windows-latest CI).
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..500 {
+        h.run_steps(1);
+        if !h.state().print_draft.printers_loading {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!h.state().print_draft.printers_loading, "the printer list loaded");
+    h.run_steps(8);
+}
+
+/// Page setup: a paper size of one's own joins the Paper list (Custom…) and prints at its size.
+/// The printer it was printed on keeps it (#2001) by name, across a restart, and Remove takes it
+/// off the list; the printer's setup then leaves the paper as it is.
+#[test]
+fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
+    use pdfcraft_engine::print::spool::{Job, Printer};
+    use std::sync::{Arc, Mutex};
+    let sent: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let attach = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().printer_source =
+            Some(Arc::new(|| vec![Printer { name: "Labeller".into(), default: true, two_sided: None, description: String::new() }]));
+        let sent = sent.clone();
+        h.state_mut().spooler = Some(Arc::new(move |pdf: &[u8], _job: &Job| {
+            sent.lock().unwrap().push(pdf.to_vec());
+            Ok(String::new())
+        }));
+    };
+    let mut h = harness();
+    attach(&mut h);
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Labeller"));
+    h.get_by_label("Custom…").click();
+    h.run_steps(2);
+    // Typed in the preferences' unit, landscape: 6 × 4 inches.
+    let per_point = h.state().print_draft.units.per_point();
+    h.state_mut().print_draft.custom_new = Some(("Label 4×6".into(), format!("{}", 432.0 * per_point), format!("{}", 288.0 * per_point)));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    {
+        let d = &h.state().print_draft;
+        assert!(d.paper_is_custom() && d.paper_name() == "Label 4×6", "{}", d.paper_name());
+        let (w, l) = d.paper_size();
+        assert!((w - 288.0).abs() < 0.01 && (l - 432.0).abs() < 0.01, "portrait: {w}×{l}");
+    }
+    // The custom row has closed: let the dialog settle at its new height before clicking.
+    h.run_steps(8);
+    h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+    for _ in 0..400 {
+        h.run_steps(1);
+        if !sent.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let pdf = sent.lock().unwrap().first().cloned().expect("the job reached the spooler");
+    let printed = pdfcraft_cos::Document::open(Arc::new(pdf)).unwrap();
+    let sheet = pdfcraft_model::pages(&printed)[0].display_size(&printed);
+    assert!((sheet.0.min(sheet.1) - 288.0).abs() < 0.5 && (sheet.0.max(sheet.1) - 432.0).abs() < 0.5, "the label paper: {sheet:?}");
+    assert_eq!(h.state().print_draft.setups.first().map(|(p, s)| (p.as_str(), s.paper.as_str())), Some(("Labeller", "Label 4×6")));
+
+    // After a restart the list has it, and the printer starts on it.
+    let settings = h.state().persist();
+    let mut h = harness_with_settings(Some(settings));
+    attach(&mut h);
+    assert_eq!(h.state().print_draft.paper_count(), pdfcraft_engine::print::PAPERS.len() + 1);
+    h.state_mut().print_draft.paper = 0;
+    h.state_mut().print_draft.printer = None;
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!((h.state().print_draft.printer.as_deref(), h.state().print_draft.paper_name().as_str()), (Some("Labeller"), "Label 4×6"));
+
+    // Remove takes it off the list; the printer's setup, still naming it, then changes nothing.
+    h.get_by_label("Remove").click();
+    h.run_steps(2);
+    let d = &mut h.state_mut().print_draft;
+    assert_eq!((d.paper_count(), d.paper), (pdfcraft_engine::print::PAPERS.len(), 0));
+    d.paper = 3;
+    d.apply_setup();
+    assert_eq!(d.paper, 3);
+}
+
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.
@@ -999,6 +1214,10 @@ fn a_booklet_decides_two_sided_itself() {
     let d = &h.state().print_draft;
     assert_eq!(d.duplex, Some(Duplex::LongEdge), "the Two-sided choice is kept");
     assert_eq!(d.job("x").duplex, Some(Duplex::ShortEdge), "both sides flip on the short edge");
+    assert!(h.query_all_by_label("Creep:").next().is_some(), "a Creep field beside Binding");
+    h.state_mut().print_draft.creep = 1.5;
+    let layout = h.state().print_draft.settings(4, &[]).map(|s| s.layout);
+    assert!(matches!(layout, Ok(pdfcraft_engine::print::Layout::Booklet { creep, .. }) if creep == 1.5), "the creep reaches the booklet (#6777)");
     for subset in [BookletSubset::FrontOnly, BookletSubset::BackOnly] {
         h.state_mut().print_draft.booklet_subset = subset;
         assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "{subset:?} is one pass of a manual duplex");
@@ -1007,6 +1226,29 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// Creep the field allows can still move a thick booklet's innermost pages too far; the preview
+/// says to reduce it rather than showing no sheets without a reason (#6777).
+#[test]
+fn too_much_creep_for_a_thick_booklet_is_explained_in_the_preview() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("thick.pdf", None, crate::support::fixtures::pdf_pages(400)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Booklet").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.creep = 5.0;
+    h.run_steps(2);
+    h.get_by_label_contains("Reduce Creep");
+    h.state_mut().print_draft.creep = 0.5;
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Reduce Creep").is_none(), "a creep that fits lays the booklet out");
 }
 
 /// An app restored from `saved` settings (if any), with a form open and its Print dialog shown.

@@ -81,6 +81,7 @@ impl Host {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
             Request::FocusField { name, .. } => name.len(),
+            Request::OpenAttachment { name, .. } => name.len(),
             _ => 0,
         };
         let kept = self.room(bytes);

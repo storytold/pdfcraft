@@ -3,7 +3,7 @@ use super::settings::{Content, Settings};
 use super::sheets::{Sheet, layout};
 use super::{DecodeBudget, Dict, Document, Matrix, ObjRef, Object, SaveOptions, Stream, write_full};
 
-// Model-derived transforms and clipping bounds need their full PDF decimal precision.
+// Transforms and clipping bounds need their full PDF decimal precision.
 fn geometry_number(value: f64) -> String {
     let mut bytes = Vec::new();
     pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
@@ -100,7 +100,9 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     let subtype = subtype_obj.as_deref().and_then(Object::as_name).unwrap_or(b"");
     match subtype {
         b"Widget" => true,
-        b"Link" | b"Popup" => false,
+        // Existing Link appearances are part of the document, not markup or fields.
+        b"Link" => content != Content::FormFieldsOnly,
+        b"Popup" => false,
         b"Stamp" => content != Content::Document && content != Content::FormFieldsOnly,
         // ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard (Table
         // 171) is not printed even with its Print flag set.
@@ -216,7 +218,18 @@ pub(crate) fn page_form(
             }
         };
         let [a0, b0, c0, d0, e0, f0] = m.0;
-        body.extend(format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0)).bytes());
+        body.extend(
+            format!(
+                "q {} {} {} {} {} {} cm /{name} Do Q\n",
+                geometry_number(a0),
+                geometry_number(b0),
+                geometry_number(c0),
+                geometry_number(d0),
+                geometry_number(e0),
+                geometry_number(f0)
+            )
+            .bytes(),
+        );
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
     // With no appearance added the form keeps the page's own Resources, shared by reference,

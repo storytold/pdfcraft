@@ -94,6 +94,21 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
     Ok(out)
 }
 
+/// The `/AA /C` action that stores `c`; `None` when it stores no calculation. A custom script is
+/// the author's own text, so it is written as a text string, as `set_field_script` writes it, and
+/// a letter outside ASCII reads the same in every viewer. The AF calls are written as they are.
+fn calculate_action(c: &crate::af::Calculate) -> Option<Object> {
+    let js = crate::af::calculate_js(c)?;
+    let text = match c {
+        crate::af::Calculate::Custom(_) => PdfString::text(&js),
+        _ => PdfString::literal(js.into_bytes()),
+    };
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name("JavaScript"));
+    a.set(b"JS".to_vec(), text);
+    Some(Object::Dict(a))
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     set_props_target(doc, name, None, props)
@@ -337,10 +352,12 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
         }
         if let Some(c) = &props.calculate {
             aa.remove(b"C");
-            if let Some(js) = crate::af::calculate_js(c) {
-                aa.set(b"C".to_vec(), action(&js));
+            let action = calculate_action(c);
+            let calculated = action.is_some();
+            if let Some(action) = action {
+                aa.set(b"C".to_vec(), action);
             }
-            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
+            crate::calc_order::keep_listed(doc, f.obj, calculated)?;
         }
         doc.update_dict(f.obj, |d| {
             if aa.is_empty() {

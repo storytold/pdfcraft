@@ -16,6 +16,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform, SignTab};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Hit, Owner, PagePress};
 
@@ -1124,11 +1125,26 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
     edit
 }
 
+/// A focused radio button's arrow keys: → or ↓ steps to the next button in its group (`true`), ← or
+/// ↑ to the one before.
+fn arrow_step(ctx: &egui::Context, keys: PageKeys) -> Option<bool> {
+    let pressed = |a, b| keys.pressed(ctx, a) || keys.pressed(ctx, b);
+    if pressed(egui::Key::ArrowRight, egui::Key::ArrowDown) {
+        Some(true)
+    } else if pressed(egui::Key::ArrowLeft, egui::Key::ArrowUp) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn overlay(
     ctx: &egui::Context,
+    keys: PageKeys,
     view: &mut DocView,
     info: &DocInfo,
     form: &[FormField],
@@ -1226,9 +1242,9 @@ pub(crate) fn overlay(
                     let caret_placed = settle_text_editor(ui, fx, &r, primary_down, laid_out.clone(), text_box.zip(before), frame);
                     turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), caret_placed, font);
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
-                    let (enter, esc, tab, shift) = ui.input(|i| {
-                        (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
-                    });
+                    let (enter, esc, tab) =
+                        (keys.pressed(ctx, egui::Key::Enter), keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+                    let shift = ui.input(|i| i.modifiers.shift);
                     if esc {
                         close = true;
                     } else if tab {
@@ -1269,7 +1285,7 @@ pub(crate) fn overlay(
                 );
             }
             let mut st = view.forms.focus.as_ref().map(|x| x.list).unwrap_or_default();
-            let list = DropDownList { view: view.view_key(), field: f, widget: w, rect, zoom, keys: !editable_combo(f) };
+            let list = DropDownList { view: view.view_key(), field: f, widget: w, rect, zoom, keys: !editable_combo(f), page_keys: keys };
             let (chosen, resp) = choice_list(ctx, list, &mut st);
             if let Some(fx) = view.forms.focus.as_mut() {
                 fx.list = st;
@@ -1279,8 +1295,8 @@ pub(crate) fn overlay(
                 close = true;
             }
             let clicked_away = !resp.response.contains_pointer() && clicked_outside();
-            let (tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let (tab, shift) = (keys.pressed(ctx, egui::Key::Tab), ctx.input(|i| i.modifiers.shift));
+            if keys.pressed(ctx, egui::Key::Escape) {
                 close = true;
             } else if tab {
                 next = Some(!shift);
@@ -1290,16 +1306,10 @@ pub(crate) fn overlay(
             }
         }
         FormFieldKind::List if !read_only => {
-            let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
-                (
-                    // Consumed, so the arrows move the selection without also scrolling the page.
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                    i.key_pressed(egui::Key::Escape),
-                    i.key_pressed(egui::Key::Tab),
-                    i.modifiers.shift,
-                )
-            });
+            // Taken, so the arrows move the selection without also scrolling the page.
+            let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
+            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+            let shift = ctx.input(|i| i.modifiers.shift);
             if esc {
                 close = true;
             } else if tab {
@@ -1336,20 +1346,11 @@ pub(crate) fn overlay(
                 has_focus = r.has_focus();
             });
             view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
-            let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            let space = has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+            let shift = ctx.input(|i| i.modifiers.shift);
+            let space = has_focus && keys.take(ctx, egui::Key::Space);
             let arrow = has_focus && f.kind == FormFieldKind::Radio;
-            let step = ctx.input(|i| {
-                if !arrow {
-                    None
-                } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowDown) {
-                    Some(true)
-                } else if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowUp) {
-                    Some(false)
-                } else {
-                    None
-                }
-            });
+            let step = if arrow { arrow_step(ctx, keys) } else { None };
             if esc || clicked_outside() {
                 close = true;
             } else if tab {
@@ -1391,6 +1392,8 @@ struct DropDownList<'a> {
     /// Whether the list takes the arrow keys and Enter: not for an editable combo box, whose
     /// text box has them.
     keys: bool,
+    /// The pages' keys, which the list's are: none while a dialog or a menu is over the pages.
+    page_keys: PageKeys,
 }
 
 /// Items a drop-down's list shows before it scrolls.
@@ -1403,7 +1406,7 @@ const LIST_ROWS: usize = 9;
 /// and the list's response. With `keys` off (an editable combo box, whose text box has the keys)
 /// only the pointer moves through and picks from it.
 fn choice_list(ctx: &egui::Context, list: DropDownList<'_>, st: &mut ChoiceList) -> (Option<usize>, egui::InnerResponse<()>) {
-    let DropDownList { view, field: f, widget: w, rect, zoom, keys } = list;
+    let DropDownList { view, field: f, widget: w, rect, zoom, keys, page_keys } = list;
     let n = f.options.len();
     let shown = n.min(LIST_ROWS);
     let max_first = n.saturating_sub(shown);
@@ -1420,7 +1423,7 @@ fn choice_list(ctx: &egui::Context, list: DropDownList<'_>, st: &mut ChoiceList)
         st.placed = true;
     }
     // Consumed, so the keys move through the list rather than the page.
-    let key = |k| keys && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+    let key = |k| keys && page_keys.take(ctx, k);
     let moved = if n == 0 {
         None
     } else if key(egui::Key::ArrowUp) {

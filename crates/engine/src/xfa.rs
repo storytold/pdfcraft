@@ -53,6 +53,7 @@ fn click_only(e: &XfaEffect) -> Option<&'static str> {
         XfaEffect::Print => Some("print"),
         XfaEffect::SaveAs => Some("save"),
         XfaEffect::LaunchUrl(_) => Some("open a link"),
+        XfaEffect::OpenAttachment { .. } => Some("open an attached file"),
         XfaEffect::ShowPanel(_) => Some("show a side panel"),
         XfaEffect::SetFocus(_) => Some("move the focus"),
         _ => None,
@@ -948,6 +949,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
+                XfaEffect::OpenAttachment { name, open } => self.run.out.requests.push(Request::OpenAttachment { name: name.clone(), open: *open }),
                 XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
                     self.focus_requests.push((self.run.out.requests.len(), Some(som.clone())));

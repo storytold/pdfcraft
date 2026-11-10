@@ -15,6 +15,8 @@ pub use save::PendingLock;
 pub use save::PendingOverwrite;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use save::download;
+#[doc(hidden)]
+pub use save::download_mime_type;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use save::in_document_folder;
 pub use save::{SaveTarget, write_atomically};
@@ -28,6 +30,16 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
+/// Clear an unfinished page-anchored drawing or composer when a page edit shifts or removes `page`.
+fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usize) {
+    if matches!(view.comments.gesture, Some(crate::comments::Gesture::Draw { page, .. }) if page >= shifted_from) {
+        view.comments.gesture = None;
+    }
+    if view.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && c.page >= shifted_from) {
+        view.comments.composer = None;
+    }
+}
+
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
 /// is the page's annotations before a delete or a paste of comments (empty for other edits).
 fn select_after_edit(
@@ -39,17 +51,27 @@ fn select_after_edit(
 ) {
     match edit {
         Edit::MovePages { pages, to } => {
+            clear_shifted_page_comment_state(view, 0);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let to = (*to).min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
         Edit::DuplicatePages { pages, at: Some(at) } => {
+            clear_shifted_page_comment_state(view, *at);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let at = (*at).min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());
         }
-        Edit::InsertBlankPage { at, .. } => view.select_pages(&[(*at).min(info.pages.len() - 1)]),
-        Edit::DeletePages { .. } => view.select_pages(&[]),
+        Edit::InsertBlankPage { at, .. } => {
+            clear_shifted_page_comment_state(view, *at);
+            view.select_pages(&[(*at).min(info.pages.len() - 1)]);
+        }
+        Edit::DeletePages { pages } => {
+            if let Some(&first) = pages.iter().min() {
+                clear_shifted_page_comment_state(view, first);
+            }
+            view.select_pages(&[]);
+        }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
@@ -76,7 +98,6 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
@@ -207,25 +228,15 @@ impl PdfCraftApp {
                     .map(|before| form_edit_pages(&before, &doc.form));
                 let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
-                    // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws. An edit that
-                    // moves no page (a form edit, or one to a page's comments or content) keeps the
-                    // values typed, in it and before it, showing until their pages redraw.
-                    let waiting = (form_edit.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
-                    view.document_changed(info);
-                    if let Some(waiting) = waiting {
-                        view.forms.unbaked = waiting;
-                    }
-                    if let Some((_, unbaked)) = form_edit {
-                        view.forms.unbaked.extend(unbaked);
-                    }
+                    signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);
                 } else if let Some(page) = one_page {
-                    one_page_changed(view, &edit, page);
+                    one_page_changed(view, &edit, page, &annots_before, info);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
                     }
+                    view.comments.document_changed(info);
                 } else {
                     view.document_changed(info);
                 }
@@ -559,6 +570,7 @@ impl PdfCraftApp {
                 self.leave_camera(i);
                 self.execute(command);
             }
+            Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
             None => {}
         }
         // That tab comes forward when its value was refused (its editor is open again with the
@@ -1109,12 +1121,50 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// A signature shows its state on its own page, which an edit elsewhere can change (a
+/// certification forbidding it, say): every page redraws. An edit that moves no page (a form edit,
+/// or one to a page's comments or content) keeps the values typed, in it and before it, showing
+/// until their pages redraw.
+fn signatures_changed_after_edit(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    info: &pdfcraft_render::DocInfo,
+    annots_before: &[pdfcraft_render::Annotation],
+    form_unbaked: Option<Vec<(String, usize)>>,
+    one_page: Option<usize>,
+) {
+    let waiting = (form_unbaked.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    }
+    view.document_changed(info);
+    if let Some(waiting) = waiting {
+        view.forms.unbaked = waiting;
+    }
+    if let Some(unbaked) = form_unbaked {
+        view.forms.unbaked.extend(unbaked);
+    }
+}
+
 /// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
 /// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
 /// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
-fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
+fn one_page_changed(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    page: usize,
+    annots_before: &[pdfcraft_render::Annotation],
+    info: &pdfcraft_render::DocInfo,
+) {
     if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
         view.page_changed(page);
+    }
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    } else {
+        view.comments.document_changed(info);
     }
 }
 

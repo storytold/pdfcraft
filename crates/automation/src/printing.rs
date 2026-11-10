@@ -38,8 +38,14 @@ fn bad(m: impl Into<String>) -> ToolError {
 }
 
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
-/// index and size; US Letter when none is given.
+/// index and size (or a size such as "8.5x14in", whose index is past the list); US Letter when
+/// none is given.
 fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
+    // A size of its own: "8.5x14in", "210x297mm", "10x15cm", "612x792pt". It has no place in
+    // `PAPERS` (index `PAPERS.len()`), so no `media` option is sent for it.
+    if let Some(size) = name.and_then(paper_size) {
+        return Ok((PAPERS.len(), size));
+    }
     let mut papers = PAPERS.iter().enumerate();
     let found = match name {
         None => papers.next(),
@@ -51,7 +57,7 @@ fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
     };
     found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
         bad(format!(
-            "unknown paper {:?}; choose one of {}",
+            "unknown paper {:?}; choose one of {}, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
             name.unwrap_or_default(),
             PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
         ))
@@ -227,6 +233,7 @@ impl Automation {
                     s => return Err(bad(format!("unknown booklet_subset {s:?}"))),
                 },
                 binding: if a.opt_str("binding")? == Some("right") { Binding::Right } else { Binding::Left },
+                creep: a.opt_num("creep")?.unwrap_or(0.0),
             },
             "poster" => Layout::Poster {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
@@ -262,8 +269,18 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        // Print a selected area: points from the top-left of the displayed page, as other tools
+        // take rectangles; the print crate takes it y up.
+        let area = match crate::content::rect_arg(a, "area")? {
+            None => None,
+            Some(r) => {
+                let [page] = pages.as_slice() else { return Err(bad("area prints one page: give pages as a single page")) };
+                let Some(&(_, h)) = sizes.get(*page) else { return Err(bad("area's page is not in the document")) };
+                Some([r[0].min(r[2]), h - r[1].max(r[3]), r[0].max(r[2]), h - r[1].min(r[3])])
+            }
+        };
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
@@ -276,12 +293,26 @@ impl Automation {
             }
             (None, Some(printer)) => {
                 let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }
         Ok(out)
     }
+}
+
+/// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
+/// inches (PDF's own page limit).
+fn paper_size(spec: &str) -> Option<(f64, f64)> {
+    let s = spec.trim().to_ascii_lowercase();
+    let (body, per_point) = [("in", 1.0 / 72.0), ("mm", 25.4 / 72.0), ("cm", 2.54 / 72.0), ("pt", 1.0)]
+        .into_iter()
+        .find_map(|(unit, per_point)| s.strip_suffix(unit).map(|b| (b, per_point)))?;
+    let (w, h) = body.split_once('x')?;
+    let side = |t: &str| t.trim().parse::<f64>().ok().map(|v| v / per_point).filter(|v| (72.0..=14_400.0).contains(v));
+    let (w, h) = (side(w)?, side(h)?);
+    Some((w.min(h), w.max(h)))
 }
 
 #[cfg(test)]
@@ -291,7 +322,7 @@ mod tests {
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
-        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left, creep: 0.0 };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
@@ -354,6 +385,9 @@ mod tests {
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
+        // A size of its own is laid out as asked and names no media.
+        assert_eq!(paper_named(Some("8.5x14in")).ok(), Some((PAPERS.len(), (612.0, 1008.0))));
+        assert!(job(json!({}), Some("8.5x14in")).options.is_empty());
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0, None, &[]).ok().map(|j| j.printer), Some(None));
         assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0, None, &[]).is_err());
     }
@@ -370,5 +404,14 @@ mod tests {
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
         assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
         assert!(!job(json!({}), None));
+    }
+
+    #[test]
+    fn a_paper_size_reads_its_numbers_and_needs_a_unit() {
+        assert_eq!(paper_size("8.5 x 14 in"), Some((612.0, 1008.0)));
+        assert_eq!(paper_size("1e3x1e3pt"), Some((1000.0, 1000.0)));
+        for spec in ["0x0mm", "-5x10cm", "5x-10cm", "10x15"] {
+            assert_eq!(paper_size(spec), None, "{spec}");
+        }
     }
 }

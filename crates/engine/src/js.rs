@@ -42,7 +42,7 @@ fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], req
         }
         references = references.saturating_add(match &field.actions.calculate {
             Calculate::Simple { fields, .. } => fields.len(),
-            Calculate::Notation(source) => source.len(),
+            Calculate::Notation(source) | Calculate::Custom(source) => source.len(),
             Calculate::None => 0,
         });
         source_bytes = source_bytes.saturating_add(field.actions.scripts.calculate.as_ref().map_or(0, String::len));
@@ -152,13 +152,13 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel or open Save As, which is noted on the console
-    /// and dropped.
+    /// except a request to show a side panel, open Save As, or open or save an attached file,
+    /// which is noted on the console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, or open Save As.
+        // button's may show or hide a side panel, open Save As, or open or save an attached file.
         // The warnings go through `say` like any other console line, so they count against the
         // line and byte caps instead of growing the console past them.
         let mut notes = Vec::new();
@@ -166,6 +166,9 @@ impl JsOutput {
             match r {
                 Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
+                Request::OpenAttachment { name, .. } => {
+                    notes.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
+                }
                 r => self.requests.push(r.clone()),
             }
         }
@@ -878,6 +881,7 @@ impl Session {
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
+            && field.kind == crate::FormFieldKind::PushButton
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             // The click returns only the output of its own edit; output from opening or from earlier edits stays.

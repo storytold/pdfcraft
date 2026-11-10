@@ -93,6 +93,7 @@ impl PdfCraftApp {
                         self.save_view(i, crate::SaveTarget::As);
                     }
                 }
+                Request::OpenAttachment { name, open } => self.open_script_attachment(id, &name, open),
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -146,6 +147,23 @@ impl PdfCraftApp {
         if self.toast.is_none() {
             self.next_script_message();
         }
+    }
+
+    /// A form button's `exportDataObject`: the attached file `name` (its key in the document's
+    /// embedded files, else its file name), opened in a new tab when the script asks to open a
+    /// PDF, and otherwise offered to save. Other files aren't launched in other programs.
+    fn open_script_attachment(&mut self, id: DocId, name: &str, open: bool) {
+        let Some(doc) = self.session.get(id) else { return };
+        let keyed = |a: &pdfcraft_render::Attachment| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key } if key == name);
+        let index = doc.info.attachments.iter().position(keyed).or_else(|| doc.info.attachments.iter().position(|a| a.name == name));
+        let Some(i) = index else {
+            // The name is the form's own text: shortened, as file names are elsewhere.
+            let shown = crate::dialogs::shorten_middle(name, 80);
+            self.notify_fmt("The form asks for the attached file {name}, which this document doesn't have.", &[("name", &shown)]);
+            return;
+        };
+        // Whether it is a PDF is decided by its bytes, not its name (`attachment_action`).
+        self.attachment_action(id, i, open);
     }
 
     /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the

@@ -140,6 +140,36 @@ fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+/// The attached file `exportDataObject` names, and whether to open it: from an object
+/// (`{cName, nLaunch}`) or from the arguments (`cName, cDIPath, bAllowAuth, nLaunch`). `nLaunch`
+/// 1 and 2 open the file; 0 (the default) and any other value save it.
+pub(crate) fn data_object(args: &[JsValue], ctx: &mut Context) -> JsResult<(String, bool)> {
+    let first = arg(args, 0);
+    // Any object of named parameters is read by key, one without `cName` too, so a missing name
+    // is refused rather than read as the object's text.
+    let named = first.as_object().filter(|o| !o.is_array() && !o.is_callable());
+    let name = match &named {
+        Some(o) => text_line(&o.get(js_string!("cName"), ctx)?, ctx)?,
+        None => text_line(&first, ctx)?,
+    };
+    if name.is_empty() {
+        return Err(error("exportDataObject needs cName, the attached file's name"));
+    }
+    let launch = match &named {
+        Some(o) => o.get(js_string!("nLaunch"), ctx)?,
+        None => arg(args, 3),
+    };
+    let launch = if launch.is_undefined() || launch.is_null() { 0.0 } else { launch.to_number(ctx)? };
+    Ok((name, launch == 1.0 || launch == 2.0))
+}
+
+/// `this.exportDataObject(…)`: asks the viewer to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    host(ctx)?.borrow_mut().request(Request::OpenAttachment { name, open });
+    Ok(JsValue::undefined())
+}
+
 /// What `app.execMenuItem(name)` asks for, for the menu items forms use: the side panels, Print
 /// and Save As. Other items do nothing.
 pub(crate) fn menu_item(name: &str) -> Option<Request> {
@@ -415,7 +445,7 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 11] = [
+    let globals: [(&str, usize, NativeFunction); 12] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -427,6 +457,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;

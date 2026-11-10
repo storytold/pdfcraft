@@ -288,13 +288,56 @@ fn imposing_lists_the_pages_once() {
 #[test]
 fn booklets_pair_pages_for_folding() {
     let sizes = vec![(200.0, 300.0); 6];
-    let sheets = layout(&sizes, &settings((0..6).collect(), Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left })).unwrap();
+    let sheets =
+        layout(&sizes, &settings((0..6).collect(), Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep: 0.0 }))
+            .unwrap();
     // 6 pages pad to 8: sheet 1 front [8,1] → [blank, 0], back [1, 6]; sheet 2 front [5, 2], back [3, 4].
     assert_eq!(sheet_pages(&sheets), [vec![0], vec![1], vec![5, 2], vec![3, 4]]);
     assert!(sheets[0].placed[0].matrix.0[4] >= 395.9, "page 1 on the right half");
     assert_eq!(sheets[0].size, (792.0, 612.0));
-    let front = layout(&sizes, &settings((0..6).collect(), Layout::Booklet { subset: BookletSubset::FrontOnly, binding: Binding::Right })).unwrap();
+    let front =
+        layout(&sizes, &settings((0..6).collect(), Layout::Booklet { subset: BookletSubset::FrontOnly, binding: Binding::Right, creep: 0.0 }))
+            .unwrap();
     assert_eq!(sheet_pages(&front), [vec![0], vec![2, 5]], "right binding mirrors the spread");
+}
+
+/// #6777: creep moves each sheet's pages toward the fold by its place from the outside, and clips
+/// them at the fold, for either binding.
+#[test]
+fn booklet_creep_moves_inner_sheets_toward_the_fold() {
+    let sizes = vec![(200.0, 300.0); 8];
+    let booklet =
+        |binding, creep| layout(&sizes, &settings((0..8).collect(), Layout::Booklet { subset: BookletSubset::BothSides, binding, creep })).unwrap();
+    for binding in [Binding::Left, Binding::Right] {
+        let (flat, crept) = (booklet(binding, 0.0), booklet(binding, 2.0));
+        assert_eq!(sheet_pages(&flat), sheet_pages(&crept));
+        let fold = 792.0 / 2.0;
+        for (side, (a, b)) in flat.iter().zip(&crept).enumerate() {
+            let shift = if side < 2 { 0.0 } else { 2.0 };
+            let (left, right) = ((&a.placed[0], &b.placed[0]), (&a.placed[1], &b.placed[1]));
+            assert!((left.1.matrix.0[4] - left.0.matrix.0[4] - shift).abs() < 1e-9, "{binding:?} side {side}: the left page moves right");
+            assert!((right.1.matrix.0[4] - right.0.matrix.0[4] + shift).abs() < 1e-9, "{binding:?} side {side}: the right page moves left");
+            let s = left.1.matrix.0[0];
+            assert!(left.1.matrix.0[4] + left.1.clip[2] * s <= fold + 1e-9, "{binding:?} side {side}: the left page stops at the fold");
+            assert!(right.1.matrix.0[4] + right.1.clip[0] * s >= fold - 1e-9, "{binding:?} side {side}: the right page starts at the fold");
+        }
+    }
+}
+
+#[test]
+fn booklet_creep_is_refused_when_it_is_not_a_small_positive_amount() {
+    let sizes = vec![(200.0, 300.0); 8];
+    let booklet = |sizes: &[(f64, f64)], creep| {
+        layout(sizes, &settings((0..sizes.len()).collect(), Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep }))
+    };
+    for creep in [f64::NAN, f64::INFINITY, -1.0, MAX_CREEP + 0.1] {
+        assert!(matches!(booklet(&sizes, creep), Err(PrintError::Invalid(_))), "{creep}");
+    }
+    assert!(booklet(&sizes, MAX_CREEP).is_ok());
+    // 400 pages fold into 100 sheets: 5 pt each would move the innermost past half its cell.
+    let thick = vec![(200.0, 300.0); 400];
+    assert!(booklet(&thick, 1.0).is_ok());
+    assert!(matches!(booklet(&thick, 5.0), Err(PrintError::Invalid(_))), "the innermost sheet moves too far");
 }
 
 #[test]
@@ -709,9 +752,11 @@ fn landscape_sheets_ask_cups_to_turn_the_page() {
     // A landscape Size sheet, and a booklet (always landscape sheets), are both turned.
     let page = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
     assert_eq!(cups_orientation(&page), ask);
-    let booklet =
-        layout(&[(200.0, 300.0); 4], &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }))
-            .unwrap();
+    let booklet = layout(
+        &[(200.0, 300.0); 4],
+        &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep: 0.0 }),
+    )
+    .unwrap();
     assert_eq!(cups_orientation(&booklet), ask);
     // Portrait sheets, mixed jobs and nothing at all say nothing.
     let portrait = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
@@ -1240,6 +1285,58 @@ fn imposed_pages_preserve_large_user_unit_matrices() {
     }
 }
 
+#[test]
+fn a_selected_area_prints_alone_fitted_or_at_actual_size() {
+    // Page 1 is 200×300; the area is its 100×50 block whose corner is at (40, 200).
+    let area = [40.0, 200.0, 140.0, 250.0];
+    let fit = layout(&[(200.0, 300.0), (200.0, 300.0)], &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Fit)) }).unwrap();
+    assert_eq!(fit.len(), 1);
+    let pl = fit[0].placed[0];
+    assert_eq!(pl.clip, area, "clipped to the area");
+    // A landscape area on Auto takes a landscape sheet and fills its width inside the margin.
+    assert_eq!(fit[0].size, (792.0, 612.0));
+    let s = pl.matrix.0[0];
+    assert!(close(s, (792.0 - 2.0 * MARGIN) / 100.0), "{s}");
+    // The area's own corner lands where a page of its size would: centred on the sheet.
+    let (x, y) = (pl.matrix.0[0] * area[0] + pl.matrix.0[4], pl.matrix.0[3] * area[1] + pl.matrix.0[5]);
+    assert!(close(x, (792.0 - 100.0 * s) / 2.0) && close(y, (612.0 - 50.0 * s) / 2.0), "{x} {y}");
+    let actual = layout(&[(200.0, 300.0)], &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Actual)) }).unwrap();
+    assert_eq!(actual[0].placed[0].matrix.0[0], 1.0, "100%");
+    // An area outside the page is cut to it; an empty one, several pages or another layout are refused.
+    let cut = layout(&[(200.0, 300.0)], &Settings { area: Some([150.0, 250.0, 400.0, 900.0]), ..settings(vec![0], Layout::Size(SizeMode::Actual)) })
+        .unwrap();
+    assert_eq!(cut[0].placed[0].clip, [150.0, 250.0, 200.0, 300.0]);
+    for (pages, area, layout_) in [
+        (vec![0], [10.0, 10.0, 10.5, 40.0], Layout::Size(SizeMode::Fit)),
+        (vec![0, 1], area, Layout::Size(SizeMode::Fit)),
+        (vec![0], [10.0, 10.0, 10.0, 40.0], Layout::Size(SizeMode::Fit)),
+        (vec![0], [250.0, 10.0, 400.0, 40.0], Layout::Size(SizeMode::Fit)),
+        (vec![0], [f64::NAN, 0.0, 50.0, 50.0], Layout::Size(SizeMode::Fit)),
+        (vec![0], [f64::NAN; 4], Layout::Size(SizeMode::Fit)),
+        (vec![0], [0.0, 0.0, f64::INFINITY, 50.0], Layout::Size(SizeMode::Fit)),
+        (
+            vec![0],
+            area,
+            Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: false },
+        ),
+        (vec![0], area, Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep: 0.0 }),
+        (vec![0], area, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true }),
+        (vec![0], area, Layout::Label { flip: false }),
+    ] {
+        assert!(matches!(
+            layout(&[(200.0, 300.0), (200.0, 300.0)], &Settings { area: Some(area), ..settings(pages, layout_) }),
+            Err(PrintError::Invalid(_))
+        ));
+    }
+    // A page the document doesn't have is refused before the area is looked at.
+    let missing = Settings { area: Some(area), ..settings(vec![5], Layout::Size(SizeMode::Fit)) };
+    assert!(matches!(layout(&[(200.0, 300.0)], &missing), Err(PrintError::NoPages)));
+    // The print-ready PDF has one sheet with only that area.
+    let bytes = impose(&fixture(1), &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Actual)) }).unwrap();
+    let out = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&out).len(), 1);
+}
+
 /// `output_within` (#1818): the bounded wait every platform's `lpoptions` call goes through.
 #[cfg(not(target_arch = "wasm32"))]
 mod bounded_commands {
@@ -1547,7 +1644,7 @@ fn missing_print_dlls_are_named() {
 #[cfg(windows)]
 #[test]
 fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
-    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printers, submit, submit_with_progress};
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printer_queues, printers, submit, submit_with_progress, two_sided};
     let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1564,6 +1661,8 @@ fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
     // Not only an empty list, which a machine without printers gives anyway: the backend wasn't asked.
     PRINTER_BACKEND_CALLS.with(|c| c.set(0));
     assert!(printers().is_empty(), "no printers are listed");
+    assert!(printer_queues().is_empty(), "no queues are listed");
+    assert_eq!(two_sided("PdfCraft test: no such printer"), None, "two-sided support is unknown");
     assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
     SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
     let _ = std::fs::remove_dir_all(&dir);
