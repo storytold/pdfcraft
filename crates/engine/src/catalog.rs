@@ -165,6 +165,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Single file", "file-input", "create.file", Ready),
                 item("Multiple files", "files", "create.multiple", Ready),
                 item("Separate PDFs", "files", "create.multiple_separate", Ready),
+                item("Scanner", "scan-line", "create.scanner", Ready),
                 item("Images", "image", "create.images", Ready),
                 item("Clipboard", "copy-plus", "create.clipboard", Ready),
                 item("Blank page", "file-plus-2", "create.blank", Ready),
@@ -263,6 +264,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         sections: &[ToolSection {
             title: "Recognize text",
             items: &[
+                item("From scanner", "scan-line", "ocr.scanner", Ready),
                 item("In this file", "scan-text", "ocr.recognize", Ready),
                 item("In multiple files", "files", "ocr.recognize_batch", Ready),
                 item("Enhance scanned file", "sparkles", "ocr.enhance", Ready),
