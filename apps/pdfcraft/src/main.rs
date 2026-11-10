@@ -15,7 +15,8 @@
 //!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //! `--combine files…` adds the files to the Combine files tab (File Explorer's "Combine files in
-//! PdfCraft", #585), of the PdfCraft already running when there is one (Windows and Linux; macOS has
+//! PdfCraft", #585; its files arrive one process per file, so their order is not guaranteed there,
+//! unlike `--combine a b c`, which lists them as given), of the PdfCraft already running when there is one (Windows and Linux; macOS has
 //! no single-instance socket, so there a second `--combine` opens a window of its own).
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files

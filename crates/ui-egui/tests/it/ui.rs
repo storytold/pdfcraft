@@ -1249,7 +1249,8 @@ fn a_pdf_dropped_on_a_document_opens_while_the_combine_tab_waits_behind_it() {
 #[test]
 fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order() {
     // #585: "Combine files" on PDFs and pictures selected together opens Combine files with them
-    // listed in the order they arrive; pictures become PDFs as they join (#569). Nothing is opened
+    // listed in the order they arrive (one `--combine a b c` keeps the order given; Explorer's
+    // one-process-per-file selection reaches the first instance in no defined order); pictures become PDFs as they join (#569). Nothing is opened
     // or combined until Combine is pressed.
     use pdfcraft_ui_egui::OsEvent;
     let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-{}", std::process::id()));
@@ -1268,7 +1269,7 @@ fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order
     let names = |h: &Harness<'_, PdfCraftApp>| h.state().combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
     assert!(h.state().combine_showing(), "the Combine files tab shows");
     h.run_steps(6);
-    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf"], "in the order given; the file that can't be read is left out");
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf"], "in the order the request lists them; the file that can't be read is left out");
     assert!(h.state().combine_draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "all PDFs, none with a problem");
     h.get_by_label_contains("missing.pdf");
     assert!(h.state().views.is_empty(), "nothing is opened or combined");
