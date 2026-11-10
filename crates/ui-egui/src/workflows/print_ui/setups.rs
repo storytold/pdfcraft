@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     fn setup(paper: usize, size: SizeMode, duplex: Option<Duplex>) -> PrinterSetup {
-        PrinterSetup { paper: super::super::PAPERS[paper].0.to_string(), size, custom_scale: 62.5, duplex }
+        PrinterSetup { paper: pdfcraft_engine::print::PAPERS[paper].0.to_string(), size, custom_scale: 62.5, duplex }
     }
 
     #[test]

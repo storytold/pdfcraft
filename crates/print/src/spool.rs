@@ -53,6 +53,19 @@ fn unavailable(dll: &str) -> crate::PrintError {
     crate::PrintError::Spool(format!("printing needs {dll}, which this Windows installation lacks; use Save as PDF instead"))
 }
 
+/// Keeps two threads of this process out of the Windows PrintTicket provider (`PTOpenProvider`
+/// and the calls on its handle) at the same time. When two threads make the process's first calls
+/// together, winspool can keep a pointer to a device capabilities cache it has freed, and a later
+/// call crashes the process. All entry points in this process that query driver capabilities
+/// or submit jobs share this process-wide lock.
+#[cfg(windows)]
+static PRINT_TICKET_PROVIDER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(windows)]
+pub(crate) fn print_ticket_provider() -> std::sync::MutexGuard<'static, ()> {
+    PRINT_TICKET_PROVIDER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The system's printers; none on a Windows installation without the print DLLs.
 pub fn printers() -> Vec<Printer> {
     if missing_print_dll().is_some() {
@@ -60,6 +73,8 @@ pub fn printers() -> Vec<Printer> {
     }
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     craft_print::printers()
 }
 
@@ -83,6 +98,8 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     }
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     craft_print::two_sided(printer)
 }
 
@@ -386,10 +403,13 @@ fn spooled(job: &Job) -> Job {
     }
 }
 
+/// Submit a PDF to the system print spooler for the configured `job`.
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
     if let Some(dll) = missing_print_dll() {
         return Err(unavailable(dll));
     }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     #[cfg(windows)]
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
@@ -404,6 +424,8 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     if let Some(dll) = missing_print_dll() {
         return Err(unavailable(dll));
     }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
     #[cfg(windows)]
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
@@ -426,8 +448,132 @@ pub(crate) fn spooled_pdf(pdf: &[u8], rename: bool) -> std::borrow::Cow<'_, [u8]
     }
 }
 
+/// Opens the printer driver's native Printing Preferences window (Windows `printui.dll`).
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// A named paper with dimensions in points `(width, height)`.
+pub type Paper = (String, (f64, f64));
+
+/// The paper sizes supported by `printer` as reported by the system / printer driver.
+/// Empty when the printer reports none or on platforms where driver capabilities are not queried.
+#[cfg(windows)]
+pub fn printer_papers(printer: &str) -> Vec<Paper> {
+    // A call into a missing delay-loaded PrintTicket DLL would terminate the process (#2630).
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    let _provider = print_ticket_provider();
+    printer_papers_internal(printer)
+}
+
+#[cfg(windows)]
+fn printer_papers_internal(printer: &str) -> Vec<Paper> {
+    #[cfg(test)]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    use winprint::ticket::{FeatureOptionPack as _, FeatureOptionPackWithPredefined as _};
+    let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
+    let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
+    let Ok(capabilities) = winprint::ticket::PrintCapabilities::fetch(&device) else { return Vec::new() };
+    let mut papers = Vec::new();
+    for media in capabilities.page_media_sizes() {
+        let size = media.size();
+        let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
+        let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
+        if w_pts.is_finite() && h_pts.is_finite() && w_pts >= 72.0 && h_pts >= 72.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
+            let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
+                if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
+            });
+            let w_pts = (w_pts * 100.0).round() / 100.0;
+            let h_pts = (h_pts * 100.0).round() / 100.0;
+            if !papers.iter().any(|(n, (w, h)): &(String, (f64, f64))| n == &name && (*w - w_pts).abs() < 0.1 && (*h - h_pts).abs() < 0.1) {
+                papers.push((name, (w_pts, h_pts)));
+            }
+        }
+    }
+    papers
+}
+
+/// The paper sizes supported by `printer` (fallback for non-Windows platforms).
+#[cfg(not(windows))]
+pub fn printer_papers(_printer: &str) -> Vec<Paper> {
+    Vec::new()
+}
+
+/// Match `paper_pts` against detected driver `papers` within a 1.0 pt tolerance.
+#[cfg(windows)]
+fn resolve_paper_name(papers: &[Paper], paper_pts: (f64, f64)) -> Paper {
+    let w_pts = (paper_pts.0 * 100.0).round() / 100.0;
+    let h_pts = (paper_pts.1 * 100.0).round() / 100.0;
+    let name = papers
+        .iter()
+        .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
+        .map(|(n, _)| n.clone())
+        .or_else(|| crate::matching_paper(paper_pts).and_then(|idx| crate::PAPERS.get(idx).map(|(n, _)| n.to_string())))
+        .unwrap_or_default();
+    (name, (w_pts, h_pts))
+}
+
+/// The default paper size configured for `printer` in the printer properties / DEVMODE.
+/// Returns `Some((name, (width, height)))` if readable.
+pub fn printer_default_paper(printer: &str) -> Option<Paper> {
+    printer_paper_info(printer).1
+}
+
+/// Reads the supported paper sizes and the default paper size configured for `printer`.
+pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
+    if missing_print_dll().is_some() {
+        return (Vec::new(), None);
+    }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    #[cfg(windows)]
+    let papers = printer_papers_internal(printer);
+    #[cfg(not(windows))]
+    let papers = printer_papers(printer);
+    #[cfg(windows)]
+    let default_paper = {
+        let settings = craft_print::rgb::default_settings(printer).ok();
+        let page = settings.as_ref().and_then(|s| craft_print::rgb::page(printer, Some(s)).ok());
+        page.map(|p| resolve_paper_name(&papers, p.paper))
+    };
+    #[cfg(not(windows))]
+    let default_paper = {
+        let _ = &papers;
+        None
+    };
+    (papers, default_paper)
+}
+
+/// Shows the printer driver's Page Setup / DocumentProperties dialog (Windows).
+///
+/// Returns the paper size and orientation selected by the user. Other per-job driver
+/// settings (such as tray or quality) are not captured; general driver settings should
+/// be configured through [`open_printer_preferences`] (Properties…).
+pub fn show_printer_properties(printer: &str, parent: Option<isize>) -> Result<Option<Paper>, crate::PrintError> {
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
+    #[cfg(windows)]
+    {
+        let devmode = match craft_print::rgb::settings_dialog(printer, None, parent) {
+            Ok(Some(dm)) => dm,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                open_printer_preferences(printer)?;
+                return Ok(None);
+            }
+        };
+        let page = craft_print::rgb::page(printer, Some(&devmode)).map_err(|e| crate::PrintError::Spool(e.to_string()))?;
+        let papers = printer_papers(printer);
+        Ok(Some(resolve_paper_name(&papers, page.paper)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (printer, parent);
+        Ok(None)
+    }
 }
 
 /// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
