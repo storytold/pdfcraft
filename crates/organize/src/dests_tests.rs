@@ -497,10 +497,12 @@ fn name_tree_nodes_sharing_one_kids_array_queue_it_once() {
 
 #[test]
 fn pages_sharing_one_annots_array_list_its_links_once() {
-    // 500 pages share one /Annots array (3) of 500 links (4 on) naming `ch`. Listed for every
-    // page, the links would be gathered 250,000 times for a rename.
+    // 500 pages share one /Annots array (3) of 500 links (4 on) naming `ch`: the even pages by
+    // `3 0 R`, the odd ones each by an object that is only `3 0 R` (after the pages). Listed for
+    // every page, the links would be gathered 250,000 times for a rename.
     let n = 500;
     let first_page = 4 + n;
+    let alias = |i: usize| if i.is_multiple_of(2) { 3 } else { first_page + n + i / 2 };
     let links: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
     let pages: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + first_page)).collect();
     let mut b: Vec<String> = vec![
@@ -509,7 +511,8 @@ fn pages_sharing_one_annots_array_list_its_links_once() {
         format!("[{}]", links.join(" ")),
     ];
     b.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest (ch) >>".to_string()));
-    b.extend((0..n).map(|_| "<< /Type /Page /Parent 2 0 R /Annots 3 0 R >>".to_string()));
+    b.extend((0..n).map(|i| format!("<< /Type /Page /Parent 2 0 R /Annots {} 0 R >>", alias(i))));
+    b.extend((0..n / 2).map(|_| "3 0 R".to_string()));
     let mut doc = open(build(&b, "/Root 1 0 R"));
     crate::take_work();
     rename_named_destination(&mut doc, "ch", "new").unwrap();
@@ -518,4 +521,52 @@ fn pages_sharing_one_annots_array_list_its_links_once() {
     let dests: Vec<Option<Object>> =
         (0..n).map(|i| doc.get(ObjRef::new((i + 4) as u32, 0)).as_dict().and_then(|d| d.get(b"Dest").cloned())).collect();
     assert!(dests.iter().all(|d| *d == Some(string("new"))), "{:?}", dests.iter().find(|d| **d != Some(string("new"))));
+}
+
+#[test]
+fn references_to_references_reach_a_shared_array_or_node_once() {
+    // `Document::resolve` follows an object that is only a reference, so 2,000 such aliases
+    // (6 on) lead to one object (5): the shared `/Names` array of 2,000 nodes, the shared
+    // `/Kids` array of the root and 2,000 nodes, or one leaf listed 2,000 times. Each is read
+    // once; read once per alias, they would take about 2,000 times the steps.
+    let n = 2_000;
+    let aliases = || (0..n).map(|_| "5 0 R".to_string());
+    let refs = |from: usize| (0..n).map(|i| format!("{} 0 R", from + i)).collect::<Vec<_>>().join(" ");
+    let names = |i: usize| format!("(k{i:02}) [3 0 R /Fit]");
+    let ten: String = (0..10).map(names).collect::<Vec<_>>().join(" ");
+    let mut shared_names = vec![format!("<< /Kids [{}] >>", refs(6 + n)), format!("[{ten}]")];
+    shared_names.extend(aliases());
+    shared_names.extend((0..n).map(|i| format!("<< /Names {} 0 R >>", 6 + i)));
+    // The leaf is the last object, after the nodes.
+    let mut shared_kids = vec!["<< /Kids 5 0 R >>".to_string(), format!("[{} 0 R {}]", 6 + 2 * n, refs(6 + n))];
+    shared_kids.extend(aliases());
+    shared_kids.extend((0..n).map(|i| format!("<< /Kids {} 0 R >>", 6 + i)));
+    shared_kids.push(format!("<< /Names [{ten}] >>"));
+    let mut shared_leaf = vec![format!("<< /Kids [{}] >>", refs(6)), format!("<< /Names [{ten}] >>")];
+    shared_leaf.extend(aliases());
+    for (case, rest) in [("names", shared_names), ("kids", shared_kids), ("leaf", shared_leaf)] {
+        let mut doc = shared_tree("4 0 R", rest);
+        crate::take_work();
+        let listed = list(&doc);
+        let work = crate::take_work();
+        assert!(work <= 2 * n + 30, "{case}: {work} steps");
+        add_named_destination(&mut doc, "new", 0, None, None).unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(tree_pairs(&doc).len(), listed.len() + 1, "{case}: every entry written back once");
+    }
+}
+
+#[test]
+fn a_tree_with_more_kids_or_entries_than_are_read_is_listed_but_not_rewritten() {
+    // One node with a kid past the kids read, and one with an entry past the entries read.
+    let leaf = || "<< /Names [(a) [3 0 R /Fit]] >>".to_string();
+    let mut many_kids = shared_tree("<< /Kids 4 0 R >>", vec!["null".into(), leaf()]);
+    many_kids.set(ObjRef::new(4, 0), Object::Array(vec![Object::Ref(ObjRef::new(5, 0)); crate::dests::TREE_KIDS + 1]));
+    let mut many_entries = shared_tree("<< /Names 4 0 R >>", vec!["null".into()]);
+    let pair = [Object::Name(b"e".to_vec()), Object::Null];
+    many_entries.set(ObjRef::new(4, 0), Object::Array(pair.iter().cycle().take(2 * (crate::dests::TREE_ENTRIES + 1)).cloned().collect()));
+    for (case, mut doc) in [("kids", many_kids), ("entries", many_entries)] {
+        assert_eq!(list(&doc).len(), 1, "{case}: what was read is listed");
+        let refused = add_named_destination(&mut doc, "new", 0, None, None).unwrap_err().to_string();
+        assert!(refused.contains("cannot be edited without losing some"), "{case}: {refused}");
+    }
 }

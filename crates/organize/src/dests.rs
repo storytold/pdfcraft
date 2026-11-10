@@ -27,6 +27,16 @@ const TREE_DEPTH: usize = 32;
 /// Most name-tree nodes read.
 const TREE_NODES: usize = 100_000;
 
+/// Most name-tree entries read, in all (AGENTS.md: cap allocations sized by the file).
+pub(crate) const TREE_ENTRIES: usize = 1 << 20;
+
+/// Most name-tree kids queued, in all.
+pub(crate) const TREE_KIDS: usize = 1 << 20;
+
+/// References followed from one reference to the object it stands for, as `Document::resolve`
+/// follows them.
+const REFERENCE_HOPS: usize = 32;
+
 /// Most actions followed along one action's `/Next` chain (ISO 32000-2 §12.6.2).
 const NEXT_DEPTH: usize = 64;
 
@@ -69,8 +79,9 @@ fn names_dict(doc: &Document) -> Option<Dict> {
 /// Every entry of the `/Names /Dests` tree, read iteratively: each indirect node once, at most
 /// [`TREE_NODES`] nodes, none deeper than [`TREE_DEPTH`]. Each indirect `/Names` and `/Kids`
 /// array is read once too, however many nodes share it: read for each, nodes sharing one would
-/// add its entries, or queue its kids, once per node. So the walk reads each entry and each kid
-/// the file holds at most once.
+/// add its entries, or queue its kids, once per node. Nodes and arrays are told apart by the
+/// object they stand for (see [`first_read`]), so references to references reach each only
+/// once. Past [`TREE_ENTRIES`] entries or [`TREE_KIDS`] kids the tree is not read whole.
 fn tree_entries(doc: &Document) -> TreeEntries {
     let mut out = TreeEntries { entries: Vec::new(), complete: true };
     let Some(tree) = names_dict(doc).and_then(|n| n.get(b"Dests").cloned()) else { return out };
@@ -79,26 +90,29 @@ fn tree_entries(doc: &Document) -> TreeEntries {
     let mut names_read: HashSet<ObjRef> = HashSet::new();
     let mut kids_read: HashSet<ObjRef> = HashSet::new();
     let mut read = 0usize;
+    let mut queued = 0usize;
     while let Some((raw, depth)) = stack.pop() {
         if depth > TREE_DEPTH || read >= TREE_NODES {
             out.complete = false;
             continue;
         }
         // A node listed twice, or a cycle, is read once.
-        if let Object::Ref(r) = raw
-            && !seen.insert(r)
-        {
+        if !first_read(doc, &mut seen, &raw) {
             continue;
         }
         read += 1;
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(pairs) = d.get(b"Names").filter(|n| first_read(&mut names_read, n)).map(|n| doc.resolve(n))
+        if let Some(pairs) = d.get(b"Names").filter(|n| first_read(doc, &mut names_read, n)).map(|n| doc.resolve(n))
             && let Some(pairs) = pairs.as_array()
         {
             #[cfg(test)]
             crate::work(pairs.len());
             for pair in pairs.chunks(2) {
+                if out.entries.len() >= TREE_ENTRIES {
+                    out.complete = false;
+                    break;
+                }
                 if let [k, v] = pair {
                     let key = doc.resolve(k);
                     let bytes = match &*key {
@@ -110,25 +124,42 @@ fn tree_entries(doc: &Document) -> TreeEntries {
                 }
             }
         }
-        if let Some(kids) = d.get(b"Kids").filter(|k| first_read(&mut kids_read, k)).map(|k| doc.resolve(k))
+        if let Some(kids) = d.get(b"Kids").filter(|k| first_read(doc, &mut kids_read, k)).map(|k| doc.resolve(k))
             && let Some(kids) = kids.as_array()
         {
             #[cfg(test)]
             crate::work(kids.len());
+            let room = TREE_KIDS.saturating_sub(queued);
+            if kids.len() > room {
+                out.complete = false;
+            }
+            queued = queued.saturating_add(kids.len().min(room));
             // Pushed in reverse, so they are read in order.
-            stack.extend(kids.iter().rev().map(|kid| (kid.clone(), depth + 1)));
+            stack.extend(kids.iter().take(room).rev().map(|kid| (kid.clone(), depth + 1)));
         }
     }
     out
 }
 
-/// Whether `o` is read now: a direct object always, a reference only the first time (it is
-/// added to `read`).
-fn first_read(read: &mut HashSet<ObjRef>, o: &Object) -> bool {
-    match o {
-        Object::Ref(r) => read.insert(*r),
-        _ => true,
+/// Whether `o` is read now: a direct object always, a reference only the first time the object
+/// it stands for is met (that object's reference is added to `read`).
+fn first_read(doc: &Document, read: &mut HashSet<ObjRef>, o: &Object) -> bool {
+    held_by(doc, o).is_none_or(|r| read.insert(r))
+}
+
+/// The reference that holds the object `o` stands for: `o` itself, or, when `o` refers to an
+/// object that is only a reference, where that leads, as `Document::resolve` follows it. `None`
+/// for a direct object.
+fn held_by(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let Object::Ref(r) = o else { return None };
+    let mut r = *r;
+    for _ in 0..REFERENCE_HOPS {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
     }
+    Some(r)
 }
 
 /// The catalog's PDF 1.1 `/Dests` dictionary, if it has one.
@@ -211,7 +242,7 @@ fn editable_entries(doc: &Document) -> Result<TreeEntries, OrganizeError> {
     let entries = tree_entries(doc);
     if !entries.complete {
         return Err(OrganizeError::Invalid(format!(
-            "the document's named destinations are nested more than {TREE_DEPTH} levels deep or spread over more than {TREE_NODES} parts, so they cannot be edited without losing some"
+            "the document's named destinations are nested more than {TREE_DEPTH} levels deep, spread over more than {TREE_NODES} parts or more than {TREE_KIDS} kids, or more than {TREE_ENTRIES} entries long, so they cannot be edited without losing some"
         )));
     }
     Ok(entries)
@@ -474,7 +505,7 @@ fn rewrite_references(doc: &mut Document, keys: &HashSet<Vec<u8>>, replace: &dyn
     for (page, _) in walk(doc)? {
         holders.push(page);
         let annots =
-            doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).filter(|a| first_read(&mut annots_read, a)).map(|a| doc.resolve(&a));
+            doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).filter(|a| first_read(doc, &mut annots_read, a)).map(|a| doc.resolve(&a));
         if let Some(annots) = annots.as_deref().and_then(Object::as_array) {
             #[cfg(test)]
             crate::work(annots.len());
