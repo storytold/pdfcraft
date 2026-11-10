@@ -12283,6 +12283,33 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
     }
 }
 
+/// A supported letter plus selectors must not become an empty fallback request. The implicit
+/// fallback and the explicitly chosen family agree on layout, including character spacing,
+/// for selectors in the supported U+FE00..U+FE0F range.
+#[test]
+fn variation_source_letters_and_selectors_survive_paragraph_save() {
+    for font in ["F1", "F2"] {
+        for replacement in ["a\u{FE0F}", "ab\u{FE00}", "a\u{FE0F}b\u{FE00}"] {
+            let mut doc = text_page(&format!("BT /{font} 12 Tf 72 700 Td (ab) Tj ET"));
+            let fonts = page_fonts(&doc, &pdfcraft_model::pages(&doc)[0]);
+            let original_font = doc.resolve(fonts.get(font.as_bytes()).unwrap()).as_dict().unwrap().clone();
+            let mut explicit = doc.clone();
+            let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(2.0), ..Default::default() };
+            text::rewrite_block(&mut doc, 0, 0, Some(replacement), &style).unwrap();
+            let explicit_style = text::BlockStyle { family: Some((added::Family::Helvetica, false, false)), ..style };
+            text::rewrite_block(&mut explicit, 0, 0, Some(replacement), &explicit_style).unwrap();
+            let doc = reopen(&doc);
+            let lines = text::text_lines(&doc, 0).unwrap();
+            let expected = text::text_lines(&reopen(&explicit), 0).unwrap();
+            assert_eq!(lines.len(), 1, "{font}: {replacement:?}");
+            assert_eq!(lines[0].text, replacement, "{font}");
+            assert!(close(lines[0].rect, expected[0].rect), "{font}: {:?} != {:?}", lines[0].rect, expected[0].rect);
+            let fonts = page_fonts(&doc, &pdfcraft_model::pages(&doc)[0]);
+            assert_eq!(doc.resolve(fonts.get(font.as_bytes()).unwrap()).as_dict(), Some(&original_font), "the source font is unchanged");
+        }
+    }
+}
+
 #[test]
 fn variation_public_line_and_block_edits_preserve_selectors_after_reopen() {
     let replacement = "1\u{FE0F}";
