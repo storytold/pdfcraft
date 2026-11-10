@@ -383,7 +383,18 @@ fn redaction_body(
             .auto_shrink([false, scroll_all])
             .min_scrolled_height(0.0)
             .max_height(list_h)
-            .show(ui, content);
+            .show(ui, |ui| {
+                let focused = content(ui);
+                // A separate list must receive its target before it closes. Short panes instead
+                // send the target below, after the disabled inner area can no longer consume it.
+                if !scroll_all
+                    && let Some(response) = &focused
+                    && response.gained_focus()
+                {
+                    response.scroll_to_me(None);
+                }
+                focused
+            });
         // The disabled inner area consumes scroll targets even on disabled axes. Content
         // identifies its own row: a viewport excludes offscreen responses, while global focus
         // may belong to a footer, another pane or a popup on another layer.
@@ -733,7 +744,7 @@ lines",
     }
     /// Real Tab/Shift+Tab navigation reveals a clipped tool row and does not fight later wheel input.
     #[test]
-    fn review_nov9_clipped_row_revealed_without_viewport_membership() {
+    fn clipped_redaction_rows_reveal_focus_in_short_panes() {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions());
         let mut observed = Vec::new();
@@ -817,5 +828,79 @@ lines",
             observed[135]
         );
         assert!(observed[155].3 && observed[155].0.contains_rect(observed[155].2), "Tab returns visibly to Apply");
+    }
+    /// Normal-height panes reveal clipped tool rows inside their separate scrolling list.
+    #[test]
+    fn separate_redaction_list_reveals_keyboard_focus() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..160 {
+            let events = if (1..40).contains(&frame) && frame % 2 == 1 || frame == 140 || frame == 145 {
+                tab(false)
+            } else if frame == 120 {
+                tab(true)
+            } else if frame == 80 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, 500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 416.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 400.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let footer = super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply", "Clear"] };
+                    assert!(ui.available_height() >= footer.height(ui) + 80.0, "must use a separate scrolling list");
+                    let mut row = None;
+                    let buttons = super::redaction_body(ui, footer, |ui| {
+                        let clip = ui.clip_rect().intersect(bounds);
+                        let mut focused = None;
+                        for i in 0..20 {
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(180.0, 34.0), egui::Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Tool {i}")));
+                            // Match production: report the actual row; no test-only scroll request.
+                            if resp.gained_focus() {
+                                focused = Some(resp.clone());
+                            }
+                            if i == if (120..140).contains(&frame) { 18 } else { 19 } {
+                                row = Some((rect, resp.has_focus(), clip));
+                            }
+                        }
+                        focused
+                    });
+                    observed.push((row.unwrap(), buttons[0].rect, buttons[0].has_focus()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for i in [39, 50, 110, 135, 155] {
+            println!("normal frame {i}: {:?}", observed[i]);
+        }
+        let (row, focused, clip) = observed[39].0;
+        assert!(focused && !clip.contains_rect(row), "target must genuinely gain focus while clipped");
+        let (row, focused, clip) = observed[50].0;
+        assert!(focused && clip.contains_rect(row), "focused row must be revealed: {:?}", observed[50]);
+        assert_eq!(observed[0].1, observed[50].1, "footer must stay fixed");
+        let (row, focused, clip) = observed[110].0;
+        assert!(focused && row.top() > clip.bottom(), "wheel must stay away while focus is retained");
+        let (row, focused, clip) = observed[135].0;
+        assert!(focused && clip.contains_rect(row), "Shift+Tab must reveal the previous row");
+        assert!(observed[155].2, "Tab must still reach Apply");
     }
 }
