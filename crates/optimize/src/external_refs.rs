@@ -462,11 +462,9 @@ mod tests {
     use super::discard;
 
     #[test]
-    fn discard_resolves_chained_indirect_references_for_bookmarks_and_page_annots() {
+    fn discard_resolves_chained_indirect_references_for_bookmarks_and_page_annots() -> Result<(), Box<dyn std::error::Error>> {
         let mut doc = Document::new_empty();
-        let Some(root_ref) = doc.root() else {
-            return;
-        };
+        let root_ref = doc.root().ok_or("empty document has no Root")?;
 
         let mut ext_action = Dict::new();
         ext_action.set(b"S".to_vec(), Object::name("GoToR"));
@@ -505,13 +503,12 @@ mod tests {
         let real_catalog = doc.add(Object::Dict(catalog));
         doc.set(root_ref, Object::Ref(real_catalog));
 
-        let Ok((links, bookmarks)) = discard(&mut doc, &[page_alias]) else {
-            return;
-        };
+        let (links, bookmarks) = discard(&mut doc, &[page_alias])?;
         assert_eq!((links, bookmarks), (1, 2));
         assert_eq!(doc.get(link_obj).as_dict().and_then(|d| d.get(b"A")), None);
         assert_eq!(doc.get(page_obj).as_dict().and_then(|d| d.get(b"Annots")), Some(&Object::Array(Vec::new())));
         assert_eq!(doc.get(bm_first_obj).as_dict().and_then(|d| d.get(b"A")), None);
         assert_eq!(doc.get(bm_next_obj).as_dict().and_then(|d| d.get(b"A")), None);
+        Ok(())
     }
 }
