@@ -498,20 +498,21 @@ const MAX_LOOKS_BYTES: usize = 16 << 20;
 /// What the appearances an export has read say about their widgets' shapes, by appearance stream
 /// (thousands of check boxes share two), and how many more bytes it may read: past
 /// [`MAX_LOOKS_BYTES`] a widget's shape is the form reader's.
-struct Looks {
+struct Looks<'a> {
+    artwork: pdfcraft_edit::ArtworkReader<'a>,
     /// Per stream: drawn round or not, or `None` for one that draws nothing (or wasn't read).
     shapes: HashMap<ObjRef, Option<AppearanceLook>>,
     bytes: usize,
 }
 
-impl Looks {
-    fn new() -> Self {
-        Self::within(MAX_LOOKS_BYTES)
+impl<'a> Looks<'a> {
+    fn new(cos: &'a pdfcraft_cos::Document) -> Self {
+        Self::within(cos, MAX_LOOKS_BYTES)
     }
 
     /// Looks that read at most `bytes` bytes of appearances.
-    fn within(bytes: usize) -> Self {
-        Looks { shapes: HashMap::new(), bytes }
+    fn within(cos: &'a pdfcraft_cos::Document, bytes: usize) -> Self {
+        Looks { artwork: pdfcraft_edit::ArtworkReader::new(cos), shapes: HashMap::new(), bytes }
     }
 
     /// Whether appearance stream `r` draws a round shape, `None` when it draws nothing, can't be
@@ -535,7 +536,7 @@ impl Looks {
                     pdfcraft_cos::Object::Stream(stream) => stream.dict.get(b"Resources").and_then(|r| cos.dict(r)).unwrap_or_default(),
                     _ => pdfcraft_cos::Dict::new(),
                 };
-                let shapes = pdfcraft_edit::reading_shape_ops(cos, &pdfcraft_content::parse(&data).ops, &resources);
+                let shapes = self.artwork.reading_shape_ops(&pdfcraft_content::parse(&data).ops, &resources);
                 (!shapes.truncated).then(|| {
                     let mut look = appearance_look(&shapes.shapes);
                     let stream = cos.get(r);
@@ -794,7 +795,7 @@ impl crate::Document {
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
         // What widgets' appearances say about their shapes, read once per stream for the export.
-        let mut looks = Looks::new();
+        let mut looks = Looks::new(cos);
         // Form fields by page (0-based), read once: Word keeps them as content controls.
         let mut fields_by_page: HashMap<usize, Vec<(usize, &pdfcraft_forms::Field, &pdfcraft_forms::Widget)>> = HashMap::new();
         // The session refreshes this model on edit/undo/redo. Reading the form again would
@@ -923,7 +924,7 @@ impl crate::Document {
                 // A page whose paths can't be read at all (its content is past the decode budget)
                 // lost them as surely as one cut short.
                 let art_read = if art {
-                    pdfcraft_edit::reading_shapes(cos, i).unwrap_or_else(|_| pdfcraft_edit::ReadingShapes { truncated: true, ..Default::default() })
+                    looks.artwork.reading_shapes(i).unwrap_or_else(|_| pdfcraft_edit::ReadingShapes { truncated: true, ..Default::default() })
                 } else {
                     pdfcraft_edit::ReadingShapes::default()
                 };
@@ -933,7 +934,7 @@ impl crate::Document {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
-                let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
+                let background = looks.artwork.page_background(i).ok().flatten();
                 // Points on the visible page, y up (as the text and image boxes above).
                 let visible_point = |p: [f64; 2]| {
                     let v = info.user_to_view(p[0] as f32, p[1] as f32);

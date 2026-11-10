@@ -2,23 +2,52 @@
 //! View auto-state precedence (render/inspect/resources.rs, ISO 32000-2 §8.11.4).
 
 use pdfcraft_cos::{Document, ObjRef, Object};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::OnceLock,
+};
 
 fn read<T>(doc: &Document, object: &Object, f: impl FnOnce(&Object) -> T) -> T {
     if object.as_ref().is_some() { f(&doc.resolve(object)) } else { f(object) }
 }
 
-pub(crate) struct Visibility<'a> {
-    doc: &'a Document,
-    off: HashSet<ObjRef>,
-    cache: HashMap<ObjRef, bool>,
-    work: usize,
-    pub truncated: bool,
+/// Reads page artwork and widget appearances from one immutable document. The default
+/// optional-content configuration is resolved at most once; evaluation budgets and caches
+/// belong to each extraction. Borrowing the document prevents stale configuration after edits.
+pub struct ArtworkReader<'a> {
+    pub(crate) doc: &'a Document,
+    configuration: OnceLock<Configuration>,
 }
 
-impl<'a> Visibility<'a> {
+impl<'a> ArtworkReader<'a> {
     pub fn new(doc: &'a Document) -> Self {
-        let mut result = Self { doc, off: HashSet::new(), cache: HashMap::new(), work: 100_000, truncated: false };
+        Self { doc, configuration: OnceLock::new() }
+    }
+
+    pub(crate) fn visibility(&self) -> Visibility<'_> {
+        let configuration = self.configuration.get_or_init(|| Configuration::new(self.doc));
+        Visibility { doc: self.doc, configuration, cache: HashMap::new(), work: MAX_WORK, truncated: configuration.truncated }
+    }
+}
+
+const MAX_WORK: usize = 100_000;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CONFIGURATION_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct Configuration {
+    off: HashSet<ObjRef>,
+    work: usize,
+    truncated: bool,
+}
+
+impl Configuration {
+    fn new(doc: &Document) -> Self {
+        #[cfg(test)]
+        CONFIGURATION_BUILDS.set(CONFIGURATION_BUILDS.get() + 1);
+        let mut result = Self { off: HashSet::new(), work: MAX_WORK, truncated: false };
         let Some(root) = doc.root() else { return result };
         let cat = doc.get(root);
         if let Some(props) = cat.as_dict().and_then(|cat| cat.get(b"OCProperties")) {
@@ -27,15 +56,15 @@ impl<'a> Visibility<'a> {
                 let Some(config) = props.get(b"D") else { return };
                 read(doc, config, |config| {
                     let Some(config) = config.as_dict() else { return };
-                    let groups = result.references(props.get(b"OCGs"));
+                    let groups = result.references(doc, props.get(b"OCGs"));
                     let known: HashSet<_> = groups.iter().copied().collect();
                     if config.name(b"BaseState") == Some(b"OFF") {
                         result.off.extend(groups);
                     }
-                    for on in result.references(config.get(b"ON")) {
+                    for on in result.references(doc, config.get(b"ON")) {
                         result.off.remove(&on);
                     }
-                    let off = result.references(config.get(b"OFF"));
+                    let off = result.references(doc, config.get(b"OFF"));
                     result.off.extend(off);
                     let mut auto = HashMap::new();
                     if let Some(apps) = config.get(b"AS") {
@@ -56,7 +85,7 @@ impl<'a> Visibility<'a> {
                                         if !view {
                                             return;
                                         }
-                                        for group in result.references(app.get(b"OCGs")) {
+                                        for group in result.references(doc, app.get(b"OCGs")) {
                                             if !known.contains(&group) {
                                                 continue;
                                             }
@@ -103,12 +132,31 @@ impl<'a> Visibility<'a> {
         true
     }
 
-    fn references(&mut self, value: Option<&Object>) -> Vec<ObjRef> {
+    fn references(&mut self, doc: &Document, value: Option<&Object>) -> Vec<ObjRef> {
         let Some(value) = value else { return Vec::new() };
-        read(self.doc, value, |value| {
+        read(doc, value, |value| {
             let Some(values) = value.as_array() else { return Vec::new() };
             values.iter().take_while(|_| self.charge()).filter_map(Object::as_ref).collect()
         })
+    }
+}
+
+pub(crate) struct Visibility<'a> {
+    doc: &'a Document,
+    configuration: &'a Configuration,
+    cache: HashMap<ObjRef, bool>,
+    work: usize,
+    pub truncated: bool,
+}
+
+impl Visibility<'_> {
+    fn charge(&mut self) -> bool {
+        if self.work == 0 {
+            self.truncated = true;
+            return false;
+        }
+        self.work -= 1;
+        true
     }
 
     pub fn visible(&mut self, object: &Object) -> bool {
@@ -135,7 +183,7 @@ impl<'a> Visibility<'a> {
             return None;
         }
         read(self.doc, object, |value| match value {
-            Object::Dict(dict) if dict.name(b"Type") == Some(b"OCG") => Some(object.as_ref().is_none_or(|r| !self.off.contains(&r))),
+            Object::Dict(dict) if dict.name(b"Type") == Some(b"OCG") => Some(object.as_ref().is_none_or(|r| !self.configuration.off.contains(&r))),
             Object::Dict(dict) if dict.name(b"Type") == Some(b"OCMD") => {
                 if let Some(expression) = dict.get(b"VE") {
                     return self.evaluate(expression, depth + 1);

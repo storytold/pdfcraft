@@ -222,3 +222,45 @@ fn review_followup_hidden_page_fill_does_not_become_a_word_background() {
     assert_eq!(crate::page_background(&doc, 0).unwrap(), Some([0.0, 1.0, 0.0]));
     assert_eq!(reading_shapes(&doc, 0).unwrap().shapes.len(), 1);
 }
+
+#[test]
+fn artwork_reader_resolves_configuration_once_for_pages_and_empty_appearances() {
+    let doc = build(&[
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [{}] /D << /OFF [5 0 R] >> >> >>", "5 0 R ".repeat(20_000)),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Properties << /Hidden 5 0 R >> >> >>".into(),
+        stream("", "/OC /Hidden BDC 1 0 0 rg 0 0 200 200 re f EMC 0 1 0 rg 0 0 200 200 re f"),
+        "<< /Type /OCG >>".into(),
+    ]);
+    let before = visibility::CONFIGURATION_BUILDS.get();
+    let reader = crate::ArtworkReader::new(&doc);
+    for _ in 0..5000 {
+        let read = reader.reading_shape_ops(&[], &Dict::new());
+        assert!(!read.truncated);
+        assert!(read.shapes.is_empty());
+    }
+    for _ in 0..3 {
+        let shapes = reader.reading_shapes(0).unwrap();
+        assert!(!shapes.truncated);
+        assert_eq!(shapes.shapes.len(), 1);
+        assert_eq!(reader.page_background(0).unwrap(), Some([0.0, 1.0, 0.0]));
+    }
+    assert_eq!(visibility::CONFIGURATION_BUILDS.get() - before, 1, "empty appearances must not rescan the catalog's layer lists");
+}
+
+#[test]
+fn artwork_reader_keeps_evaluation_limits_and_caches_local() {
+    let doc = page("0 0 10 10 re S", "", &["<< /Type /OCG >>".into()]);
+    let reader = crate::ArtworkReader::new(&doc);
+    // Exhaust the evaluation budget of one appearance, without exhausting configuration work.
+    let members = "5 0 R ".repeat(100_000);
+    let exhausted = parse(format!("/OC << /Type /OCMD /OCGs [{members}] >> BDC 0 0 10 10 re S EMC").as_bytes());
+    let failed = reader.reading_shape_ops(&exhausted.ops, &Dict::new());
+    assert!(failed.truncated);
+    assert!(failed.shapes.is_empty());
+    let normal = parse(b"/OC << /Type /OCMD /OCGs [5 0 R] >> BDC 0 0 10 10 re S EMC");
+    let good = reader.reading_shape_ops(&normal.ops, &Dict::new());
+    assert!(!good.truncated);
+    assert_eq!(good.shapes.len(), 1);
+    assert!(!reader.reading_shapes(0).unwrap().truncated);
+}

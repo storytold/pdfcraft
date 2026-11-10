@@ -44,7 +44,20 @@ struct State {
 /// an opaque fill, in a gray, RGB or CMYK colour, of a path with a rectangle that covers the
 /// whole visible page (and no clip keeps it from doing so). `None` for a page that paints anything else
 /// first, or nothing. Forms and later content are not looked at.
+/// A shared [`crate::ArtworkReader`] avoids resolving layers again for each page.
 pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditError> {
+    crate::ArtworkReader::new(doc).page_background(page)
+}
+
+impl crate::ArtworkReader<'_> {
+    /// Read a page background using the shared configuration and fresh evaluation limits.
+    pub fn page_background(&self, page: usize) -> Result<Option<Rgb>, EditError> {
+        page_background_with(self, page)
+    }
+}
+
+fn page_background_with(reader: &crate::ArtworkReader<'_>, page: usize) -> Result<Option<Rgb>, EditError> {
+    let doc = reader.doc;
     let pages = pdfcraft_model::pages(doc);
     let p = pages.get(page).ok_or(EditError::NoSuchPage(page))?;
     let crop = p.crop(doc);
@@ -63,7 +76,7 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
     let mut rects: Vec<(Quad, bool)> = Vec::new();
     let mut curved = false;
     let mut clip_pending = false;
-    let mut visibility = crate::optional_content::Visibility::new(doc);
+    let mut visibility = reader.visibility();
     let mut marked = crate::optional_content::Marked::default();
     let properties = resources.get(b"Properties").and_then(|p| doc.dict(p)).unwrap_or_default();
     for op in &ops {

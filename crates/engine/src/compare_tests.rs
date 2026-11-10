@@ -44,7 +44,7 @@ fn widget_shapes_are_read_once_per_stream_within_the_exports_budget() {
     let widgets: Vec<&pdfcraft_forms::Widget> = fields.iter().flat_map(|f| &f.widgets).collect();
     assert_eq!(widgets.len(), 2);
 
-    let mut looks = Looks::new();
+    let mut looks = Looks::new(&doc);
     for w in &widgets {
         assert!(widget_round(&doc, w, &mut looks), "drawn round");
         assert!(widget_look(&doc, w).0.is_some(), "round widgets retain their border");
@@ -52,7 +52,7 @@ fn widget_shapes_are_read_once_per_stream_within_the_exports_budget() {
     assert_eq!(looks.shapes.len(), 1, "one stream, read once");
     assert_eq!(looks.bytes, MAX_LOOKS_BYTES - data.len());
 
-    let mut spent = Looks::within(0);
+    let mut spent = Looks::within(&doc, 0);
     let square = Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false });
     assert!(!widget_round(&doc, widgets[0], &mut spent), "the reader's shape: a square check box");
     assert_eq!(widget_look(&doc, widgets[0]), (square, None));
@@ -181,7 +181,7 @@ fn word_widget_looks_decode_escaped_appearance_state_names() {
             format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{data}\nendstream", data.len()),
         ]);
         let fields = pdfcraft_forms::fields(&doc);
-        let mut looks = Looks::new();
+        let mut looks = Looks::new(&doc);
         assert!(!widget_round(&doc, &fields[0].widgets[0], &mut looks));
         let (border, background) = widget_look(&doc, &fields[0].widgets[0]);
         assert!(border.is_some(), "the square appearance must override the radio's round fallback: {name}");
@@ -512,7 +512,7 @@ fn review_followup_appearance_backgrounds_and_legacy_width() {
         let doc = review_followup_field_doc(props, appearance);
         let fields = pdfcraft_forms::fields(&doc);
         let f = &fields[0];
-        let exported = export_field(&doc, f, &f.widgets[0], &|r| r, 1.0, &mut Looks::new(), &field_preparation(f)).unwrap();
+        let exported = export_field(&doc, f, &f.widgets[0], &|r| r, 1.0, &mut Looks::new(&doc), &field_preparation(f)).unwrap();
         assert_eq!(exported.background, background, "{props}: {appearance}");
         assert_eq!(exported.border.map(|s| s.width), border, "{props}");
     }

@@ -540,44 +540,62 @@ impl Walk<'_> {
 
 /// The paths page `page` (0-based) paints, in painting order, including those inside the form
 /// XObjects it draws (Export ▸ Word). Coordinates are user space, before `/Rotate`.
+/// For multiple pages or appearances, share a [`crate::ArtworkReader`] to resolve layers once.
 pub fn reading_shapes(doc: &Document, page: usize) -> Result<ReadingShapes, EditError> {
-    let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
-    let resources = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).unwrap_or_default();
-    let mut decode = pdfcraft_cos::DecodeBudget::page();
-    let streams = crate::text::content_streams_within(doc, &p.dict, &mut decode)?;
-    // The page's streams are one stream in pieces: an operator may span two of them.
-    let pieces = crate::text::joined(&streams);
-    let truncated = streams.iter().any(|s| s.read != crate::text::Read::Whole);
-    let mut walk = Walk {
-        visibility: visibility::Visibility::new(doc),
-        doc,
-        out: ReadingShapes { truncated, ..Default::default() },
-        points: 0,
-        order: Vec::new(),
-        forms: Vec::new(),
-        budget: crate::text::FormBudget::new(decode),
-    };
-    let mut st = State::new(Matrix::IDENTITY, p.crop(doc));
-    walk.ops(&pieces.parse().ops, &resources, &mut st);
-    Ok(walk.out)
+    visibility::ArtworkReader::new(doc).reading_shapes(page)
+}
+
+impl visibility::ArtworkReader<'_> {
+    /// Read page shapes using this document's shared optional-content configuration.
+    pub fn reading_shapes(&self, page: usize) -> Result<ReadingShapes, EditError> {
+        let doc = self.doc;
+        let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
+        let resources = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).unwrap_or_default();
+        let mut decode = pdfcraft_cos::DecodeBudget::page();
+        let streams = crate::text::content_streams_within(doc, &p.dict, &mut decode)?;
+        // The page's streams are one stream in pieces: an operator may span two of them.
+        let pieces = crate::text::joined(&streams);
+        let truncated = streams.iter().any(|s| s.read != crate::text::Read::Whole);
+        let mut walk = Walk {
+            visibility: self.visibility(),
+            doc,
+            out: ReadingShapes { truncated, ..Default::default() },
+            points: 0,
+            order: Vec::new(),
+            forms: Vec::new(),
+            budget: crate::text::FormBudget::new(decode),
+        };
+        let mut st = State::new(Matrix::IDENTITY, p.crop(doc));
+        walk.ops(&pieces.parse().ops, &resources, &mut st);
+        Ok(walk.out)
+    }
 }
 
 /// Read bounded vector geometry from already decoded operators, for widget appearances.
 /// The caller bounds the decoded input. Nested forms are not decoded by this probe: encountering
 /// one marks the result truncated, so callers can avoid classifying an incomplete appearance.
+/// For repeated probes, share a [`crate::ArtworkReader`] to resolve the layer configuration once.
 pub fn reading_shape_ops(doc: &Document, ops: &[Op], resources: &Dict) -> ReadingShapes {
-    let mut walk = Walk {
-        visibility: visibility::Visibility::new(doc),
-        doc,
-        out: ReadingShapes::default(),
-        points: 0,
-        order: Vec::new(),
-        forms: Vec::new(),
-        budget: crate::text::FormBudget::new(pdfcraft_cos::DecodeBudget::new(0, 0)),
-    };
-    let mut state = State::new(Matrix::IDENTITY, [-MAX_COORD, -MAX_COORD, MAX_COORD, MAX_COORD]);
-    walk.ops(ops, resources, &mut state);
-    walk.out
+    visibility::ArtworkReader::new(doc).reading_shape_ops(ops, resources)
+}
+
+impl visibility::ArtworkReader<'_> {
+    /// Read appearance geometry with fresh limits and this document's shared configuration.
+    pub fn reading_shape_ops(&self, ops: &[Op], resources: &Dict) -> ReadingShapes {
+        let doc = self.doc;
+        let mut walk = Walk {
+            visibility: self.visibility(),
+            doc,
+            out: ReadingShapes::default(),
+            points: 0,
+            order: Vec::new(),
+            forms: Vec::new(),
+            budget: crate::text::FormBudget::new(pdfcraft_cos::DecodeBudget::new(0, 0)),
+        };
+        let mut state = State::new(Matrix::IDENTITY, [-MAX_COORD, -MAX_COORD, MAX_COORD, MAX_COORD]);
+        walk.ops(ops, resources, &mut state);
+        walk.out
+    }
 }
 
 #[cfg(test)]
