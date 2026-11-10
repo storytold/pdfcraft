@@ -4034,8 +4034,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets"]
-notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340). Typed text, which no comment tool makes, gives Fill & Sign's new text its size and border"
+evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets", "crates/ui-egui/tests/it/control.rs::measurement_defaults_leave_plain_comment_tools_unchanged", "crates/ui-egui/tests/it/control.rs::measurement_defaults_survive_restart_and_style_new_drawings", "crates/ui-egui/tests/it/control.rs::measurement_defaults_restore_bounded_values_without_migrating_comment_styles"]
+notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340). Distance, perimeter and area measurements have separate defaults, used by their live outlines and new annotations without changing Line/Arrow/PolyLine/Polygon comment defaults; area fill and its opacity are saved too (#6847). Line endings and scale are not style defaults. Typed text, which no comment tool makes, gives Fill & Sign's new text its size and border"
 
 [[feature]]
 id = "comment.keep-tool-selected"

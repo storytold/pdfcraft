@@ -4,7 +4,7 @@ use crate::file_filter::AddFilterAnyCase as _;
 use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
-    Document, Edit, Style,
+    Document, Edit,
     measure::{self, Kind, NewMeasurement, PageUnit, Point, Reading, Scale},
 };
 
@@ -319,7 +319,6 @@ pub(crate) fn page_input(
 ) {
     let page = cx.page;
     let xf = cx.xf;
-    let author = &cx.prefs.author;
     if !doc.allows_annotation() {
         return;
     }
@@ -385,14 +384,14 @@ pub(crate) fn page_input(
             }
             let finishes = closes || matches!(tool, Tool::Distance | Tool::Calibrate) && state.points.len() == 2;
             if finishes {
-                finish(state, &mut view.pending_edit, doc, page, tool, author, units);
+                finish(state, &mut view.pending_edit, doc, page, tool, cx.prefs, units);
             }
         }
     }
     if state.page == Some(page) && !state.points.is_empty() {
         let double = clicks.double && takes_clicks(state);
         if (double || !typing && cx.keys.pressed(ui.ctx(), egui::Key::Enter)) && matches!(tool, Tool::Perimeter | Tool::Area) {
-            finish(state, &mut view.pending_edit, doc, page, tool, author, units);
+            finish(state, &mut view.pending_edit, doc, page, tool, cx.prefs, units);
         }
         if !typing && cx.keys.pressed(ui.ctx(), egui::Key::Backspace) {
             state.points.pop();
@@ -410,7 +409,12 @@ pub(crate) fn page_input(
             }
         }
         let positions: Vec<Pos2> = points.iter().map(|&p| screen(p)).collect();
-        let stroke = Stroke::new(1.5, Color32::from_rgb(0, 120, 214));
+        let stroke = if tool == Tool::Calibrate {
+            Stroke::new(1.5, Color32::from_rgb(0, 120, 214))
+        } else {
+            let style = cx.prefs.measurement_style(tool.kind());
+            Stroke::new((style.width as f32 * xf.zoom()).max(1.0), crate::comments::color32(style.color).gamma_multiply(style.opacity as f32))
+        };
         for pair in positions.windows(2) {
             if let [a, b] = pair {
                 ui.painter().line_segment([*a, *b], stroke);
@@ -444,7 +448,15 @@ pub(crate) fn page_input(
         }
     }
 }
-fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, page: usize, tool: Tool, author: &str, units: crate::units::Unit) {
+fn finish(
+    state: &mut MeasureView,
+    pending: &mut Option<Edit>,
+    doc: &Document,
+    page: usize,
+    tool: Tool,
+    prefs: &crate::comments::CommentPrefs,
+    units: crate::units::Unit,
+) {
     if tool == Tool::Calibrate {
         if let [a, b] = state.points.as_slice() {
             let a = doc.measurement_to_view(page, *a);
@@ -467,9 +479,9 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
             kind: tool.kind(),
             points: state.points.clone(),
             scale,
-            style: Style { color: [0.0, 0.47, 0.84], ..Style::default() },
+            style: prefs.measurement_style(tool.kind()),
             label: state.label.clone(),
-            author: author.into(),
+            author: prefs.author.clone(),
         }));
         state.cancel();
     }
