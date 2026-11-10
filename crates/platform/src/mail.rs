@@ -823,6 +823,27 @@ fn file_name(path: &Path) -> String {
     path.to_string_lossy().rsplit(['\\', '/']).next().unwrap_or_default().to_string()
 }
 
+/// The most bytes of text one encoded word holds. RFC 2047 caps a word at 75 characters and a
+/// header line at 78; 36 bytes make 48 base64 characters, a 60-character word, which leaves
+/// room for `Subject: ` before the first and a space before each folded one.
+const WORD_BYTES: usize = 36;
+
+/// `subject` as UTF-8 encoded words, one per [`WORD_BYTES`] bytes at most (never splitting a
+/// character), joined by a folded line break so no header line passes 78 characters.
+fn subject_words(subject: &str) -> String {
+    let mut words = Vec::new();
+    let mut start = 0;
+    while start < subject.len() {
+        let mut end = (start + WORD_BYTES).min(subject.len());
+        while !subject.is_char_boundary(end) {
+            end -= 1;
+        }
+        words.push(format!("=?UTF-8?B?{}?=", base64(&subject.as_bytes()[start..end])));
+        start = end;
+    }
+    words.join("\r\n ")
+}
+
 /// An unsent message (RFC 5322 with MIME, `X-Unsent: 1` so it opens as a new one): the
 /// recipients, the subject and the file's name as UTF-8 encoded words, the body and the file in
 /// base64. Recipients were checked for control characters ([`check`]).
@@ -838,7 +859,7 @@ fn unsent_message(compose: &Compose, name: &str, file: &[u8]) -> String {
         lines.push(format!("To: {}", compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join(", ")));
     }
     // An empty subject has no encoded-word (RFC 2047 wants at least one character in it).
-    lines.push(if compose.subject.is_empty() { "Subject:".to_string() } else { format!("Subject: {}", word(&compose.subject)) });
+    lines.push(if compose.subject.is_empty() { "Subject:".to_string() } else { format!("Subject: {}", subject_words(&compose.subject)) });
     lines.extend(["X-Unsent: 1".into(), "MIME-Version: 1.0".into(), format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"")]);
     lines.extend([String::new(), format!("--{boundary}")]);
     lines.extend(["Content-Type: text/plain; charset=utf-8".into(), "Content-Transfer-Encoding: base64".into(), String::new()]);
@@ -953,7 +974,8 @@ fn fill(template: &str, values: &[(&str, String)]) -> String {
 /// `code <MAPI result>` or `failed <why>`. The MAPI part is C# compiled by PowerShell itself
 /// (`Add-Type`), which every Windows has: `MAPISendMailW` runs on a thread of its own while the
 /// script looks for a new window, not this program's, whose title carries the subject (Outlook's
-/// "<subject> - Message", Thunderbird's "Write: <subject>"). A client that answers without a
+/// "<subject> - Message", Thunderbird's "Write: <subject>"; with no subject, any new window of the
+/// client's own program). A client that answers without a
 /// window (an error) is reported by its code. A window counts only when it belongs to the email
 /// client's own program (its file name from the client's registration under
 /// `Software\Clients\Mail`), so another application whose window holds the subject never says a
@@ -1066,8 +1088,9 @@ public static class PdfCraftMapi {
 		bool told = false;
 		while (!worker.Join(250)) {
 			if (told) continue;
-			// An empty subject is in every window's title, so no window says the message opened.
-			if (subject.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; break; } }
+			// An empty subject is in every window's title, so it can't tell them apart: a new window of
+			// the email client's own program says the message opened (the client is known by then).
+			if (subject.Length > 0 || program.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; break; } }
 			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
 			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
 		}
@@ -1420,6 +1443,54 @@ mod tests {
         let lines: Vec<&str> = message.split("\r\n").collect();
         assert_eq!(lines[1], "Subject:");
         assert!(!message.contains("=?UTF-8?B??="));
+    }
+
+    /// Decode standard base64 (what `base64` writes), for reading a subject back.
+    fn unbase64(text: &str) -> Vec<u8> {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        let (mut bits, mut count) = (0u32, 0);
+        for byte in text.bytes().filter(|b| *b != b'=') {
+            bits = bits << 6 | ALPHABET.iter().position(|a| *a == byte).expect("a base64 character") as u32;
+            count += 6;
+            if count >= 8 {
+                count -= 8;
+                out.push((bits >> count) as u8);
+                bits &= (1 << count) - 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_long_subject_is_split_into_encoded_words_that_fit_a_header_line() {
+        let mut c = compose();
+        // Several hundred characters, two- and three-byte ones among them, so a split lands next to a
+        // character that must not be cut.
+        c.subject = "Informe de inspección — 检查报告 ".repeat(20);
+        let message = unsent_message(&c, "a.pdf", &[0u8; 20]);
+        let header = message
+            .split("\r\n")
+            .skip_while(|l| !l.starts_with("Subject:"))
+            .take_while(|l| l.starts_with("Subject:") || l.starts_with(' '))
+            .collect::<Vec<_>>();
+        assert!(header.len() > 1, "the subject is folded over several lines");
+        let mut decoded = Vec::new();
+        for line in &header {
+            assert!(line.len() <= 78, "a header line of {} characters: {line}", line.len());
+            let word = line.trim_start_matches("Subject:").trim();
+            assert!(word.len() <= 75, "an encoded word of {} characters", word.len());
+            let b64 = word.strip_prefix("=?UTF-8?B?").and_then(|w| w.strip_suffix("?=")).expect("an encoded word");
+            let piece = unbase64(b64);
+            assert!(std::str::from_utf8(&piece).is_ok(), "a word is whole characters");
+            decoded.extend(piece);
+        }
+        assert_eq!(String::from_utf8(decoded).unwrap(), c.subject);
+    }
+
+    #[test]
+    fn the_mapi_script_counts_a_new_window_of_the_client_when_the_subject_is_empty() {
+        assert!(MAPI_SCRIPT.contains("if (subject.Length > 0 || program.Length > 0) foreach"));
     }
 
     #[test]
