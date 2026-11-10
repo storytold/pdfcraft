@@ -28,6 +28,10 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    /// Latin, Greek and Cyrillic letters in the bundled Inter face
+    /// ([`crate::document_latin_fonts`]), which every build has: for the ones WinAnsiEncoding
+    /// lacks, beside the standard font that draws the rest.
+    Latin,
 }
 
 impl ShapedScript {
@@ -36,6 +40,7 @@ impl ShapedScript {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
         }
     }
 }
@@ -44,10 +49,12 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static LATIN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Latin => &LATIN,
     };
     cache
         .get_or_init(|| {
@@ -91,6 +98,38 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
 }
 
+/// Whether the bundled Inter face has a glyph for `c`.
+pub fn latin_has(c: char) -> bool {
+    face(ShapedScript::Latin).is_some_and(|(font, _)| font.charmap().map(c).is_some_and(|g| g.to_u32() != 0))
+}
+
+/// Shape a left-to-right run of Latin, Greek or Cyrillic `text` with the bundled Inter face,
+/// accents and other marks kept with their letter. [`GlyphError::Missing`] when the face lacks a
+/// character.
+pub fn shape_latin(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Latin)
+}
+
+/// The scripts the bundled face's runs are shaped as.
+#[derive(Clone, Copy, PartialEq)]
+enum LatinRun {
+    Latin,
+    Greek,
+    Cyrillic,
+}
+
+/// The script of a run for the bundled face: that of its first Greek or Cyrillic letter, else
+/// Latin.
+fn latin_run(text: &str) -> LatinRun {
+    text.chars()
+        .find_map(|c| match u32::from(c) {
+            0x0370..=0x03FF | 0x1F00..=0x1FFF => Some(LatinRun::Greek),
+            0x0400..=0x052F | 0x1C80..=0x1C8F | 0x2DE0..=0x2DFF | 0xA640..=0xA69F => Some(LatinRun::Cyrillic),
+            _ => None,
+        })
+        .unwrap_or(LatinRun::Latin)
+}
+
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -102,11 +141,16 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        ShapedScript::Latin => match latin_run(text) {
+            LatinRun::Greek => script::GREEK,
+            LatinRun::Cyrillic => script::CYRILLIC,
+            LatinRun::Latin => script::LATIN,
+        },
     });
-    // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
+    // Preserve the historical Arabic per-character mapping; Hebrew, Thai and Latin marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
