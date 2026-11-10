@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 craft-print = { workspace = true }
+log = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
@@ -20,3 +21,5 @@ winprint = { version = "0.2.1", git = "https://github.com/storytold/winprint.rs"
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+# Reads the renamed programs back with a parser that isn't ours.
+skrifa = "0.44"

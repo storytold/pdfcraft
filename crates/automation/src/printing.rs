@@ -1,7 +1,7 @@
 //! Printing tools: list printers, and print (or save the print-ready PDF) with Acrobat's Print
 //! dialog options.
 
-use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
+use pdfcraft_engine::print::{self, Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
@@ -94,8 +94,19 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
 /// (as `media` after the driver's `options`) rather than the queue's default paper, which a job
-/// naming none got (A4 under Letter sheets on the queue in #3752).
-fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, media: Option<&str>) -> Result<spool::Job> {
+/// naming none got (A4 under Letter sheets on the queue in #3752), and tells CUPS which way the
+/// laid-out `sheets` run, as the Print dialog does (#2713): an orientation the caller chose in
+/// `options` stands. It asks the driver for grayscale only when the pages aren't grey pictures
+/// already ([`print::driver_needs_grayscale`]).
+fn spool_job(
+    a: &Args,
+    printer: &str,
+    title: String,
+    duplex: Option<spool::Duplex>,
+    media: Option<&str>,
+    raster: Option<print::Raster>,
+    sheets: &[print::Sheet],
+) -> Result<spool::Job> {
     let options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
@@ -113,13 +124,56 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         collate: a.opt_bool("collate")?.unwrap_or(true),
         duplex,
         scaling: spool::Scaling::Exact,
-        grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
+        grayscale: print::driver_needs_grayscale(a.opt_bool("grayscale")?.unwrap_or(false), raster),
         title,
-        options: options.into_iter().chain(media.map(|m| ("media".to_string(), m.to_string()))).collect(),
+        options: {
+            let mut options: Vec<(String, String)> = options.into_iter().chain(media.map(|m| ("media".to_string(), m.to_string()))).collect();
+            print::add_cups_orientation(&mut options, sheets);
+            options
+        },
     })
 }
 
 impl Automation {
+    /// Print production ▸ Convert colours: every colour on the pages in gray, rgb or cmyk.
+    pub(crate) fn convert_colours(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let target = match a.opt_str("to")?.unwrap_or("gray") {
+            "gray" | "grayscale" => pdfcraft_engine::ColourTarget::Gray,
+            "rgb" => pdfcraft_engine::ColourTarget::Rgb,
+            "cmyk" => pdfcraft_engine::ColourTarget::Cmyk,
+            other => return Err(ToolError::InvalidArgs(format!("unknown target {other:?} (gray, rgb, cmyk)"))),
+        };
+        let settings = pdfcraft_engine::ConvertColours {
+            target,
+            preserve_black: a.opt_bool("preserve_black")?.unwrap_or(true),
+            images: a.opt_bool("images")?.unwrap_or(true),
+            annotations: a.opt_bool("annotations")?.unwrap_or(false),
+        };
+        let id = self.doc(a)?.id;
+        let found = self.session.count_colours(id, &pages, &settings);
+        if found.colours == 0 && found.images == 0 {
+            return Ok(json!({ "colours": 0, "images": 0, "images_left": found.images_left, "pages": 0, "loses_conformance": [] }));
+        }
+        // PDF/X has no declaration of its own here: it always carries an output intent.
+        let declared = self.doc(a)?.standards();
+        let pdfa = declared.pdfa.map(|(part, level)| format!("PDF/A-{part}{}", level.to_lowercase()));
+        let loses: Vec<String> = pdfa.into_iter().chain(declared.output_intents.iter().map(|i| format!("output intent {i}"))).collect();
+        let r = self.apply(a, pdfcraft_engine::Edit::ConvertColours { pages, settings })?;
+        Ok(json!({
+            "colours": found.colours,
+            "images": found.images,
+            "images_left": found.images_left,
+            "pages": found.pages,
+            "loses_conformance": loses,
+            "undo": r["undo"],
+        }))
+    }
+
     /// `printers`: the system's printers, the default marked, and each one's two-sided support
     /// where the spooler reports it.
     pub(crate) fn printers(&self) -> Result<Value> {
@@ -178,9 +232,6 @@ impl Automation {
         let pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
             .map_err(|e| bad(e.to_string()))?;
         let layout = match a.opt_str("layout")?.unwrap_or("fit") {
-            "fit" => Layout::Size(SizeMode::Fit),
-            "actual" => Layout::Size(SizeMode::Actual),
-            "shrink" => Layout::Size(SizeMode::Shrink),
             "custom" => Layout::Size(SizeMode::Custom(a.opt_num("scale")?.ok_or_else(|| bad("custom needs scale (percent)"))?)),
             "multiple" => {
                 // Custom pages per sheet: `cols` across by `rows` down, both or neither.
@@ -225,13 +276,14 @@ impl Automation {
                     s => return Err(bad(format!("unknown booklet_subset {s:?}"))),
                 },
                 binding: if a.opt_str("binding")? == Some("right") { Binding::Right } else { Binding::Left },
+                creep: a.opt_num("creep")?.unwrap_or(0.0),
             },
             "poster" => Layout::Poster {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
                 overlap: a.opt_num("overlap")?.unwrap_or(18.0),
                 cut_marks: a.opt_bool("cut_marks")?.unwrap_or(true),
             },
-            l => return Err(bad(format!("unknown layout {l:?}"))),
+            l => Layout::Size(print::names::parse_size_mode(l, 100.0).ok_or_else(|| bad(format!("unknown layout {l:?}")))?),
         };
         let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
         if (a.opt_int("cols")?.is_some() || a.opt_int("rows")?.is_some()) && !matches!(layout, Layout::Multiple { .. }) {
@@ -246,13 +298,8 @@ impl Automation {
             "landscape" => Orientation::Landscape,
             o => return Err(bad(format!("unknown orientation {o:?}"))),
         };
-        let content = match a.opt_str("comments_forms")?.unwrap_or("document-and-markups") {
-            "document" => Content::Document,
-            "document-and-markups" => Content::DocumentAndMarkups,
-            "document-and-stamps" => Content::DocumentAndStamps,
-            "form-fields-only" => Content::FormFieldsOnly,
-            c => return Err(bad(format!("unknown comments_forms {c:?}"))),
-        };
+        let content = a.opt_str("comments_forms")?.unwrap_or("document-and-markups");
+        let content = print::names::parse_content(content).ok_or_else(|| bad(format!("unknown comments_forms {content:?}")))?;
         let printer_arg = a.opt_str("printer")?;
         let resolved_printer = printer_arg.map(|p| {
             if p == "default" {
@@ -275,7 +322,8 @@ impl Automation {
         };
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
-        let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
+        let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
+        let sheets = laid_out.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
         match (a.opt_str("path")?, a.opt_str("printer")?) {
@@ -286,7 +334,7 @@ impl Automation {
             }
             (None, Some(printer)) => {
                 let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
-                let job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, Some(&media))?;
+                let job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, Some(&media), settings.raster, &laid_out)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
@@ -302,7 +350,7 @@ mod tests {
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
-        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left, creep: 0.0 };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
@@ -325,13 +373,31 @@ mod tests {
         assert!(duplex("sideways", false).is_err());
     }
 
+    /// #2713, #3739: `doc_print` to a printer tells CUPS when every sheet runs landscape, after
+    /// the paper, so a landscape sheet is turned onto the portrait paper rather than printed
+    /// unrotated and cut off. Portrait and mixed jobs say nothing, and an orientation passed in
+    /// `options` stands and isn't sent twice.
+    #[test]
+    fn printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them() {
+        let sheets = |sizes: &[(f64, f64)]| sizes.iter().map(|&size| print::Sheet { size, ..Default::default() }).collect::<Vec<_>>();
+        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, Some("Letter"), None, s).unwrap().options;
+        let media = ("media".to_string(), "Letter".to_string());
+        let landscape = sheets(&[(792.0, 612.0), (792.0, 612.0)]);
+        let turned = if cfg!(windows) { vec![media.clone()] } else { vec![media.clone(), ("orientation-requested".to_string(), "4".to_string())] };
+        assert_eq!(job(json!({}), &landscape), turned);
+        assert_eq!(job(json!({}), &sheets(&[(612.0, 792.0)])), vec![media.clone()], "portrait sheets");
+        assert_eq!(job(json!({}), &sheets(&[(792.0, 612.0), (612.0, 792.0)])), vec![media.clone()], "a job that mixes them");
+        let chosen = ("orientation-requested".to_string(), "5".to_string());
+        assert_eq!(job(json!({ "options": { "orientation-requested": "5" } }), &landscape), [chosen, media], "the caller's own choice, once");
+    }
+
     /// #3752: `doc_print` to a printer sent no paper, so the queue's default paper stood in for
     /// the one the sheets were laid out on (A4 under Letter sheets on the report's queue).
     #[test]
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
             let (_, media) = resolve_paper(paper_name, None).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, Some(&media)).unwrap()
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, Some(&media), None, &[]).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -346,7 +412,6 @@ mod tests {
         // Short forms find the same paper.
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
-
         // Non-preset dimensions and driver papers carry their media selection.
         assert_eq!(job(json!({}), Some("300x500")).options, [media("Custom.300x500")]);
         assert_eq!(job(json!({}), Some("300 x 500 pt")).options, [media("Custom.300x500")]);
@@ -356,7 +421,22 @@ mod tests {
         assert_eq!(job(json!({}), Some("Custom.300x500pt")).options, [media("Custom.300x500")]);
 
         assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter")).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some("Letter")).is_err());
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter"), None, &[]).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some("Letter"), None, &[]).is_err());
+    }
+
+    /// #5806: grayscale with Print as image sends grey pictures, so the driver isn't asked for
+    /// grayscale, which Microsoft Print to PDF keeps no setting for and the job was refused.
+    #[test]
+    fn grey_pictures_dont_ask_the_driver_for_grayscale() {
+        let grey = print::Raster { dpi: 300.0, grayscale: true };
+        let colour = print::Raster { dpi: 300.0, grayscale: false };
+        let job = |args: Value, raster: Option<print::Raster>| {
+            spool_job(&Args(&args), "Office", String::new(), None, Some("Letter"), raster, &[]).unwrap().grayscale
+        };
+        assert!(job(json!({ "grayscale": true }), None), "vector pages: the driver makes them grey");
+        assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
+        assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
+        assert!(!job(json!({}), None));
     }
 }

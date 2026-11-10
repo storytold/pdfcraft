@@ -1,4 +1,5 @@
 use super::*;
+use pdfcraft_engine::print::names as print_names;
 
 /// [`PdfCraftApp::date_text`] for callers that already borrow other parts of the app.
 pub(crate) fn date_text(session: &Session, fmt: Option<&str>) -> Result<String, String> {
@@ -76,6 +77,19 @@ impl PdfCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
+        // The Print dialog's choices that describe how this computer prints (#2001), named as
+        // `doc_print` names them. Copies, pages, layout and orientation are one job's.
+        let print = serde_json::json!({
+            "duplex": print_names::duplex(self.print_draft.duplex),
+            "grayscale": self.print_draft.grayscale,
+            "collate": self.print_draft.collate,
+            "size": print_names::size_mode(self.print_draft.size),
+            "custom_scale": self.print_draft.custom_scale,
+            "comments_forms": print_names::content(self.print_draft.content),
+            "binding": print_names::binding(self.print_draft.binding),
+            "as_image": self.print_draft.as_image,
+            "dpi": self.print_draft.dpi,
+        });
         let mut v = serde_json::json!({
             "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
@@ -104,6 +118,7 @@ impl PdfCraftApp {
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
+            "ask_to_lock_signatures": self.ask_to_lock_signatures,
             "fill_text_size": self.fill_text_size,
             "fill_text_border": self.fill_text_default.width,
             "fill_text_border_color": self.fill_text_default.color,
@@ -182,6 +197,10 @@ impl PdfCraftApp {
         let size = self.print_draft.paper_size();
         v["print_paper_size"] = serde_json::json!([size.0, size.1]);
         v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
+        // Also set outside json! above, which is at serde_json's macro recursion limit.
+        v["print"] = print;
+        // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
+        v["print_printers"] = crate::print_ui::setups_to_json(&self.print_draft.setups);
         v.to_string()
     }
 
@@ -302,31 +321,7 @@ impl PdfCraftApp {
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
         }
-        if let Some(name) = v.get("print_paper").and_then(serde_json::Value::as_str) {
-            let saved_size = v.get("print_paper_size").and_then(|s| {
-                let w = s.get(0)?.as_f64()?;
-                let h = s.get(1)?.as_f64()?;
-                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
-            });
-            let matched_pos = self
-                .print_draft
-                .papers
-                .iter()
-                .position(|(n, s)| n == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0))
-                .or_else(|| {
-                    pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| {
-                        *canonical == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0)
-                    })
-                });
-            if let Some(paper) = matched_pos {
-                self.print_draft.paper = paper;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
-            } else if let Some(size) = saved_size {
-                self.print_draft.papers.push((name.to_string(), size));
-                self.print_draft.paper = self.print_draft.papers.len() - 1;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
-            }
-        }
+        self.restore_print_prefs(v);
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }
@@ -347,6 +342,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
+        }
+        if let Some(on) = v["ask_to_lock_signatures"].as_bool() {
+            self.ask_to_lock_signatures = on;
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
@@ -411,6 +409,73 @@ impl PdfCraftApp {
         }
         if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
             self.comment_prefs.pinned = pinned;
+        }
+    }
+
+    /// Print dialog settings, remembered per-printer setups, and driver paper selection.
+    fn restore_print_prefs(&mut self, v: &serde_json::Value) {
+        if let Some(name) = v.get("print_paper").and_then(serde_json::Value::as_str) {
+            let saved_size = v.get("print_paper_size").and_then(|s| {
+                let w = s.get(0)?.as_f64()?;
+                let h = s.get(1)?.as_f64()?;
+                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
+            });
+            let matched_pos = self
+                .print_draft
+                .papers
+                .iter()
+                .position(|(n, s)| n == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0))
+                .or_else(|| {
+                    pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| {
+                        *canonical == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0)
+                    })
+                });
+            if let Some(paper) = matched_pos {
+                self.print_draft.paper = paper;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            } else if let Some(size) = saved_size {
+                self.print_draft.papers.push((name.to_string(), size));
+                self.print_draft.paper = self.print_draft.papers.len() - 1;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            }
+        }
+        if let Some(setups) = crate::print_ui::setups_from_json(&v["print_printers"]) {
+            self.print_draft.setups = setups;
+        }
+        // The Print dialog's remembered choices (#2001). Settings are untrusted: an unknown name
+        // or a scale outside the dialog's range keeps the default. The scale is read before the
+        // size mode, which carries it.
+        let print = &v["print"];
+        let draft = &mut self.print_draft;
+        if let Some(duplex) = print["duplex"].as_str().and_then(print_names::parse_duplex) {
+            draft.duplex = duplex;
+        }
+        if let Some(on) = print["grayscale"].as_bool() {
+            draft.grayscale = on;
+        }
+        if let Some(on) = print["collate"].as_bool() {
+            draft.collate = on;
+        }
+        if let Some(scale) = print["custom_scale"].as_f64().filter(|s| print_ui::CUSTOM_SCALE.contains(s)) {
+            draft.custom_scale = scale;
+        }
+        if let Some(size) = print["size"].as_str().and_then(|name| print_names::parse_size_mode(name, draft.custom_scale)) {
+            draft.size = size;
+        }
+        if let Some(content) = print["comments_forms"].as_str().and_then(print_names::parse_content) {
+            draft.content = content;
+        }
+        // A booklet's binding side, as Acrobat keeps it (#2707).
+        if let Some(binding) = print["binding"].as_str().and_then(print_names::parse_binding) {
+            draft.binding = binding;
+        }
+        // Print as image and its resolution (#6392), so a printer that needs pictures keeps getting
+        // them; a resolution the dialog doesn't offer keeps the default.
+        if let Some(on) = print["as_image"].as_bool() {
+            draft.as_image = on;
+        }
+        if let Some(dpi) = print["dpi"].as_f64().filter(|d| print_ui::IMAGE_DPI.contains(d)) {
+            draft.dpi = dpi;
         }
     }
 
