@@ -895,14 +895,16 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
 /// endian) and is dropped; without one the bytes are UTF-8 when they are valid UTF-8, and
 /// otherwise the Windows code page they most likely are: 1254 (Turkish) or 1252 (Western).
 pub fn decode_text(bytes: &[u8]) -> String {
-    if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
-        return encoding.decode_without_bom_handling(bytes.get(bom..).unwrap_or_default()).0.into_owned();
-    }
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return text.to_string();
-    }
-    let encoding = if turkish_code_page(bytes) { encoding_rs::WINDOWS_1254 } else { encoding_rs::WINDOWS_1252 };
-    encoding.decode_without_bom_handling(bytes).0.into_owned()
+    use unicode_normalization::UnicodeNormalization;
+    let raw = if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        encoding.decode_without_bom_handling(bytes.get(bom..).unwrap_or_default()).0.into_owned()
+    } else if let Ok(text) = std::str::from_utf8(bytes) {
+        text.to_string()
+    } else {
+        let encoding = if turkish_code_page(bytes) { encoding_rs::WINDOWS_1254 } else { encoding_rs::WINDOWS_1252 };
+        encoding.decode_without_bom_handling(bytes).0.into_owned()
+    };
+    raw.nfc().collect()
 }
 
 /// Windows-1254 and 1252 differ only in six bytes: Ğ İ Ş ğ ı ş in 1254 are Ð Ý Þ ð ý þ in 1252.
@@ -919,6 +921,10 @@ fn turkish_code_page(bytes: &[u8]) -> bool {
 /// [`CreateError::Invalid`] naming the line and the first character neither face draws. Text
 /// PdfCraft generates goes through [`from_text_escaped`] instead.
 pub fn from_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
+    use unicode_normalization::UnicodeNormalization;
+    let title: String = title.nfc().collect();
+    let text: String = text.nfc().collect();
+    let (title, text) = (title.as_str(), text.as_str());
     // Helvetica in WinAnsiEncoding draws it: set as it always was.
     if first_undrawable_line(text).is_none() {
         return set_text(title, text, page, font_size, false);
@@ -947,6 +953,10 @@ pub const ESCAPED_NOTE: &str = "Characters Helvetica can't draw are written as [
 /// line says so ([`ESCAPED_NOTE`]). Returns the document and how many characters were written
 /// that way.
 pub fn from_text_escaped(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<(Document, usize), CreateError> {
+    use unicode_normalization::UnicodeNormalization;
+    let title: String = title.nfc().collect();
+    let text: String = text.nfc().collect();
+    let (title, text) = (title.as_str(), text.as_str());
     if first_undrawable_line(text).is_some() && text_font::first_missing(text).is_none() {
         return Ok((set_text(title, &text.chars().map(text_font::drawn_as).collect::<String>(), page, font_size, true)?, 0));
     }
@@ -1016,3 +1026,43 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64, inter: bo
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod nfc_tests {
+    use super::*;
+
+    #[test]
+    fn from_text_composes_nfd_accents_and_still_refuses_uncomposable_marks() -> Result<(), Box<dyn std::error::Error>> {
+        // Decomposed WinAnsi accents ("Cafe\u{0301} Mu\u{0308}ller") compose to NFC ("Café Müller")
+        // and draw with standard /Helvetica instead of falling back to Inter with loose marks.
+        let doc = from_text("Cafe\u{0301}", "Cafe\u{0301} Mu\u{0308}ller", LETTER, 12.0)?;
+        let nfc_doc = from_text("Café", "Café Müller", LETTER, 12.0)?;
+        let page = pdfcraft_model::pages(&doc).into_iter().next().ok_or("missing page")?;
+        let nfc_page = pdfcraft_model::pages(&nfc_doc).into_iter().next().ok_or("missing nfc page")?;
+        let Object::Stream(stream) = &*doc.get(page.dict.reference(b"Contents").ok_or("missing /Contents")?) else {
+            return Err("expected stream".into());
+        };
+        let Object::Stream(nfc_stream) = &*nfc_doc.get(nfc_page.dict.reference(b"Contents").ok_or("missing nfc /Contents")?) else {
+            return Err("expected nfc stream".into());
+        };
+        assert_eq!(stream.decoded()?, nfc_stream.decoded()?);
+
+        // Non-WinAnsi decomposed accents ("S\u{0327}ehir") compose to NFC ("Şehir") in the bundled Inter font.
+        let inter_doc = from_text("S\u{0327}ehir", "S\u{0327}ehir", LETTER, 12.0)?;
+        let inter_nfc = from_text("Şehir", "Şehir", LETTER, 12.0)?;
+        let inter_page = pdfcraft_model::pages(&inter_doc).into_iter().next().ok_or("missing inter page")?;
+        let inter_nfc_page = pdfcraft_model::pages(&inter_nfc).into_iter().next().ok_or("missing inter nfc page")?;
+        let Object::Stream(inter_s) = &*inter_doc.get(inter_page.dict.reference(b"Contents").ok_or("missing /Contents")?) else {
+            return Err("expected inter stream".into());
+        };
+        let Object::Stream(inter_nfc_s) = &*inter_nfc.get(inter_nfc_page.dict.reference(b"Contents").ok_or("missing /Contents")?) else {
+            return Err("expected inter nfc stream".into());
+        };
+        assert_eq!(inter_s.decoded()?, inter_nfc_s.decoded()?);
+
+        // A combining mark with no composed form after NFC that neither face draws (a + U+1AB0) is refused naming U+1AB0.
+        let err = from_text("t", "a\u{1AB0}", LETTER, 12.0).err().ok_or("expected refusal for a + U+1AB0")?;
+        assert!(err.to_string().contains("U+1AB0"), "got {err}");
+        Ok(())
+    }
+}

@@ -31,6 +31,7 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 /// `?` permanent. For new text (a new comment, changed contents), as Acrobat keeps text its font
 /// can't show, and for display-only copies.
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
+    normalize_text_entries(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
@@ -38,6 +39,37 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
     let Some(stream) = build_appearance(doc, &d, &direct, page) else { return Err(AnnotError::Unsupported(subtype)) };
     let built = Built::new(stream, &direct);
     apply_appearance(doc, r, &d, built)
+}
+
+/// Normalise text strings on `r` (`/Contents`, `/RC`, `/OverlayText`, `/T`, `/Subj`, `/PCByLine`)
+/// to Unicode NFC so decomposed text (NFD) draws composed glyphs rather than `?`.
+fn normalize_text_entries(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
+    let d = annot_dict(doc, r);
+    let updates = nfc_updates(&d);
+    if !updates.is_empty() {
+        doc.update_dict(r, |dict| {
+            for (key, nfc) in updates {
+                dict.set(key.to_vec(), pdfcraft_cos::PdfString::text(&nfc));
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn nfc_updates(d: &Dict) -> Vec<(&'static [u8], String)> {
+    use unicode_normalization::UnicodeNormalization;
+    const TEXT_KEYS: [&[u8]; 6] = [b"Contents", b"RC", b"OverlayText", b"T", b"Subj", b"PCByLine"];
+    let mut updates = Vec::new();
+    for key in TEXT_KEYS {
+        if let Some(s) = d.get(key).and_then(Object::as_string) {
+            let raw = s.to_text();
+            let nfc: String = raw.nfc().collect();
+            if nfc != raw {
+                updates.push((key, nfc));
+            }
+        }
+    }
+    updates
 }
 
 /// Whether [`set_appearance`] can draw the annotation `d`: read as the display reads it, with
@@ -157,6 +189,9 @@ pub(crate) fn with_direct_values_within<'d>(doc: &Document, d: &'d Dict, pass: &
         }
     }
     *pass = pass.saturating_sub(allowed.saturating_sub(budget));
+    for (key, nfc) in nfc_updates(out.as_ref().unwrap_or(d)) {
+        out.get_or_insert_with(|| d.clone()).set(key.to_vec(), pdfcraft_cos::PdfString::text(&nfc));
+    }
     out.map_or(std::borrow::Cow::Borrowed(d), std::borrow::Cow::Owned)
 }
 
@@ -420,4 +455,53 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
         }
     }
     copy
+}
+
+#[cfg(test)]
+mod nfc_tests {
+    use super::*;
+    use crate::lookup::{annot_dict, annot_ref};
+    use crate::{Meta, NewAnnotation, Shape, Style, add_annotation, set_contents, summaries};
+
+    #[test]
+    fn freetext_and_comment_nfd_text_is_composed_to_nfc_without_question_marks() -> Result<(), Box<dyn std::error::Error>> {
+        let mut doc = Document::new_empty();
+        let tree = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).ok_or("missing Pages")?;
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        let p_ref = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(p_ref)]));
+        })?;
+
+        let idx = add_annotation(
+            &mut doc,
+            &NewAnnotation {
+                page: 0,
+                shape: Shape::TextBox { rect: [72.0, 600.0, 260.0, 650.0], font_size: 12.0 },
+                style: Style::default(),
+                contents: "Cafe\u{0301} Mu\u{0308}ller".into(),
+                author: "A\u{0308}uthor".into(),
+            },
+            &Meta::default(),
+        )?;
+        let annots = summaries(&doc);
+        let info = annots.get(idx).ok_or("missing annotation")?;
+        assert_eq!(info.contents.as_deref(), Some("Café Müller"));
+        assert_eq!(info.author.as_deref(), Some("Äuthor"));
+        let (_, r) = annot_ref(&mut doc, 0, idx)?;
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&annot_dict(&doc, r)), None);
+
+        // Editing the text box with decomposed text also composes to NFC and draws without `?`.
+        set_contents(&mut doc, 0, idx, "Re\u{0301}sume\u{0301}", &Meta::default())?;
+        let annots = summaries(&doc);
+        let info = annots.get(idx).ok_or("missing edited annotation")?;
+        assert_eq!(info.contents.as_deref(), Some("Résumé"));
+        let (_, r) = annot_ref(&mut doc, 0, idx)?;
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&annot_dict(&doc, r)), None);
+        Ok(())
+    }
 }
