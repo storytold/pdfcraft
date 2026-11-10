@@ -568,7 +568,7 @@ impl Type0Font {
     /// PdfCraft patch: the text of a code when `/ToUnicode` is missing
     /// or does not cover the code. As other readers do, take the
     /// glyph the code draws (CID, then `/CIDToGIDMap`) and look it up in the embedded font's
-    /// `cmap`, which maps Unicode to glyphs.
+    /// `cmap`, which maps Unicode to glyphs. Private Use Area code points are skipped.
     fn unicode_from_embedded_glyph(&self, code: u32) -> Option<BfString> {
         if self.fallback {
             return None;
@@ -583,7 +583,8 @@ impl Type0Font {
         let map = self.glyph_to_char.get_or_init(|| {
             let mut map: HashMap<GlyphId, char> = HashMap::new();
             for (cp, glyph) in t.font_ref().charmap().mappings() {
-                if let Some(c) = char::from_u32(cp) {
+                // A symbol (3,0) `cmap` gives its glyphs Private Use Area code points, which are no text.
+                if let Some(c) = char::from_u32(cp).filter(|c| !matches!(c, '\u{E000}'..='\u{F8FF}')) {
                     // Several code points can share a glyph (space and no-break space): keep the lowest.
                     map.entry(glyph).and_modify(|old| *old = (*old).min(c)).or_insert(c);
                 }
