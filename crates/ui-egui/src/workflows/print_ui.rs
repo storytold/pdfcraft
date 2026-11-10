@@ -808,6 +808,37 @@ mod tests {
         assert!(!PrintDraft::default().job("a.pdf").grayscale);
     }
 
+    /// #6852: Color Handling converts the printed pictures into the profile chosen, with the
+    /// intent and black point compensation; a profile that can't be printed into says why.
+    #[test]
+    fn color_handling_prints_the_pictures_into_the_chosen_profile() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-print-colour-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wide = dir.join("wide.icc");
+        std::fs::write(&wide, craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_slice()).unwrap();
+        let press = dir.join("press.icc");
+        std::fs::write(&press, craft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
+
+        let mut draft = PrintDraft::default();
+        draft.choose_colour_profile(Some(&wide));
+        assert_eq!(draft.colour_error, None);
+        if let Some(c) = &mut draft.colour {
+            c.intent = print::colour::Intent::Perceptual;
+            c.black_point = false;
+        }
+        let raster = draft.settings(1, &[]).unwrap().raster.expect("a profile prints as image");
+        let colour = raster.colour.expect("the pictures go into the profile");
+        assert_eq!((colour.intent, colour.black_point), (print::colour::Intent::Perceptual, false));
+
+        draft.choose_colour_profile(Some(&press));
+        assert!(draft.colour_error.as_deref().is_some_and(|e| e.contains("RGB or grey")), "{:?}", draft.colour_error);
+        assert_eq!(draft.colour_path.as_deref(), Some(wide.as_path()), "the choice stays as it was");
+
+        draft.choose_colour_profile(None);
+        assert!(draft.settings(1, &[]).unwrap().raster.is_some_and(|r| r.colour.is_none()), "the printer manages colour again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn composed_sheets_keep_exact_scaling_and_the_dialogs_duplex_choice() {
         let draft = PrintDraft { duplex: Some(spool::Duplex::LongEdge), ..PrintDraft::default() };

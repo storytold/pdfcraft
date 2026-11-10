@@ -79,6 +79,62 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         .accessible_name(name);
 }
 
+/// Color Handling (Advanced): leave colour to the printer, or convert the pictures into an
+/// installed printer profile with a rendering intent and black point compensation.
+fn colour_handling(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    use print::colour::Intent;
+    let profiles = d.colour_profiles.get_or_insert_with(print::colour::installed_profiles);
+    let shown = match (&d.colour, &d.colour_path) {
+        (None, _) => tl!("Printer manages colours").to_string(),
+        (Some(c), path) => {
+            path.as_ref().and_then(|p| profiles.iter().find(|i| i.path == *p)).map_or_else(|| c.profile.name().to_string(), |i| i.name.clone())
+        }
+    };
+    let mut chosen: Option<Option<std::path::PathBuf>> = None;
+    ui.horizontal(|ui| {
+        let caption = ui.label(tl!("Color handling:"));
+        craft_ui::ComboBox::from_id_salt("print-colour")
+            .selected_text(shown)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(d.colour.is_none(), tl!("Printer manages colours")).clicked() {
+                    chosen = Some(None);
+                }
+                for p in profiles.iter() {
+                    if ui.selectable_label(d.colour_path.as_ref() == Some(&p.path), &p.name).clicked() {
+                        chosen = Some(Some(p.path.clone()));
+                    }
+                }
+            })
+            .response
+            .labelled_by(caption.id);
+    });
+    if let Some(path) = chosen {
+        d.choose_colour_profile(path.as_deref());
+    }
+    if let Some(c) = &mut d.colour {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Rendering intent:"));
+            let intents = [
+                (Intent::Perceptual, tl!("Perceptual")),
+                (Intent::RelativeColorimetric, tl!("Relative colorimetric")),
+                (Intent::Saturation, tl!("Saturation")),
+                (Intent::AbsoluteColorimetric, tl!("Absolute colorimetric")),
+            ];
+            combo(ui, "print-intent", tl!("Rendering intent:"), &mut c.intent, &intents, 180.0);
+        });
+        ui.add(widgets::checkbox(&mut c.black_point, tl!("Black point compensation")));
+        ui.label(
+            egui::RichText::new(tl!("The pages print as pictures in this profile. Turn the printer's own color management off in its Properties."))
+                .small()
+                .color(t.text_muted),
+        );
+    }
+    if let Some(e) = &d.colour_error {
+        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Can't print into that profile: {e}"), &[("e", e)])).small().color(t.text_muted));
+    }
+}
+
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
 /// (print, cancel).
 pub(crate) fn body(
@@ -485,10 +541,11 @@ pub(crate) fn body(
             ui.add_space(6.0);
             egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::upper_label("Advanced")).font(theme::semibold(10.5)).color(t.text_faint))
                 .id_salt("print-advanced")
-                .default_open(d.as_image)
+                .default_open(d.as_image || d.colour.is_some())
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
+                        // A Color Handling profile converts pictures, so it prints as image.
+                        ui.add_enabled(d.colour.is_none(), widgets::checkbox(&mut d.as_image, tl!("Print as image")));
                         ui.add_enabled_ui(d.as_image, |ui| {
                             ui.label(tl!("Resolution:"));
                             let mut dpi = d.dpi.round() as u32;
@@ -503,6 +560,8 @@ pub(crate) fn body(
                         .small()
                         .color(t.text_muted),
                     );
+                    ui.add_space(6.0);
+                    colour_handling(ui, d, t);
                 });
         });
         ui.add_space(12.0);
