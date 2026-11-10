@@ -124,11 +124,20 @@ fn linked(metadata: &std::fs::Metadata) -> bool {
 
 /// Canonicalize the existing ancestor, including when the requested output does not exist yet.
 fn absolute(path: &Path) -> Result<PathBuf> {
+    absolute_with(path, Path::exists)
+}
+
+/// [`absolute`], asking `exists` whether a link resolves. One `symlink_metadata` decides each
+/// step: asking `exists` first and the link second let a folder that another run created in
+/// between pass for a broken link, so concurrent batches into one new `out_dir` failed (#6893).
+fn absolute_with(path: &Path, exists: impl Fn(&Path) -> bool) -> Result<PathBuf> {
     let mut ancestor = path;
     let mut tail = Vec::new();
-    while !ancestor.exists() {
-        if ancestor.symlink_metadata().is_ok() {
-            return Err(failed("broken link in batch path"));
+    loop {
+        match ancestor.symlink_metadata() {
+            Ok(metadata) if !linked(&metadata) || exists(ancestor) => break,
+            Ok(_) => return Err(failed("broken link in batch path")),
+            Err(_) => {}
         }
         tail.push(ancestor.file_name().ok_or_else(|| failed("invalid batch path"))?);
         ancestor = ancestor.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -325,5 +334,25 @@ mod tests {
         assert_eq!(report["files"][0]["status"], "planned", "{report}");
         assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
         assert!(!dir.path().join("out").exists());
+    }
+
+    /// #6893: `out` is created by another run just after this one was told it was missing.
+    #[test]
+    fn a_folder_another_run_just_created_is_not_a_broken_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let not_there_yet = |p: &Path| p != out && p.exists();
+        let resolved = absolute_with(&out.join("page.pdf"), not_there_yet).unwrap();
+        assert_eq!(resolved, dir.path().canonicalize().unwrap().join("out").join("page.pdf"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_is_still_a_broken_link() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("out")).unwrap();
+        let err = absolute(&dir.path().join("out/page.pdf")).unwrap_err();
+        assert!(err.to_string().contains("broken link"), "{err}");
     }
 }
