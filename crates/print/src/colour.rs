@@ -87,10 +87,8 @@ impl ManagedColour {
         if self.profile.is_gray() {
             let mut grey = vec![0u8; source.len() / 4];
             t.convert_u8(&source, 4, &mut grey, 1, false).map_err(|e| format!("can't convert into the printer profile: {e}"))?;
-            for (px, g) in rgba.chunks_exact_mut(4).zip(grey) {
-                px[0] = g;
-                px[1] = g;
-                px[2] = g;
+            for (px, g) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(grey) {
+                px[..3].fill(g);
             }
             Ok(())
         } else {
@@ -226,7 +224,7 @@ mod tests {
         assert_eq!((clipped[0], clipped[4], clipped[8]), (0, 0, 0), "{clipped:?}");
         let kept = convert(&profile, true, &darks);
         assert!(kept[0] < kept[4] && kept[4] < kept[8], "{kept:?}");
-        assert!(kept.chunks_exact(4).all(|p| p[0] == p[1] && p[1] == p[2] && p[3] == 255), "grey written to R, G and B: {kept:?}");
+        assert!(kept.as_chunks::<4>().0.iter().all(|&[r, g, b, a]| r == g && g == b && a == 255), "grey written to R, G and B: {kept:?}");
     }
 
     /// An RGB printer profile changes the values (sRGB's green is not the profile's green) and
