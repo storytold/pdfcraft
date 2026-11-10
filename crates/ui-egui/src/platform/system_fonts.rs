@@ -575,6 +575,8 @@ mod tests {
         assert_eq!(reversed.bytes().len() as u64, size(&mono), "reversing the list must reverse the pick");
     }
 
+    /// A script fallback skips missing files and takes the first face that has the script's
+    /// probe letter, so a Latin-only face never stands in for Telugu, Khmer or the others.
     #[test]
     fn a_script_fallback_is_the_first_candidate_with_the_probe() {
         // This one calls `script_fallback` too, so it fails under the documented switch that
@@ -595,6 +597,9 @@ mod tests {
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
     }
 
+    /// Every per-script candidate list is non-empty and names `.ttf` or `.ttc` files by absolute
+    /// path (Windows paths are built from `%WINDIR%`), so no list is left empty or names a file
+    /// that is not a font.
     #[test]
     fn script_candidates_are_absolute_font_files() {
         for list in [
