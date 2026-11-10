@@ -463,7 +463,9 @@ fn malformed_membership_on_annotations_that_do_not_draw_does_not_block_printing(
             match case {
                 0 => d.set(b"F".to_vec(), Object::Int(0)),
                 1 => d.set(b"F".to_vec(), Object::Int(6)),
-                2 => d.set(b"Subtype".to_vec(), Object::name("Link")),
+                // A Popup never prints. (A Link did not either, until #5028 printed existing
+                // Link appearances.)
+                2 => d.set(b"Subtype".to_vec(), Object::name("Popup")),
                 3 => {
                     d.remove(b"AP");
                 }
