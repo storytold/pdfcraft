@@ -2,9 +2,9 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, SaveTarget};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -130,7 +130,7 @@ fn text_marks_and_date() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Ada Lovelace".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(4);
     let v = items(&h);
     assert_eq!(v.len(), 4, "{v:?}");
@@ -139,9 +139,9 @@ fn text_marks_and_date() {
     assert!(v.iter().any(|(t, _)| t == "Stamp"));
 }
 
-/// The open type box, found as the focused text input.
+/// The open type box, found by its accessible name for either input role.
 fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
-    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("an open type box").rect()
+    h.get_by_label("Text to place").rect()
 }
 
 #[test]
@@ -149,14 +149,65 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
-    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.event(egui::Event::Text("\nAda\nLovelace\n".into()));
     h.run_steps(1);
     // Still on Add text: the next click starts a new box, and must keep the first one.
     click(&mut h, 50.0, 150.0);
     h.run_steps(2);
     let v = items(&h);
-    assert_eq!(v, vec![("FreeText".to_string(), Some("Ada Lovelace".to_string()))]);
+    assert_eq!(v, vec![("FreeText".to_string(), Some("\nAda\nLovelace\n".to_string()))]);
     assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
+}
+
+/// Escape steps back out of a Fill & Sign tool as out of a comment tool: the first press closes
+/// the open type box, the next one leaves the Text tool for Select, so a click opens no new box.
+#[test]
+fn escape_leaves_the_fill_and_sign_tools() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    assert!(h.state().views[0].fill_text.is_some(), "a box is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].fill_text.is_none(), "the first Escape closes the box");
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Text), "the tool stays for the next box");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "the next Escape leaves the tool");
+    click(&mut h, 50.0, 150.0);
+    assert!(h.state().views[0].fill_text.is_none(), "no new box");
+    assert!(items(&h).is_empty(), "nothing was added: {:?}", items(&h));
+    // A mark tool too.
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// A box opened while a comment is selected deselects it: two presses of Escape still close the
+/// box and leave the tool.
+#[test]
+fn escape_leaves_the_text_tool_in_two_presses_after_a_selection() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    assert_eq!(items(&h).len(), 1, "{:?}", items(&h));
+    h.state_mut().views[0].fill_text = None;
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    click(&mut h, 50.0, 150.0);
+    assert!(h.state().views[0].fill_text.is_some(), "a box is open");
+    assert_eq!(h.state().views[0].comments.selected, None, "the new box deselected the comment");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].fill_text.is_none(), "the first Escape closes the box");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "the second Escape leaves the tool");
 }
 
 #[test]
@@ -164,13 +215,13 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     h.run_steps(2);
-    h.get_by_label("Font size:");
+    h.get_by_label("Font size");
     h.state_mut().fill_text_size = 24.0;
     click(&mut h, 50.0, 250.0);
     assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
     h.event(egui::Event::Text("Larger text".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let annotation =
         h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
@@ -192,7 +243,7 @@ fn fill_text_size_resizes_the_selected_text() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Resize me".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let height = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
@@ -201,6 +252,8 @@ fn fill_text_size_resizes_the_selected_text() {
     };
     let before = height(&h);
     let set_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
         h.query_all_by_role(egui::accesskit::Role::SpinButton)
             .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
             .expect("the Font size control")
@@ -211,6 +264,8 @@ fn fill_text_size_resizes_the_selected_text() {
         h.run_steps(1);
         h.key_press(egui::Key::Enter);
         h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
     };
     // Nothing selected: only the size for new text changes.
     h.state_mut().views[0].comments.selected = None;
@@ -235,6 +290,50 @@ fn fill_text_size_resizes_the_selected_text() {
     assert_eq!(h.state().fill_text_size, 36.0);
     let after = height(&h);
     assert!(after > before * 2.0, "36 pt text has a taller box than 10 pt text: {before} -> {after}");
+}
+
+/// Dragging the Font size control with a placed text selected resizes it once, when the drag
+/// ends, to the size it was dragged to: the frame of the release must not put the old size back.
+#[test]
+fn dragging_the_font_size_resizes_the_selected_text_to_where_the_drag_ends() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Drag me".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    let (id, annotation) = {
+        let s = h.state();
+        let id = s.views[0].id;
+        let a = s.session.get(id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Drag me")).map(|a| (a.page, a.index));
+        (id, a.unwrap())
+    };
+    h.state_mut().views[0].comments.selected = Some(annotation);
+    h.run_steps(2);
+    // The size is set in the Font size button's popup.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+    h.run_steps(2);
+    let from = h
+        .query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
+        .expect("the Font size control")
+        .rect()
+        .center();
+    let before = h.state().fill_text_size;
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for dx in [10.0, 20.0, 30.0, 40.0] {
+        h.hover_at(from + egui::vec2(dx, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(from + egui::vec2(40.0, 0.0));
+    h.run_steps(4);
+    let dragged = h.state().fill_text_size;
+    assert!(dragged > before, "the drag made the size larger: {before} -> {dragged}");
+    let placed = h.state().session.get(id).unwrap().comment_props(annotation.0, annotation.1).and_then(|p| p.font_size);
+    assert_eq!(placed, Some(dragged), "the selected text has the size the drag ended at");
 }
 
 /// The font sizes of the texts `text` drawn in the last frame.
@@ -280,6 +379,321 @@ fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
             assert!((d - size * zoom).abs() < 0.5, "{rotate}°: drawn at {d}, the page shows it at {}", size * zoom);
         }
     }
+}
+
+/// With a placed text selected, the toolbar shows its own border, also after Comment Properties
+/// changed it, and changes only that text: the Border colour button gives its border its own
+/// colour ("Same as text" takes it back), and new text keeps the toolbar's own border.
+#[test]
+fn the_toolbar_shows_and_changes_the_selected_texts_border() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Framed".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Framed")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    let shows = |h: &Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
+    };
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    // As Comment Properties ▸ Thickness does.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
+    h.run_steps(3);
+    assert!(shows(&h, "2 pt"), "the toolbar shows the selected text's border");
+    assert_eq!(h.state().fill_text_border, 0.0, "new text keeps none");
+
+    h.get_by_label("Border colour").click();
+    h.run_steps(2);
+    h.get_by_label("Red").click();
+    h.run_steps(4);
+    let red = Some([0.89, 0.13, 0.13]);
+    assert_eq!(props(&h).border_color, red, "the selected text's border is red");
+    assert_eq!(h.state().fill_text_border_color, None, "new text's border keeps the text's colour");
+    h.get_by_label("Border colour").click();
+    h.run_steps(2);
+    h.get_by_label("Same as text").click();
+    h.run_steps(4);
+    assert_eq!(props(&h).border_color, None);
+    // Nothing selected, the toolbar shows new text's border again.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    assert!(shows(&h, "None"));
+}
+
+/// With a border, typed text can have an oval or a circle around it instead of a box (a
+/// position number in a circle on a plan): the toolbar's shape control sets it for new text and
+/// for the selected text, and shows the selected text's own. The text stays where it was typed.
+#[test]
+fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
+    use pdfcraft_engine::BorderShape;
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Border shape").count(), 0, "no shape without a border");
+    h.state_mut().fill_text_border = 1.0;
+    h.run_steps(2);
+    // The shape control shows "Rectangle"; pick Circle for new text. It is the last of the text's
+    // controls, so in a vertical bar it may sit below the bar's end: scrolled to first, as by hand.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Rectangle"))
+        .expect("the shape control")
+        .scroll_to_me();
+    h.run_steps(2);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Rectangle")).expect("the shape control").click();
+    h.run_steps(2);
+    h.get_by_label("Circle").click();
+    h.run_steps(2);
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle);
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("12".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("12")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Circle), "new text gets the circle");
+    let r = h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.index == index).unwrap().rect;
+    assert!(((r[2] - r[0]) - (r[3] - r[1])).abs() < 0.01, "a circle's square box: {r:?}");
+    // Snug around "12" at 10 pt: its box no wider than the text needs (not the 40 pt a box to type
+    // into keeps), so the circle is as wide as that box, where it was 50 pt around the wider one.
+    let w = pdfcraft_engine::annot_text::text_width("12", 10.0) + 10.0;
+    let across = f64::from(r[2] - r[0]);
+    assert!((across - w.max(20.0)).abs() < 0.01, "the circle is {across} pt across, not {w}: {r:?}");
+    // Selected, an oval from the toolbar: one undo step.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.run_steps(3);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Circle"))
+        .expect("shows the text's own")
+        .scroll_to_me();
+    h.run_steps(2);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Circle")).expect("shows the text's own").click();
+    h.run_steps(2);
+    h.get_by_label("Oval").click();
+    h.run_steps(4);
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Oval));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle, "new text keeps the circle");
+    // As Comment Properties does: the toolbar shows it.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Rectangle });
+    h.run_steps(3);
+    assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("Rectangle")), "the selected text's own");
+
+    // The circle for new text lasts until PdfCraft quits; a saved default is read back.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Rectangle);
+    restored.restore(r#"{"fill_text_border_shape":"oval"}"#);
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Oval);
+    restored.restore(r#"{"fill_text_border_shape":"star"}"#);
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Oval, "an unknown shape keeps the setting");
+}
+
+/// Border ▸ None takes an oval or a circle away with its line, from the selected text and for new
+/// text: without one, the text's box stayed grown around a shape that isn't drawn.
+#[test]
+fn no_border_takes_the_oval_or_circle_away_too() {
+    use pdfcraft_engine::BorderShape;
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.state_mut().fill_text_border = 1.0;
+    h.state_mut().fill_text_border_shape = BorderShape::Circle;
+    h.run_steps(2);
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("12".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("12")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Circle));
+    let no_border = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("1 pt")).expect("the Border control").click();
+        h.run_steps(2);
+        h.get_by_label("None").click();
+        h.run_steps(4);
+    };
+    // The selected text: no line, and a rectangle again, its box the text's.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.run_steps(3);
+    no_border(&mut h);
+    assert_eq!(props(&h).width, Some(0.0));
+    assert_eq!(props(&h).border_shape.unwrap_or_default(), BorderShape::Rectangle);
+    // One undo step brings back the line and the circle together.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!((props(&h).width, props(&h).border_shape), (Some(1.0), Some(BorderShape::Circle)), "one undo step");
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle, "new text keeps its circle");
+    // New text: none, and a rectangle when a border is chosen again.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    no_border(&mut h);
+    assert_eq!((h.state().fill_text_border, h.state().fill_text_border_shape), (0.0, BorderShape::Rectangle));
+}
+
+/// The Border control puts a frame around new Fill & Sign text, and around the text that is
+/// selected; the box grows outwards, so the text stays where it was typed. The choice persists.
+#[test]
+fn fill_text_border_frames_new_and_selected_text() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Border:");
+    let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
+        click(h, 50.0, y);
+        h.event(egui::Event::Text("Same".into()));
+        h.run_steps(1);
+        commit_typed_text(h);
+    };
+    // The two texts, oldest first: (page, index, rect).
+    let texts = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let mut v: Vec<_> =
+            doc.info.annotations.iter().filter(|a| a.contents.as_deref() == Some("Same")).map(|a| (a.page, a.index, a.rect)).collect();
+        v.sort_by_key(|t| t.1);
+        v
+    };
+    let width = |r: [f32; 4]| r[2] - r[0];
+    type_at(&mut h, 150.0);
+    // Nothing selected, so the toolbar sets new text's border only (it shows a selected text's).
+    h.state_mut().views[0].comments.selected = None;
+    h.state_mut().fill_text_border = 1.5;
+    type_at(&mut h, 250.0);
+    let [(page, index, plain), (_, _, framed)] = texts(&h)[..] else { panic!("two texts") };
+    assert!((width(framed) - width(plain) - 3.0).abs() < 0.01, "1.5 pt on each side: {plain:?} {framed:?}");
+
+    // The plain text selected, then framed with 2 pt from the toolbar.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("1.5 pt"))
+        .expect("the Border control, showing the border for new text")
+        .click();
+    h.run_steps(2);
+    h.get_by_label("2 pt").click();
+    h.run_steps(4);
+    assert_eq!(h.state().fill_text_border, 1.5, "new text keeps its own");
+    let (_, _, now) = texts(&h)[0];
+    assert!((width(now) - width(plain) - 4.0).abs() < 0.01, "2 pt on each side: {plain:?} {now:?}");
+    assert!((plain[0] - now[0] - 2.0).abs() < 0.01 && (now[3] - plain[3] - 2.0).abs() < 0.01, "grown outwards, the text in place: {plain:?} {now:?}");
+
+    // The toolbar's border lasts until PdfCraft quits; a saved default is read back.
+    let settings = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&settings);
+    assert_eq!(restored.fill_text_border, 0.0);
+    restored.restore(r#"{"fill_text_border":2}"#);
+    assert_eq!(restored.fill_text_border, 2.0);
+    restored.restore(r#"{"fill_text_border":100}"#);
+    assert_eq!(restored.fill_text_border, 2.0, "invalid settings do not change the border");
+}
+
+/// Make Properties Default on typed text sets what Fill & Sign gives new text, its size and
+/// border, and keeps it across launches.
+#[test]
+fn typed_text_made_default_is_what_new_text_gets() {
+    use pdfcraft_engine::{BorderShape, Edit};
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32, text: &str| {
+        click(h, 50.0, y);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+        commit_typed_text(h);
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let (page, index) = type_at(&mut h, 150.0, "Model");
+    let red = Some([0.89, 0.13, 0.13]);
+    for edit in [
+        Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(1.5), endings: None },
+        Edit::BorderColorAnnotation { page, index, color: red },
+        Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Circle },
+        Edit::FontSizeAnnotation { page, index, size: 14.0 },
+    ] {
+        assert!(h.state_mut().apply_edit(edit));
+    }
+    h.state_mut().open_comment_props(page, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.fill_text_size, s.fill_text_border, s.fill_text_border_color, s.fill_text_border_shape), (14.0, 1.5, red, BorderShape::Circle));
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(
+        (restored.fill_text_size, restored.fill_text_border, restored.fill_text_border_color, restored.fill_text_border_shape),
+        (14.0, 1.5, red, BorderShape::Circle),
+        "kept across launches"
+    );
+    h.state_mut().views[0].comments.selected = None;
+    let (page, index) = type_at(&mut h, 350.0, "Next");
+    let p = h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    assert_eq!((p.font_size, p.width, p.border_color, p.border_shape), (Some(14.0), Some(1.5), red, Some(BorderShape::Circle)));
+}
+
+#[test]
+fn fill_text_colour_survives_preview_commit_settings_and_save() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(2);
+    let color = h.state().fill_text_color;
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().color, color, "the editor uses the selected colour");
+    h.event(egui::Event::Text("Blue form text".into()));
+    h.run_steps(2);
+    commit_typed_text(&mut h);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let expected = color.map(|v| v as f32);
+    let annotation = h.state().session.get(id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Blue form text")).unwrap();
+    assert_eq!(annotation.color, Some(expected));
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let reopened = harness_bytes(&bytes);
+    let saved = reopened
+        .state()
+        .session
+        .get(reopened.state().views[0].id)
+        .unwrap()
+        .info
+        .annotations
+        .iter()
+        .find(|a| a.contents.as_deref() == Some("Blue form text"))
+        .unwrap();
+    assert_eq!(saved.color, Some(expected));
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_color, color);
+    restored.restore(r#"{"fill_text_color":[2,0,0]}"#);
+    assert_eq!(restored.fill_text_color, color, "invalid saved colours are ignored");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert!(!items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert!(items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
 }
 
 #[test]
@@ -376,9 +790,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
 
     // The quick toolbar exposes replacement without changing the normal placement action.
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change signature").click();
     h.run_steps(2);
@@ -398,9 +812,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 200.0);
     assert_eq!(items(&h).len(), 2);
 
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change initials").click();
     h.run_steps(2);
@@ -641,7 +1055,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddLink {
         page: 0,
         rect: [30.0, 230.0, 60.0, 270.0],
-        action: pdfcraft_engine::LinkAction::Page(0),
+        action: pdfcraft_engine::LinkAction::Page { page: 0, zoom: pdfcraft_engine::LinkZoom::FitPage },
         style: pdfcraft_engine::LinkStyle::default(),
     });
     h.state_mut().signature = Some(SavedSig::Image(image));
@@ -1109,7 +1523,15 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -1120,7 +1542,15 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 160.0],
+        text: "More".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());
@@ -1705,6 +2135,361 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     std::fs::remove_file(photo).unwrap();
 }
 
+/// #2149: the first save after Fill & Sign places a signature asks whether to lock it into the
+/// page. Lock and save flattens it; Keep editable keeps it a comment; Don't ask again becomes
+/// the preference; the Fill & Sign panel has the switch too, once, and the Sign menu no longer
+/// does (review on #2348).
+#[test]
+fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-signature-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    let signed = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    assert_eq!(signed(&h), 1);
+    // Keep editable: saved, still a comment, and not asked again for this placement.
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Lock your signature into the page?");
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved");
+    assert_eq!(signed(&h), 1, "still a removable comment");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no new signature: no question");
+    // A new signature asks again; Lock and save with Don't ask again flattens and remembers.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 200.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Lock and save").click();
+    h.run_steps(3);
+    assert_eq!(signed(&h), 0, "locked into the page");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    assert!(h.state().flatten_fill_sign_on_save, "remembered as the preference");
+    // The switch is in the panel's Sign yourself section, once; the Sign menu over the page,
+    // where it was easy to miss, no longer has it.
+    h.state_mut().flatten_fill_sign_on_save = false;
+    // With the signature tool on, the quick tool button opens the Sign menu.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Sign").click();
+    h.run_steps(2);
+    h.get_by_label("Use signature");
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "not in the Sign menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "the panel is closed");
+    h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
+    h.state_mut().left_open = true;
+    h.run_steps(3);
+    h.get_by_label("Use signature");
+    assert_eq!(h.query_all_by_label("Lock into the page when saving").count(), 1, "once, in the panel");
+    h.get_by_label("Lock into the page when saving").click();
+    h.run_steps(2);
+    assert!(h.state().flatten_fill_sign_on_save);
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review (CodeRabbit): answering the lock question doesn't forget the signature; only a
+/// save that succeeds does. When the save after the answer fails, the next save asks again.
+#[test]
+fn a_save_that_fails_after_the_lock_question_asks_again() {
+    let bad = std::env::temp_dir().join(format!("pdfcraft-no-such-dir-{}", std::process::id())).join("out.pdf");
+    let good = std::env::temp_dir().join(format!("pdfcraft-lock-retry-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(bad.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "the save failed");
+    // The save after the answer doesn't ask twice in a row, but the failed one left the signature
+    // unsaved: the next save asks again.
+    h.state_mut().save_override = Some(good.to_string_lossy().into_owned());
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks again");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved this time");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "saved: no question");
+    let _ = std::fs::remove_file(&good);
+}
+
+/// #2348 review (CodeRabbit): File ▸ Revert discards a signature just placed, so the save after it
+/// doesn't ask to lock one, even when the saved file holds an earlier Fill & Sign signature.
+#[test]
+fn reverting_forgets_a_signature_just_placed() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-revert-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    // An earlier signature, saved as a comment: the file keeps a Fill & Sign mark.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    // A new signature, then Revert: the new one is gone, the saved one stays.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 200.0);
+    h.state_mut().revert_active();
+    h.run_steps(3);
+    let marks = h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count();
+    assert_eq!(marks, 1, "the saved signature is back, the new one is gone");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no signature was placed since the last save: no question");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review (benandez): right after a signature is placed, a notice offers to lock it into
+/// the page now. Lock now flattens it (undoable) without saving, so the save that follows doesn't
+/// ask; undoing the lock brings back both the notice and the question. Dismiss hides the notice
+/// until the next signature. A digitally signed document, or one whose saves lock anyway, gets no
+/// notice.
+#[test]
+fn placing_a_signature_offers_to_lock_it_now() {
+    const NOTICE: &str = "Signature added. Others can move it until it's locked.";
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-now-{}.pdf", std::process::id()));
+    let place = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, y);
+        h.run_steps(2);
+    };
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing placed yet");
+    place(&mut h, 300.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 0, "locked into the page");
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing left to lock");
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "locked, not saved");
+    // Undo brings the movable signature back, with the notice and the save-time question.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    h.get_by_label(NOTICE);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks again after undoing the lock");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // Locked again, the save doesn't ask.
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "already locked: no question");
+    // Dismiss hides it until the next signature.
+    place(&mut h, 200.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "dismissed");
+    place(&mut h, 100.0);
+    h.get_by_label(NOTICE);
+    // Once saved, a signature kept as a comment is no longer just placed: no notice.
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(marks(&h) > 0, "still a comment");
+    assert!(h.query_by_label(NOTICE).is_none(), "saved: nothing just placed");
+    place(&mut h, 50.0);
+    h.get_by_label(NOTICE);
+    // Saves that lock anyway need no offer.
+    h.state_mut().flatten_fill_sign_on_save = true;
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "saving locks it anyway");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: no notice, as locking would change the document after signing.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    place(&mut h, 300.0);
+    assert_eq!(marks(&h), 1);
+    assert!(h.query_by_label(NOTICE).is_none(), "a signed document isn't offered the lock");
+}
+
+/// #2348 review: locking takes the placed signature out of the comments, so its selection goes
+/// too; a stale (page, index) would point at nothing, or at another comment.
+#[test]
+fn locking_a_signature_clears_the_comment_selection() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.selected.is_some(), "the placed signature is selected");
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.selected.is_none(), "nothing left to select");
+}
+
+/// #2348 review: when locking the signature fails (here the document's security allows comments
+/// but not changes), nothing is lost: the next save asks again, and "Don't ask again" isn't
+/// remembered.
+#[test]
+fn a_lock_that_fails_keeps_the_question() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-fails-{}.pdf", std::process::id()));
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let mut h = harness_bytes(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    let signed = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    assert_eq!(signed(&h), 1, "comments are allowed");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Lock and save").click();
+    h.run_steps(3);
+    assert_eq!(signed(&h), 1, "changes aren't allowed: still a comment");
+    assert!(!h.state().flatten_fill_sign_on_save, "the failed answer isn't remembered");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "the next save asks again");
+    h.run_steps(2);
+    h.get_by_label("Lock your signature into the page?");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review: the lock question stays out of the way where it must. Answering it on a file
+/// that changed on disk leaves the changed-on-disk question showing (it was closed with the lock
+/// question, so the save silently didn't happen); a signature placed and then undone asks
+/// nothing; and a digitally signed document isn't asked, since locking would change it after
+/// signing.
+#[test]
+fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
+    let place = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, 300.0);
+    };
+    // A file that changed on disk.
+    let path = std::env::temp_dir().join(format!("pdfcraft-lock-changed-{}.pdf", std::process::id()));
+    std::fs::write(&path, FIXTURE).unwrap();
+    let mut h = harness_bytes(FIXTURE);
+    h.state_mut().close_tab(0);
+    h.state_mut().open_path(&path.to_string_lossy());
+    for _ in 0..100 {
+        if !h.state().views.is_empty() {
+            break;
+        }
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(3);
+    place(&mut h);
+    std::fs::write(&path, [FIXTURE, b"\n% rewritten elsewhere\n".as_slice()].concat()).unwrap();
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::OverwriteChanged), "the changed-on-disk question shows");
+    let _ = std::fs::remove_file(&path);
+
+    // Placed, then undone: nothing to lock, so the save just saves.
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-undone-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no question after the signature was undone");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: never asked.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    let id = h.state().views[0].id;
+    assert!(h.state().session.get(id).unwrap().is_signed());
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "a signed document isn't asked");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2149: Cancel saves nothing, and Keep editable with Don't ask again turns the question off.
+#[test]
+fn cancelling_the_lock_question_saves_nothing() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-cancel-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(!out.exists() && h.state().session.get(h.state().views[0].id).unwrap().dirty, "nothing saved");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asked again");
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(out.exists() && !h.state().ask_to_lock_signatures);
+    let restored = {
+        let mut a = PdfCraftApp::new();
+        a.restore(&h.state().persist());
+        a.ask_to_lock_signatures
+    };
+    assert!(!restored, "kept with the settings");
+    let _ = std::fs::remove_file(&out);
+}
+
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
@@ -1764,4 +2549,350 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.drop_at(convert);
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
+}
+
+fn place_selected_text(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.state_mut().execute("sign.fill.text");
+    click(h, 50.0, 250.0);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    commit_typed_text(h);
+    let selected = {
+        let s = h.state();
+        s.session
+            .get(s.views[0].id)
+            .unwrap()
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.contents.as_deref() == Some(text))
+            .map(|a| (a.page, a.index))
+            .unwrap()
+    };
+    h.state_mut().views[0].comments.selected = Some(selected);
+    h.run_steps(2);
+}
+
+fn placed_height(h: &Harness<'static, PdfCraftApp>, text: &str) -> f32 {
+    let s = h.state();
+    let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap();
+    a.rect[3] - a.rect[1]
+}
+
+fn placed_color(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<[f32; 3]> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().color
+}
+
+#[test]
+fn the_fill_text_size_flyout_opens_from_an_icon_and_leaves_a_stored_size_alone() {
+    let mut h = harness();
+    h.state_mut().fill_text_size = 9.1;
+    place_selected_text(&mut h, "Keep me");
+    let height = placed_height(&h, "Keep me");
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count(), 0);
+    h.get_by_label("Font size").click();
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).any(|n| n.value().is_some_and(|v| v.ends_with(" pt"))),
+        "the flyout holds the size"
+    );
+    assert_eq!(h.state().fill_text_size, 9.1, "opening the flyout does not round the size");
+    assert_eq!(placed_height(&h, "Keep me"), height, "opening the flyout does not resize the selected text");
+}
+
+#[test]
+fn dragging_the_fill_text_size_slider_is_one_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Drag me");
+    let height = placed_height(&h, "Drag me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let y = (slider.min.y + slider.max.y) / 2.0;
+    let from = pos2(slider.min.x + 10.0, y);
+    let to = pos2(slider.max.x - 10.0, y);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert_eq!(placed_height(&h, "Drag me"), height, "nothing is applied before the release");
+    h.drop_at(to);
+    h.run_steps(3);
+    assert!(placed_height(&h, "Drag me") > height, "the release resizes the selected text");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Drag me"), height, "one undo takes the whole drag back");
+}
+
+#[test]
+fn pressing_the_fill_text_size_slider_without_moving_it_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Hold me");
+    let height = placed_height(&h, "Hold me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let at = pos2(slider.min.x + (slider.max.x - slider.min.x) * 0.75, (slider.min.y + slider.max.y) / 2.0);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    };
+    press(&mut h);
+    let resized = placed_height(&h, "Hold me");
+    assert!(resized > height, "the first press moves the size: {height} -> {resized}");
+    press(&mut h);
+    assert_eq!(placed_height(&h, "Hold me"), resized);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Hold me"), height, "one undo takes back the only change; the second press added no step");
+}
+
+#[test]
+fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Round me");
+    let height = placed_height(&h, "Round me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let type_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
+            .expect("the Font size control")
+            .click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    };
+    type_size(&mut h, "36.1234");
+    let resized = placed_height(&h, "Round me");
+    assert!(resized > height, "the first size applies: {height} -> {resized}");
+    type_size(&mut h, "36.1231");
+    assert_eq!(h.state().fill_text_size, 36.1231);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Round me"), height, "one undo takes back the only change; the rounded retype added no step");
+}
+
+#[test]
+fn the_fill_colour_dot_recolours_the_selected_text() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Paint me");
+    let before = placed_color(&h, "Paint me");
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    let color = h.state().fill_text_color.map(|v| v as f32);
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    assert_ne!(before, Some(color));
+    assert_eq!(placed_color(&h, "Paint me"), Some(color));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_color(&h, "Paint me"), before, "one undo takes the colour back");
+}
+
+#[test]
+fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, Some(Dialog::Signature));
+
+    h.state_mut().dialog = None;
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, None);
+    h.get_by_label("Fill & Sign: Sign").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().execute("sign.fill.check");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Checkmark").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
+}
+
+#[test]
+fn a_restored_fill_tool_shows_without_replacing_the_last_selection() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.date");
+    h.run_steps(2);
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Fill & Sign: Date");
+
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Checkmark").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+}
+
+#[test]
+fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
+    let mut h = harness();
+    let mode = h.state().mode;
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "fill-date").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date");
+
+    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.initials.change");
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved initials");
+}
+
+#[test]
+fn the_quick_bar_fill_button_keeps_date_after_deselecting_and_across_documents() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+
+    h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(1);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
+    assert_eq!(h.state().dialog, None, "the default tool's dialog stays closed");
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+
+    h.state_mut().close_tab(1);
+    h.state_mut().close_tab(0);
+    h.run_steps(2);
+    h.state_mut().open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
+}
+
+fn commit_typed_text(h: &mut Harness<'static, PdfCraftApp>) {
+    let p = pos2(350.0, 850.0); // Blank canvas outside the page and the type box.
+    h.hover_at(p);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+fn fill_input(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+fn fill_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key) {
+    fill_input(
+        h,
+        [true, false].map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }),
+    );
+}
+
+#[test]
+fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
+    let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
+    let _gpu = shots.then(gpu);
+    let mut h = harness();
+    assert!(h.state_mut().execute("sign.fill.text"));
+    click(&mut h, 50.0, 300.0);
+    let initial_height = type_box_rect(&h).height();
+    fill_key(&mut h, egui::Key::Enter);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.text.as_str()), Some("\n"), "Enter inserts a newline and keeps the editor open");
+    fill_input(&mut h, [egui::Event::Text("Ada".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_input(&mut h, [egui::Event::Text("Lovelace".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    let text = "\nAda\n\nLovelace\n";
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().text, text);
+    assert!(items(&h).is_empty(), "Enter never places an annotation");
+    let galley = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(&t.galley),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(galley.rows.len(), 5, "short typed lines fit without accidental soft wraps");
+    assert!(type_box_rect(&h).height() > initial_height * 3.0, "the editor grows with its lines");
+    if shots {
+        h.render().unwrap().save("/tmp/5850-multiline.png").unwrap();
+    }
+    commit_typed_text(&mut h);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
+    let id = h.state().views[0].id;
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let mut session = pdfcraft_engine::Session::new();
+    let reopened = session.open("again.pdf", None, saved.clone(), None).unwrap();
+    let annot = &session.get(reopened).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text));
+    assert!(annot.rect[3] - annot.rect[1] >= 5.0 * 10.0 * 1.2, "the saved box keeps all five lines");
+    // Compared as edits, not saved bytes: a save stamps its time, so two saves a second apart differ.
+    let unchanged = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = h.state().session.get(id).unwrap();
+        (doc.edit_generation(), doc.dirty, doc.can_undo().map(str::to_owned))
+    };
+    let before = unchanged(&h);
+    click(&mut h, 50.0, 180.0);
+    fill_input(&mut h, [egui::Event::Text("Cancel me".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Escape);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(unchanged(&h), before, "Escape cancels without writing");
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
 }
