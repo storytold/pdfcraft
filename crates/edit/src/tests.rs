@@ -8464,7 +8464,13 @@ fn text_edited_into_thai_hindi_or_korean_is_drawn_with_their_bundled_faces() {
         text::rewrite_block(&mut doc, 0, 0, Some("ภาษาไทย ใหม่"), &style).unwrap();
         assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "ภาษาไทย ใหม่");
     }
-    let samples = [("त्रैमासिक रिपोर्ट", pdfcraft_fonts::document_devanagari_font()), ("새 텍스트", pdfcraft_fonts::ShapedScript::Korean.font())];
+    let samples = [
+        ("त्रैमासिक रिपोर्ट", pdfcraft_fonts::document_devanagari_font()),
+        ("새 텍스트", pdfcraft_fonts::ShapedScript::Korean.font()),
+        // Hebrew with points (niqqud) was refused ("can't be written into a PDF yet"): the shaped
+        // fallback places them on their letters.
+        ("הַדּוֹחַ הַשְּׁנָתִי", pdfcraft_fonts::document_hebrew_font(false)),
+    ];
     for (text, face) in samples {
         let Some(face) = face else {
             eprintln!("skipping {text}: built without its craft-fonts face (set CRAFT_FONTS_DIR)");
