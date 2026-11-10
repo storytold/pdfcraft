@@ -606,11 +606,11 @@ impl PdfCraftApp {
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also
     /// deletes them (one page always stays).
     pub fn copy_pages(&mut self, cut: bool) {
-        // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        let Some((i, id)) = self.active_ids() else { return };
+        // What's typed in a form field or open text box is part of the document (#166, #3496).
+        if !self.commit_typing_in(id) {
             return;
         }
-        let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let pages = self.views[i].target_pages();
         let n = doc.info.pages.len();

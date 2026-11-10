@@ -137,8 +137,10 @@ impl PdfCraftApp {
             return Some(clip);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.system_clipboard {
-            return read_clipboard();
+        if self.system_clipboard
+            && let Some(clip) = read_clipboard()
+        {
+            return Some(clip);
         }
         if let Some((w, h, rgba)) = self.last_copied_image.clone() {
             return Some(Clip::Image { width: w as usize, height: h as usize, rgba });

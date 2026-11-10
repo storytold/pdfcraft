@@ -263,9 +263,10 @@ pub struct PageClip {
 
 impl PageClip {
     /// Whether `clip` matches the system-clipboard state from when these pages were copied
-    /// (either the unchanged pre-copy clipboard or the page-copy marker line).
+    /// (the unchanged pre-copy clipboard, an empty or unreadable clipboard read, or the
+    /// page-copy marker line).
     pub(crate) fn matches_system_clip(&self, clip: &Option<crate::create_ui::Clip>) -> bool {
-        clip == &self.system_clip_at_copy || matches!(clip, Some(crate::create_ui::Clip::Text(t)) if t == &self.clipboard_marker)
+        clip.is_none() || clip == &self.system_clip_at_copy || matches!(clip, Some(crate::create_ui::Clip::Text(t)) if t == &self.clipboard_marker)
     }
 }
 
