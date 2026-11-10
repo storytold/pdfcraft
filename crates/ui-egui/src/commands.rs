@@ -1037,7 +1037,7 @@ mod tests {
         app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
         app.views[0].select_pages(&[1, 2]);
         assert!(app.execute("edit.header_footer"));
-        app.views[0].clear_selection();
+        app.views[0].select_pages(&[]);
         assert!(app.execute("edit.header_footer"));
         assert!(app.marks_draft.range.all, "the range is every page again");
     }
