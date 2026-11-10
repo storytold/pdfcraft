@@ -111,15 +111,30 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     }
 }
 
-/// The normal appearance stream to draw for an annotation (honouring `/AS`).
+/// Read an annotation value through at most 64 indirect references.
+/// Standalone indirect objects can themselves hold references (ISO 32000-2 §7.3.10).
+/// Cycles and longer chains are unusable, like other invalid annotation values.
+fn annotation_value(doc: &Document, value: &Object) -> Option<std::sync::Arc<Object>> {
+    let mut value = std::sync::Arc::new(value.clone());
+    let mut seen = std::collections::HashSet::new();
+    while let Object::Ref(reference) = &*value {
+        if seen.len() == 64 || !seen.insert(*reference) {
+            return None;
+        }
+        value = doc.get(*reference);
+    }
+    Some(value)
+}
+
+/// The normal appearance stream to draw, resolving the annotation's `/AS` state name.
 pub(crate) fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     let ap = doc.resolve(d.get(b"AP")?);
     let normal = ap.as_dict()?.get(b"N")?.clone();
     match &*doc.resolve(&normal) {
         Object::Stream(_) => normal.as_ref(),
         Object::Dict(states) => {
-            let state = d.name(b"AS")?;
-            states.get(state)?.as_ref()
+            let state = annotation_value(doc, d.get(b"AS")?)?;
+            states.get(state.as_name()?)?.as_ref()
         }
         _ => None,
     }
@@ -146,6 +161,20 @@ pub(crate) fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> 
     ]);
     // The Do that draws the form applies its /Matrix itself, so only the placement goes here.
     Some(a)
+}
+
+/// ISO 32000-1 section 12.5.3: counterrotate the fitted appearance about Rect's upper-left
+/// corner in default user space. Crop, UserUnit and sheet transforms remain outside it.
+fn no_rotate_placement(placement: Matrix, rect: [f64; 4], rotation: i64) -> Option<Matrix> {
+    let [x, _, _, y] = rect;
+    let counterrotation = match rotation {
+        90 => Matrix([0.0, 1.0, -1.0, 0.0, x + y, y - x]),
+        180 => Matrix([-1.0, 0.0, 0.0, -1.0, 2.0 * x, 2.0 * y]),
+        270 => Matrix([0.0, -1.0, 1.0, 0.0, x - y, y + x]),
+        _ => Matrix::default(),
+    };
+    let placement = placement.then(&counterrotation);
+    placement.0.iter().all(|value| value.is_finite()).then_some(placement)
 }
 
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
@@ -182,15 +211,27 @@ pub(crate) fn page_form(
         if !prints(doc, &d, content) {
             continue;
         }
-        let rect: Vec<f64> =
-            d.get(b"Rect").and_then(|r| doc.resolve(r).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-        if rect.len() != 4 {
-            continue;
-        }
-        let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+        // A rectangle has four numbers, and each can be an indirect object (ISO 32000-2 §7.3.10).
+        let rect = d.get(b"Rect").and_then(|r| {
+            let rect = annotation_value(doc, r)?;
+            let [x0, y0, x1, y1] = rect.as_array()?.as_slice() else { return None };
+            let number = |v: &Object| annotation_value(doc, v)?.as_f64().filter(|v| v.is_finite());
+            Some([number(x0)?, number(y0)?, number(x1)?, number(y1)?])
+        });
+        let Some([x0, y0, x1, y1]) = rect else { continue };
+        let rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
         let Some(ap) = appearance(doc, &d) else { continue };
         let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
         let Some(m) = appearance_matrix(doc, &form, rect) else { continue };
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        // Text annotations have implicit NoRotate even when the flag is clear (ISO 32000-1 section 12.5.6.4).
+        let no_rotate = flags & 16 != 0 || d.get(b"Subtype").is_some_and(|subtype| doc.resolve(subtype).as_name() == Some(b"Text"));
+        let m = if no_rotate {
+            no_rotate_placement(m, rect, page.rotation(doc))
+                .ok_or_else(|| PrintError::Invalid(format!("page {} has a non-finite NoRotate annotation placement", index.saturating_add(1))))?
+        } else {
+            m
+        };
         let ap = if !form.contains(b"Subtype")
             && let Object::Stream(stream) = &*doc.get(ap)
         {
