@@ -26,14 +26,29 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   Headless: `doc_print` with `layout: "multiple"`, `order: "cut-stack"` and
   `per_sheet: 4` (or any supported grid size), plus `path` or `printer`.
 - **Booklet**: saddle-stitch imposition padded to a multiple of 4; both sides, front or back
-  only; left or right binding.
+  only; left or right binding; creep compensation, which moves each sheet's pages toward the
+  fold by its place from the outside times the creep (points per sheet, up to `MAX_CREEP`),
+  clipped at the fold. Headless: `doc_print` with `layout: "booklet"` and `creep`.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).
+  Existing Link appearances are document content in the first three modes; Link appearances
+  are not synthesized when absent, and form fields only excludes them.
 - **Properties… on CUPS** reads the queue's PPD and its current defaults (`lpoptions -l`) off
   the GUI thread, and gives `lpoptions` ten seconds: a CUPS that has stopped answering leaves
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`
   kills and reaps the command at the deadline).
+- **Remembered choices** (#2001): the dialog keeps two-sided (including leaving it to the
+  printer), grayscale, collate, page sizing (with its custom percent), Comments & forms and a
+  booklet's binding side across restarts, in the settings file under `print` with the names
+  `doc_print` takes (`names::duplex`, `names::content`, `names::size_mode` and their `parse_*`
+  counterparts are the one vocabulary). The paper is saved by its own setting (#2156).
+- **Each job starts afresh**: copies, pages (the choice, the range, odd/even and reverse), the
+  layout with its own options (pages per sheet, order, borders, booklet subset, poster scale,
+  overlap and cut marks) and orientation reset to the defaults each time Print opens, in the
+  same session too; ISO 32000-2 Table 147 initialises them per document when the print dialog
+  opens. Picked thumbnails still open it on Selected pages. The printer picked last carries over
+  within a session (#3537) but is not saved.
 
 Each source page becomes a Form XObject (its content wrapped in q/Q, plus the printable
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
@@ -49,13 +64,37 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`; on macOS they also carry the job
-name and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog
-sends them, which some vendors' filters need (#5743). Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`, and with `orientation-requested=4` when
+every sheet is landscape (`cups_orientation`), since CUPS would otherwise shrink a landscape
+sheet into portrait paper. On macOS they also carry the job name and owner
+(`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog sends them, which
+some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
 are removed on success and failure. Other targets offer the print-ready PDF instead.
+
+On Windows, **Printer default** reads the selected driver's current `DEVMODEW` duplex
+setting immediately before submission and carries that binding explicitly into the job
+(#5130). This also applies to `doc_print` with `duplex: "printer"`; its omitted-argument
+default remains `off`. Explicit Off/Long Edge/Short Edge choices, booklet binding and
+single-sided cut-and-stack bypass this lookup. Drivers without `DM_DUPLEX` retain the
+unspecified setting. Two-sided defaults also stay unspecified when the driver does not
+confirm automatic two-sided support, preserving manual duplex preferences (#5772).
+A failed lookup, settings read or invalid declared duplex value is
+logged and falls back to leaving duplex unspecified, so the driver can still choose its default.
+If the queue was resolved before the settings failure, the job remains pinned to that queue. CUPS still leaves the choice to the queue. The Windows backend
+selects `JobDuplexAllDocumentsContiguously`, falling back to `DocumentDuplex` when
+the driver exposes only document-level duplex, and validates the retained binding before submission
+([craft-libs #411](https://github.com/storytold/craft-libs/pull/411)).
+
+Before a job reaches the Windows spooler, every embedded TrueType or OpenType program is
+renamed `PdfCraftPrint<n>` in its `name` table and in the PDF (`/BaseFont`, `/FontName`; a
+subset keeps its tag). Windows otherwise draws a subset's renumbered glyphs with the installed
+font of the same name, so ReportLab's Arial subsets printed as shifted letters (#3132). Glyphs,
+encodings and `/ToUnicode` are unchanged, and CUPS and Save as PDF get the PDF as it was. A
+program PdfCraft can't read and rewrite keeps its old name in the PDF too, so a viewer that
+can't load it either still picks its substitute by that name.
 
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
