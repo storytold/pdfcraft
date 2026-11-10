@@ -1530,6 +1530,21 @@ mod tests {
         assert!(toast.contains("3 characters had no font"), "{toast}");
     }
 
+    /// A dead export worker holds the status lock while it dies and never writes a final
+    /// message, so `poll_export` must clear the run and notify instead of leaving it
+    /// pending forever (#3919). The status is fabricated, so no export is needed.
+    #[test]
+    fn a_dead_export_worker_clears_and_notifies() {
+        let mut app = PdfCraftApp::new();
+        let status: crate::export_ui::ExportStatus = Arc::new(Mutex::new(Some((0, 1, None))));
+        poison(&status);
+        app.export_status = Some(status);
+        app.poll_export();
+        assert!(app.export_status.is_none(), "the export run is cleared, not left pending");
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(!toast.is_empty(), "a dead worker notifies instead of waiting forever");
+    }
+
     /// The dialog's "Editable text" output is honored: a run that promised an editable document
     /// does not quietly write the invisible searchable layer — its result opens in the OCR
     /// Verify screen, whose Accept produces the editable document. The result is fabricated,
