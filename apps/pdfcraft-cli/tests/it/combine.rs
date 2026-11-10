@@ -164,6 +164,7 @@ fn a_bad_sort_says_what_is_wrong_and_writes_nothing() {
         (&["--sort", "warnings"][..], "\"warnings\""),
         (&["--descending"][..], "--descending needs --sort"),
         (&["--sort"][..], "--sort needs a value"),
+        (&["--sort", "--descending"][..], "--sort needs a value"),
     ] {
         let output = run(&dir, &[&["combine", "a.pdf", "b.pdf", "--out", "out.pdf"], args].concat());
         let stderr = String::from_utf8_lossy(&output.stderr);

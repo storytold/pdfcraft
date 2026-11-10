@@ -315,10 +315,12 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     if inputs.len() < 2 {
         return Err("combine: give at least two input files".into());
     }
-    let sort = match (args.iter().any(|a| a == "--sort"), flag(args, "--sort")) {
-        (true, None) => return Err("combine: --sort needs a value".into()),
-        (_, name) => name.map(FileSort::from_name).transpose().map_err(|e| format!("combine: --sort {e}"))?,
-    };
+    let sort = flag(args, "--sort");
+    // No sort's name starts with `--`: another option there means the value was left out.
+    if args.iter().any(|a| a == "--sort") && sort.is_none_or(|name| name.starts_with("--")) {
+        return Err("combine: --sort needs a value".into());
+    }
+    let sort = sort.map(FileSort::from_name).transpose().map_err(|e| format!("combine: --sort {e}"))?;
     let descending = args.iter().any(|a| a == "--descending");
     if descending && sort.is_none() {
         return Err("combine: --descending needs --sort".into());
