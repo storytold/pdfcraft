@@ -56,7 +56,7 @@ pub use model::{
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{run, run_shared, run_shared_calculations, run_shared_calculations_shared};
 
 pub mod formcalc;
 pub mod xfa;

@@ -152,6 +152,7 @@ pub(crate) fn run_here(
     ctx.insert_data(RefCell::new(crate::host::Host {
         fields: std::sync::Arc::clone(&doc.fields),
         changed: Default::default(),
+        formatted: Default::default(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
@@ -166,6 +167,10 @@ pub(crate) fn run_here(
             xfa: true,
             highlight: doc.highlight,
         },
+        // `calculateNow()` belongs to the AcroForm document; an XFA form recalculates itself.
+        calculations: Default::default(),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
         xfa: true,
