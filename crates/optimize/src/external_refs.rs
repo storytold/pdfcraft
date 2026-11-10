@@ -337,19 +337,34 @@ impl Outline {
     }
 }
 
+fn resolve_ref(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let mut r = o.as_ref()?;
+    for _ in 0..=32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => return Some(r),
+        }
+    }
+    None
+}
+
 /// Take actions to other documents out of bookmarks, depth-first. Returns the bookmarks changed.
 fn discard_bookmarks(doc: &mut Document) -> Result<usize, OptimizeError> {
-    let Some(root) = doc.root() else { return Ok(0) };
+    let Some(root) = doc.root().and_then(|r| resolve_ref(doc, &Object::Ref(r))) else {
+        return Ok(0);
+    };
     let catalog = doc.get(root);
     let mut walk = Outline::default();
     let mut seen = HashSet::new();
     match catalog.as_dict().and_then(|c| c.get(b"Outlines")) {
-        Some(Object::Ref(o)) => {
-            seen.insert(*o);
-            if let Some(mut d) = doc.get(*o).as_dict().cloned()
-                && walk.visit(doc, &mut d, *o, 0, false)?
-            {
-                doc.set(*o, Object::Dict(d));
+        Some(o @ Object::Ref(_)) => {
+            if let Some(o) = resolve_ref(doc, o) {
+                seen.insert(o);
+                if let Some(mut d) = doc.get(o).as_dict().cloned()
+                    && walk.visit(doc, &mut d, o, 0, false)?
+                {
+                    doc.set(o, Object::Dict(d));
+                }
             }
         }
         Some(Object::Dict(o)) => {
@@ -361,6 +376,9 @@ fn discard_bookmarks(doc: &mut Document) -> Result<usize, OptimizeError> {
         _ => {}
     }
     while let Some(r) = walk.stack.pop() {
+        let Some(r) = resolve_ref(doc, &Object::Ref(r)) else {
+            continue;
+        };
         if !seen.insert(r) {
             continue;
         }
@@ -378,7 +396,8 @@ pub(crate) fn discard(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, us
     let mut links = 0;
     let mut removed_links = HashSet::new();
     for p in pages {
-        let Some(pd) = doc.get(*p).as_dict().cloned() else { continue };
+        let Some(p) = resolve_ref(doc, &Object::Ref(*p)) else { continue };
+        let Some(pd) = doc.get(p).as_dict().cloned() else { continue };
         let Some(annots) = pd.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else { continue };
         let mut keep = Vec::with_capacity(annots.len());
         let mut changed = false;
@@ -387,17 +406,15 @@ pub(crate) fn discard(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, us
                 keep.push(x.clone());
                 continue;
             };
-            let owner = match x {
-                Object::Ref(r) => *r,
-                _ => *p,
-            };
+            let target_ref = resolve_ref(doc, x);
+            let owner = target_ref.unwrap_or(p);
             let link = d.get(b"Subtype").map(|s| doc.resolve(s)).is_some_and(|s| s.as_name().is_some_and(|n| n == b"Link"));
             let stripped = match d.get(b"A") {
                 Some(a) if link => strip_action(doc, a, owner)?,
                 _ => None,
             };
             let Some(action) = stripped else {
-                if !matches!(x, Object::Ref(r) if removed_links.contains(r)) {
+                if target_ref.is_none_or(|r| !removed_links.contains(&r)) {
                     keep.push(x.clone());
                 } else {
                     changed = true;
@@ -412,17 +429,17 @@ pub(crate) fn discard(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, us
                 }
             }
             let removed = d.get(b"A").is_none() && d.get(b"Dest").is_none();
-            match x {
-                Object::Ref(r) => {
-                    doc.set(*r, Object::Dict(d));
+            match target_ref {
+                Some(r) => {
+                    doc.set(r, Object::Dict(d));
                     if removed {
-                        removed_links.insert(*r);
+                        removed_links.insert(r);
                         changed = true;
                     } else {
                         keep.push(x.clone());
                     }
                 }
-                _ => {
+                None => {
                     changed = true;
                     if !removed {
                         keep.push(Object::Dict(d));
@@ -431,9 +448,70 @@ pub(crate) fn discard(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, us
             }
         }
         if changed {
-            doc.update_dict(*p, |d| d.set(b"Annots".to_vec(), Object::Array(keep)))?;
+            doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(keep)))?;
         }
     }
     let bookmarks = discard_bookmarks(doc)?;
     Ok((links, bookmarks))
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{Dict, Document, Object};
+
+    use super::discard;
+
+    #[test]
+    fn discard_resolves_chained_indirect_references_for_bookmarks_and_page_annots() {
+        let mut doc = Document::new_empty();
+        let Some(root_ref) = doc.root() else {
+            return;
+        };
+
+        let mut ext_action = Dict::new();
+        ext_action.set(b"S".to_vec(), Object::name("GoToR"));
+
+        let mut link_dict = Dict::new();
+        link_dict.set(b"Subtype".to_vec(), Object::name("Link"));
+        link_dict.set(b"A".to_vec(), Object::Dict(ext_action.clone()));
+        let link_obj = doc.add(Object::Dict(link_dict));
+        let link_alias_1 = doc.add(Object::Ref(link_obj));
+        let link_alias_2 = doc.add(Object::Ref(link_alias_1));
+
+        let mut page_dict = Dict::new();
+        page_dict.set(b"Type".to_vec(), Object::name("Page"));
+        page_dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link_alias_1), Object::Ref(link_alias_2)]));
+        let page_obj = doc.add(Object::Dict(page_dict));
+        let page_alias = doc.add(Object::Ref(page_obj));
+
+        let mut bm_next = Dict::new();
+        bm_next.set(b"A".to_vec(), Object::Dict(ext_action.clone()));
+        let bm_next_obj = doc.add(Object::Dict(bm_next));
+        let bm_next_alias = doc.add(Object::Ref(bm_next_obj));
+
+        let mut bm_first = Dict::new();
+        bm_first.set(b"A".to_vec(), Object::Dict(ext_action));
+        bm_first.set(b"Next".to_vec(), Object::Ref(bm_next_alias));
+        let bm_first_obj = doc.add(Object::Dict(bm_first));
+        let bm_first_alias = doc.add(Object::Ref(bm_first_obj));
+
+        let mut outlines = Dict::new();
+        outlines.set(b"First".to_vec(), Object::Ref(bm_first_alias));
+        let outlines_obj = doc.add(Object::Dict(outlines));
+        let outlines_alias = doc.add(Object::Ref(outlines_obj));
+
+        let mut catalog = doc.get(root_ref).as_dict().cloned().unwrap_or_default();
+        catalog.set(b"Outlines".to_vec(), Object::Ref(outlines_alias));
+        let real_catalog = doc.add(Object::Dict(catalog));
+        doc.set(root_ref, Object::Ref(real_catalog));
+
+        let Ok((links, bookmarks)) = discard(&mut doc, &[page_alias]) else {
+            return;
+        };
+        assert_eq!((links, bookmarks), (1, 2));
+        assert_eq!(doc.get(link_obj).as_dict().and_then(|d| d.get(b"A")), None);
+        assert_eq!(doc.get(page_obj).as_dict().and_then(|d| d.get(b"Annots")), Some(&Object::Array(Vec::new())));
+        assert_eq!(doc.get(bm_first_obj).as_dict().and_then(|d| d.get(b"A")), None);
+        assert_eq!(doc.get(bm_next_obj).as_dict().and_then(|d| d.get(b"A")), None);
+    }
 }
