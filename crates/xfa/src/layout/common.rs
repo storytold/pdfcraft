@@ -1,5 +1,5 @@
-use super::items::{Action, Item, Rounded};
-use super::{DataNode, DataPath, HashMap, Layout, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
+use super::items::{Action, BorderShape, Item, Rounded, Widget, WidgetBorder};
+use super::{DataNode, DataPath, HashMap, HashSet, Layout, MAX_DEPTH, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
 use crate::data::{data_date_letters, data_to_iso, fields_with_ids};
 
 /// The value of each field with an `id`, for the rich text that embeds it (floating fields,
@@ -39,6 +39,47 @@ impl EmbedSource {
             (Some(v), Some((pattern, data_pattern))) => iso_to_pattern(&data_to_iso(&v, data_pattern.as_deref()), pattern),
             (Some(v), None) => v,
             (None, _) => self.default.clone(),
+        }
+    }
+}
+
+/// The names the template's fields, exclusion groups and the groups' member fields take as
+/// written ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` →
+/// `Cell4_2`) must not be one of these, or two fields would share it. (A group's radio buttons
+/// are the group's PDF field; a member that isn't one is a PDF field with its own name.)
+pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Field(f) => {
+                if let Some(name) = &f.common.name {
+                    out.insert(clean_name(name));
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(name) = &g.common.name {
+                    out.insert(clean_name(name));
+                }
+                // Its members are drawn as fields with their own names (`draw_field`), so a
+                // repeat drawn before the group must not take one.
+                for f in &g.fields {
+                    if let Some(name) = &f.common.name {
+                        out.insert(clean_name(name));
+                    }
+                }
+            }
+            Node::Subform(s) => {
+                collect_names(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_names(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_names(&a.children, out, depth + 1),
+            Node::Draw(_) => {}
         }
     }
 }
@@ -88,12 +129,19 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Only { item, .. } => solid_extent(item),
     }
 }
 
 /// `item` as the part above `cut` and the part below: solid items go whole to the side their
 /// top is on, fills and lines crossing the cut are cut in two.
 pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Item::Only { views, item } = item {
+        // Each part shows where the whole did.
+        let wrap = |i: Item| Item::Only { views, item: Box::new(i) };
+        let (a, b) = divide(*item, cut);
+        return (a.map(wrap), b.map(wrap));
+    }
     if let Some((top, _)) = solid_extent(&item) {
         return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
     }
@@ -143,8 +191,64 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
     }
 }
 
+/// How much of a widget a page break must leave above it for the field to split there: a line of
+/// its text.
+pub(super) fn split_line(w: &Widget) -> f64 {
+    (w.face.size * 1.2).max(1.0)
+}
+
+/// The rest of an empty field's widget below a page break: its box and the look of its border.
+pub(super) type WidgetRest = (Rect, WidgetBorder);
+
+/// An empty field's widget cut at `cut`: the widget down to the cut, and the rest of its box below
+/// it to go on in the following content areas ([`widget_box`] draws each piece of it). A widget the
+/// cut doesn't cross stays whole on its side, as does one with no room above the cut for a line of
+/// its text: the second item is the widget when it all goes below.
+pub(super) fn split_widget(item: Item, cut: f64) -> (Option<Item>, Option<Item>, Option<WidgetRest>) {
+    let Item::Widget(mut w) = item else { return (Some(item), None, None) };
+    let line = split_line(&w);
+    if w.rect.bottom() <= cut + 0.01 {
+        return (Some(Item::Widget(w)), None, None);
+    }
+    if w.rect.y + line > cut {
+        return (None, Some(Item::Widget(w)), None);
+    }
+    let rest = Rect::new(w.rect.x, cut, w.rect.w, w.rect.bottom() - cut);
+    w.rect.h = cut - w.rect.y;
+    let border = w.border.clone();
+    (Some(Item::Widget(w)), None, Some((rest, border)))
+}
+
+/// One piece of a split widget's box at `rect`: its fill, and its border closed on every side (a
+/// border's default `break="close"`, XFA 3.3 pp. 629–630).
+pub(super) fn widget_box(rect: Rect, border: &WidgetBorder) -> Vec<Item> {
+    let mut items = Vec::new();
+    if let Some(color) = border.fill {
+        items.push(Item::Fill { rect, color });
+    }
+    if let Some(color) = border.color {
+        let width = border.width.max(0.0);
+        let i = width / 2.0;
+        let (x0, y0, x1, y1) = (rect.x + i, rect.y + i, rect.right() - i, rect.bottom() - i);
+        // The border's corners in drawing order: each edge joins two in a row.
+        let corners: &[(f64, f64)] = match border.shape {
+            BorderShape::Full => &[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+            BorderShape::Underline => &[(x0, y1), (x1, y1)],
+            BorderShape::None => &[],
+        };
+        items.extend(corners.windows(2).filter_map(|edge| match *edge {
+            [from, to] => Some(Item::Line { from, to, width, color, dashed: false }),
+            _ => None,
+        }));
+    }
+    items
+}
+
 /// `item` moved by (`dx`, `dy`).
 pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    if let Item::Only { views, item: inner } = item {
+        return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
+    }
     match &mut item {
         Item::Fill { rect, .. } | Item::Image { rect, .. } => {
             rect.x += dx;
@@ -171,6 +275,8 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             t.extent = (t.extent.0 + dy, t.extent.1 + dy);
             t.items = std::mem::take(&mut t.items).into_iter().map(|i| moved(i, dx, dy)).collect();
         }
+        // Taken apart above.
+        Item::Only { .. } => {}
     }
     item
 }

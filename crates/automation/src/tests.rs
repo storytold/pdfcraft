@@ -707,3 +707,27 @@ fn text_extract_html_has_one_budget_across_pages() {
     assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
     assert_eq!(capped["pages"][1]["styles_incomplete"], true);
 }
+
+/// Replace through the tool when a page's text can't be read for the find bar: the page is named
+/// and counted as refused, in the result, and the readable pages are still replaced.
+#[test]
+fn replace_all_reports_a_page_whose_text_cannot_be_read() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
+        extract_parallel(bytes, password, pages)
+            .into_iter()
+            .map(|(p, result)| (p, if p == 1 { Err("synthetic page 2 failure".to_owned()) } else { result }))
+            .collect()
+    };
+    let r = a.text_replace_with(&Args(&json!({ "doc": id.0, "find": "Page", "replace": "Sheet" })), &mut extract).unwrap();
+    assert_eq!(r["replaced"], 3, "{r}");
+    assert_eq!((r["skipped"].clone(), r["skipped_by"]["refused"].clone()), (json!(1), json!(1)), "{r}");
+    let why = r["refusals"][0].as_str().unwrap();
+    assert!(why.starts_with("page 2:") && why.contains("synthetic page 2 failure"), "{why}");
+    // Replacing the first match stops at an unreadable page before it: nothing is replaced.
+    let r =
+        a.text_replace_with(&Args(&json!({ "doc": id.0, "find": "Page", "replace": "Sheet", "all": false, "pages": [2, 3] })), &mut extract).unwrap();
+    assert_eq!((r["replaced"].clone(), r["changed"].clone(), r["skipped_by"]["refused"].clone()), (json!(0), json!(false), json!(1)), "{r}");
+    assert!(r["refusals"][0].as_str().unwrap().starts_with("page 2:"), "{r}");
+}

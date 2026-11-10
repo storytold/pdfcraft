@@ -5426,6 +5426,91 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
+/// A paragraph's edge and an open paragraph's frame are caught a few pixels either side of
+/// their hairline, and the cursor shows exactly where a press takes hold (#2203).
+#[test]
+fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
+    let start = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        // The drawn box: the text on screen, 2 px larger each side.
+        let bx = egui::Rect::from_min_max(
+            egui::pos2(r.left() + b.rect[0] as f32 * k, r.top() + (300.0 - b.rect[3] as f32) * k),
+            egui::pos2(r.left() + b.rect[2] as f32 * k, r.top() + (300.0 - b.rect[1] as f32) * k),
+        )
+        .expand(2.0);
+        (id, bx)
+    };
+    // A closed paragraph's right edge, 7 px inside and 7 px outside: the rewrap arrow, and a
+    // drag from there changes the width rather than moving the box.
+    for dx in [-7.0f32, 7.0] {
+        let mut h = harness(1, |_| {});
+        let (id, bx) = start(&mut h);
+        let p = egui::pos2(bx.right() + dx, bx.center().y);
+        h.hover_at(p);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "{dx} px from the edge");
+        drag(&mut h, p, p + egui::vec2(40.0, 0.0));
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"), "{dx} px from the edge rewraps");
+    }
+    // An open paragraph's frame, 7 px beyond its drawn line: the move arrow, and a press there
+    // selects the box instead of closing the paragraph.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    let p = egui::pos2(bx.center().x, bx.top() - 7.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the pointer shows the frame takes hold");
+    click_at(&mut h, p);
+    assert!(h.state().views[0].line_editor.is_none());
+    h.get_by_label("1 object selected");
+    // Once the text is changed, a press on the frame doesn't take the box (selecting it would
+    // drop the typing): it applies the typing like any click off the text, so the pointer doesn't
+    // offer the move arrow there either.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    h.state_mut().views[0].line_editor.as_mut().expect("open for typing").text = "Page one".into();
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "no move arrow where a press can't take the box");
+    click_at(&mut h, p);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
+}
+
+/// Leaving All tools ▸ Edit a PDF for another tool applies the paragraph still open, as leaving
+/// the Edit tab does, rather than dropping what was typed (review on #4605).
+#[test]
+fn another_tool_from_edit_a_pdf_applies_the_open_paragraph() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_ne!(h.state().mode, Mode::Edit, "Edit a PDF from All tools, not the Edit tab");
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    click_at(&mut h, egui::pos2(r.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, r.top() + (300.0 - (b.rect[1] + b.rect[3]) / 2.0) as f32 * k));
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"), "the paragraph is open for typing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Page one".into();
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the typed text was applied");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});
@@ -6410,6 +6495,106 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
         })
         .expect("a caret on the last row");
     assert!(caret > row_height * 0.8 && caret < row_height + 4.0, "caret {caret} px on a {row_height} px row");
+}
+
+/// One paragraph whose every word is its own run at its own size, in a font the editor can't load
+/// (not embedded, and not a standard font), with glyphs much wider than its stand-in face's: the
+/// shape of an OCR layer, and of a Type 1 paragraph from LaTeX. Returns the PDF and its words.
+fn stand_in_words_fixture() -> (Vec<u8>, Vec<&'static str>) {
+    let words: Vec<(&str, f64)> = vec![
+        ("In", 10.0),
+        ("poker", 10.3),
+        ("a", 15.1),
+        ("full", 11.7),
+        ("house", 10.7),
+        ("is", 9.7),
+        ("a", 15.1),
+        ("set", 9.0),
+        ("of", 10.4),
+        ("cards", 10.0),
+        ("that", 9.4),
+        ("make", 9.0),
+        ("a", 12.4),
+        ("pair", 11.7),
+    ];
+    let mut content = String::new();
+    let mut x = 20.0;
+    for (word, size) in &words {
+        content.push_str(&format!("BT /F1 {size} Tf {x:.2} 200 Td ({word}) Tj ET\n"));
+        x += word.len() as f64 * 0.7 * size + 4.0;
+    }
+    let widths = vec!["700"; 95].join(" ");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 700 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /CMR10 /FirstChar 32 /LastChar 126 /Widths [{widths}] >>"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    (out, words.into_iter().map(|(w, _)| w).collect())
+}
+
+/// A drag over a word of an unchanged paragraph selects that word. The editor lays the paragraph
+/// out unseen in a stand-in face, and stretching each run to its width let every word boundary
+/// drift: over an OCR layer, dragging across "kind" selected "of a", two words before it.
+#[test]
+fn dragging_over_a_word_selects_that_word_when_the_editor_uses_a_stand_in_face() {
+    let (bytes, words) = stand_in_words_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("ocr-like.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 700.0;
+    let screen = |x: f64, y: f64| egui::pos2(page.left() + x as f32 * k, page.top() + (300.0 - y) as f32 * k);
+    let lines = h.state().session.get(h.state().views[0].id).unwrap().text_lines(0);
+    assert_eq!(lines.len(), words.len(), "one run per word: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+    let first = lines[0].rect;
+    let at = screen((first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(4);
+    let opened = h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(opened.as_deref(), Some(words.join(" ").as_str()), "the words open as one paragraph");
+    // Drag across each of the last words, just inside its box, as a reader aims at what the page shows.
+    for target in [words.len() - 1, words.len() - 4, 9] {
+        let r = lines[target].rect;
+        let middle = (r[1] + r[3]) / 2.0;
+        let (from, to) = (screen(r[0] + 0.5, middle), screen(r[2] - 0.5, middle));
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.hover_at(from + (to - from) * (step as f32 / 6.0));
+            h.run_steps(1);
+        }
+        h.drop_at(to);
+        h.run_steps(3);
+        let ed = h.state().views[0].line_editor.as_ref().expect("the paragraph stays open");
+        let selected = ed.selection.clone().and_then(|s| ed.text.get(s)).unwrap_or_default();
+        assert_eq!(selected, words[target], "dragging over word {target} ({:?})", words[target]);
+    }
 }
 
 /// Opt-in private-document regression. This never captures images or saves the source file.
@@ -9428,6 +9613,137 @@ fn test_cropped_image_selection_and_bounding_box() {
     assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
 }
 
+/// Print production ▸ Add printer marks: the dialog adds removable marks around
+/// the trim box, widening the page to make room; Remove printer marks takes them off.
+#[test]
+fn printer_marks_are_added_from_the_dialog_and_removed() {
+    let mut h = harness(2, |_| {});
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().info.pages[0].width;
+    assert!(h.state_mut().execute("prepress.marks"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::PrinterMarks));
+    h.get_by_label("All marks");
+    h.get_by_label("Add").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Add printer marks"));
+    assert!(doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    // No trim box: the whole page is the trim box, so the page grew 36 pt a side for the marks.
+    assert!((doc.info.pages[0].width - (before + 72.0)).abs() < 0.5, "{} → {}", before, doc.info.pages[0].width);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Printer marks added");
+    assert!(h.state_mut().execute("prepress.marks.remove"));
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert!(!doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    assert_eq!(doc.can_undo(), Some("Remove printer marks"));
+}
+
+/// Print production ▸ Convert colours: the dialog converts the page's colours
+/// and says how many; with nothing to convert it says so and changes nothing.
+#[test]
+fn convert_colours_from_the_dialog() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S",
+    )));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("colours.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::ConvertColours));
+    h.get_by_label("Grayscale");
+    // The mode bar has a "Convert" too: the dialog's button is the last one.
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Converted 2 colours and 0 pictures on 1 pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Convert colours"));
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Nothing on those pages needed converting");
+}
+
+/// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
+/// strokes and says how many; with nothing to fix it says so and changes nothing.
+#[test]
+fn fix_hairlines_from_the_dialog() {
+    // A page with a zero-width line and a 2 pt line.
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc
+        .add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S")));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FixHairlines));
+    h.get_by_label("Type 3 font glyphs");
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 1 hairline on 1 page");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+    // Nothing left: told, and no new undo step.
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "No hairlines found on those pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+}
+
+/// Several strokes on one page: the notice says "hairlines" and "1 page".
+#[test]
+fn fix_hairlines_notice_uses_singular_and_plural() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
+    for (n, page) in pdfcraft_model::pages(&doc).into_iter().enumerate() {
+        let lines = if n == 0 { "0 w 10 10 m 100 10 l S 0 w 10 20 m 100 20 l S" } else { "2 w 10 10 m 100 10 l S" };
+        let cs = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), lines.as_bytes())));
+        doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    // The dialog's default range is every page; only the first has hairlines.
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 2 hairlines on 1 page");
+}
+
+/// The `dialog` option goes through the command: with no document it does not open the dialog.
+#[test]
+fn fix_hairlines_option_needs_a_document() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("dialog", "fix-hairlines").unwrap();
+    assert_eq!(app.dialog, None);
+}
+
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
 /// putting the Edit text tool down does; left open, it would stay drawn in Read mode with no tool.
 #[test]
@@ -11174,6 +11490,172 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
             "preview jumped after commit/save: clip={clip:?} rotation={rotation}: {preview:?} != {committed:?}"
         );
     }
+}
+
+/// The Escape that closes a dialog opened from a menu while a paragraph is being typed is the
+/// dialog's: the typing stays, in the open paragraph or applied to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
+    let mut h = open_source_font_fixture();
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let serif = egui::pos2(page.left() + 25.0 / 300.0 * page.width(), page.top() + (300.0 - 228.0) / 300.0 * page.height());
+    h.hover_at(serif);
+    h.run_steps(1);
+    h.drag_at(serif);
+    h.run_steps(1);
+    h.drop_at(serif);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open");
+    h.event(egui::Event::Text("typed ".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let s = h.state();
+    let open = s.views[0].line_editor.as_ref().is_some_and(|e| e.text.contains("typed"));
+    let applied = s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().any(|b| b.text.contains("typed"));
+    assert!(open || applied, "the typing stays");
+}
+
+/// Edit ▸ Select all from the in-window menu bar selects every page in Organize. The bar reads
+/// as open on the pass after its click, and its ⌘A waits for the bar to let go of the keys, which
+/// the chords leave to it: nothing was selected.
+#[test]
+fn edit_select_all_from_the_menu_bar_selects_every_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Select all").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2], "Edit ▸ Select all selected every page");
+}
+
+/// Edit ▸ Cut from the in-window menu bar cuts the selected page in Organize: its Cut waits for
+/// the bar, which reads as open on the pass after its click, to let go of the keys.
+#[test]
+fn edit_cut_from_the_menu_bar_cuts_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Cut").click();
+    h.run_steps(4);
+    assert!(h.state().page_clipboard.is_some(), "Edit ▸ Cut put the page on the clipboard");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2, "Edit ▸ Cut took the page out");
+}
+
+/// A native menu's Edit ▸ Paste with a page's context menu open closes the menu, which the click
+/// never reached, and the platform's answer pastes the page, also when it comes late (on Wayland
+/// egui-winit reads the clipboard asynchronously, within 3 seconds).
+#[test]
+fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 4, "the late paste pasted the page");
+}
+
+/// Two native Edit ▸ Pastes with a page's context menu open each ask for the clipboard, and each
+/// answer pastes the page (on Wayland they come one by one).
+#[test]
+fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    for _ in 0..2 {
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+        h.step();
+        assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    }
+    for pasted in [4, 5] {
+        h.event(egui::Event::Paste("clipboard text".into()));
+        h.run_steps(3);
+        assert_eq!(pages(&h), pasted, "each answer pastes the page");
+    }
+}
+
+/// A paste behind a page's context menu stays there, also one that answers an Edit ▸ Paste asked
+/// for before the user opened the menu (egui-winit answers it as it answers ⌘V): it pastes no page.
+#[test]
+fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 3, "the paste behind the context menu pasted the page");
+}
+
+/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The bar reads as
+/// open on the pass after its click, so Edit ▸ Paste asks the platform for the clipboard once it
+/// has let go of the keys, and the answer (kittest gives none, so the test does) comes to the
+/// pages. An answer to a request sent with the click would come while the bar still held the keys.
+#[test]
+fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    assert_eq!(pages(&h), 3);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Paste").click();
+    h.step();
+    assert!(craft_menu::bar::is_open(&h.ctx), "the bar reads as open on the pass after the click");
+    assert!(!support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked while the bar held the keys");
+    let mut asked = false;
+    for _ in 0..4 {
+        h.step();
+        asked |= support::asked_for_the_clipboard(&h);
+    }
+    assert!(asked, "Edit ▸ Paste asked the platform for the clipboard");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
 }
 
 #[test]

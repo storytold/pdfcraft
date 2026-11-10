@@ -2,8 +2,8 @@
 use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
-    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_DRAW_CHARS, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para,
-    Rc, Rect, SomIndices, XfaError, data_path, text,
+    Block, Border, Common, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_DRAW_CHARS, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, Node, PAGE_COUNT_MARK,
+    PageRole, Para, Rc, Rect, SomIndices, Views, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -11,6 +11,14 @@ impl Layouter<'_> {
         let m = msg.into();
         if self.warned.insert(m.clone()) && self.warnings.len() < 100 {
             self.warnings.push(m);
+        }
+    }
+
+    /// Say once when `c`'s `relevant` names a view other than print, which is drawn as if it
+    /// didn't: for drawn objects, flowed subforms and table rows alike.
+    pub(super) fn warn_other_views(&mut self, c: &Common) {
+        if let Some(other) = &c.relevant_other {
+            self.warn_once(format!("the form limits some objects to views other than print (relevant \"{other}\"); they are drawn as if it didn't"));
         }
     }
 
@@ -65,12 +73,25 @@ impl Layouter<'_> {
         Ok(())
     }
 
+    /// Put `item` on the last page, shown where what it is inside is shown ([`Self::views`]): a
+    /// field's widget carries that itself, anything else drawn only on screen or only in print
+    /// goes in an [`Item::Only`], and what shows nowhere isn't put at all.
     pub(super) fn push(&mut self, item: Item) -> Result<(), XfaError> {
         self.check_measures()?;
         self.items += 1;
         if self.items > MAX_ITEMS {
             return Err(XfaError::TooLarge("the form has too many objects to lay out".into()));
         }
+        let views = self.views;
+        let item = match item {
+            Item::Widget(mut w) => {
+                w.views = views;
+                Item::Widget(w)
+            }
+            other if views == Views::ALL => other,
+            _ if !views.any() => return Ok(()),
+            other => Item::Only { views, item: Box::new(other) },
+        };
         if let Some(p) = self.pages.last_mut() {
             p.items.push(item);
         }
@@ -123,17 +144,35 @@ impl Layouter<'_> {
         if let Some(u) = self.uses.get_mut(idx) {
             *u += 1;
         }
-        self.pages.push(Page { width: area.width, height: area.height, items: Vec::new() });
+        self.pages.push(Page { width: area.width, height: area.height, items: Vec::new(), area: area.name.clone() });
         let content = area.content.first().copied().unwrap_or(Rect::new(0.0, 0.0, area.width, area.height));
         self.cur = Some(Cursor { area: idx, content: 0, rect: content, y: content.y, placed: false });
-        // Master page content: positioned draws and fields.
-        let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
+        // Master page content: positioned draws and fields. The page area's own SOM index counts
+        // the pages made from it, so a field repeated on each page (a page number, an office-use
+        // box) has a path of its own per page rather than every page sharing `[0]`.
+        let instance = self.uses.get(idx).map_or(0, |u| u.saturating_sub(1));
+        let ctx =
+            Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[{instance}]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
-        let sibs = SomIndices::of(&area.items);
-        for (i, item) in area.items.iter().enumerate() {
-            self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i))?;
-        }
-        Ok(())
+        // What scripts set on this page's master content (a button hidden on this page only) goes
+        // on a copy of it for this page; other pages keep the template's.
+        let prefix = format!("{}.", ctx.som);
+        let copy =
+            self.overrides.filter(|ov| !ctx.som.is_empty() && ov.presence.keys().chain(ov.access.keys()).any(|k| k.starts_with(&prefix))).map(|ov| {
+                let mut copy = area.items.clone();
+                crate::script::apply_overrides_to(&mut copy, &ctx.som, ov, 1);
+                let copy = Rc::new(copy);
+                self.master_copies.push(Rc::clone(&copy));
+                copy
+            });
+        let items: &[Node] = copy.as_deref().map_or(&area.items, Vec::as_slice);
+        let sibs = SomIndices::of(items);
+        // The master page's own objects: shown where they say, whatever the body was drawing
+        // when it needed this page.
+        let body = std::mem::replace(&mut self.views, Views::ALL);
+        let drawn = items.iter().enumerate().try_for_each(|(i, item)| self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i)));
+        self.views = body;
+        drawn
     }
 
     /// Move to the next content area, or the next page.
@@ -165,7 +204,7 @@ impl Layouter<'_> {
     }
 
     /// Whether the flow is still in the content area `m` was taken in.
-    fn on_area(&self, m: &FlowMark) -> bool {
+    pub(super) fn on_area(&self, m: &FlowMark) -> bool {
         self.pages.len() == m.page && self.cur.as_ref().is_some_and(|c| c.area == m.area && c.content == m.content)
     }
 
@@ -186,7 +225,7 @@ impl Layouter<'_> {
         let (rect, mut y, _) = self.cursor();
         let page = self.pages.len().saturating_sub(1);
         let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
-        let filled: Vec<bool> = self.frames.iter().map(|f| self.has_items_from(page, f.part.items)).collect();
+        let filled: Vec<bool> = self.frames.iter().map(|f| f.held || self.has_items_from(page, f.part.items)).collect();
         for ((f, here), filled) in self.frames.iter_mut().zip(here).zip(filled).rev() {
             y = (y + f.margin.bottom).min(rect.bottom());
             if !here {
@@ -206,12 +245,20 @@ impl Layouter<'_> {
             let Some(mark) = self.flow_mark() else { break };
             let Some(f) = self.frames.get_mut(i) else { break };
             f.part = mark;
+            f.held = false;
             // `max` before `min`: a NaN margin counts as none and leaves `room` a number.
             let top = f.margin.top.max(0.0).min(room);
             room = (room - top).max(0.0);
             self.advance(top);
         }
         Ok(())
+    }
+
+    /// The bottom margins of the flowed subforms being laid out, which a break leaves below their
+    /// content ([`Self::break_frames`]).
+    pub(super) fn frames_bottom(&self) -> f64 {
+        // `max` first: a NaN margin counts as none.
+        self.frames.iter().map(|f| f.margin.bottom.max(0.0)).sum()
     }
 
     /// Close flowed subform `f` once its content is placed: its last part ends where the flow
@@ -230,7 +277,7 @@ impl Layouter<'_> {
         let page = self.pages.len().saturating_sub(1);
         if !self.on_area(&f.part) {
             f.lost = true;
-        } else if self.has_items_from(page, f.part.items) && end - f.part.y >= 0.01 {
+        } else if (f.held || self.has_items_from(page, f.part.items)) && end - f.part.y >= 0.01 {
             f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, end - f.part.y)));
         }
         if f.lost {
@@ -246,7 +293,7 @@ impl Layouter<'_> {
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    pub(super) fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
         self.draw_border(b, rect)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {

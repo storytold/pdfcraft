@@ -944,6 +944,24 @@ fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
     assert!(h.state().toast.is_none(), "the notice is delivered once");
 }
 
+/// A form opened behind the current document that turns field highlighting on gets it at
+/// once, and so does the next document: only requests that act on the current document (a
+/// print, a save, a message) wait for its tab.
+#[test]
+fn a_background_forms_highlight_request_applies_at_once() {
+    let mut h = harness(&[3]);
+    // Highlighting is on by default: start from a user who turned it off.
+    h.state_mut().view_defaults.highlight_fields = false;
+    h.state_mut().views[0].highlight_fields = false;
+    h.run_steps(1);
+    deliver_startup(&h, "late-form.pdf", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0), "it opened behind the current document");
+    assert!(h.state().views[1].highlight_fields, "the background form is highlighted");
+    assert!(!h.state().views[0].highlight_fields, "the current document is left as it was");
+    assert!(h.state().view_defaults.highlight_fields, "the next document opens highlighted");
+}
+
 /// Embedded bytes and the PDF's original /UF name stay independent of the Save suggestion.
 fn attachment_fixture() -> Vec<u8> {
     attachment_pdf("invoice\u{202e}fdp.exe", b"hello notes")
