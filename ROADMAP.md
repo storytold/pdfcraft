@@ -79,7 +79,7 @@
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M4 #2997: Ctrl-drag (Option on macOS) in the Organize grid copies the pages into the drop gap; `page_duplicate` takes `at`; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: AcroForm XML text; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M2/gap 12: the Annex D.2 alias codes read as the ink they draw in both tables; the text oracle scores reading order; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-05 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 863af864: ≈ 67% → ≈ 71% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-10 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 8559306f: ≈ 67% → ≈ 73% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M4: indirect page rotations; M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M6: preserve XML/XFDF attribute whitespace; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -146,7 +146,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 71%** tier-weighted (61.8% unweighted: 457 shipped + 109 partial of 828; P0 94.6%) | measured, `parity/acrobat-features.toml` (`cargo xtask parity`, 2026-11-05) |
+| **Feature breadth** | **≈ 73%** tier-weighted (64.3% unweighted: 476 shipped + 121 partial of 835; P0 94.6%) | measured, `parity/acrobat-features.toml` (`cargo xtask parity`, 2026-11-10) |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured 2026-10-26 ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -192,20 +192,20 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Area | Breadth (measured) | Ready (estimated) | Remaining (h) |
 |---|---|---|---|
-| A Core model and fidelity | 78.0% | 70% | 25–45 |
-| B View and navigation | 64.7% | 55% | 110–190 |
-| C Content editing | 65.1% | 30% | 100–180 |
-| D Organize pages | 71.2% | 70% | 12–25 |
-| E Comments and review | 80.7% | 70% | 12–25 |
-| F Forms and JavaScript | 80.4% | 65% | 40–75 |
-| G Protect, redact, sanitize | 59.5% | 55% | 15–30 |
+| A Core model and fidelity | 78.8% | 70% | 25–45 |
+| B View and navigation | 66.7% | 55% | 110–190 |
+| C Content editing | 65.9% | 30% | 100–180 |
+| D Organize pages | 73.8% | 70% | 12–25 |
+| E Comments and review | 85.1% | 70% | 12–25 |
+| F Forms and JavaScript | 81.0% | 65% | 40–75 |
+| G Protect, redact, sanitize | 62.8% | 55% | 15–30 |
 | H Digital signatures | 62.2% | 45% | 40–70 |
-| I Scan and OCR | 32.7% | 15% | 40–75 |
+| I Scan and OCR | 44.2% | 15% | 40–75 |
 | J Create and export | 41.4% | 25% | 55–100 |
-| K Optimize and standards | 38.8% | 20% | 65–115 |
-| L Print | 43.6% | 35% | 30–55 |
+| K Optimize and standards | 44.8% | 20% | 65–115 |
+| L Print | 53.8% | 35% | 30–55 |
 | M Accessibility | 72.1% | 30% | 40–70 |
-| N Automation, preferences, misc | 34.9% | 35% | 25–45 |
+| N Automation, preferences, misc | 34.2% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
 
@@ -879,6 +879,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | M7 #1540, merge of `upstream/main` at 8559306f: checklist recounted with `cargo xtask parity` (64.3% unweighted: 476 shipped + 121 partial of 835; P0 94.6%; ≈ 73% tier-weighted) and areas A (78.8%), B (66.7%), C (65.9%), D (73.8%), E (85.1%), F (81.0%), G (62.8%), I (44.2%), K (44.8%), L (53.8%) and N (34.2%) updated; readiness and hours not re-judged |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |

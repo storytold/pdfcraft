@@ -14,13 +14,13 @@ The [PDF workflow research reference](research/pdf-workflows/README.md) collects
 
 ## Measured
 
-- **213 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
+- **223 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
   command palette and the automation `command_run` tool; menus are generated from the registry
   (`view.menus-from-registry`).
-- **195 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
+- **211 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
-- **View area of the checklist: 64.7% breadth** (54 shipped, 15 partial of 95). All three counted on
-  2026-11-05.
+- **View area of the checklist: 66.7% breadth** (56 shipped, 16 partial of 96). All three counted on
+  2026-11-10.
 
 No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24).
 
