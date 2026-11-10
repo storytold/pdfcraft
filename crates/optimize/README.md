@@ -22,11 +22,14 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   printed this way went from 4.3 MB to 231 KB (Standard) and 161 KB (Mobile). Not merged yet:
   side-by-side tiles, rotated strips, masks. Content arrays use the shared space boundary
   policy, so trailing comments, split operands and graphics state keep their meaning after merging.
+  A page whose content doesn't decode, or is damaged partway, is left as it is: written again from
+  what decoded, it would lose the rest.
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses).
   Page-local `/UserUnit` scaling is included, so large-format pages are measured in physical inches.
   If a use can't be
-  measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
+  measured (forms nested deeper or drawn too many times, or content that doesn't decode or is
+  damaged partway, which may draw an image larger past the damage), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
   stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
@@ -118,7 +121,16 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
     about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
     counts those the image step read. Streams it only stores with Flate (below) aren't counted.
-- **Discard objects:** thumbnails, alternate images, document tags, print settings.
+- **Threads**: pictures are worked out on up to half the machine's processors (at most 8, one on
+  the web), and as many as 1 GiB holds of the largest picture. Those threads go at low priority
+  where the system allows it, so other programs go first; pictures done on the calling thread keep
+  its priority. The document only changes in order on one thread, and what a picture costs is paid
+  in that order, so the file written, and the pictures the run's decoding allowance refuses, are
+  the same with any number.
+- **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
+  submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
+  default). The fields, links, bookmarks and pages that ran a removed action keep their other
+  actions, and the actions chained after it through `/Next` still run in order.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes; streams with `/DecodeParms`, images and object streams keep their ASCII layer. LZW-compressed
@@ -127,12 +139,36 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   stay LZW: a predictor carries over to Flate without
   `EarlyChange`, filters applied before the LZW one go with it and those after it keep their
   bytes. A stream whose LZW data doesn't decode cleanly is left as it is. Not yet: inline images.
+- **Discard external cross-references** (off by default): `GoToR`, `GoToE`, `Launch` and
+  `ImportData` actions, and `Thread` actions with an `/F`, are taken out of link annotations and
+  bookmarks, and the actions chained after one through `/Next` take its place. Other annotations,
+  such as form fields, keep their actions. A link left with no action and no `/Dest` is removed
+  from its page, and its object, when something else refers to it, keeps the link without the
+  action; a bookmark keeps its title and children. Links within the document and web links
+  (`URI`) stay. An outline of more than 100,000 bookmarks stops the optimization with an error.
+
+Apart from optimizing, `tile_large_images` redraws large pictures for Windows printing (#5131).
+Windows' PDF renderer draws an image of more than 2²² pixels from a copy shrunk to that size, so
+in the copy of a print that goes to the spooler (`pdfcraft_engine::spooler::spooler_copy`) each
+such image becomes a form XObject of the same object number drawing tiles, one every 2000 pixels.
+Each overlaps the next by a pixel, against seams on drivers that soften image edges, so a tile has
+at most 2001 pixels a side; except for an image with a soft mask, whose see-through pixels would
+be blended twice there. A soft or stencil
+mask of the image's size is cut the same way. JPEG 2000, JPEGs that aren't grey or RGB, masks of
+another size and images over 80 million pixels are left whole.
 
 The engine runs Remove Hidden Information (`pdfcraft-redact`) for the user-data categories,
 then this, then merges identical objects and writes a full, compressed save
 (`pdfcraft_engine::optimizer::OptimizeJob`, which the UI runs on a worker thread with a
 progress bar). JPEG decoding comes from `zune-jpeg` (the decoder behind `image` and the
 renderer), JPEG encoding and resampling from the `image` crate.
+
+Discard embedded search index (`discard_search_index`, off by default) removes the entries of
+the catalog's `/PieceInfo` whose application name contains "index" in any letter case, such as
+`IBM-ODIndexes`, and removes `/PieceInfo` when no other entry is left. An indirect `/PieceInfo`
+is copied into the catalog without those entries, and the original object is not changed. The
+full save leaves out the objects that only the removed entries refer to. Pages keep their own
+`/PieceInfo`.
 
 ## Target PDF version: partial compatibility
 

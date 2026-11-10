@@ -83,10 +83,17 @@ pub struct RenderConfig {
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
     /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
     pub system_fonts: bool,
+    /// The render is output for printing (print as image): the configuration's auto state for
+    /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
+    pub for_print: bool,
     /// Steps of JBIG2 decoding a render may take across the page's images, instead of the usual
     /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
     /// be decoded.
     pub jbig2_work: Option<u64>,
+    /// Layer visibility overrides for print-preview rasters ([`PRINT_TAG`]), when the document
+    /// prints its layers differently from how they are shown (the Print event's auto state, ISO
+    /// 32000-2 §8.11.4.4): the preview shows the page as it prints. `None`: previews use `layers`.
+    pub print_layers: Option<Arc<Vec<(i32, i32, bool)>>>,
 }
 
 impl RenderConfig {
@@ -109,6 +116,7 @@ impl RenderConfig {
         let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
+            view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
@@ -261,11 +269,23 @@ pub struct RenderedPage {
 /// A non-fatal condition reported while interpreting a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderWarning {
-    /// Content was skipped after the per-page decoded-content budget was exhausted.
+    /// Content was left out at one of the renderer's limits: content past the page's
+    /// decoded-content budget or its JBIG2 allowance, or a picture whose JBIG2 mask is past a
+    /// decoder limit.
     ContentTruncated,
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
+    /// An image's `/Indexed` colour space is malformed (ISO 32000-2 §8.6.6.3), so the image may be
+    /// drawn wrongly or not at all. It is drawn recovered when it can be: indices past a lookup
+    /// table shorter than m × (hival + 1) bytes in black, a `hival` past 255 taken as 255, a real
+    /// one truncated, or (a `hival` below zero or not a number) the image in DeviceGray. With no
+    /// lookup table at all (missing, not a string or a stream, or a stream that does not decode)
+    /// it is not drawn. Reported once per page however many images it affects.
+    MalformedIndexedImage,
+    /// A Type 3 font without the `/Widths` it requires (ISO 32000-2 Table 110) was used; its
+    /// glyphs were spaced by the widths their glyph procedures give.
+    Type3WidthsMissing,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -355,16 +375,20 @@ fn render_page<'a>(
     config: &RenderConfig,
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
-    // Print previews share the viewer pool, but must use the output font policy. Keep the
-    // caller's cancellation/warning hooks, layers and annotation settings. A fresh cache is
-    // essential: hayro keys cached fonts by PDF dictionary, not by the font resolver, so the
-    // viewer cache could supply an installed face even after changing the resolver (and a
-    // cached missing font from print preview could blank the viewer on switching back).
+    // Print previews share the viewer pool, but must use the output font policy and the layers
+    // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
+    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // font resolver, so the viewer cache could supply an installed face even after changing the
+    // resolver (and a cached missing font from print preview could blank the viewer on switching
+    // back); nothing drawn with the viewer's layers is reused either.
     let print_settings;
     let print_cache;
-    let (settings, cache) = if config.system_fonts && req.tag & PRINT_TAG != 0 {
+    let print = req.tag & PRINT_TAG != 0;
+    let print_layers = config.print_layers.as_ref().filter(|_| print);
+    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
+            ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
             ..settings.clone()
         };
         print_cache = RenderCache::new();
@@ -408,6 +432,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    ..Default::default()
                 }
             }
             None => {
@@ -442,6 +467,8 @@ fn render_page<'a>(
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
+        // A print preview shows what prints, and printing is not the View event.
+        preview_settings.view_auto_state &= req.tag & PRINT_TAG == 0;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
         Ok((w.into(), h.into(), pixels, None))
     }));
@@ -465,10 +492,13 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget, or the colours that fell back: once per page is enough.
+            // exhausted budget, or the colours that fell back, and several images can share one
+            // malformed colour space: each warning is recorded once per page.
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
+                InterpreterWarning::MalformedIndexedImage => RenderWarning::MalformedIndexedImage,
+                InterpreterWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);

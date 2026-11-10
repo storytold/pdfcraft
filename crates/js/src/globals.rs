@@ -4,7 +4,7 @@ use super::host::{arg, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
-    js_string,
+    error, js_string,
 };
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -90,11 +90,63 @@ fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other. One the cap drops changes nothing, so the script
+        // goes on reading the setting the viewer has.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        if h.request(Request::Highlight(on)) {
+            h.doc.highlight = on;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
 /// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
 /// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = message(&arg(args, 0), "cURL", ctx)?;
     host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
+    Ok(JsValue::undefined())
+}
+
+/// The attached file `exportDataObject` names, and whether to open it: from an object
+/// (`{cName, nLaunch}`) or from the arguments (`cName, cDIPath, bAllowAuth, nLaunch`). `nLaunch`
+/// 1 and 2 open the file; 0 (the default) and any other value save it.
+pub(crate) fn data_object(args: &[JsValue], ctx: &mut Context) -> JsResult<(String, bool)> {
+    let first = arg(args, 0);
+    // Any object of named parameters is read by key, one without `cName` too, so a missing name
+    // is refused rather than read as the object's text.
+    let named = first.as_object().filter(|o| !o.is_array() && !o.is_callable());
+    let name = match &named {
+        Some(o) => text_line(&o.get(js_string!("cName"), ctx)?, ctx)?,
+        None => text_line(&first, ctx)?,
+    };
+    if name.is_empty() {
+        return Err(error("exportDataObject needs cName, the attached file's name"));
+    }
+    let launch = match &named {
+        Some(o) => o.get(js_string!("nLaunch"), ctx)?,
+        None => arg(args, 3),
+    };
+    let launch = if launch.is_undefined() || launch.is_null() { 0.0 } else { launch.to_number(ctx)? };
+    Ok((name, launch == 1.0 || launch == 2.0))
+}
+
+/// `this.exportDataObject(…)`: asks the viewer to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    host(ctx)?.borrow_mut().request(Request::OpenAttachment { name, open });
     Ok(JsValue::undefined())
 }
 
@@ -123,6 +175,55 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
         host(ctx)?.borrow_mut().request(r);
     }
     Ok(JsValue::undefined())
+}
+
+/// Return a page box in Acrobat's rotated-user-space order: left, top, right, bottom.
+fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = arg(args, 0);
+    let name = if name.is_undefined() {
+        "Crop".to_string()
+    } else {
+        name.as_string().ok_or_else(|| error("getPageBox box name must be a string"))?.to_std_string_escaped()
+    };
+    let which = match name.as_str() {
+        "Media" | "MediaBox" => 0,
+        "Crop" | "CropBox" => 1,
+        "Bleed" | "BleedBox" => 2,
+        "Trim" | "TrimBox" => 3,
+        "Art" | "ArtBox" => 4,
+        _ => return Err(error("getPageBox box name must be Media, Crop, Trim, Bleed, or Art")),
+    };
+    let page_value = arg(args, 1);
+    let page = if page_value.is_undefined() {
+        0
+    } else {
+        if !page_value.is_number() {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        let page = page_value.to_number(ctx)?;
+        if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        page as usize
+    };
+    let (rect, rotation, crop) = {
+        let h = host(ctx)?.borrow();
+        let boxes = h.doc.page_boxes.get(page).ok_or_else(|| error("getPageBox page is outside the document"))?;
+        let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
+        (boxes[which], rotation, boxes[1])
+    };
+    let [x0, y0, x1, y1] = rect;
+    let [cx0, cy0, cx1, cy1] = crop;
+    let rotated = match rotation {
+        90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
+        180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
+        270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
+        _ => [x0 - cx0, y1 - cy0, x1 - cx0, y0 - cy0],
+    };
+    if !rotated.iter().all(|value| value.is_finite()) {
+        return Err(error("getPageBox returned non-finite coordinates"));
+    }
+    Ok(JsArray::from_iter(rotated.into_iter().map(JsValue::from), ctx).into())
 }
 
 /// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
@@ -177,11 +278,11 @@ fn color_object(ctx: &mut Context) -> JsObject {
 const XFA_VERSION: f64 = 3.5;
 
 /// Defines the form object model's globals: the document's functions (`getField`, `resetForm`,
-/// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
-/// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
-/// `color` objects.
+/// `print`, `submitForm`, `exportDataObject` and others) and properties (`numFields`, `pageNum`,
+/// `numPages`, `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`,
+/// `display` and `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 11] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -189,8 +290,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
         ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("getPageBox", 2, NativeFunction::from_fn_ptr(get_page_box)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
@@ -222,7 +325,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
@@ -276,12 +382,29 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
+/// The `event` object for `e`, and the store behind its `value`: `value` holds what the script
+/// reads and writes, and `set` turns true once the script assigns `event.value`, even the value it
+/// already had. The store is out of the script's reach.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, JsObject)> {
+    fn get(_: &JsValue, _: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.get(js_string!("value"), c)
+    }
+    fn set(_: &JsValue, args: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.set(js_string!("value"), arg(args, 0), false, c)?;
+        store.set(js_string!("set"), true, false, c)?;
+        Ok(JsValue::undefined())
+    }
+    let store = ObjectInitializer::new(ctx)
+        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .property(js_string!("set"), false, Attribute::all())
+        .build();
+    let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
+    let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
     let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
-    ObjectInitializer::new(ctx)
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
-        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .accessor(js_string!("value"), Some(value_get), Some(value_set), Attribute::CONFIGURABLE | Attribute::ENUMERABLE)
         .property(js_string!("change"), s(&e.change), Attribute::all())
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
@@ -293,5 +416,6 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    Ok((event, store))
 }
