@@ -38,20 +38,25 @@ pub(crate) struct StandardStringOrder;
 #[derive(Debug)]
 pub(crate) struct StandardOrder {
     /// Whether the strict text is replaced: a Type 3 font's codes read as ASCII, where the glyph
-    /// widths prove the standard strings' reading.
+    /// widths prove the standard strings' reading and contradict the ASCII one (or the ASCII
+    /// one doesn't read as text).
     override_strict: bool,
+    /// The ids the font has a glyph for, sorted: an id it has none for draws `.notdef` and reads
+    /// as nothing.
+    ids: Vec<u32>,
 }
 
 /// Why [`StandardStringOrder`] replaces the strict text of a Type 3 font.
 const ASCII_GUESS: &str = "the strict text reads the codes as ASCII, but they are CFF standard string ids, \
      which the glyph widths confirm";
 
-/// The last string id read: SIDs 1 to 149 are printable ASCII and the other glyphs of Adobe's
-/// standard encoding (quotes, dashes, the bullet, ligatures, accents; TN #5176 Appendix A).
-/// Past them the ISOAdobe charset adds Latin-1's symbols and accented capitals, where a
-/// converter's numbering was seen to depart from the strings' (a `©` drawn at code 166,
-/// `minus`), so those ids read nothing.
-const MAX_SID: u32 = 149;
+/// The last string id read: SIDs 1 to 95 are printable ASCII (TN #5176 Appendix A), which the
+/// width evidence checks letter by letter. Past them come the other glyphs of Adobe's standard
+/// encoding and the ISOAdobe charset's Latin-1 additions (quotes, dashes, the bullet, accents,
+/// symbols), whose widths prove nothing about their order, and where a converter's numbering
+/// was seen to depart from the strings' (a `©` drawn at code 166, `minus`): those ids read
+/// nothing.
+const MAX_SID: u32 = 95;
 
 /// The character standard string id `sid` gives, up to [`MAX_SID`].
 fn standard_string_char(sid: u32) -> Option<char> {
@@ -108,8 +113,23 @@ impl Rule for StandardStringOrder {
         if !widths_agree(&read_widths(&ids, standard_string_char, width)).proves() {
             return None;
         }
+        // A Type 3 font's strict text is its codes read as ASCII: it is replaced only when that
+        // reading is evidently wrong (its widths contradict it, or it doesn't read as text);
+        // otherwise the rule fills glyphs without strict text only.
+        let override_strict = type3 && {
+            let ascii = |id: u32| {
+                u8::try_from(id)
+                    .ok()
+                    .filter(|b| (0x20..0x7f).contains(b))
+                    .map(char::from)
+            };
+            let basic = |id: u32| (0x20..0x7f).contains(&id);
+            widths_agree(&read_widths(&ids, ascii, width)).contradict > 0
+                || !plausible_reading(ids.iter().map(|&id| (ascii(id), basic(id))))
+        };
         Some(StandardOrder {
-            override_strict: type3,
+            override_strict,
+            ids,
         })
     }
 
@@ -118,7 +138,8 @@ impl Rule for StandardStringOrder {
         _: &FontFacts<'_>,
         glyph: &GlyphFacts<'_>,
     ) -> Option<(BfString, RecoveryMode)> {
-        let c = standard_string_char(glyph.id?)?;
+        let id = glyph.id.filter(|id| guard.ids.binary_search(id).is_ok())?;
+        let c = standard_string_char(id)?;
         let mode = if guard.override_strict {
             RecoveryMode::Override {
                 reason: ASCII_GUESS,

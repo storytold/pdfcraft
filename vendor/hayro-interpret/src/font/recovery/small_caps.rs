@@ -46,24 +46,38 @@ pub(crate) fn small_cap_base(c: char) -> Option<(char, bool)> {
     (same && !base.is_control()).then_some((base, small && base.is_alphabetic()))
 }
 
-/// Whether `text` has a character [`small_cap_base`] reads.
-fn has_small_cap(text: &BfString) -> bool {
-    match text {
-        BfString::Char(c) => small_cap_base(*c).is_some(),
-        BfString::String(s) => s.chars().any(|c| small_cap_base(c).is_some()),
+/// Suffixes that name a small capital or an oldstyle figure after the character it is a form
+/// of (`a.sc`, `a.smcp`, `A.c2sc`, `zero.onum`, `zero.oldstyle`).
+const FORM_SUFFIXES: [&str; 7] = ["sc", "smcp", "c2sc", "small", "oldstyle", "onum", "osf"];
+
+/// The character a glyph name says its glyph is a small capital or an oldstyle figure of: a
+/// name the glyph list itself gives such a code point (`Asmall`, `zerooldstyle`), or a
+/// character's name with a form suffix (`a.sc`, `five.oldstyle`). Nothing for any other name.
+pub(crate) fn name_form_base(name: &str) -> Option<char> {
+    if let Some((base, _)) = glyph_name_to_unicode(name).and_then(small_cap_base) {
+        return Some(base);
     }
+    let (stem, suffix) = name.split_once('.')?;
+    if !FORM_SUFFIXES.contains(&suffix) {
+        return None;
+    }
+    let mut lower = glyph_name_to_unicode(stem)?.to_lowercase();
+    let base = lower.next()?;
+    lower.next().is_none().then_some(base)
 }
 
 impl Rule for AdobeSmallCaps {
     const RULE: RecoveryRule = RecoveryRule::AdobeSmallCaps;
     type Guard = ();
 
-    /// A simple font (Type 1, CFF, TrueType or Type 3) with `/ToUnicode` (which may map codes
-    /// to these code points) or with a glyph name the glyph list reads as one; the reading
-    /// looks at each glyph's strict text. A Type 0 font never qualifies: in the corpus its
-    /// `/ToUnicode` maps into this range for other reasons (a Korean font's private use
-    /// characters at U+F734 …, an OCR text layer's identity map), and expert fonts with small
-    /// capitals are simple fonts. Fonts named as symbol fonts never qualify either.
+    /// A simple font (Type 1, CFF, TrueType or Type 3) with at least one glyph name that names
+    /// a small capital or an oldstyle figure ([`name_form_base`]); each glyph is then read only
+    /// where its own name confirms its strict text. A private use code point from `/ToUnicode`
+    /// alone is no evidence: icon fonts use this range too (Font Awesome's U+F773, U+F7A2), and
+    /// a font that names nothing takes no rule's time. A Type 0 font never qualifies: in the
+    /// corpus its `/ToUnicode` maps into this range for other reasons (a Korean font's private
+    /// use characters at U+F734 …, an OCR text layer's identity map), and expert fonts with
+    /// small capitals are simple fonts. Fonts named as symbol fonts never qualify either.
     fn guard(font: &FontFacts<'_>) -> Option<()> {
         if !matches!(
             font.kind,
@@ -72,27 +86,25 @@ impl Rule for AdobeSmallCaps {
         {
             return None;
         }
-        let named = font.names.is_some_and(|names| {
-            (0..=u8::MAX)
-                .filter_map(names)
-                .filter_map(glyph_name_to_unicode)
-                .any(|c| small_cap_base(c).is_some())
-        });
-        (font.has_to_unicode || named).then_some(())
+        let names = font.names?;
+        (0..=u8::MAX)
+            .filter_map(names)
+            .any(|name| name_form_base(name).is_some())
+            .then_some(())
     }
 
     fn read(_: &(), _: &FontFacts<'_>, glyph: &GlyphFacts<'_>) -> Option<(BfString, RecoveryMode)> {
-        let strict = glyph.strict?;
-        if !has_small_cap(strict) {
+        // One private use small capital or oldstyle figure, which the glyph's own name confirms;
+        // a string of several characters is left as it is.
+        let Some(BfString::Char(c)) = glyph.strict else {
+            return None;
+        };
+        let (base, _) = small_cap_base(*c)?;
+        if glyph.name.and_then(name_form_base) != Some(base) {
             return None;
         }
-        let base = |c: char| small_cap_base(c).map_or(c, |(b, _)| b);
-        let text = match strict {
-            BfString::Char(c) => BfString::Char(base(*c)),
-            BfString::String(s) => BfString::String(s.chars().map(base).collect()),
-        };
         Some((
-            text,
+            BfString::Char(base),
             RecoveryMode::Override {
                 reason: PRIVATE_FORM,
             },
@@ -100,15 +112,9 @@ impl Rule for AdobeSmallCaps {
     }
 }
 
-/// Whether recovered `text` read by `rule` is shown in small capitals: [`AdobeSmallCaps`]
-/// reading a letter.
+/// Whether recovered text read by `rule` is shown in small capitals: [`AdobeSmallCaps`]
+/// reading one small capital letter (a string of several characters is never styled so).
 pub(crate) fn shown_small(rule: RecoveryRule, strict: Option<&BfString>) -> bool {
     rule == RecoveryRule::AdobeSmallCaps
-        && match strict {
-            Some(BfString::Char(c)) => small_cap_base(*c).is_some_and(|(_, small)| small),
-            Some(BfString::String(s)) => s
-                .chars()
-                .any(|c| small_cap_base(c).is_some_and(|(_, small)| small)),
-            None => false,
-        }
+        && matches!(strict, Some(BfString::Char(c)) if small_cap_base(*c).is_some_and(|(_, small)| small))
 }

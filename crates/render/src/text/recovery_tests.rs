@@ -1367,15 +1367,16 @@ fn cids_the_widths_dont_confirm_recover_nothing() {
 }
 
 /// Rule N in a Type 3 font whose codes are standard string ids and whose glyph names only
-/// number them (`/c37` draws `D`): the strict text reads the codes as ASCII (`%BUB%JSFDU`) and
-/// stays so in the strict layer; the recovered layer overrides it, saying why.
+/// number them (`/c37` draws `D`): the strict text reads the codes as ASCII (`5IF 3FTJEFODF`)
+/// and stays so in the strict layer; where the widths contradict that ASCII reading (its `I` is
+/// the glyph of an `h`, as wide as an `n`), the recovered layer overrides it, saying why.
 #[test]
 fn type3_codes_that_are_standard_string_ids_override_the_ascii_reading() {
-    let text = "DataDirect Connect";
+    let text = "The Residence address and ZIP code are indicated";
     let page = type3_page(text, |c| u8::try_from(sid(c)).unwrap(), "c");
     let (strict, recovered, plain) = layers(&parse(page));
     assert_eq!(strict, plain);
-    assert_eq!(strict.plain_text().replace(' ', ""), "%BUB%JSFDU$POOFDU");
+    assert!(strict.plain_text().starts_with("5IF"), "{:?}", strict.plain_text());
     let r = recovered.expect("recovered");
     assert_eq!(r.text.plain_text(), text);
     let over = r.recovery.iter().flatten().find(|x| matches!(x.mode, RecoveryMode::Override { .. })).expect("an override");
@@ -1540,16 +1541,16 @@ fn standard_string_ids_read_as_the_specification_lists_them() {
     let text = "Indicated (when applicable) for Kim\u{2019}s Bank Zone, 9 \u{2018}Quote";
     let (_, recovered, _) = layers(&parse(cid_cff_page(text, 0, false, "Identity")));
     assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text));
-    // Glyphs past the printable range: a bullet (SID 116) and Á (SID 171), read in a font that
-    // the plain letters prove.
-    let text = "The Residence address";
+    // Glyphs past the printable range read nothing (review on the rules, M2: their widths prove
+    // nothing): a bullet (SID 116), in a font that the plain letters prove.
+    let text = "The Residence address and ZIP code are indicated";
     let mut unique: Vec<char> = text.chars().collect();
     unique.sort_unstable();
     unique.dedup();
     let mut cids: Vec<u16> = unique.iter().map(|&c| sid(c)).collect();
-    cids.extend([116, 171]);
-    let w: String = unique.iter().map(|&c| format!("{} [{}] ", sid(c), helvetica_width(c))).collect::<String>() + "116 [350] 171 [667]";
-    let shown: String = text.chars().map(|c| format!("{:04X}", sid(c))).collect::<String>() + "007400AB";
+    cids.push(116);
+    let w: String = unique.iter().map(|&c| format!("{} [{}] ", sid(c), helvetica_width(c))).collect::<String>() + "116 [350]";
+    let shown: String = text.chars().map(|c| format!("{:04X}", sid(c))).collect::<String>() + "0074";
     let page = page_with_font(
         "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
         &format!("<{shown}>"),
@@ -1569,7 +1570,7 @@ fn standard_string_ids_read_as_the_specification_lists_them() {
         ],
     );
     let (_, recovered, _) = layers(&parse(page));
-    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("The Residence address\u{2022}"));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text), "the bullet reads nothing");
 }
 
 /// The K extension's `cmap` check takes the candidate policy's choice when a glyph is named
@@ -1663,24 +1664,38 @@ fn adobe_small_capitals_read_as_their_letters_in_small_capitals() {
     }
 }
 
-/// Rule M reads the same code points from `/ToUnicode`, and only those the glyph list names as
-/// a small capital or an oldstyle figure of the very character at their Latin-1 offset: U+F6CE
-/// (`Grave`, outside the range) and U+F760 (`Gravesmall`, whose `Grave` isn't a grave accent
-/// in the glyph list) read nothing, nor does any other private use character.
+/// Rule M reads the same code points from `/ToUnicode`, but only where the glyph's own name
+/// confirms the form (`a.sc`, `zero.oldstyle`), and only those the glyph list names as a small
+/// capital or an oldstyle figure of the very character at their Latin-1 offset: U+F6CE (`Grave`,
+/// outside the range) and U+F760 (`Gravesmall`, whose `Grave` isn't a grave accent in the glyph
+/// list) read nothing. Review on the rules (M1): a font whose map gives these code points with
+/// nothing in its names to confirm them, as an icon font does (Font Awesome's U+F773, U+F7A2,
+/// U+F76E), or whose names name other letters, reads nothing.
 #[test]
 fn only_the_glyph_lists_small_capitals_are_read() {
     let tu = |pairs: &str| {
         format!("/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <01> <FF> endcodespacerange 3 beginbfchar {pairs} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end").into_bytes()
     };
-    let page = |pairs: &str| {
-        page_with_font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 7 0 R >>", "<010203>", false, &[("", tu(pairs))])
+    let page = |base: &str, names: &str, pairs: &str| {
+        let encoding = if names.is_empty() { String::new() } else { format!(" /Encoding << /Type /Encoding /Differences [1 {names}] >>") };
+        page_with_font(
+            &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base}{encoding} /ToUnicode 7 0 R >>"),
+            "<010203>",
+            false,
+            &[("", tu(pairs))],
+        )
     };
-    let (strict, recovered, _) = layers(&parse(page("<01> <F761> <02> <F762> <03> <F763>")));
-    assert_eq!(strict.plain_text(), "\u{F761}\u{F762}\u{F763}");
-    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("abc"));
-    let (strict, recovered, _) = layers(&parse(page("<01> <F6CE> <02> <F760> <03> <E000>")));
+    let (strict, recovered, _) = layers(&parse(page("Helvetica", "/a.sc /b.sc /zero.oldstyle", "<01> <F761> <02> <F762> <03> <F730>")));
+    assert_eq!(strict.plain_text(), "\u{F761}\u{F762}\u{F730}");
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("ab0"));
+    let (strict, recovered, _) = layers(&parse(page("Helvetica", "/Grave.sc /a.sc /e.sc", "<01> <F6CE> <02> <F760> <03> <E000>")));
     assert_eq!(strict.plain_text(), "\u{F6CE}\u{F760}\u{E000}");
     assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+    let (strict, recovered, _) = layers(&parse(page("ABCDEF+FontAwesome5Free-Solid", "", "<01> <F773> <02> <F7A2> <03> <F76E>")));
+    assert_eq!(strict.plain_text(), "\u{F773}\u{F7A2}\u{F76E}");
+    assert!(recovered.is_none(), "icon font: {:?}", recovered.map(|r| r.text.plain_text()));
+    let (_, recovered, _) = layers(&parse(page("Helvetica", "/a.sc /b.sc /c.sc", "<01> <F773> <02> <F7A2> <03> <F76E>")));
+    assert!(recovered.is_none(), "names of other letters: {:?}", recovered.map(|r| r.text.plain_text()));
 }
 
 /// Counter-examples for rule M from the corpus: a font named as a symbol font with these glyph
@@ -1754,4 +1769,137 @@ fn a_cid_cff_font_in_the_mac_order_has_its_accents_as_wide_as_their_bases() {
     assert_eq!(recovered.map(|r| r.text.plain_text()), Some(format!("{text}\u{e9}")));
     let (_, recovered, _) = layers(&parse(page(700)));
     assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
+
+/// Review on the rules (H1, H2): subsets in capitals only, numbered a glyph or more off (or by
+/// ASCII where the rule expects standard string ids), read nothing in any of the three paths that
+/// rest on the widths: a CID-keyed CFF font (rule N and the Macintosh order), a Type 0 TrueType
+/// font with an empty `/ToUnicode`, and a Type 3 font whose `/aNN` names number ASCII codes,
+/// whose right strict text is kept.
+#[test]
+fn subsets_in_capitals_numbered_off_read_nothing() {
+    for text in ["JACQUES DUPRE", "JUDGE BOARD", "PROJECT QUEUE", "SUBJECT"] {
+        for shift in [31, 1, -1, 3] {
+            let (_, recovered, _) = layers(&parse(cid_cff_page(text, shift, false, "Identity")));
+            assert!(recovered.is_none(), "{text:?} {shift}: {:?}", recovered.map(|r| r.text.plain_text()));
+        }
+    }
+    for text in ["JACQUES DUPRE", "PROJECT QUEUE ADMIN", "SUBJECT MATTER"] {
+        for shift in [1i32, -1, 2] {
+            let shifted: Vec<u16> = gids(text).iter().map(|g| u16::try_from(i32::from(*g) + shift).unwrap()).collect();
+            let program = subset(300, &shifted, Cmap::None, None);
+            let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &shifted, &mac_widths(text, shift), Some(""))));
+            assert!(recovered.is_none(), "{text:?} {shift}: {:?}", recovered.map(|r| r.text.plain_text()));
+        }
+    }
+    let ascii = |c: char| u8::try_from(u32::from(c)).unwrap();
+    for text in ["JACQUES DUPRE", "JUDGE BOARD", "OBJECTION"] {
+        let (strict, recovered, _) = layers(&parse(type3_page(text, ascii, "a")));
+        assert_eq!(strict.plain_text(), text);
+        assert!(recovered.is_none(), "{text:?}: {:?}", recovered.map(|r| r.text.plain_text()));
+    }
+}
+
+/// Review on the rules (H2): rule N replaces a Type 3 font's ASCII reading only where that
+/// reading is evidently wrong. A font of lowercase letters coded by standard string ids reads
+/// as capitals in ASCII (`CFBO` for `bean`), which no width contradicts and which reads as
+/// text: its strict text is kept, and nothing overrides it.
+#[test]
+fn a_type3_ascii_reading_nothing_contradicts_is_kept() {
+    let text = "bean dope jig quad gape bud";
+    let (strict, recovered, _) = layers(&parse(type3_page(text, |c| u8::try_from(sid(c)).unwrap(), "c")));
+    assert!(strict.plain_text().starts_with("CFBO"), "{:?}", strict.plain_text());
+    assert!(
+        recovered.as_ref().is_none_or(|r| r.recovery.iter().flatten().all(|x| x.mode == RecoveryMode::Fill)),
+        "{:?}",
+        recovered.map(|r| r.text.plain_text())
+    );
+}
+
+/// Review on the rules (L1): a CID the font has no glyph for draws `.notdef` and reads as
+/// nothing, in rule N and in the Macintosh order's CID-keyed CFF path; the font's other glyphs
+/// still read.
+#[test]
+fn an_id_the_font_has_no_glyph_for_reads_nothing() {
+    let text = "The Residence address and ZIP code are indicated";
+    for shift in [0i32, 2] {
+        let mut unique: Vec<char> = text.chars().collect();
+        unique.sort_unstable();
+        unique.dedup();
+        let cid = |c: char| u16::try_from(i32::from(sid(c)) + shift).unwrap();
+        let cids: Vec<u16> = unique.iter().map(|&c| cid(c)).collect();
+        let w: String = unique.iter().map(|&c| format!("{} [{}] ", cid(c), helvetica_width(c))).collect();
+        // `q` drawn, though the program has no glyph for it.
+        let shown: String = text.chars().map(|c| format!("{:04X}", cid(c))).collect::<String>() + &format!("{:04X}", cid('q'));
+        let page = page_with_font(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+            &format!("<{shown}>"),
+            false,
+            &[
+                (
+                    &format!(
+                        "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Meta /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    "<< /Type /FontDescriptor /FontName /ABCDEF+Meta /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                    Vec::new(),
+                ),
+                ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+            ],
+        );
+        let (_, recovered, _) = layers(&parse(page));
+        assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text), "shift {shift}");
+    }
+}
+
+/// Review on the rules (L2): a simple font with `/ToUnicode` but no glyph name of a small
+/// capital is taken by no rule, so its glyphs cost the rules nothing past the font's one
+/// decision.
+#[test]
+fn a_font_with_a_to_unicode_map_alone_takes_no_rules_time() {
+    use hayro::hayro_interpret::font::recovery_taken_asks;
+    let tu = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfrange <20> <7E> <0020> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end".to_vec();
+    let page = page_with_font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 7 0 R >>", "(Residence)", false, &[("", tu)]);
+    let pdf = parse(page);
+    let before = recovery_taken_asks();
+    let (strict, recovered, _) = layers(&pdf);
+    assert_eq!(strict.plain_text(), "Residence");
+    assert!(recovered.is_none());
+    assert_eq!(recovery_taken_asks() - before, 0);
+}
+
+/// Review on the rules (N1): a Type 0 font's `/ToUnicode` is checked against the order only for
+/// the glyph ids the order is read for (below 130): an answer for glyph 191 (an Arial subset's
+/// `fi`, where the order has `guilsinglright`) doesn't stop the font's letters being read.
+#[test]
+fn a_to_unicode_answer_past_the_read_ids_doesnt_stop_the_reading() {
+    let text = "Indicadores de estudiantes";
+    let mut g = gids(text);
+    g.push(191);
+    let program = subset(300, &g, Cmap::None, None);
+    let (_, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), Some("<00BF> <FB01>"))));
+    let r = recovered.expect("the letters read");
+    assert!(r.text.plain_text().starts_with(text), "{:?}", r.text.plain_text());
+}
+
+/// Review on the rules (N3): a glyph whose strict text is several characters, small capitals
+/// among them, is neither read nor styled in small capitals; one small capital is.
+#[test]
+fn a_glyph_of_several_characters_is_not_styled_in_small_capitals() {
+    let tu = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <01> <FF> endcodespacerange 2 beginbfchar <01> <0061F762> <02> <F763> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end".to_vec();
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [1 /b.sc /c.sc] >> /ToUnicode 7 0 R >>",
+        "<0102>",
+        false,
+        &[("", tu)],
+    );
+    let (_, recovered, _) = layers(&parse(page));
+    let r = recovered.expect("the single small capital reads");
+    let read: Vec<(usize, &Recovery)> = r.recovery.iter().enumerate().filter_map(|(k, x)| x.as_ref().map(|x| (k, x))).collect();
+    assert_eq!(read.len(), 1, "{read:?}");
+    let (k, x) = read[0];
+    assert_eq!(x.text, hayro::hayro_interpret::hayro_cmap::BfString::Char('c'));
+    assert!(x.small_caps && r.style_of(k).is_some_and(|s| s.small_caps));
 }

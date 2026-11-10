@@ -86,6 +86,16 @@ thread_local! {
     /// Asks of the recovery rules (`RecoveryCache::recover`, before any guard is decided) on
     /// this thread.
     static RULE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Asks of the recovery rules about a glyph of a font some rule's guard took, on this
+    /// thread: the asks that build the font's and the glyph's facts and run the readings.
+    static TAKEN_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times a glyph of a font some rule takes was asked of the rules on this thread
+/// (`test-counters` only): a font no rule takes costs one guard decision and then nothing.
+#[cfg(feature = "test-counters")]
+pub fn recovery_taken_asks() -> usize {
+    TAKEN_ASKS.with(std::cell::Cell::get)
 }
 
 /// PdfCraft patch (104) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
@@ -433,6 +443,8 @@ impl RecoveryCache {
         if guards.none() {
             return None;
         }
+        #[cfg(feature = "test-counters")]
+        TAKEN_ASKS.with(|c| c.set(c.get().saturating_add(1)));
         let font = facts();
         let glyph = &glyph();
         RecoveryRule::ORDER.iter().find_map(|rule| match rule {
@@ -690,8 +702,9 @@ pub(crate) enum MacSource {
     Program { override_strict: bool, below: u32 },
     /// `/gNN` glyph names.
     Names,
-    /// The CIDs of a CID-keyed CFF program, glyph ids in the order ([`cid_cff_in_mac_order`]).
-    Cids,
+    /// The CIDs of a CID-keyed CFF program, glyph ids in the order ([`cid_cff_in_mac_order`]),
+    /// sorted: a CID the program has no glyph for draws `.notdef` and reads as nothing.
+    Cids(Vec<u32>),
 }
 
 /// Why [`MacGlyphOrder`] replaces the strict text of a simple TrueType font.
@@ -991,7 +1004,7 @@ fn cid_cff_in_mac_order(font: &FontFacts<'_>) -> Option<MacSource> {
     }
     widths::widths_agree(&widths::read_widths(&cids, mac_glyph_char, width))
         .proves()
-        .then_some(MacSource::Cids)
+        .then_some(MacSource::Cids(cids))
 }
 
 /// Most `cmap` mappings [`cmap_agrees`] reads.
@@ -1047,8 +1060,11 @@ fn to_unicode_agrees(font: &FontFacts<'_>, drawn: &[u32]) -> bool {
     let Some(text) = font.id_text.filter(|_| font.to_unicode_checkable) else {
         return false;
     };
+    // Only the ids the order is read for: an answer past them (an Arial subset's `fi` at 191)
+    // is the map's business and says nothing about the order below.
     drawn
         .iter()
+        .filter(|&&gid| gid < MAC_RELAXED_LIMIT)
         .all(|&gid| match (text(gid), mac_glyph_char(gid)) {
             (Some(strict), Some(mac)) => strict == BfString::Char(mac),
             _ => true,
@@ -1161,8 +1177,10 @@ impl Rule for MacGlyphOrder {
                     .and_then(mac_glyph_char)?;
                 Some((BfString::Char(c), RecoveryMode::Fill))
             }
-            MacSource::Cids => {
-                let cid = glyph.id.filter(|&cid| cid < MAC_RELAXED_LIMIT)?;
+            MacSource::Cids(cids) => {
+                let cid = glyph
+                    .id
+                    .filter(|&cid| cid < MAC_RELAXED_LIMIT && cids.binary_search(&cid).is_ok())?;
                 Some((BfString::Char(mac_glyph_char(cid)?), RecoveryMode::Fill))
             }
             MacSource::Program {
