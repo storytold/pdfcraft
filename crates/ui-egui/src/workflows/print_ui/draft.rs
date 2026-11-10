@@ -8,6 +8,8 @@ pub enum Which {
     Range,
     /// The pages picked in the Pages panel or the organize grid when the dialog opened.
     Selected,
+    /// Only the area chosen with Snapshot (`PrintDraft::area`).
+    Area,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +48,8 @@ pub struct PrintDraft {
     pub range: String,
     /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
     pub selected: Vec<usize>,
+    /// The area Snapshot's Print area… asked for: (page, rectangle in display space, points, y up).
+    pub area: Option<(usize, [f64; 4])>,
     pub subset: Subset,
     pub reverse: bool,
     pub handling: Handling,
@@ -134,6 +138,7 @@ impl Default for PrintDraft {
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
+            area: None,
             subset: Subset::All,
             reverse: false,
             handling: Handling::Size,
@@ -241,11 +246,34 @@ impl PrintDraft {
 
     /// The engine settings for this draft (page count and labels from the document).
     pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
+        let size = Layout::Size(match self.size {
+            SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
+            m => m,
+        });
+        let paper = self.paper_size();
+        let raster = self.raster();
+        // A selected area prints alone, its one page sized like a page of its own: Size is its
+        // only handling (the dialog offers no other while it is chosen).
+        if self.which == Which::Area {
+            let Some((page, area)) = self.area.filter(|(p, _)| *p < count) else {
+                return Err("The selected area is no longer on a page of this document.".into());
+            };
+            return Ok(print::Settings {
+                pages: vec![page],
+                paper,
+                orientation: self.orientation,
+                layout: size,
+                content: self.content,
+                raster,
+                crops: Vec::new(),
+                area: Some(area),
+            });
+        }
         if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All | Which::Selected | Which::Current => None,
+            Which::All | Which::Selected | Which::Current | Which::Area => None,
             Which::Range => Some(self.range.clone()),
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
@@ -253,16 +281,13 @@ impl PrintDraft {
         let pages = match self.which {
             Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
             Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
-            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
+            Which::All | Which::Range | Which::Area => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
         .map_err(|e| e.said(&crate::i18n::words))?;
         let layout = match self.handling {
-            Handling::Size => Layout::Size(match self.size {
-                SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
-                m => m,
-            }),
+            Handling::Size => size,
             Handling::Multiple => {
                 let grid = if self.custom_grid {
                     Layout::grid(self.cols, self.rows).ok_or_else(|| tl!("Columns and rows must each be 1 to 99.").to_string())?
@@ -282,12 +307,13 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: self.paper_size(),
+            paper,
             orientation: self.orientation,
             layout,
             content: self.content,
             raster: self.raster(),
             crops: self.crops.clone(),
+            area: None,
         })
     }
 
