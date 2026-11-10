@@ -29,12 +29,12 @@ pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, re
 
 /// The XObject names of the resource dictionary `xo` that `content` draws: directly, or through
 /// a form that has no /Resources of its own (such a form draws through its caller's). Each such
-/// form is read once, however many names are asked about, with its `/DecodeParms` given by
-/// reference. The flag says whether some of what `content` draws could not be read (a form that
-/// will not decode, or nesting past the limit), so a name missing from the set may still be drawn.
-/// Operators are read one at a time, since only the `Do`s matter: no stream's are held whole, and
-/// each form is decoded only in its turn.
-fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
+/// form is read with its `/DecodeParms` given by reference, once in a pass however many contents
+/// and names ask about it: `forms` keeps what each form looked up draws. The flag says whether some
+/// of what `content` draws could not be read (a form that will not decode, or nesting past the
+/// limit), so a name missing from the set may still be drawn. Operators are read one at a time,
+/// since only the `Do`s matter: no stream's are held whole, only the names they draw.
+fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, forms: &mut HashMap<ObjRef, Followed>) -> (HashSet<Vec<u8>>, bool) {
     let mut drawn = HashSet::new();
     let mut seen = HashSet::new();
     let joined = Pieces::join(content);
@@ -44,34 +44,22 @@ fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashS
     // already queued from being read: a name drawn only inside one of those need not be unknown.
     let mut unknown = false;
     while let Some((form, depth)) = pending.pop() {
-        let data = match form {
-            None => std::borrow::Cow::Borrowed(joined.data()),
-            Some(r) => {
-                let obj = doc.get(r);
-                let Object::Stream(s) = &*obj else { continue };
-                match doc.decoding_view(s).decoded() {
-                    Ok(data) => std::borrow::Cow::Owned(data),
-                    Err(_) => {
-                        unknown = true;
-                        continue;
-                    }
+        let names: Rc<[Vec<u8>]> = match form {
+            None => do_names(joined.data()).into(),
+            Some(r) => match forms.get(&r) {
+                Some(Followed::Draws(names)) => names.clone(),
+                _ => {
+                    unknown = true;
+                    continue;
                 }
-            }
+            },
         };
-        for op in pdfcraft_content::ops(&data).filter(|op| op.is("Do")) {
-            let Some(n) = op.last_name() else { continue };
-            if !drawn.insert(n.to_vec()) {
+        for n in names.iter() {
+            if !drawn.insert(n.clone()) {
                 continue;
             }
             let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-            let obj = doc.get(r);
-            let Object::Stream(s) = &*obj else { continue };
-            // A /Resources that isn't a dictionary (null, or a missing object) is no resources of
-            // its own, as for `resource_ops` and the interpreter.
-            if s.dict.name(b"Subtype") != Some(b"Form")
-                || s.dict.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some())
-                || !seen.insert(r)
-            {
+            if matches!(forms.entry(r).or_insert_with(|| followed(doc, r)), Followed::No) || !seen.insert(r) {
                 continue;
             }
             if depth < MAX_DEPTH {
@@ -82,6 +70,41 @@ fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashS
         }
     }
     (drawn, unknown)
+}
+
+/// What [`names_content_draws`] found of a form it looked up, kept for the rest of its pass.
+enum Followed {
+    /// Not a form without resources of its own: not followed.
+    No,
+    /// Such a form, which won't decode.
+    Unreadable,
+    /// Such a form, and the names its `Do`s draw.
+    Draws(Rc<[Vec<u8>]>),
+}
+
+/// Whether `r` is a form that draws through its caller's resources, and what it draws.
+fn followed(doc: &Document, r: ObjRef) -> Followed {
+    let obj = doc.get(r);
+    let Object::Stream(s) = &*obj else { return Followed::No };
+    // A /Resources that isn't a dictionary (null, or a missing object) is no resources of its own,
+    // as for `resource_ops` and the interpreter.
+    if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some()) {
+        return Followed::No;
+    }
+    match doc.decoding_view(s).decoded() {
+        Ok(data) => Followed::Draws(do_names(&data).into()),
+        Err(_) => Followed::Unreadable,
+    }
+}
+
+/// The names `data`'s `Do`s draw, each once, in the order first drawn.
+fn do_names(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut seen = HashSet::new();
+    pdfcraft_content::ops(data)
+        .filter(|op| op.is("Do"))
+        .filter_map(|op| op.last_name().map(<[u8]>::to_vec))
+        .filter(|n| seen.insert(n.clone()))
+        .collect()
 }
 
 /// Whether any of `drawn` (from [`names_content_draws`]) draws `name`: `None` when none is known to and
@@ -300,6 +323,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     let (holders, _) = resource_holders(doc);
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
+    // What each form drawn through these dictionaries draws, read once for all of them (the
+    // check of removed images; the check of retired properties reads them for each page).
+    let mut forms = HashMap::new();
     for (node, users) in holders {
         let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
             continue;
@@ -320,7 +346,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         let mut pruned = false;
         // What each page draws through this dictionary, worked out once for all the names.
         let drawn: Vec<_> =
-            if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
+            if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo, &mut forms)).collect() };
         for n in names {
             match any_draws(&drawn, &n) {
                 Some(true) => {}
@@ -337,6 +363,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+            // Defensive: a node reaches here only with a /Resources dictionary of its own, so if
+            // it were a form too, it was never followed (`Followed::No`) and still isn't.
+            forms.remove(&node);
         }
     }
     // A surviving form can own the same old resource dictionary as a rewritten page. Its
@@ -436,7 +465,7 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
     if doomed_names.is_empty() {
         return Ok(false);
     }
-    let drawn = [names_content_draws(doc, content, xo)];
+    let drawn = [names_content_draws(doc, content, xo, &mut HashMap::new())];
     for name in doomed_names {
         match any_draws(&drawn, name) {
             Some(true) => {}

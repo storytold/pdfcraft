@@ -6866,11 +6866,12 @@ fn a_layer_a_view_rule_turns_off_is_hidden() {
     assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
 }
 
-/// The forms and glyph programs redaction reads besides its walk, in the unlinking check and the
-/// Type 3 cleanup, are decoded through `Document::decoding_view`, not `Document::with_direct_parms`:
-/// with `/DecodeParms` given by reference that copies the whole stream, and these read one stream
-/// again for each page or Type 3 font that draws it, so a dictionary made large is copied again each
-/// time. `tests/stream_views.rs` measures the unlinking check's case; this holds all nine reads.
+/// The forms and glyph programs redaction reads apart from its walk of the page's content (in the
+/// page's check of what it still draws, `resource_ops`, the unlinking check and the Type 3 cleanup)
+/// are decoded through `Document::decoding_view`, not `Document::with_direct_parms`: with
+/// `/DecodeParms` given by reference that copies the whole stream, and some of these read one stream
+/// again for each page or Type 3 font that draws it, so a dictionary made large would be copied
+/// again each time. `tests/stream_views.rs` measures the unlinking check's case; this holds all nine.
 #[test]
 fn the_reads_besides_the_walk_decode_through_a_view() {
     for (file, source) in [("src/interp/prune.rs", include_str!("interp/prune.rs")), ("src/type3.rs", include_str!("type3.rs"))] {
