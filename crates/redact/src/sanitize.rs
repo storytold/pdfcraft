@@ -419,6 +419,47 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
     }
 }
 
+/// Every value of `key` held outside a name map, as [`owners`] finds them: with the indirect
+/// object that holds it and whether it is that object's own entry (rather than one in a
+/// dictionary written inside it). Fails as [`owners`] does for a graph nested too deeply.
+pub(crate) fn owned_values(doc: &Document, key: &[u8]) -> Result<Vec<(ObjRef, bool, Object)>, RedactError> {
+    let (_, holders) = owners(doc, &[key])?;
+    let mut out = Vec::new();
+    for (r, role) in holders {
+        collect_owned(&doc.get(r), role, key, 0, &mut |own, v| out.push((r, own, v.clone())));
+    }
+    Ok(out)
+}
+
+/// Calls `found` with each value of `key` in `o` and what it holds in place, outside name maps
+/// (the reading counterpart of [`strip_owned`]), and whether it is `o`'s own entry.
+fn collect_owned(o: &Object, role: Held, key: &[u8], depth: usize, found: &mut dyn FnMut(bool, &Object)) {
+    if depth > MAX_DIRECT_DEPTH {
+        return;
+    }
+    let (d, role) = match o {
+        Object::Array(a) => {
+            for v in a {
+                collect_owned(v, Held::Owner, key, depth + 1, found);
+            }
+            return;
+        }
+        Object::Dict(d) => (d, role),
+        Object::Stream(s) => (&s.dict, Held::Owner),
+        _ => return,
+    };
+    if role != Held::Map
+        && let Some(v) = d.get(key)
+    {
+        found(depth == 0, v);
+    }
+    for (k, v) in d.iter() {
+        if matches!(v, Object::Array(_) | Object::Dict(_)) {
+            collect_owned(v, role.child(k), key, depth + 1, found);
+        }
+    }
+}
+
 /// A comment as the comments list sees it, less file attachments (removed with Attachments) and
 /// redaction marks.
 fn is_comment(subtype: &[u8]) -> bool {
@@ -888,11 +929,7 @@ pub(crate) fn remove_counted(
     let listed_before = if annotations { listed_annotations(doc) } else { std::collections::HashSet::new() };
     if fields {
         // Fields without appearances get one first, so their values stay visible.
-        for f in pdfcraft_forms::fields(doc) {
-            if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
-                pdfcraft_forms::redraw_field(doc, &f.name)?;
-            }
-        }
+        pdfcraft_forms::redraw_fields(doc, |doc, f| f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))))?;
         let n = pdfcraft_model::pages(doc).len();
         pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
         doc.update_dict(root, |d| {
