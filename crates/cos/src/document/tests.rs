@@ -883,6 +883,78 @@ fn an_edited_object_stream_leaves_other_clones_members_alone() {
     assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
 }
 
+/// A member another clone read from the file's object stream is not what a clone that replaced
+/// the stream reads, nor is one the document read itself before replacing it.
+#[test]
+fn a_replaced_object_stream_hides_the_members_read_before() {
+    let replacement = || {
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+        dict.set(b"N".to_vec(), Object::Int(1));
+        dict.set(b"First".to_vec(), Object::Int(4));
+        crate::Stream::from_raw(dict, b"3 0 << /Hidden (no) >>".to_vec())
+    };
+    let file = Arc::new(object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0));
+    let doc = Document::open(file.clone()).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    let mut replaced = doc.clone();
+    replaced.set(ObjRef::new(4, 0), replacement());
+    assert_eq!(text_of(&replaced, 3, b"Hidden").as_deref(), Some("no"), "another clone's read of the file's stream");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
+    let mut doc = Document::open(file.clone()).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    doc.set(ObjRef::new(4, 0), replacement());
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("no"), "the document's own read before the edit");
+    let doc = Document::open(file).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(4, 0));
+    assert_eq!(freed.try_get(3), Err(CosError::MissingObject(4)), "another clone's read before the free");
+}
+
+/// An object stream another clone framed by the file's indirect `/Length` is not what a clone
+/// that edited that length reads.
+#[test]
+fn an_edited_object_stream_length_hides_the_members_read_before() {
+    let file = Arc::new(object_stream_file_with("3 0 ", "<< /Hidden (cut endstream here) >>", 0, true));
+    let doc = Document::open(file).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"));
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 0), Object::Int("3 0 << /Hidden (cut".len() as i64));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "another clone's framing of the stream");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
+}
+
+/// A stream another clone read by the file's indirect `/Length` is not what a clone that edited
+/// that length reads.
+#[test]
+fn an_edited_stream_length_hides_the_stream_read_before() {
+    let bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [] /Count 0 >>",
+        "<< /Length 4 0 R >>\nstream\nshort\nendstream long\nendstream",
+        "20",
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut table = String::from("xref\n0 5\n0000000000 65535 f \n");
+    for (n, body) in bodies.iter().enumerate() {
+        table.push_str(&format!("{:010} 00000 n \n", out.len()));
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", n + 1).as_bytes());
+    }
+    let start = out.len();
+    out.extend_from_slice(format!("{table}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n").as_bytes());
+    let data = |doc: &Document| match &*doc.get(ObjRef::new(3, 0)) {
+        Object::Stream(s) => s.raw.to_vec(),
+        other => panic!("{other:?}"),
+    };
+    let doc = Document::open(Arc::new(out)).unwrap();
+    assert_eq!(data(&doc), b"short\nendstream long");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(4, 0), Object::Int(5));
+    assert_eq!(data(&edited), b"short", "another clone's read by the file's length");
+    assert_eq!(data(&doc), b"short\nendstream long", "the edited length reached another clone");
+}
+
 /// A member that failed to load from the file's object stream is kept as a failure, but replacing
 /// or freeing that stream forgets it: the member then reads from the edit.
 #[test]
@@ -1500,7 +1572,7 @@ fn temporary_reader_keeps_file_views_and_evicts_data_of_its_own() {
     // cleared after the next read, including a failed one.
     let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
     let size = held_bytes(&owned, &reader.document.data, 0);
-    reader.document.cache.lock().unwrap().insert(3, Ok(Arc::new(owned)), size);
+    reader.document.cache.lock().unwrap().insert(3, Ok(Arc::new(owned)), size, Default::default());
     assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
     assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
 }
@@ -2238,10 +2310,10 @@ fn the_object_cache_keeps_its_total_as_objects_come_and_go() {
     let two = Arc::new(Object::Array(vec![Object::Int(1); 10]));
     let (a, b) = (held_bytes(&one, &data, 0), held_bytes(&two, &data, 0));
     let mut cache = super::state::ObjectCache::default();
-    cache.insert(1, Ok(one.clone()), a);
-    cache.insert(2, Ok(two), b);
+    cache.insert(1, Ok(one.clone()), a, Default::default());
+    cache.insert(2, Ok(two), b, Default::default());
     assert_eq!(cache.owned(), a + b);
-    cache.insert(2, Ok(one), a);
+    cache.insert(2, Ok(one), a, Default::default());
     assert_eq!(cache.owned(), a + a, "a replaced object no longer counts");
     cache.retain(|n| *n == 1);
     assert_eq!((cache.len(), cache.owned()), (1, a));

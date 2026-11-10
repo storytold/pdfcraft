@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member,
-    overlay_reads,
+    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadFrame, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read,
+    note_read, objstm_member, overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -554,22 +554,32 @@ impl Document {
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
         if let Some(slot) = self.overlay.get(&num) {
+            note_read(num, None);
             note_overlay_read();
             return Ok(match slot {
                 Slot::Set(_, o) | Slot::RepairedSet(_, _, o) => o.clone(),
                 Slot::Freed(_) => Arc::new(Object::Null),
             });
         }
-        if let Some(loaded) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+        // Clones share the cache: what a load read that this document has edited since (the
+        // member's object stream, a `/Length`) makes the entry another document's.
+        if let Some((loaded, reads)) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num)
+            && !reads.touch(&self.overlay)
+        {
+            note_read(num, Some(reads));
             return loaded.clone();
         }
+        note_read(num, None);
         // Loading can re-enter (indirect stream `/Length`, object streams); damaged files make
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
+        let frame = ReadFrame::enter();
         let loaded = self.load(num, 0).map(Arc::new);
+        let reads = frame.reads();
+        drop(frame);
         if let Err(e) = &loaded
             && !matches!(e, CosError::Poisoned)
         {
@@ -581,7 +591,7 @@ impl Document {
         if overlay_reads() == edits_read && !matches!(loaded, Err(CosError::Poisoned)) {
             // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
             // is cheap, and returned objects outlive eviction.
-            self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, loaded.clone(), loaded_bytes(&loaded, &self.data));
+            self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, loaded.clone(), loaded_bytes(&loaded, &self.data), reads);
             self.evict_editor_cache_if_over_budget(num)?;
         }
         loaded
@@ -724,9 +734,14 @@ impl Document {
     pub(super) fn objstm(&self, num: u32) -> Result<Arc<ObjStm>, CosError> {
         // An edited or freed stream is this document's alone: clones share the parsed streams.
         let edited = self.overlay.contains_key(&num);
-        if !edited && let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+        if !edited
+            && let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num)
+            && !s.reads.touch(&self.overlay)
+        {
+            note_read(num, Some(&s.reads));
             return Ok(s.clone());
         }
+        let frame = ReadFrame::enter();
         // A file entry that cannot place the stream (one that says it is itself compressed
         // inside another stream, as in #2367, or points nowhere) is tried by the stream's own
         // header, as a plain object with a wrong offset is. An edited or freed stream, in the
@@ -758,7 +773,7 @@ impl Document {
             let (Some(Object::Int(onum)), Some(Object::Int(off))) = (lx.object().ok(), lx.object().ok()) else { break };
             index.push(objstm_member(onum, off, first, data.len()));
         }
-        let stm = Arc::new(ObjStm { index, data: Arc::new(data) });
+        let stm = Arc::new(ObjStm { index, data: Arc::new(data), reads: frame.reads() });
         if own {
             return Ok(stm);
         }
@@ -778,16 +793,20 @@ impl Document {
         }
         let cached = loading();
         // A length resolved through this document's edits counts as an edit read on every reuse.
-        if cached && let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
+        // Each reuse counts as a read of the length, and of what resolving it read.
+        if cached && let Some((known, edits, reads)) = LENGTHS.with(|m| m.borrow().get(&r).cloned()) {
             if edits {
                 note_overlay_read();
             }
+            note_read(r.num, Some(&reads));
             return known;
         }
+        note_read(r.num, None);
         let edits_read = overlay_reads();
+        let frame = ReadFrame::enter();
         let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
         if cached {
-            LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
+            LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read, frame.reads())));
         }
         length
     }
@@ -847,7 +866,6 @@ impl Document {
     pub fn set(&mut self, r: ObjRef, obj: impl Into<Object>) {
         let obj = self.adopt(obj.into());
         self.overlay.insert(r.num, Slot::Set(r.generation, Arc::new(obj)));
-        self.forget_member_failures(r.num);
         if r.num >= self.next_num {
             self.next_num = r.num.saturating_add(1);
         }
@@ -907,16 +925,6 @@ impl Document {
     /// Delete an object (its number becomes free with the next generation).
     pub fn free(&mut self, r: ObjRef) {
         self.overlay.insert(r.num, Slot::Freed(r.generation.saturating_add(1)));
-        self.forget_member_failures(r.num);
-    }
-
-    /// Forget cached failures of the members `stream` held in the file: they were failures of
-    /// the file's copy, and an edit of `stream` may read. Clones share the cache, so theirs are
-    /// searched again too, which costs time only. A poisoned lock leaves the cache as it is.
-    fn forget_member_failures(&self, stream: u32) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.forget_failures(|n| matches!(self.entries.lookup(*n, &self.data), Some(XrefEntry::InStream { stream: s, .. }) if s == stream));
-        }
     }
 
     /// Free what was added since the file was read and nothing refers to any more: the objects
