@@ -453,12 +453,6 @@ impl Stream {
         self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
     }
 
-    /// [`Stream::decoded_strict`] for a caller with less than [`MAX_DECODED`] left to spend:
-    /// decoding past `max` bytes (in any filter stage) is an error.
-    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
-        self.decoded_strict_within_counted(max).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
-    }
-
     /// [`Stream::decoded_strict`] bounded by `max` and counted like
     /// [`Stream::decoded_within_counted`].
     pub(crate) fn decoded_strict_within_counted(&self, max: usize) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)> {
