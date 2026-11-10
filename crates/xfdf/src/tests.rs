@@ -143,9 +143,10 @@ fn values(doc: &Document) -> Vec<(String, Vec<String>)> {
     fields(doc).into_iter().map(|f| (f.name, f.value)).collect()
 }
 
-/// #2666: Replace Text writes a Caret and a StrikeOut grouped under it. XFDF names the link by
-/// the `/NM` of the annotation it points at, so when both carried one id the `inreplyto` was the
-/// strikeout's own `name`: importing it found a comment replying to itself and the pair was lost.
+/// #2666: Replace Text writes a Caret and a StrikeOut grouped with it (`/IRT`, `/RT /Group`). XFDF
+/// names the `/IRT` annotation by its `/NM`, so when both carried one id the strikeout's
+/// `inreplyto` was its own `name`: importing it found a comment replying to itself and the pair
+/// was lost.
 #[test]
 fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let mut src = blank();
@@ -170,7 +171,7 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
     assert!(xfdf.contains("name=\"strike\"") && xfdf.contains("name=\"caret\""), "each gets its own name: {xfdf}");
-    assert!(xfdf.contains("inreplyto=\"caret\""), "the strikeout is grouped under the caret: {xfdf}");
+    assert!(xfdf.contains("inreplyto=\"caret\""), "the strikeout is grouped with the caret: {xfdf}");
     assert!(!xfdf.contains("inreplyto=\"strike\""), "never a reply to itself");
 
     let mut dst = blank();
@@ -180,6 +181,7 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let kinds: Vec<&str> = found.iter().map(|s| s.subtype.as_str()).collect();
     assert!(kinds.contains(&"StrikeOut") && kinds.contains(&"Caret"), "{kinds:?}");
     assert_eq!(comment_view(&dst), comment_view(&src), "the pair and its thread survive");
+    assert!(found.iter().any(|s| s.subtype == "StrikeOut" && s.is_group_member()), "still grouped (/RT /Group) with the caret: {found:?}");
     // Review on #5689 (CodeRabbit): the intents travel too, so the imported pair is still
     // Replace Text, and deleting its strikeout takes the caret and its replacement with it.
     assert!(xfdf.contains("intent=\"Replace\"") && xfdf.contains("intent=\"StrikeOutTextEdit\""), "{xfdf}");
@@ -1706,6 +1708,43 @@ fn xml_form_import_preserves_text_around_comments_and_instructions() {
     }
 }
 
+/// Page discovery accepts a leaf without /Type, so a comment's nested reference to one must not
+/// carry the page or its content into the export.
+#[test]
+fn fdf_export_nulls_a_nested_link_to_a_page_without_a_type() {
+    let source = {
+        let mut doc = Document::new_empty();
+        let root = doc.root().unwrap();
+        let tree = doc.get(root).as_dict().unwrap().reference(b"Pages").unwrap();
+        let contents = doc.add(pdfcraft_cos::Stream::from_raw(Dict::new(), b"% private-page-content\n".repeat(4_096)));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+        let mut target = Dict::new();
+        target.set(b"Label".to_vec(), PdfString::text("kept"));
+        target.set(b"Target".to_vec(), Object::Ref(page));
+        fdf_note_with_data(&mut doc, Object::Array(vec![Object::Dict(target)]));
+        write_full(&doc, &SaveOptions::default()).unwrap()
+    };
+    let source = Document::open(Arc::new(source)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&source).len(), 1);
+    let bytes = export_fdf(&source, true, false, "source.pdf").unwrap();
+    assert!(bytes.len() < 4_096, "the untyped page's content must stay in the PDF ({} bytes)", bytes.len());
+    let fdf = Document::open(Arc::new(bytes)).unwrap();
+    let data = exported_note_data(&fdf);
+    let target = data.as_array().unwrap()[0].as_dict().unwrap();
+    assert_eq!(target.get(b"Label").unwrap().as_string().unwrap().to_text(), "kept");
+    assert_eq!(*fdf.resolve(target.get(b"Target").unwrap()), Object::Null);
+}
+
 #[test]
 fn fdf_export_nulls_nested_page_links_without_copying_the_source_page_tree() {
     for indirect_type in [false, true] {
@@ -2230,6 +2269,48 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let page = pdfcraft_model::pages(&dst)[0].dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
+}
+
+/// A check box field whose two kids have the on states `A` and `B`.
+fn check_box_kids() -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] >>",
+        "<< /FT /Btn /T (pair) /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [50 700 64 714] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [80 700 94 714] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// Imported data that names a check box kid's on state ticks that kid (ISO 32000-2 §12.7.5.2.3:
+/// the field's value is the on state of the kid that is on), not the first kid.
+#[test]
+fn imported_values_tick_the_check_box_kid_they_name() {
+    let mut src = check_box_kids();
+    set_value(&mut src, "pair", &pdfcraft_forms::FieldValue::Text("B".into())).unwrap();
+    let xfdf = export_xfdf(&src, false, true, "form.pdf");
+    let mut dst = check_box_kids();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let all = fields(&dst);
+    let pair = all.iter().find(|f| f.name == "pair").unwrap();
+    assert_eq!(pair.value, ["B"], "{xfdf}");
+    assert_eq!((pair.widget_on(0), pair.widget_on(1)), (false, true));
 }
 
 /// Copy: the chosen comments travel with their replies and nothing else.

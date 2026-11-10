@@ -38,6 +38,8 @@ impl FieldEvent {
 pub struct FieldChange {
     pub name: String,
     pub value: Option<Vec<String>>,
+    /// This value came from a Calculate script; redraw it through the field's Format script.
+    pub formatted: bool,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
@@ -148,7 +150,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         {
             let value = match f.kind {
                 FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => FieldValue::Check(!v.is_empty()),
+                FieldKind::CheckBox => f.check_box_value(v.first().map(String::as_str)),
                 FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
                 FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
                 _ => continue,
@@ -157,9 +159,13 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
             tmp.actions = Default::default();
             // `write_value` refuses a value before writing anything, so a refused one leaves the
-            // field as it was.
+            // field as it was (and there is no new value to redraw).
             match crate::write_value(doc, &tmp, &value, &mut NoScripts) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if c.formatted {
+                        crate::redraw_calculated_value(doc, f, v, scripts)?;
+                    }
+                }
                 Err(FormError::Invalid(why)) => scripts.refused(&why),
                 Err(e) => return Err(e),
             }

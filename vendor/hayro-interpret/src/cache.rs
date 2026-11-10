@@ -10,9 +10,10 @@ use std::sync::{Arc, Mutex};
 
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
 /// The objects read from a document, by key. PdfCraft patch (48): the second field counts the
-/// ICC profiles read through it ([`Cache::icc_profile_reads`]).
+/// ICC profiles read through it ([`Cache::icc_profile_reads`]). PdfCraft patch (80): the third
+/// counts the `/Indexed` lookup tables read ([`Cache::indexed_lookup_reads`]).
 #[derive(Clone)]
-pub(crate) struct Cache(Arc<Mutex<CacheMap>>, Arc<AtomicUsize>);
+pub(crate) struct Cache(Arc<Mutex<CacheMap>>, Arc<AtomicUsize>, Arc<AtomicUsize>);
 impl Default for Cache {
     fn default() -> Self {
         Self::new()
@@ -21,7 +22,11 @@ impl Default for Cache {
 
 impl Cache {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())), Arc::default())
+        Self(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::default(),
+            Arc::default(),
+        )
     }
 
     /// PdfCraft patch (48): count one ICC profile read, the colour space of an `/ICCBased`
@@ -33,6 +38,17 @@ impl Cache {
     /// PdfCraft patch (48): how many ICC profiles were read through this cache.
     pub(crate) fn icc_profile_reads(&self) -> usize {
         self.1.load(Ordering::Relaxed)
+    }
+
+    /// PdfCraft patch (80): count one `/Indexed` lookup table read (a stream decoded or a
+    /// string copied).
+    pub(crate) fn count_indexed_lookup_read(&self) {
+        self.2.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// PdfCraft patch (80): how many `/Indexed` lookup tables were read through this cache.
+    pub(crate) fn indexed_lookup_reads(&self) -> usize {
+        self.2.load(Ordering::Relaxed)
     }
 
     pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
@@ -77,7 +93,10 @@ impl Cache {
 /// and gets nothing, as the decode did. A failure counts [`FAILED_DECODE_BYTES`] towards the
 /// budget, so failures can't grow the map without bound either. A failure that may come from
 /// what the page had left (its JBIG2 allowance, `ContentTruncated`) isn't kept: another page,
-/// or the same page drawn again, starts with a fresh allowance.
+/// or the same page drawn again, starts with a fresh allowance. One that left out a JBIG2 mask
+/// for a limit its stream reaches by itself is kept, with the image it takes along (patch 73,
+/// [`note_stream_limited`]): decoding them again would only refuse them again, and an image of
+/// any size under such a mask was decoded again at every draw.
 #[derive(Clone)]
 pub(crate) struct DecodedImageCache {
     inner: Arc<Mutex<DecodedImageCacheInner>>,
@@ -126,6 +145,26 @@ pub(crate) struct DecodedImageKey {
 /// entry take in the map.
 const FAILED_DECODE_BYTES: usize = 128;
 
+/// PdfCraft patch (91): with the warnings of a failure kept, that it left out a JBIG2 mask for a
+/// limit its stream reaches by itself ([`note_stream_limited`]); no warning's flag.
+const STREAM_LIMITED: u8 = 128;
+
+std::thread_local! {
+    static LEFT_OUT_BY_STREAM_LIMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch (73): note, wherever a decode reports `ContentTruncated` for an image or a kept
+/// failure replays it, whether that left out a JBIG2 mask for a limit its stream reaches by itself
+/// (`hayro_syntax::jbig2_limited_by_stream`): its failure, and the failure of the image it takes
+/// along, is then the stream's to keep, since decoding it again refuses it again.
+pub(crate) fn note_stream_limited(limited: bool) {
+    LEFT_OUT_BY_STREAM_LIMIT.with(|left_out| left_out.set(limited));
+}
+
+fn stream_limited() -> bool {
+    LEFT_OUT_BY_STREAM_LIMIT.with(std::cell::Cell::get)
+}
+
 /// PdfCraft patch (91): what a [`DecodedImageCache`] keeps for a key.
 enum DecodedEntry {
     /// The decoded image.
@@ -142,6 +181,7 @@ fn warning_bit(warning: InterpreterWarning) -> u8 {
         InterpreterWarning::ContentTruncated => 4,
         InterpreterWarning::ColorFallback => 8,
         InterpreterWarning::Type3WidthsMissing => 16,
+        InterpreterWarning::MalformedIndexedImage => 32,
     }
 }
 
@@ -153,6 +193,7 @@ fn warnings_in(bits: u8) -> impl Iterator<Item = InterpreterWarning> {
         InterpreterWarning::ContentTruncated,
         InterpreterWarning::ColorFallback,
         InterpreterWarning::Type3WidthsMissing,
+        InterpreterWarning::MalformedIndexedImage,
     ]
     .into_iter()
     .filter(move |warning| bits & warning_bit(*warning) != 0)
@@ -226,6 +267,7 @@ impl DecodedImageCache {
         match hit {
             Some(Ok(hit)) => return Some(hit),
             Some(Err(bits)) => {
+                note_stream_limited(bits & STREAM_LIMITED != 0);
                 warnings_in(bits).for_each(|warning| sink(warning));
                 return None;
             }
@@ -260,12 +302,12 @@ impl DecodedImageCache {
             Some(DecodedEntry::Failed(_)) if val.is_none() => return None,
             _ => {}
         }
+        let truncated = reported & warning_bit(InterpreterWarning::ContentTruncated) != 0;
         let size = match &val {
             Some(v) => size_of(v),
-            // A failure the page's JBIG2 allowance may have caused isn't the image's to keep.
-            None if reported & warning_bit(InterpreterWarning::ContentTruncated) != 0
-                || hayro_syntax::page_jbig2_work_spent() =>
-            {
+            // A failure the page's JBIG2 allowance may have caused isn't the image's to keep, nor
+            // one a JBIG2 decode's work did, which may be the page's too.
+            None if hayro_syntax::page_jbig2_work_spent() || (truncated && !stream_limited()) => {
                 return None;
             }
             None => FAILED_DECODE_BYTES,
@@ -279,6 +321,8 @@ impl DecodedImageCache {
         }
         let entry = match &val {
             Some(val) => DecodedEntry::Decoded(Box::new(val.clone())),
+            // Here only when a limit of its stream refused the mask that left it out (above).
+            None if truncated => DecodedEntry::Failed(reported | STREAM_LIMITED),
             None => DecodedEntry::Failed(reported),
         };
         // An entry replaced (a failure another thread kept) isn't given back: the budget

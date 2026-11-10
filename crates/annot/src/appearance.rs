@@ -3,24 +3,30 @@
 //! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary and the
 //! objects it points at, so the same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
-//! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
-//! endings), so callers never replace an appearance with a worse one. It resolves `/QuadPoints`
+//! It returns `None` for anything it cannot draw faithfully (unknown line endings, a cloudy
+//! callout), so callers never replace an appearance with a worse one. It resolves `/QuadPoints`
 //! itself; for the other values, callers that hold the document follow references first
 //! (`draw::with_direct_values`).
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding, and draw Thai from the craft-fonts Thai face as Type 3
-//! glyphs (`pdfcraft_fonts::shaped_text`, the writer Add text uses); line breaking uses
-//! [`text_width`], the standard-14 metrics and the Thai face's shaped advances.
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
+//! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
+//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
+//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
+//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
-use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, win_ansi, wrap_with};
+use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
 /// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
 /// face that text boxes draw it with.
 pub fn text_width(text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, helvetica_width)
+    text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
+}
+
+/// [`text_width`] in the standard `face` a text box draws its other text in.
+pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
+    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -55,7 +61,9 @@ pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)
 }
 
-/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1).
+/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1). ISO 32000-2
+/// Table 169 leaves the size open; this is the size PdfCraft's polygon clouds already had, so
+/// squares, circles and text boxes match them.
 pub fn cloud_radius(w: f64) -> f64 {
     6.0 + 1.5 * w.max(0.0)
 }
@@ -179,6 +187,80 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
 
 /// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
 pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
+
+/// A cloudy border's intensity (ISO 32000-2 §12.5.4, Table 169: `/BE /I`, "in the range 0 to 2.
+/// Default value: 0"), or `None` for no cloud: no `/BE`, a style other than `/C`, or intensity 0,
+/// which draws the border plain.
+pub(crate) fn cloud_intensity(d: &Dict) -> Option<f64> {
+    let be = d.get(b"BE").and_then(|b| b.as_dict())?;
+    if be.name(b"S") != Some(b"C") {
+        return None;
+    }
+    let i = be.get(b"I").and_then(|i| i.as_f64()).unwrap_or(0.0);
+    (i.is_finite() && i > 0.0).then(|| i.min(2.0))
+}
+
+/// The bump radius for a cloudy border of width `w` at `intensity` (0–2].
+pub(crate) fn cloud_bump(w: f64, intensity: f64) -> f64 {
+    cloud_radius(w) * intensity.clamp(0.5, 2.0)
+}
+
+/// How far past its outline a cloud with bumps of radius `bump` around an outline `perimeter`
+/// long can reach. `cloud_path` rounds each edge to whole bumps, so one may span up to three
+/// radii and bulge 1.5 radii; it also grows the radius to keep within its bump budget.
+pub(crate) fn cloud_reach(perimeter: f64, bump: f64) -> f64 {
+    1.5 * bump.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64))
+}
+
+/// `/RD` when it is four finite, non-negative numbers (Tables 170 and 180).
+fn rd_of(d: &Dict) -> Option<Vec<f64>> {
+    nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0))
+}
+
+/// `rect` less `rd`, whose four numbers are the left, top, right and bottom differences.
+fn less_rd(rect: [f64; 4], rd: &[f64]) -> [f64; 4] {
+    let at = |i: usize| rd.get(i).copied().unwrap_or(0.0);
+    [rect[0] + at(0), rect[1] + at(3), rect[2] - at(2), rect[3] - at(1)]
+}
+
+/// The box a plain (not cloudy) square or circle is drawn in: `/Rect` less a usable `/RD` (Table
+/// 180: the differences between `/Rect` and "the actual boundaries of the underlying square or
+/// circle"), or `None` when there is no `/RD`, it isn't four finite non-negative numbers, or it
+/// leaves less than a point either way, so the caller draws in `/Rect` as without one.
+fn rect_less_rd(d: &Dict, rect: [f64; 4]) -> Option<[f64; 4]> {
+    let inner = less_rd(rect, &rd_of(d)?);
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+}
+
+/// The shape a cloudy square, circle or text box draws its bumps around: `/Rect` less `/RD`
+/// (Table 180: the differences between "the left, top, right, and bottom coordinates of Rect and
+/// those of the square or circle, respectively"), but at least the bumps' greatest reach and half
+/// the line from each side, so they stay inside `/Rect`; without a usable `/RD`, that margin.
+fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<[f64; 4]> {
+    // The cloud's reach and half the line keep it inside `/Rect`; an `/RD` leaving more is
+    // followed, one leaving less is not.
+    let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
+    let m = cloud_reach(perimeter, bump) + w / 2.0;
+    let safe = [rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m];
+    let inner = match rd_of(d) {
+        Some(rd) => {
+            let r = less_rd(rect, &rd);
+            [r[0].max(safe[0]), r[1].max(safe[1]), r[2].min(safe[2]), r[3].min(safe[3])]
+        }
+        None => safe,
+    };
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+}
+
+/// Points around the ellipse inscribed in `r`, counter-clockwise, one per bump of radius `bump`
+/// (each edge of the outline becomes one bump), for a cloudy circle.
+fn ellipse_points(r: [f64; 4], bump: f64) -> Vec<(f64, f64)> {
+    let (cx, cy, rx, ry) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, (r[2] - r[0]) / 2.0, (r[3] - r[1]) / 2.0);
+    // Ramanujan's approximation of the perimeter; the count stays within the bump budget.
+    let perimeter = std::f64::consts::PI * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).max(0.0).sqrt());
+    let count = (perimeter / (2.0 * bump.max(0.5))).round().clamp(8.0, MAX_CLOUD_BUMPS as f64) as u32;
+    (0..count).map(|i| f64::from(i) * std::f64::consts::TAU / f64::from(count)).map(|a| (cx + rx * a.cos(), cy + ry * a.sin())).collect()
+}
 
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
@@ -334,13 +416,17 @@ pub fn da_border(d: &Dict) -> Option<Rgb> {
     col
 }
 
-/// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
+/// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt: a `Tf` without a
+/// usable size (missing, zero, negative or not a number) keeps 12 pt, and sizes past 400 pt are
+/// capped. A text box has no automatic size, so a zero size, which means auto-size in a form
+/// field's `/DA` (ISO 32000-2 §12.7.4.3), is the default here. An operand that isn't a finite
+/// number (`NaN`, `inf`, which Rust's parser would otherwise accept) is ignored with its operator.
 pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
     let toks: Vec<&str> = da.split_whitespace().collect();
     let mut col = [0.0; 3];
     let mut size = 12.0;
-    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok());
+    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite());
     for (i, t) in toks.iter().enumerate() {
         match *t {
             "rg" if i >= 3 => {
@@ -468,7 +554,9 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
-        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
+        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") => {
+            ("the stamp's \"By\" line", text(b"PCByLine")?)
+        }
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
         b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
         _ => return None,
@@ -478,18 +566,19 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
 pub(crate) fn helvetica_resource() -> Object {
-    Object::Dict(helvetica_fonts())
+    Object::Dict(font_resources(pdfcraft_fonts::Std14::Helvetica))
 }
 
-/// [`helvetica_resource`]'s dictionary.
-fn helvetica_fonts() -> Dict {
+/// `/Font` resources naming one standard face with WinAnsiEncoding, under the resource name
+/// [`crate::text_style::resource_name`] gives it (`/Helv` for Helvetica).
+fn font_resources(face: pdfcraft_fonts::Std14) -> Dict {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
-    fonts.set(b"Helv".to_vec(), Object::Dict(font));
+    fonts.set(crate::text_style::resource_name(face).as_bytes().to_vec(), Object::Dict(font));
     fonts
 }
 
@@ -536,7 +625,8 @@ struct AppearanceContext<'a> {
     dict: &'a Dict,
     subtype: &'a [u8],
     rect: [f64; 4],
-    cloudy: bool,
+    /// A cloudy border's intensity ([`cloud_intensity`]), or `None` for a plain one.
+    cloud: Option<f64>,
     /// The line's opacity (`parts.line`).
     opacity: f64,
     parts: PartOpacity,
@@ -584,7 +674,8 @@ pub(crate) fn build_on_page(doc: &Document, d: &Dict, page: Option<[f64; 4]>) ->
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
         b"Stamp" => return draw_stamp(&context, drawing),
-        b"FreeText" => return draw_free_text(&context, drawing),
+        // The face a text box's `/DA` font names in the form's `/DR`, when it names one.
+        b"FreeText" => return draw_free_text(&context, drawing, crate::text_style::dr_face(doc, d)),
         _ => {}
     }
     let mut drawing = drawing;
@@ -599,11 +690,13 @@ fn appearance_context<'a>(doc: &'a Document, d: &'a Dict, page: Option<[f64; 4]>
         return None;
     }
     let subtype = d.name(b"Subtype")?;
-    let rect = normalised_rect(d)?;
+    // A number too long for a double reads as infinite, and two near its limit are an infinite
+    // width apart: nothing is drawn rather than "inf" written into the appearance (review on #4195).
+    let rect = normalised_rect(d).filter(|r| r.iter().all(|x| x.is_finite()) && (r[2] - r[0]).is_finite() && (r[3] - r[1]).is_finite())?;
     let rect = page.and_then(|page| point_reach(doc, d, rect, page)).unwrap_or(rect);
-    // Cloudy borders (§12.5.4) are drawn for polygons only.
-    let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
-    if cloudy && subtype != b"Polygon" {
+    // Cloudy borders (§12.5.4, Table 169) apply to squares, circles, polygons and text boxes.
+    let cloud = cloud_intensity(d);
+    if cloud.is_some() && !matches!(subtype, b"Square" | b"Circle" | b"Polygon" | b"FreeText") {
         return None;
     }
     Some(AppearanceContext {
@@ -611,7 +704,7 @@ fn appearance_context<'a>(doc: &'a Document, d: &'a Dict, page: Option<[f64; 4]>
         dict: d,
         subtype,
         rect,
-        cloudy,
+        cloud,
         opacity: part_opacity(d).line,
         parts: part_opacity(d),
         stroke: color(d, b"C")?,
@@ -698,14 +791,18 @@ fn drawn_points(doc: &Document, d: &Dict) -> Option<(Vec<f64>, f64)> {
             if count < 4 || count % 2 != 0 || count / 2 > MAX_REACH_POINTS {
                 return None;
             }
-            let cloudy = d.get(b"BE").and_then(Object::as_dict).is_some_and(|b| b.name(b"S") == Some(b"C"));
-            // A cloud's bumps are drawn at up to twice their nominal radius (`draw_polygon`).
-            let reach = match subtype {
-                b"Polygon" if cloudy => 2.0 * cloud_radius(w),
-                b"PolyLine" if has_ending() => arrow_size(w),
+            let vertices = nums(d, b"Vertices")?;
+            // A cloud's bumps (`draw_polygon`) reach as far past the outline as `cloud_reach` says.
+            let reach = match (subtype, cloud_intensity(d)) {
+                (b"Polygon", Some(intensity)) => {
+                    let pts: Vec<(f64, f64)> = vertices.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+                    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| (b.0 - a.0).hypot(b.1 - a.1)).sum();
+                    cloud_reach(if perimeter.is_finite() { perimeter } else { 0.0 }, cloud_bump(w, intensity))
+                }
+                (b"PolyLine", _) if has_ending() => arrow_size(w),
                 _ => 0.0,
             };
-            (nums(d, b"Vertices")?, w / 2.0 + reach)
+            (vertices, w / 2.0 + reach)
         }
         b"Line" => {
             let [x0, y0, x1, y1] = <[f64; 4]>::try_from(nums(d, b"L")?).ok()?;
@@ -888,11 +985,31 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
 }
 
 fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
+    let d = context.dict;
     let stroke = context.stroke;
     let c = &mut drawing.content;
     // While marked: the outline of each area (the fill comes when applied).
-    let q = quads(context)?;
-    let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
+    // ISO 32000-2 gives a mark no outline colour (§12.5.6.23, Table 195). An array `/OC` of
+    // three numbers is the one some writers give it, and is drawn (the observation is in
+    // `parity/acrobat-features.toml`); `/OC` as ISO 32000-2 defines it (Table 166) is an
+    // optional-content dictionary, which this leaves alone.
+    let outline = nums(d, b"OC").and_then(|c| match c.as_slice() {
+        [r, g, b] if c.iter().all(|x| x.is_finite()) => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+        _ => None,
+    });
+    // Quadrilaterals are outlined in the `/OC` colour, else in `/C` as they always were.
+    let (q, col) = match d.get(b"QuadPoints") {
+        Some(_) => (quads(context)?, outline.or(stroke)),
+        // Without `/QuadPoints`, `/Rect` is the area (Table 195): outlined just inside its
+        // edges when the mark names an outline colour, else not drawn while marked.
+        None => {
+            let outline = outline?;
+            let rect = context.rect;
+            let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
+            (vec![[x0, y1, x1, y1, x0, y0, x1, y0]], Some(outline))
+        }
+    };
+    let col = col.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
     for quad in q.iter() {
         c.push_str(&format!(
@@ -921,15 +1038,27 @@ fn draw_box(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) ->
     if stroke.is_none() && fill.is_none() {
         return Some(());
     }
+    // A plain square or circle lies within /Rect less /RD (Table 180), its stroke centred
+    // half the width inside that box.
+    let shape = rect_less_rd(d, rect).unwrap_or(rect);
     let inset = w / 2.0;
-    let [x0, y0, x1, y1] = [rect[0] + inset, rect[1] + inset, rect[2] - inset, rect[3] - inset];
+    let [x0, y0, x1, y1] = [shape[0] + inset, shape[1] + inset, shape[2] - inset, shape[3] - inset];
     if let Some(f) = fill {
         c.push_str(&rg(f));
     }
     if let Some(s) = stroke {
         c.push_str(&format!("{}{} w\n{}", rg_stroke(s), n(w), dash(d)));
     }
-    if subtype == b"Square" {
+    if let Some(intensity) = context.cloud {
+        let bump = cloud_bump(w, intensity);
+        let inner = cloud_inner(d, rect, bump, w)?;
+        let pts = if subtype == b"Square" {
+            vec![(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])]
+        } else {
+            ellipse_points(inner, bump)
+        };
+        c.push_str(&format!("1 j\n{}", cloud_path(&pts, bump)));
+    } else if subtype == b"Square" {
         c.push_str(&format!("{} {} {} {} re\n", n(x0), n(y0), n(x1 - x0), n(y1 - y0)));
     } else {
         c.push_str(&ellipse(x0, y0, x1, y1));
@@ -990,7 +1119,6 @@ fn draw_polygon(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing
     let subtype = context.subtype;
     let stroke = context.stroke;
     let w = context.width;
-    let cloudy = context.cloudy;
     let c = &mut drawing.content;
     let v = nums(d, b"Vertices").filter(|v| v.len() >= 4 && v.len() % 2 == 0 && v.iter().all(|x| x.is_finite()))?;
     let pts: Vec<(f64, f64)> = v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
@@ -1018,9 +1146,8 @@ fn draw_polygon(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing
     if let Some(s) = col {
         c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(s), n(w), dash(d)));
     }
-    if cloudy {
-        let intensity = d.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(|i| i.as_f64()).unwrap_or(1.0);
-        c.push_str(&cloud_path(&pts, cloud_radius(w) * intensity.clamp(0.5, 2.0)));
+    if let Some(intensity) = context.cloud {
+        c.push_str(&cloud_path(&pts, cloud_bump(w, intensity)));
     } else {
         for (i, p) in pts.iter().enumerate() {
             c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
@@ -1137,7 +1264,8 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         return Some(form(rect, c.as_bytes(), res));
     }
     // A custom stamp: its picture (an image, or a form mapped to /PCPictureSize) fills
-    // the rectangle. An image signature added to a turned page (`/PCPictureRotate`) gets
+    // the rectangle. An image signature or a stamp with a line added to a turned page
+    // (`/PCPictureRotate`) gets
     // the standard counter-rotation as its form `/Matrix`: viewers fit the turned
     // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
     if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
@@ -1146,14 +1274,61 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
             [w, h] if *w > 0.0 && *h > 0.0 => Some((*w, *h)),
             _ => None,
         });
-        let place = picture_place(rect, image, size)?;
+        // A text line (#1741) takes the bottom of the rectangle, and the picture keeps its
+        // shape, centred above it. Without one the picture fills the rectangle.
+        let line = d.get(b"PCByLine").and_then(Object::as_string).map(PdfString::to_text).filter(|l| !l.trim().is_empty());
+        let turn = picture_turn(d);
+        // A lined stamp on a quarter-turned page is laid out in its displayed box (the
+        // rectangle with its sides swapped) and turned into `/Rect` by the `/Matrix` below.
+        // Laid out in user space, the viewer's fit of the turned box to `/Rect` would scale
+        // the two displayed axes differently and squash the picture and its line.
+        let bbox = if line.is_some() && matches!(turn, 90 | 270) { [0.0, 0.0, rect[3] - rect[1], rect[2] - rect[0]] } else { rect };
+        let [x0, y0, x1, y1] = bbox;
+        let band = if line.is_some() { (y1 - y0) * crate::CUSTOM_LINE_BAND } else { 0.0 };
+        let (w, h) = (x1 - x0, y1 - y0 - band);
+        let place = match (&line, size) {
+            (Some(_), Some((sw, sh))) => {
+                let k = (w / sw).min(h / sh).max(0.0);
+                let (pw, ph) = (sw * k, sh * k);
+                let (px, py) = (x0 + (w - pw) / 2.0, y0 + band + (h - ph) / 2.0);
+                if image {
+                    format!("{} 0 0 {} {} {} cm", n(pw), n(ph), n(px), n(py))
+                } else {
+                    format!("{} 0 0 {} {} {} cm", n(k), n(k), n(px), n(py))
+                }
+            }
+            // Without a line the band is empty and this is the rectangle itself.
+            _ => picture_place([x0, y0 + band, x1, y1], image, size)?,
+        };
         c.push_str(&format!("q {place} /Pic Do Q\n"));
+        // Bytes from here: the line is WinAnsi, not UTF-8.
+        let mut content = std::mem::take(c).into_bytes();
+        if let Some(l) = &line {
+            // Centred in the band, at its usual size unless the stamp was made narrower.
+            let mut size = band * crate::CUSTOM_LINE_TEXT;
+            let tw = text_width(l, size);
+            if tw > w - 4.0 && tw > 0.0 {
+                size *= ((w - 4.0) / tw).max(0.0);
+            }
+            let tw = text_width(l, size);
+            let ty = y0 + (band - size * 0.72) / 2.0;
+            content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (w - tw) / 2.0), n(ty)).bytes());
+            content.extend(literal(&win_ansi(l)));
+            content.extend_from_slice(b" Tj\nET\n");
+            let mut f = Dict::new();
+            f.set(b"Type".to_vec(), Object::name("Font"));
+            f.set(b"Subtype".to_vec(), Object::name("Type1"));
+            f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+            f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            let mut fonts = Dict::new();
+            fonts.set(b"Helv".to_vec(), Object::Dict(f));
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
         let mut xo = Dict::new();
         xo.set(b"Pic".to_vec(), Object::Ref(pic));
         res.set(b"XObject".to_vec(), Object::Dict(xo));
-        let mut stream = form(rect, c.as_bytes(), res);
-        let turn = picture_turn(d);
-        if image && turn != 0 {
+        let mut stream = form(bbox, &content, res);
+        if (image || line.is_some()) && turn != 0 {
             // The page's view matrix without its offset: display axes in user space.
             let m = pdfcraft_model::view_matrix_for(turn, [0.0; 4]);
             let matrix = [m[0], m[1], m[2], m[3], 0.0, 0.0];
@@ -1266,7 +1441,7 @@ fn shaped_border(
     Some(rect)
 }
 
-fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
+fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let d = context.dict;
     let parts = context.parts;
     let rect = context.rect;
@@ -1274,11 +1449,12 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
-    let (text_color, size) = parse_da(d);
+    let crate::text_style::TextStyle { face, size, color: text_color } = crate::text_style::text_style(d, dr_face);
     // The box's border and a callout's leader line: their own colour, else the text's.
     let line_color = da_border(d).unwrap_or(text_color);
     let bg = stroke;
-    let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
+    // Without `/BS` or `/Border`, the `/Border` default [0 0 1]: a 1-pt border (Table 166).
+    let bw = border_width(d);
     // A callout: the leader line (arrowhead at its first point), and the text box inside
     // `/Rect` by `/RD`.
     // Text added to a turned page is drawn upright in its displayed box, which the form
@@ -1332,7 +1508,20 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // `/RD` and keeps its place: background and border take the shape, the text is laid out
     // in the text box as in a rectangle.
     let shape = crate::BorderShape::of(d);
-    if shape != crate::BorderShape::Rectangle {
+    // A cloudy box (not a callout): its background and border follow the cloud around
+    // the text, which keeps to the cloud's inner rectangle.
+    if let Some(intensity) = context.cloud.filter(|_| !d.contains(b"CL")) {
+        let cw = if bw > 0.0 { bw } else { 1.0 };
+        let bump = cloud_bump(cw, intensity);
+        let inner = cloud_inner(d, rect, bump, cw)?;
+        let pts = [(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])];
+        c.push_str(&format!("{}{}{} w 1 j\n{}", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(cw), dash(d)));
+        c.push_str(&cloud_path(&pts, bump));
+        c.push_str(if bg.is_some() { "B\n[] 0 d\n" } else { "S\n[] 0 d\n" });
+        rect = inner;
+    } else if context.cloud.is_some() {
+        return None;
+    } else if shape != crate::BorderShape::Rectangle {
         rect = shaped_border(d, shape, full, turn, bw, bg, line_color, &mut c)?;
     } else {
         if let Some(bg) = bg {
@@ -1363,37 +1552,38 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         c.push_str("/GS1 gs\n");
     }
     c.push_str(&format!(
-        "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
+        "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
         n(rect[0]),
         n(rect[1]),
         n(rect[2] - rect[0]),
         n(rect[3] - rect[1]),
+        crate::text_style::resource_name(face),
         n(size),
         rg(text_color)
     ));
     let mut out = c.into_bytes();
-    let lines = wrap(&text, size, width);
+    let lines = pdfcraft_fonts::wrap_with(&text, size, width, |s, size| text_width_in(face, s, size));
     let mut y = rect[3] - pad - size * reach(&lines)[0];
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
     // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
     // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
-    // `?`, which `undrawable_text` reports), in Helvetica.
-    let mut fonts = helvetica_fonts();
+    // `?`, which `undrawable_text` reports), in the box's standard face.
+    let mut fonts = font_resources(face);
     let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
     let mut current = None;
     for pieces in &pieces {
         if y < rect[1] - size {
             break;
         }
-        let lw = shaped_text::pieces_width(pieces, size, 0.0, helvetica_width);
+        let lw = shaped_text::pieces_width(pieces, size, 0.0, |s, size| face.text_width(s, size));
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        shaped.show_line(&mut out, pieces, x, y, size, "Helv", win_ansi, |s| helvetica_width(s, size), &mut current);
+        shaped.show_line(&mut out, pieces, x, y, size, crate::text_style::resource_name(face), win_ansi, |s| face.text_width(s, size), &mut current);
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");

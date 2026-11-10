@@ -27,6 +27,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let bm_can_paste = app.bookmark_clipboard.is_some();
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
+    // The Pages panel's Escape and Delete act on the pages: not while something is over them.
+    let keys = app.page_keys.also(app.covers_pages());
     {
         let Some(doc) = app.session.get(id) else { return };
         let info = &doc.info;
@@ -49,7 +51,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Bookmarks => ("Bookmarks", None),
                     RightPanel::Pages => ("Pages", Some(info.pages.len())),
                     RightPanel::Fields => ("Fields", Some(info.fields.len())),
-                    RightPanel::Layers => ("Layers", Some(info.layers.len())),
+                    RightPanel::Layers => {
+                        ("Layers", Some(info.layer_order.iter().filter(|r| matches!(r.item, pdfcraft_render::LayerItem::Layer(_))).count()))
+                    }
                     RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
                     RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
                     RightPanel::Accessibility => ("Accessibility Checker", None),
@@ -216,7 +220,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
                         }
                     }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
+                    RightPanel::Pages => pages(ui, &t, info, view, modal, keys, bm_editable, &mut nav),
                     RightPanel::Fields => {
                         field_properties = fields(
                             ui,
@@ -234,8 +238,31 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
                             empty(ui, &t, "layers", "This document has no layers.");
+                        } else if info.layer_order.is_empty() {
+                            // ISO 32000-2 Table 99: only the groups /Order lists are presented.
+                            empty(ui, &t, "layers", "This document lists no layers to show.");
                         }
-                        for (li, l) in info.layers.iter().enumerate() {
+                        // The default configuration's /Order, as a tree: a level is indented
+                        // 16 points, up to eight levels; a label is a heading, not a layer.
+                        for row in &info.layer_order {
+                            let indent = 16.0 * row.depth.min(8) as f32;
+                            let li = match &row.item {
+                                pdfcraft_render::LayerItem::Layer(li) => *li,
+                                pdfcraft_render::LayerItem::Label(label) => {
+                                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+                                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
+                                    crate::widgets::paint_left(
+                                        ui,
+                                        rect.left_center() + vec2(8.0 + indent, 0.0),
+                                        label,
+                                        theme::medium(12.0),
+                                        t.text_faint,
+                                        (rect.width() - 12.0 - indent).max(0.0),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let Some(l) = info.layers.get(li) else { continue };
                             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, l.visible, &l.name));
                             let press = theme::Press::track(ui, &resp);
@@ -243,7 +270,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let body = rect.translate(press.offset());
                             icons::paint(
                                 ui,
-                                Rect::from_min_size(body.min + vec2(4.0, 7.0), vec2(18.0, 18.0)),
+                                Rect::from_min_size(body.min + vec2(4.0 + indent, 7.0), vec2(18.0, 18.0)),
                                 if l.visible { "eye" } else { "eye-off" },
                                 16.0,
                                 t.icon,
@@ -251,11 +278,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let fg = if l.visible { t.text } else { t.text_faint };
                             crate::widgets::paint_left(
                                 ui,
-                                body.left_center() + vec2(32.0, 0.0),
+                                body.left_center() + vec2(32.0 + indent, 0.0),
                                 &l.name,
                                 theme::regular(13.0),
                                 fg,
-                                (rect.width() - 40.0).max(0.0),
+                                (rect.width() - 40.0 - indent).max(0.0),
                             );
                             if theme::hand(resp).on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
                                 toggle_layer = Some((li, !l.visible));
@@ -365,6 +392,20 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                                 if ui.button(tl!("Save attachment…")).clicked() {
                                     attachment_action = Some((ai, false));
+                                    ui.close();
+                                }
+                                if let Some(key) = deletable
+                                    && ui.button(tl!("Edit description")).clicked()
+                                {
+                                    app.attachment_description_draft = Some((
+                                        id,
+                                        doc.edit_generation(),
+                                        key.clone(),
+                                        a.name.clone(),
+                                        a.description.clone().unwrap_or_default(),
+                                        a.has_description,
+                                    ));
+                                    app.dialog = Some(crate::Dialog::AttachmentDescription);
                                     ui.close();
                                 }
                                 if let Some(key) = deletable

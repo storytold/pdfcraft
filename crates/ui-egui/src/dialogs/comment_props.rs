@@ -119,7 +119,7 @@ impl PdfCraftApp {
             self.notify_fmt("New {tool} comments will look like this one", &[("tool", &kind)]);
             return;
         }
-        let Some(tool) = crate::comments::tool_for_default(a, p.endings.as_deref()) else { return };
+        let Some(tool) = crate::comments::tool_for_default(&doc.info.annotations, a, p.endings.as_deref()) else { return };
         let mut style = self.comment_prefs.style(tool);
         if let Some(c) = p.color {
             style.color = c;
@@ -312,18 +312,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         .zip(app.comment_props.as_ref())
         .map(|(doc, d)| {
             let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply());
-            doc.info
-                .annotations
+            // Every state change set on it, including a reviewer's later ones, which reply to
+            // their earlier (ISO 32000-2 §12.5.6.3).
+            let states = pdfcraft_render::ReviewStates::new(&doc.info.annotations);
+            me.map(|a| states.history(a))
+                .unwrap_or_default()
                 .iter()
-                .filter(|r| r.state.is_some() && me.is_some_and(|a| r.replies_to(a)))
                 .map(|r| (r.state.clone().unwrap_or_default(), r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
                 .collect()
         })
         .unwrap_or_default();
     let has_default = app.comment_props.as_ref().is_some_and(|d| {
-        let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
-        doc.and_then(|doc| doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()))
-            .is_some_and(|a| crate::comments::tool_for_default(a, d.edited.endings.as_deref()).is_some() || crate::comments::typed_text(a))
+        let Some(doc) = app.active_ids().and_then(|(_, id)| app.session.get(id)) else { return false };
+        doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()).is_some_and(|a| {
+            crate::comments::tool_for_default(&doc.info.annotations, a, d.edited.endings.as_deref()).is_some() || crate::comments::typed_text(a)
+        })
     });
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();

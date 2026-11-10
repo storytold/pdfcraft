@@ -16,6 +16,9 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 
+/// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
+pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
+
 /// Deepest nesting of `(`, `[` and `{`.
 const MAX_BRACKET_DEPTH: usize = 64;
 
@@ -108,6 +111,33 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &Arc::new(Vec::new()), limits)
+}
+
+/// Like [`run_shared`], with the document's ordered calculated fields available to
+/// `calculateNow()` while this context is running.
+pub fn run_shared_calculations(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &[(String, String)],
+    limits: Limits,
+) -> Outcome {
+    run_shared_calculations_shared(script, event, doc, fields, doc_scripts, &Arc::new(calculations.to_vec()), limits)
+}
+
+/// Like [`run_shared_calculations`], sharing its ordered calculation scripts with the context.
+pub fn run_shared_calculations_shared(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &Arc<Vec<(String, String)>>,
+    limits: Limits,
+) -> Outcome {
     if let Some(why) = refuse(script) {
         return failed(event, why);
     }
@@ -119,7 +149,9 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         let english = crate::format::printd_english();
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
-                crate::format::with_english_printd(english, || run_here(script, event, doc, fields, (kept, skipped), limits, &|| {}))
+                crate::format::with_english_printd(english, || {
+                    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits, &|| {})
+                })
             });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed(event, "the script stopped with an internal error".into())),
@@ -128,7 +160,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, (kept, skipped), limits, &|| {})
+    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits, &|| {})
 }
 
 /// Like [`run_shared`], held to `timeout` of wall-clock time from when the engine is ready (its
@@ -152,13 +184,27 @@ pub fn run_shared_within(
     limits: Limits,
     timeout: std::time::Duration,
 ) -> Outcome {
+    run_shared_calculations_within(script, event, doc, fields, (doc_scripts, &Arc::new(Vec::new())), limits, timeout)
+}
+
+/// Like [`run_shared_within`], with the document's ordered calculated fields available to
+/// `calculateNow()` while this context is running (as [`run_shared_calculations_shared`]).
+pub fn run_shared_calculations_within(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    (doc_scripts, calculations): (&[String], &Calculations),
+    limits: Limits,
+    timeout: std::time::Duration,
+) -> Outcome {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = timeout;
-        run_shared(script, event, doc, fields, doc_scripts, limits)
+        run_shared_calculations_shared(script, event, doc, fields, doc_scripts, calculations, limits)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    run_on_thread_from(&SCRIPT_THREADS, script, event, doc, fields, doc_scripts, (limits, timeout))
+    run_on_thread_from(&SCRIPT_THREADS, script, event, doc, fields, (doc_scripts, calculations), (limits, timeout))
 }
 
 /// How many threads [`run_shared_within`] keeps alive at once in a process, scripts that ran past
@@ -227,7 +273,7 @@ pub(crate) fn run_on_thread_from(
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[String],
+    (doc_scripts, calculations): (&[String], &Calculations),
     (limits, timeout): (Limits, std::time::Duration),
 ) -> Outcome {
     use std::sync::mpsc::RecvTimeoutError;
@@ -246,6 +292,7 @@ pub(crate) fn run_on_thread_from(
     let (kept, skipped) = sort_doc_scripts(doc_scripts);
     let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
     let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
+    let calculations = Arc::clone(calculations);
     // The script's thread writes dates as this one asked (`with_english_printd`).
     let english = crate::format::printd_english();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -260,7 +307,8 @@ pub(crate) fn run_on_thread_from(
         let started = tx.clone();
         let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
         let o = crate::format::with_english_printd(english, || {
-            run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
+            let setup = ScriptSetup { doc_scripts: &kept, skipped: &skipped, calculations: &calculations };
+            run_here(&script_owned, &event_owned, &doc_owned, fields, setup, limits, &move || {
                 let _ = started.send(Step::Started);
             })
         });
@@ -296,6 +344,10 @@ pub(crate) fn run_on_thread_from(
         }
     }
 }
+
+/// The form's calculated fields in calculation order, each with its calculation script, for
+/// `calculateNow()`.
+type Calculations = Arc<Vec<(String, String)>>;
 
 /// A document script refused before running ([`refuse`]): its place among all of them, and why.
 type Skipped = (usize, String);
@@ -362,15 +414,21 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
     format!("document script {}: {error}", index.saturating_add(1))
 }
 
-/// `doc_scripts` are the document scripts to run with their places among all of them, and the
-/// ones refused before running, with the reason. `started` is called once the engine is ready:
-/// a time limit on the script runs from then.
+/// `doc_scripts` are the document scripts to run with their places among all of them;
+/// `skipped` the ones refused before running, with the reason.
+struct ScriptSetup<'a> {
+    doc_scripts: &'a [(usize, &'a str)],
+    skipped: &'a [Skipped],
+    calculations: &'a Arc<Vec<(String, String)>>,
+}
+
+/// `started` is called once the engine is ready: a time limit on the script runs from then.
 fn run_here(
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
-    (doc_scripts, skipped): (&[(usize, &str)], &[Skipped]),
+    setup: ScriptSetup<'_>,
     limits: Limits,
     started: &dyn Fn(),
 ) -> Outcome {
@@ -387,15 +445,19 @@ fn run_here(
     ctx.insert_data(RefCell::new(Host {
         fields,
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        calculations: Arc::clone(setup.calculations),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
-    let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
+    let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
         let (ev, value_store) = event_object(&mut ctx, event)?;
@@ -403,7 +465,7 @@ fn run_here(
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
         // the other scripts, stay available (#3940).
-        for &(i, d) in doc_scripts {
+        for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
             }
@@ -429,6 +491,7 @@ fn run_here(
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
+        out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;

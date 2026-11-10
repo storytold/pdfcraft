@@ -28,8 +28,8 @@ As a document opens, its document-level scripts run (ISO 32000-2 §12.6.4.17) un
 is off (Preferences ▸ JavaScript, `Session::set_javascript`, the `js_enabled` tool). They run
 unasked from a file that may be hostile, so they and the calculations they start share a
 3-second wall-clock limit (past it the script is abandoned and nothing it did applies), and
-what they ask for that a person should choose (a link, a submission, printing, saving) is
-noted on the console instead of carried out. What they change is a revision in memory: opening
+what they ask for that a person should choose (a link, a submission, printing, saving, an
+attached file) is noted on the console instead of carried out. What they change is a revision in memory: opening
 writes nothing to disk, and the document does not count as edited. Script memory is not
 bounded beyond boa's own limits.
 
@@ -87,8 +87,14 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `catalog` | Acrobat's "All tools" information architecture as data — groups, sections, icons, hues, and an `Availability` of `Ready`, `Planned(milestone)` or `Provider`. The UI renders what is *not* built yet, honestly |
 | `actions` | PDF action dispatch (go-to, URI, named, set-layer-state, JavaScript) |
 | `links` | Link creation, properties, and finding URLs in page text |
+| `open_parameters` | A path's PDF open parameters (`manual.pdf#nameddest=Intro`, `#page=12`): the file to open and where to show it. The app and `doc_open` both read them |
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
+
+AcroForm Keystroke, Validate, Calculate and Format scripts run automatically. Their Print,
+ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; field values,
+alerts and other requests are retained. Explicit button and console scripts can still request
+printing (#4088).
 
 ## Not done here
 
