@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-10 | **Last updated:** 2026-11-10 | **Change:** patch (M7, #2101 partial: unchanged bidi rows keep their shaped caret positions; estimates unchanged)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
@@ -251,6 +253,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-10 (M7, #2101 partial):** The inline editor no longer replaces an unchanged bidi row's shaped positions with left-to-right source-word placement. A synthetic TextEdit regression covers Hebrew alone, Hebrew with digits, and Latin-first mixed text: click, insert, Backspace, Delete and visual Right. Plain left-to-right source-word alignment is retained; broader RTL editing, fonts and selection remain partial.
+
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
@@ -874,6 +878,9 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
 
 ## Revision history
+
+**2026-11-10 · patch:** M7/#2101 partial: unchanged bidi rows keep shaped caret positions.
+Hebrew and mixed-text regressions cover click, insert, deletion and visual Right; estimates unchanged.
 
 **2026-10-27 · minor:** M10 #5005: vector printing preserves annotation optional-content membership.
 Source resources and shared appearances remain unchanged.

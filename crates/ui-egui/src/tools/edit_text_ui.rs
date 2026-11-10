@@ -1310,6 +1310,82 @@ C", &picked
     }
 
     #[test]
+    fn hebrew_source_word_positions_keep_the_clicked_caret_in_logical_order() {
+        use egui::{Event, Key, Modifiers, PointerButton};
+
+        for original in ["אבג", "אבג דהו 123", "PDF אבג 123"] {
+            let (app, mut ed) = preview_app();
+            let doc = app.session.get(app.views[0].id).unwrap();
+            let mut block = doc.text_blocks(0).remove(0);
+            let mut line = doc.text_lines(0).remove(0);
+            ed.text = original.into();
+            ed.original = ed.text.clone();
+            let ctx = egui::Context::default();
+            ctx.set_fonts(crate::theme::font_definitions());
+            let id = egui::Id::unique("hebrew-source-caret");
+            let frame = |ed: &mut LineEditor, events| {
+                let snapshot = ed.clone();
+                let mut output = None;
+                let full = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(ctx.cumulative_frame_nr() as f64 * 0.1),
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut layouter =
+                            |ui: &egui::Ui, text: &dyn egui::TextBuffer, width| editor_galley(ui, &snapshot, text.as_str(), 1.0, width);
+                        output = Some(egui::TextEdit::multiline(&mut ed.text).id(id).layouter(&mut layouter).desired_width(500.0).show(ui));
+                    },
+                );
+                full.drop_without_applying_deltas();
+                output.unwrap()
+            };
+            // A source row with the same width as the shaped text: the unchanged editor must
+            // preserve that visual order, not lay its logical characters out left to right.
+            let natural = frame(&mut ed, vec![]);
+            let row = &natural.galley.rows[0];
+            let bet = row.glyphs.iter().find(|g| g.chr == 'ב').unwrap();
+            let click_x = row.pos.x + bet.pos.x + bet.advance_width * 0.1;
+            line.text = original.into();
+            line.rect[0] = 0.0;
+            line.rect[2] = f64::from(row.size.x);
+            line.ink.clear();
+            block.text = original.into();
+            block.editor_text = original.into();
+            block.reflow_text = original.into();
+            block.rect = line.rect;
+            block.spans = vec![(0..original.len(), 0)];
+            block.rows = vec![vec![0]];
+            block.lines = vec![0];
+            ed.source = Some((block, vec![line]));
+            let output = frame(&mut ed, vec![]);
+            let row = &output.galley.rows[0];
+            let point = output.galley_pos + egui::vec2(click_x, row.pos.y + row.height() * 0.5);
+            for pressed in [true, false] {
+                frame(
+                    &mut ed,
+                    vec![
+                        Event::PointerMoved(point),
+                        Event::PointerButton { pos: point, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+                    ],
+                );
+            }
+            frame(&mut ed, vec![Event::Text("ז".into())]);
+            assert_eq!(ed.text, original.replace("אבג", "אבזג"), "typing at the source bet in {original:?}");
+            let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+            frame(&mut ed, vec![key(Key::Backspace)]);
+            assert_eq!(ed.text, original);
+            frame(&mut ed, vec![key(Key::Delete)]);
+            assert_eq!(ed.text, original.replace("אבג", "אב"));
+            frame(&mut ed, vec![key(Key::ArrowRight)]);
+            frame(&mut ed, vec![Event::Text("ג".into())]);
+            assert_eq!(ed.text, original.replace("אבג", "אגב"), "right arrow moves visually right in Hebrew");
+        }
+    }
+
+    #[test]
     fn review_committing_the_shown_size_applies_it_to_a_mixed_selection() {
         let (_app, mut ed) = preview_app();
         ed.selection = Some(0..2);
