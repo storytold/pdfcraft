@@ -12,20 +12,23 @@
   `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
   them. The branch is 0 behind and
   `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: `3f3bbedb0` (docs: record the cabinet
-  HS256 auth pass and its gates) on `157f4d239` (feat: accept the cabinet's
-  HS256 session tickets next to RS256) on `b27fa89c8` (docs: record the split
-  part and the ordered Combine confirmation) on `843a8f533` (feat: keep a
-  split's part and join Combine as ordered parts) on `a007c4256` (docs: record
-  the rebase onto `ba28458ad` and the gate run) on `5f3c6f3c2` (style: wrap the
-  engine export list after the rebase merge) on `2020fce3f` (docs: record the
-  Split/Combine dialogs inside a session) on `d975ebb72` (feat: send Split and
-  Combine from a session as page operations) on `8f71c37db` (feat: split/combine
-  pages as server-ordered operations) on `32e94bc78` (docs: the previous rebase
-  record) on `ebce0fb6b` (refactor: the `apply_edit` dispatcher, which the
-  merged `ui-egui` needed to stay under the clippy complexity limit) — **82
-  commits** on `ba28458ad` (`git rev-list --count origin/main..HEAD`), 0 behind
-  and 2 ahead of the PR head. Commits named below and
+- Local head before this STATUS commit: `22d29d070` (feat: share a comment's
+  parts, a move and its geometry) on `be5ac3570` (docs(collab): reconcile
+  STATUS with PR #6622 and the cabinet HS256 image) on `3f3bbedb0` (docs:
+  record the cabinet HS256 auth pass and its gates) on `157f4d239` (feat:
+  accept the cabinet's HS256 session tickets next to RS256) on `b27fa89c8`
+  (docs: record the split part and the ordered Combine confirmation) on
+  `843a8f533` (feat: keep a split's part and join Combine as ordered parts) on
+  `a007c4256` (docs: record the rebase onto `ba28458ad` and the gate run) on
+  `5f3c6f3c2` (style: wrap the engine export list after the rebase merge) on
+  `2020fce3f` (docs: record the Split/Combine dialogs inside a session) on
+  `d975ebb72` (feat: send Split and Combine from a session as page operations)
+  on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
+  `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
+  `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
+  clippy complexity limit) — **84 commits** on `ba28458ad`
+  (`git rev-list --count origin/main..HEAD`), 0 behind and 4 ahead of the PR
+  head. Commits named below and
   in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
 - PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
   `feature/realtime-collaboration`, 80 commits) and reports
@@ -40,8 +43,9 @@
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `3f3bbedb0` (the HS256 crates' gates were run
-  at `157f4d239`, whose only child is the docs record).
+  §4 are green at the local head `22d29d070` (the HS256 crates' gates were run
+  at `157f4d239`; the parts/move/geometry operations' gates at `22d29d070`,
+  §4).
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -53,7 +57,9 @@
   page split/combine (`362f9c72b`), the Split/Combine dialogs sending them
   inside a session (this session, §4), and the split part kept as a document
   plus one Combine confirmation as ordered parts (`843a8f533`, §4), and the
-  cabinet's HS256 session tickets next to RS256 (`157f4d239`, §4). The whole
+  cabinet's HS256 session tickets next to RS256 (`157f4d239`, §4), and a
+  comment's parts, a move, a resize and a reshape as addressable operations
+  (`22d29d070`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table).
 - Known gaps before production are listed in §5, the plan in §6. The one this
@@ -73,8 +79,8 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert, restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
-| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`) and their before/expect CAS; the review-state names of a status reply |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert, restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`), its parts (`PartsUpdate`), its move (`MoveUpdate`) and its geometry (`GeometryUpdate`) and their before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
@@ -1102,10 +1108,98 @@ Gates at `c400147b3` (host `agents`, rustc 1.99.1, `-j 8`):
 What this does **not** cover: the full `ui-egui` suite was not re-run (the only
 UI change is none — the new operations are reached through the existing
 `Edit::FontSizeAnnotation`/`Edit::SetAnnotationInfo` arms of `ops_for_edit`;
-clippy with the feature compiles it); `PartOpacity` and moving/resizing a comment
-inside the same Comment Properties batch are still refused whole (they are not
-operation kinds yet), so a dialog change that includes them fails as before; and
-nothing was run against a real cabinet or in a browser.
+clippy with the feature compiles it); and nothing was run against a real cabinet
+or in a browser.
+
+### Part opacity, a move and a comment's geometry — §5 p.2 / limitation 2 (2026-11-10, local; not pushed)
+
+`22d29d070` on `be5ac3570`. This closes the rest of limitation 2: the three
+Comment Properties edits the engine applies with its own `Edit`s are now
+addressable operations with a compare-and-set undo, so a batch that carries
+them is no longer refused whole.
+
+- **`annotation.parts`** (`{"action":"annotation.parts","parts":{"fill":0.4,
+  "text":0.8},"expect":{"fill":1.0}}`) sets a shape's or text box's fill
+  opacity and a text box's, typewriter text's or callout's text opacity — the
+  final numbers, 0–1, in one operation over `Edit::PartOpacity`
+  (`pdfcraft_annot::set_part_opacity`). `annotation.update` still sets the
+  *whole* comment's opacity; a part's inherits it, and an undo writes the
+  numbers back (the engine drops the key again when the value equals the
+  parent's, so the drawn look is the same). A note or line with a fill opacity,
+  a shape with a text opacity, a locked comment or an appearance that can't be
+  redrawn is refused before anything changes. The accepted operation carries
+  `parts` and `before`; undo is `parts = before`, `expect = parts`.
+- **`annotation.move`** (`{"action":"annotation.move","dx":12,"dy":-4,
+  "expect":[10,10,80,40]}`) moves a comment, its pop-up and its points by an
+  offset over `Edit::MoveAnnotation`; the accepted operation carries `before`
+  and `after` (the `/Rect` the engine read and wrote), because three decimals
+  and a sum are not the same number. `expect` is the undo's compare-and-set on
+  `/Rect`. Text markup (`Highlight`/`Underline`/`StrikeOut`/`Squiggly`) and
+  the caret of a Replace Text proposal stay on their text, and a locked
+  comment stays put — both `unsupported` before mutation.
+- **`annotation.geometry`** (`{"geometry":{"rect":[…]}}` or
+  `{"geometry":{"points":[[x,y],…]}}`) is a resize (`Edit::ResizeAnnotation`,
+  the frame Comment Properties names: a callout's text box, else `/Rect`) or a
+  reshape (`Edit::ReshapeAnnotation`: a line's ends, a polygon's corners, a
+  callout's arrow point and knee). A rectangle is normalised at parse time and
+  must be at least 1 pt on a side; points are bounded and counted by kind (a
+  line two, a polyline/polygon at least two, a callout one or two). Only
+  `Square`, `Circle`, `FreeText`, `Stamp` and `Ink` resize (a callout without
+  a readable `/RD` does not), and a measurement (`/IT … Dimension`) keeps its
+  points. The accepted operation carries `geometry`, `before` and `after` (what
+  the engine drew around the edit), so the undo of a circle's or a callout's
+  resize names the frame the engine actually produced, not the client's
+  intent.
+- **A batch from the interface is one group per comment.** `Comment Properties
+  ▸ OK` and a group drag go through `annotation_property_ops`, which now folds
+  style, parts, font size, info, moves and geometry into one operation per
+  kind and one group per addressed comment, in that order. Every group is
+  checked before any operation is sent, so an unsupported edit still refuses
+  the whole batch; a batch over several selected comments is no longer refused
+  (it used to require one comment). The history group still undoes the batch as
+  one step.
+- Refusals do not move the version, write no journal line and are answered only
+  to the sender; a stranger's later change to the same parts, place or
+  geometry makes the undo `conflict` (`retryable: false`) and leaves their
+  value in place. The three new kinds are `merge`-class and never move `epoch`.
+- The engine side needed no new edit: `Props` now reports the comment's
+  `/Rect`, the frame a resize names and its points (`crates/annot/src/info.rs`),
+  and `collab-annot` gained `PartsUpdate`, `MoveUpdate`, `GeometryUpdate` with
+  the usual `check_for`/`before`/`still_matches`; the adapter and the client
+  projection map them to the engine's edits and build the undo from the
+  accepted operation (`inverse_after`), like a restyle.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-annot` | `a_parts_update_round_trips_and_refuses_a_part_the_comment_has_not` (0–1, unknown part, a rectangle's text, the before and the CAS), `a_geometry_update_round_trips_a_rect_and_refuses_a_bad_one` (corner order, under 1 pt, non-finite, a note and a callout without a text box), `a_geometry_update_round_trips_points_and_a_measurement_keeps_its_own` (line/polygon/callout counts, a Dimension, the CAS), `a_move_round_trips_and_keeps_text_markup_in_place` (dx/dy, the `/Rect` before and after, markup and a Replace caret refused) |
+| `collab-pdf` | `a_parts_update_sets_the_fill_and_text_opacities_and_undoes_as_one_operation` (before, replay on a fresh replica, a rectangle's text refused with the version unmoved, a stale undo a conflict), `a_move_and_a_resize_are_addressable_and_undo_with_a_compare_and_set` (before/after, replay, a stranger's drag blocks the undo, the resize undone from `before`/`after`), `a_reshape_sets_the_points_of_a_line_and_refuses_a_comment_without_them` (points, a rectangle refused, a stale undo, replay) |
+| `collab-client-pdf` | `a_mixed_properties_batch_becomes_one_operation_per_kind` (style → parts → font size → info → move → geometry; a two-comment batch is one group per comment; a batch with `SetAnnotationPopup` refused whole), `a_parts_update_and_a_move_round_trip_two_replicas` (accepted op applied on both, undo applied on both, a note's resize builds no operation), `a_resize_and_a_reshape_round_trip_two_replicas` |
+| `collab-ws` e2e | `two_clients_change_parts_and_move_a_comment_and_undo_them` (both replicas, the undo's `expect` from the accepted op, a note's resize and a text box's points refused with the version unmoved), `two_clients_resize_and_reshape_a_comment_and_undo_them` |
+
+Gates at `22d29d070` (host `agents`, rustc 1.99.1, `-j 4`/`-j 8`/`-j 12` per
+step):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **250**: proto 12, server 29 + bin 34, hub 5, client 13, client-pdf 37, session 5, ws 14 unit, pdf 50, annot 22, daemon 3 (`conflict_resolve` 1, `crash_recovery` 1, `publication_retry` 1) + **e2e 26** |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **26/26** (two new) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+
+What this does **not** cover: the full `ui-egui` suite was not re-run (no UI
+source changed — the dialog's `PartOpacity` arm and the drag's
+`MoveAnnotation`/`ResizeAnnotation`/`ReshapeAnnotation` were already in
+`ops_for_edit`'s reach; clippy with the feature compiles them); a callout's
+resize is the frame the interface names, and a comment whose `/RD` or
+appearance cannot be read is refused rather than guessed; the pop-up window
+(`Edit::SetAnnotationPopup`), signatures, custom stamps, redaction marks and
+attachments are still refused; and nothing was run against a real cabinet or in
+a browser.
 
 ### Page insert and duplicate — §5 p.3 (2026-11-09, local; not pushed)
 
@@ -2024,11 +2118,17 @@ Ordered by the risk they pose to production.
    box, typewriter text or callout, and `annotation.info` the author, subject
    and note icon, each as its own addressable operation with the same CAS undo
    (`c400147b3`, §4); `annotation.reply` carries a review state (`/State`)
-   whose reply is named by the client and survives delete/restore. Drawn and
+   whose reply is named by the client and survives delete/restore; and
+   `annotation.parts`, `annotation.move` and `annotation.geometry` share a
+   comment's fill and text opacities, its move, its resize and the points of a
+   line or polygon (`22d29d070`, §4), each as its own operation with the same
+   compare-and-set undo. A Comment Properties batch or a group drag that
+   carries them is no longer refused whole: it becomes one group of operations
+   per comment. Drawn and
    typed signatures, custom stamps, redaction marks and attachments are still
    refused with `unsupported` (RFC §3.1.1). What is still not shared inside a
-   comment: part opacity, moving/resizing a comment and reshaping a line or
-   polygon — a Comment Properties batch that carries them is refused whole.
+   comment: the pop-up window (`Edit::SetAnnotationPopup`) is the one edit the
+   room has no operation for (RFC §3.1.6, §13 p.7).
 3. **Structural coverage.** Page rotate, move, delete and restore, insert and
    duplicate (§4, `b13933e9b`), replace and blank insert
    (`e9756d138`, §4, RFC §3.1.4), and now split and combine
@@ -2216,10 +2316,14 @@ a CAS undo) and status replies (`annotation.reply` with `state` → `/State` +
 **Done since (`c400147b3`, §4):** line endings (`/LE`) in the same style
 object, the font size (`annotation.font_size`) and a comment's author/subject/
 note icon (`annotation.info`), each its own addressable operation with a CAS
-undo. What is still open here: part opacity, moving/resizing a comment,
-reshaping a line/polygon, and the same typed envelope for `AddCustomStamp` if
-the cabinet ever needs it (it references an XObject, so it would need the blob
-channel).
+undo. **Done since (`22d29d070`, §4):** a comment's fill and text opacities
+(`annotation.parts`), its move (`annotation.move`), its resize and the points
+of a line or polygon (`annotation.geometry`), each with a compare-and-set undo,
+and a Comment Properties batch or a group drag folded into one group of
+operations per comment. What is still open here: the same typed envelope for
+`AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
+would need the blob channel), and the pop-up window (`Edit::SetAnnotationPopup`),
+which has no operation yet.
 
 ### 6.3 Web host bridge — done in this branch (local, not pushed)
 
