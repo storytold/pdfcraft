@@ -168,6 +168,25 @@ fn place_in(page: usize, (dw, dh): (f64, f64), cell: [f64; 4], s: f64, rotate: b
     Placement { page, matrix, clip: [0.0, 0.0, dw, dh] }
 }
 
+/// The most creep per sheet, in points. Paper adds a fraction of a point per sheet; more is a mistake.
+pub const MAX_CREEP: f64 = 10.0;
+
+/// `placed` moved `shift` points across the sheet (positive is rightward) and clipped at the fold
+/// at `fold`, so a page moved toward it never prints on the facing page.
+fn creep_toward_fold(mut placed: Placement, shift: f64, fold: f64, s: f64) -> Placement {
+    if shift == 0.0 || s <= 0.0 {
+        return placed;
+    }
+    placed.matrix.0[4] += shift;
+    let at_fold = (fold - placed.matrix.0[4]) / s;
+    if shift > 0.0 {
+        placed.clip[2] = placed.clip[2].min(at_fold);
+    } else {
+        placed.clip[0] = placed.clip[0].max(at_fold);
+    }
+    placed
+}
+
 fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
     if dw <= 0.0 || dh <= 0.0 { 1.0 } else { (cw / dw).min(ch / dh) }
 }
@@ -321,13 +340,19 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 sheets.push(sheet);
             }
         }
-        Layout::Booklet { subset, binding } => {
+        Layout::Booklet { subset, binding, creep } => {
             // Pad to a multiple of 4 with blank pages (None).
             let n4 = pages.len().div_ceil(4) * 4;
             let at = |i: usize| pages.get(i).copied();
             let size = oriented(paper, Orientation::Landscape, true);
             let half = (size.0 - 2.0 * MARGIN) / 2.0;
             let cells = [[MARGIN, MARGIN, MARGIN + half, size.1 - MARGIN], [MARGIN + half, MARGIN, size.0 - MARGIN, size.1 - MARGIN]];
+            // The innermost sheet moves furthest; it must stay within half its cell. `pages` is not
+            // empty (checked above), so there is at least one sheet.
+            let innermost = creep * (n4 / 4 - 1) as f64;
+            if !((0.0..=MAX_CREEP).contains(&creep) && innermost < half / 2.0) {
+                return Err(PrintError::Invalid("invalid booklet creep".into()));
+            }
             for k in 0..n4 / 4 {
                 let front = (at(n4 - 1 - 2 * k), at(2 * k));
                 let back = (at(2 * k + 1), at(n4 - 2 - 2 * k));
@@ -341,11 +366,12 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 for (l, r) in sides {
                     let (l, r) = if binding == Binding::Right { (r, l) } else { (l, r) };
                     let mut sheet = Sheet { size, ..Sheet::default() };
-                    for (p, cell) in [(l, cells[0]), (r, cells[1])] {
+                    for (p, cell, toward) in [(l, cells[0], 1.0), (r, cells[1], -1.0)] {
                         if let Some(p) = p {
                             let d = sizes[p];
                             let s = fit_scale(d, (cell[2] - cell[0], cell[3] - cell[1]));
-                            sheet.placed.push(place_in(p, d, cell, s, false));
+                            let placed = place_in(p, d, cell, s, false);
+                            sheet.placed.push(creep_toward_fold(placed, toward * creep * k as f64, MARGIN + half, s));
                         }
                     }
                     sheets.push(sheet);
