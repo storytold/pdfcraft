@@ -251,7 +251,10 @@ impl PdfCraftApp {
                     let sink = |name: &str, bytes: Vec<u8>| {
                         crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
-                    let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);
+                    // A panic in the export must still write the result, or `poll_export`
+                    // would wait for a message that never comes (#3919).
+                    let msg = pdfcraft_engine::guard(|| run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink))
+                        .unwrap_or_else(|e| crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e)]));
                     if let Ok(mut s) = st.lock() {
                         let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                         let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
@@ -260,8 +263,11 @@ impl PdfCraftApp {
                 };
                 if inline {
                     work(); // tests and automation: synchronous
-                } else {
-                    std::thread::Builder::new().name("pdfcraft-export".into()).spawn(work).ok();
+                } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-export".into()).spawn(work) {
+                    // No worker: report the failure instead of waiting for a result that never comes.
+                    if let Ok(mut s) = status.lock() {
+                        *s = Some((0, 0, Some(crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]))));
+                    }
                 }
                 app.export_status = Some(status);
             };
@@ -289,7 +295,15 @@ impl PdfCraftApp {
     /// Show export progress, and the result once it is done.
     pub(crate) fn poll_export(&mut self) {
         let Some(st) = self.export_status.clone() else { return };
-        let snapshot = st.lock().ok().and_then(|s| s.clone());
+        // The worker may have stopped while holding the lock: it will never report back (#3919).
+        let snapshot = match st.lock() {
+            Ok(s) => s.clone(),
+            Err(e) => {
+                self.export_status = None;
+                self.notify(crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]));
+                return;
+            }
+        };
         match snapshot {
             Some((_, _, Some(msg))) => {
                 self.export_status = None;

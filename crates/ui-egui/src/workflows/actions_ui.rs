@@ -100,41 +100,60 @@ impl PdfCraftApp {
         let lang = crate::i18n::current();
         // Each file runs in its own session; it keeps this one's JavaScript preference.
         let javascript = self.session.javascript();
+        let action_name = action.name.clone();
+        let spawn_action_name = action.name.clone();
         let work = move || {
-            crate::i18n::set_current(lang);
-            let (mut ok, mut failed) = (0, Vec::new());
-            for (i, (name, bytes)) in files.into_iter().enumerate() {
+            let work = std::panic::AssertUnwindSafe(|| {
+                crate::i18n::set_current(lang);
+                let (mut ok, mut failed) = (0, Vec::new());
+                for (i, (name, bytes)) in files.into_iter().enumerate() {
+                    if let Ok(mut s) = p.lock() {
+                        s.done = i;
+                    }
+                    let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), javascript, |_, _| {}).and_then(|r| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
+                        #[cfg(target_arch = "wasm32")]
+                        crate::editing::download(&name, &r.bytes)?;
+                        Ok(())
+                    });
+                    match r {
+                        Ok(()) => ok += 1,
+                        Err(e) => failed.push(format!("{name}: {}", e)),
+                    }
+                }
+                let done = if ok == 1 {
+                    crate::i18n::fmt(tl!("1 file done"), &[])
+                } else {
+                    crate::i18n::fmt(tl!("{n} files done"), &[("n", &ok.to_string())])
+                };
+                let mut msg = format!("{}: {done}", action.name);
+                if !failed.is_empty() {
+                    msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
+                }
                 if let Ok(mut s) = p.lock() {
-                    s.done = i;
+                    s.done = s.total;
+                    s.message = Some(msg);
                 }
-                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), javascript, |_, _| {}).and_then(|r| {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
-                    Ok(())
-                });
-                match r {
-                    Ok(()) => ok += 1,
-                    Err(e) => failed.push(format!("{name}: {}", e)),
+            });
+            // A panic in the action must still write the result, or `poll_action`
+            // would wait for a message that never comes (#3919).
+            if let Err(e) = pdfcraft_engine::guard(work) {
+                if let Ok(mut s) = p.lock() {
+                    s.done = s.total;
+                    s.message = Some(format!("{}: failed: {}", action_name, e));
                 }
-            }
-            let done =
-                if ok == 1 { crate::i18n::fmt(tl!("1 file done"), &[]) } else { crate::i18n::fmt(tl!("{n} files done"), &[("n", &ok.to_string())]) };
-            let mut msg = format!("{}: {done}", action.name);
-            if !failed.is_empty() {
-                msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
-            }
-            if let Ok(mut s) = p.lock() {
-                s.done = s.total;
-                s.message = Some(msg);
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-action".into()).spawn(work).ok();
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-action".into()).spawn(work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            if let Ok(mut s) = progress.lock() {
+                s.done = s.total;
+                s.message = Some(format!("{}: failed: {}", spawn_action_name, e));
+            }
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -145,13 +164,21 @@ impl PdfCraftApp {
     /// Show the running action's progress, and its summary when done.
     pub(crate) fn poll_action(&mut self) {
         let Some(p) = self.action_run.clone() else { return };
-        let state = p.lock().ok().map(|mut s| s.message.take().ok_or((s.done, s.total)));
+        let state = match p.lock() {
+            Ok(mut s) => s.message.take().ok_or((s.done, s.total)),
+            // The worker stopped while holding the lock: it will never report back (#3919).
+            Err(e) => {
+                self.action_run = None;
+                self.notify(format!("failed: {e}"));
+                return;
+            }
+        };
         match state {
-            Some(Ok(m)) => {
+            Ok(m) => {
                 self.action_run = None;
                 self.notify(m);
             }
-            Some(Err((done, total))) => {
+            Err((done, total)) => {
                 let m = crate::i18n::fmt(
                     tl!("Running action… file {d} of {t}"),
                     &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
@@ -163,7 +190,6 @@ impl PdfCraftApp {
                     ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 }
             }
-            None => self.action_run = None,
         }
     }
 
