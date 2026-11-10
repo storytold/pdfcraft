@@ -262,7 +262,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
                     _ => {}
                 }
             })?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            let fresh = all.iter().find(|field| field.obj == obj).cloned().unwrap_or_else(|| f.clone());
+            redraw(doc, &fresh, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -305,17 +306,19 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = &scripting::accept(doc, f, t, scripts)?;
+            let (t, refresh_field) = scripting::accept(doc, f, t, scripts)?;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, f, std::slice::from_ref(t), scripts)
+            let current =
+                if refresh_field { fields(doc).into_iter().find(|current| current.obj == f.obj).unwrap_or_else(|| f.clone()) } else { f.clone() };
+            redraw(doc, &current, std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.
