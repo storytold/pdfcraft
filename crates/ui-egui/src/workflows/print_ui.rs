@@ -247,6 +247,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            area: None,
             custom_new: None,
             ..keep
         };
