@@ -67,11 +67,83 @@ impl RecoveryRule {
     }
 }
 
+/// The work the recovery layer counts for tests ([`recovery_counters`], the `test-counters`
+/// feature); without the feature [`count`] does nothing.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Counter {
+    /// A glyph asked of the rules (`RecoveryCache::recover`): the one check every glyph costs.
+    RuleCall,
+    /// A font's guards decided (`Guards::decide`).
+    GuardDecision,
+    /// A font's [`FontFacts`] built.
+    FactsBuilt,
+    /// A glyph's [`GlyphFacts`] built.
+    GlyphFactsBuilt,
+    /// A guard walk over an embedded program's tables (its `cmap` and `post`, its `loca`, its
+    /// metrics).
+    ProgramWalk,
+    /// A Type 3 font's dictionary hashed for its cache key.
+    Type3KeyHash,
+}
+
+/// Counts `counter` on this thread (only with the `test-counters` feature).
+#[inline]
+pub(crate) fn count(counter: Counter) {
+    #[cfg(feature = "test-counters")]
+    COUNTERS.with(|c| {
+        let mut n = c.get();
+        let field = match counter {
+            Counter::RuleCall => &mut n.rule_calls,
+            Counter::GuardDecision => &mut n.guard_decisions,
+            Counter::FactsBuilt => &mut n.facts_built,
+            Counter::GlyphFactsBuilt => &mut n.glyph_facts_built,
+            Counter::ProgramWalk => &mut n.program_walks,
+            Counter::Type3KeyHash => &mut n.type3_key_hashes,
+        };
+        *field = field.saturating_add(1);
+        c.set(n);
+    });
+    #[cfg(not(feature = "test-counters"))]
+    let _ = counter;
+}
+
+/// The recovery layer's work on this thread so far, for tests that show what a page costs
+/// (the `test-counters` feature).
+#[cfg(feature = "test-counters")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecoveryCounters {
+    /// Glyphs asked of the rules: one check each.
+    pub rule_calls: usize,
+    /// Fonts whose guards were decided.
+    pub guard_decisions: usize,
+    /// Font facts built (for the guards, and for each glyph of a font some rule takes).
+    pub facts_built: usize,
+    /// Glyph facts built (only for glyphs of a font some rule takes).
+    pub glyph_facts_built: usize,
+    /// Guard walks over embedded programs' tables.
+    pub program_walks: usize,
+    /// Type 3 font dictionaries hashed for a cache key.
+    pub type3_key_hashes: usize,
+}
+
 #[cfg(feature = "test-counters")]
 thread_local! {
-    /// Asks of the recovery rules (`RecoveryCache::recover`, before any guard is decided) on
-    /// this thread.
-    static RULE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COUNTERS: std::cell::Cell<RecoveryCounters> = const {
+        std::cell::Cell::new(RecoveryCounters {
+            rule_calls: 0,
+            guard_decisions: 0,
+            facts_built: 0,
+            glyph_facts_built: 0,
+            program_walks: 0,
+            type3_key_hashes: 0,
+        })
+    };
+}
+
+/// The recovery layer's work on this thread so far ([`RecoveryCounters`]).
+#[cfg(feature = "test-counters")]
+pub fn recovery_counters() -> RecoveryCounters {
+    COUNTERS.with(std::cell::Cell::get)
 }
 
 /// PdfCraft patch (104) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
@@ -111,7 +183,7 @@ pub mod test_hooks {
 /// `test-counters` feature (a dev-dependency feature; release builds count nothing).
 #[cfg(feature = "test-counters")]
 pub fn recovery_rule_calls() -> usize {
-    RULE_CALLS.with(std::cell::Cell::get)
+    recovery_counters().rule_calls
 }
 
 /// Whether a recovered reading fills a glyph that has no strict text or replaces its strict
@@ -259,6 +331,10 @@ pub(crate) struct GlyphFacts<'a> {
 pub(crate) trait Rule {
     /// Which rule this is.
     const RULE: RecoveryRule;
+    /// The font kinds the rule can take. A font of any other kind is never asked of it: its
+    /// guard isn't decided and its facts aren't built, so a font no rule reads costs one
+    /// check per glyph and nothing else.
+    const KINDS: &'static [FontKind];
     /// What the font-level decision keeps.
     type Guard;
     /// Whether the font qualifies, decided once per font.
@@ -279,10 +355,16 @@ pub(crate) struct Guards {
 }
 
 impl Guards {
+    /// Whether some rule can take a font of `kind` ([`Rule::KINDS`]).
+    fn read(kind: FontKind) -> bool {
+        NumberedLatin1Names::KINDS.contains(&kind) || MacGlyphOrder::KINDS.contains(&kind)
+    }
+
     fn decide(font: &FontFacts<'_>) -> Self {
+        count(Counter::GuardDecision);
         Self {
-            numbered: NumberedLatin1Names::guard(font),
-            mac: MacGlyphOrder::guard(font),
+            numbered: guard::<NumberedLatin1Names>(font),
+            mac: guard::<MacGlyphOrder>(font),
         }
     }
 
@@ -413,21 +495,30 @@ impl std::fmt::Debug for Guards {
 }
 
 impl RecoveryCache {
-    /// The recovered reading of one glyph: `facts` builds the font's facts (called for the
-    /// guards the first time, and again only when some rule takes the font), `glyph` the
-    /// glyph's (built only when some rule takes the font).
+    /// The recovered reading of one glyph of a font of `kind`: `facts` builds the font's facts
+    /// (of that kind; called for the guards the first time, and again only when some rule takes
+    /// the font), `glyph` the glyph's (built only when some rule takes the font). A font of a
+    /// kind no rule reads is turned away before either is built or a guard decided.
     pub(crate) fn recover<'a, 'g>(
         &self,
+        kind: FontKind,
         facts: impl Fn() -> FontFacts<'a>,
         glyph: impl FnOnce() -> GlyphFacts<'g>,
     ) -> Option<Recovery> {
-        #[cfg(feature = "test-counters")]
-        RULE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+        count(Counter::RuleCall);
+        if !Guards::read(kind) {
+            return None;
+        }
+        let facts = || {
+            count(Counter::FactsBuilt);
+            facts()
+        };
         let guards = self.0.get_or_init(|| Guards::decide(&facts()));
         if guards.none() {
             return None;
         }
         let font = facts();
+        count(Counter::GlyphFactsBuilt);
         let glyph = &glyph();
         RecoveryRule::ORDER.iter().find_map(|rule| match rule {
             RecoveryRule::NumberedLatin1Names => {
@@ -438,6 +529,14 @@ impl RecoveryCache {
             }
         })
     }
+}
+
+/// Rule `R`'s guard for `font`, asked only of a font of a kind it can take ([`Rule::KINDS`]).
+fn guard<R: Rule>(font: &FontFacts<'_>) -> Option<R::Guard> {
+    R::KINDS
+        .contains(&font.kind)
+        .then(|| R::guard(font))
+        .flatten()
 }
 
 /// Rule `R`'s reading of a glyph, under the fill/override policy: a reading of a glyph without
@@ -575,6 +674,7 @@ fn advent_postscript(base: Option<&str>) -> bool {
 
 impl Rule for NumberedLatin1Names {
     const RULE: RecoveryRule = RecoveryRule::NumberedLatin1Names;
+    const KINDS: &'static [FontKind] = &[FontKind::Type1, FontKind::Cff];
     type Guard = NumberedEncoding;
 
     fn guard(font: &FontFacts<'_>) -> Option<NumberedEncoding> {
@@ -722,6 +822,7 @@ const ACCENTED_BASES: [(u16, u16); 28] = [
 /// font with glyphs of its own first: Skia's `h` is glyph 104, the order's `Udieresis`) puts
 /// other letters there, of other widths, and fails.
 fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
+    count(Counter::ProgramWalk);
     use skrifa::MetadataProvider;
     use skrifa::instance::{LocationRef, Size};
     let metrics = program.glyph_metrics(Size::unscaled(), LocationRef::default());
@@ -837,6 +938,7 @@ const MAX_PROGRAM_GLYPHS: usize = 65_536;
 /// three (`.notdef`, `.null`, the carriage return), when the program has at least 258 glyphs
 /// and draws at most half of them; `None` otherwise or when its tables can't be read.
 fn sparse_original_ids(program: &FontRef<'_>) -> Option<Vec<u32>> {
+    count(Counter::ProgramWalk);
     let glyphs = usize::from(program.maxp().ok()?.num_glyphs());
     if !(258..=MAX_PROGRAM_GLYPHS).contains(&glyphs) {
         return None;
@@ -885,6 +987,7 @@ fn codes_read_as_winansi(font: &FontFacts<'_>) -> bool {
 /// (Windows 1 or 10, or the Unicode platform) and no glyph names of its own (`post` missing,
 /// or format 3). A `post` table of format 1 *is* the standard Macintosh order and qualifies.
 fn program_names_nothing(program: &FontRef<'_>) -> bool {
+    count(Counter::ProgramWalk);
     if let Ok(cmap) = program.cmap() {
         let unicode = cmap.encoding_records().iter().any(|r| {
             use skrifa::raw::tables::cmap::PlatformId;
@@ -909,6 +1012,12 @@ fn program_names_nothing(program: &FontRef<'_>) -> bool {
 
 impl Rule for MacGlyphOrder {
     const RULE: RecoveryRule = RecoveryRule::MacGlyphOrder;
+    const KINDS: &'static [FontKind] = &[
+        FontKind::Type1,
+        FontKind::Cff,
+        FontKind::TrueType,
+        FontKind::CidTrueType,
+    ];
     type Guard = MacSource;
 
     fn guard(font: &FontFacts<'_>) -> Option<MacSource> {

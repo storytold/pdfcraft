@@ -570,44 +570,47 @@ impl Type0Font {
             }
             _ => None,
         };
+        let kind = if program.is_some() {
+            FontKind::CidTrueType
+        } else if cid_cff.is_some() {
+            FontKind::CidCff
+        } else {
+            FontKind::CidOther
+        };
         let ids = || cid_cff.map(|c| c.charset_cids()).unwrap_or_default();
         let id_width = |cid: u32| self.widths.get(&cid).copied();
-        let identity = self.identity_codes();
         let id_text = |gid: u32| {
-            identity
+            self.identity_codes()
                 .then(|| self.char_code_to_unicode(gid))
                 .flatten()
         };
-        let facts = || FontFacts {
-            kind: if program.is_some() {
-                FontKind::CidTrueType
-            } else if cid_cff.is_some() {
-                FontKind::CidCff
-            } else {
-                FontKind::CidOther
-            },
-            base_font: self.recovery.base_font.as_deref(),
-            flags: self.recovery.flags.as_ref(),
-            // A font of an Adobe character collection names its characters by CID, through the
-            // collection's UCS2 CMap (patch 84) even where that map lacks a CID: its glyph ids
-            // are never a reading in the Macintosh order.
-            has_to_unicode: self.to_unicode.is_some()
-                || self.identity_to_unicode
-                || self.adobe_collection,
-            has_encoding: self.recovery.has_encoding,
-            names: None,
-            program,
-            code_glyph: None,
-            to_unicode_checkable: self.to_unicode.is_some()
-                && !self.to_unicode_is_cid_indexed
-                && !self.identity_to_unicode
-                && !self.adobe_collection
-                && identity,
-            ids: cid_cff.is_some().then_some(&ids as &dyn Fn() -> Vec<u32>),
-            // By CID: a glyph id too when codes are glyph ids.
-            id_width: (cid_cff.is_some() || identity)
-                .then_some(&id_width as &dyn Fn(u32) -> Option<f32>),
-            id_text: identity.then_some(&id_text as &dyn Fn(u32) -> Option<BfString>),
+        let facts = || {
+            let identity = self.identity_codes();
+            FontFacts {
+                kind,
+                base_font: self.recovery.base_font.as_deref(),
+                flags: self.recovery.flags.as_ref(),
+                // A font of an Adobe character collection names its characters by CID, through the
+                // collection's UCS2 CMap (patch 84) even where that map lacks a CID: its glyph ids
+                // are never a reading in the Macintosh order.
+                has_to_unicode: self.to_unicode.is_some()
+                    || self.identity_to_unicode
+                    || self.adobe_collection,
+                has_encoding: self.recovery.has_encoding,
+                names: None,
+                program,
+                code_glyph: None,
+                to_unicode_checkable: self.to_unicode.is_some()
+                    && !self.to_unicode_is_cid_indexed
+                    && !self.identity_to_unicode
+                    && !self.adobe_collection
+                    && identity,
+                ids: cid_cff.is_some().then_some(&ids as &dyn Fn() -> Vec<u32>),
+                // By CID: a glyph id too when codes are glyph ids.
+                id_width: (cid_cff.is_some() || identity)
+                    .then_some(&id_width as &dyn Fn(u32) -> Option<f32>),
+                id_text: identity.then_some(&id_text as &dyn Fn(u32) -> Option<BfString>),
+            }
         };
         let glyph = || GlyphFacts {
             gid,
@@ -615,7 +618,7 @@ impl Type0Font {
             strict,
             id: self.code_to_cid(code),
         };
-        self.recovery.cache.recover(facts, glyph)
+        self.recovery.cache.recover(kind, facts, glyph)
     }
 
     /// The text a character code stands for, or `None` when the font gives none (or, for an

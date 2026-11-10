@@ -195,13 +195,14 @@ impl Type1Font {
         gid: GlyphId,
         strict: Option<&BfString>,
     ) -> Option<Recovery> {
+        let kind = if matches!(self.1, Kind::Cff(_)) {
+            FontKind::Cff
+        } else {
+            FontKind::Type1
+        };
         let names = |c: u8| self.code_to_ps_name(c);
         let facts = || FontFacts {
-            kind: if matches!(self.1, Kind::Cff(_)) {
-                FontKind::Cff
-            } else {
-                FontKind::Type1
-            },
+            kind,
             base_font: self.4.base_font.as_deref(),
             flags: self.4.flags.as_ref(),
             has_to_unicode: self.2.is_some(),
@@ -219,7 +220,7 @@ impl Type1Font {
             strict,
             id: None,
         };
-        self.4.cache.recover(facts, glyph)
+        self.4.cache.recover(kind, facts, glyph)
     }
 
     fn code_to_ps_name(&self, code: u8) -> Option<&str> {
