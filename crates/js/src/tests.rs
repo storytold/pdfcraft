@@ -629,6 +629,19 @@ fn nesting_guard_reads_templates_regexes_and_comments() {
     assert_eq!((o.error, o.value.as_str()), (None, "29 \\([)](a)(?:b)a{2} 1 1"));
 }
 
+/// A leading `#!` line is a comment: brackets in it don't count, while nesting on the lines
+/// after it still does.
+#[test]
+fn a_hashbang_line_is_read_as_a_comment() {
+    use super::nesting::MAX_BRACKET_DEPTH;
+    let s = format!("#!{}\nevent.value = 1;", "(".repeat(MAX_BRACKET_DEPTH + 1));
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+    let n = MAX_BRACKET_DEPTH + 1;
+    let s = format!("#!\nevent.value = {}1{};", "(".repeat(n), ")".repeat(n));
+    assert!(super::run::refuse(&s).is_some_and(|e| e.contains("nested too deeply")));
+}
+
 /// Divisions don't add up to a refusal: a form's calculation rounds with `/` many times over,
 /// and on one long line, and each `/` could start a regular expression as far as the scan
 /// knows. The reading as a regular expression is dropped where boa would reject it.

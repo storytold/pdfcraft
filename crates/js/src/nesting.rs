@@ -260,11 +260,10 @@ fn line_break(b: &[u8], i: usize) -> usize {
 /// conditionals; or the script has more ambiguous readings than the scan follows.
 pub(crate) fn too_deep(source: &str) -> bool {
     let b = source.as_bytes();
-    let mut readings = vec![Reading::in_code()];
-    if b.starts_with(b"#!") {
-        // A hashbang comment, when the script is the start of what boa parses.
-        readings.push(Reading::in_code().with_mode(Mode::LineComment));
-    }
+    // A leading `#!` is a hashbang comment: boa parses scripts and eval code from a goal that
+    // allows one. Read as code it could only be a syntax error (`#` must start a private name).
+    let first = if b.starts_with(b"#!") { Mode::LineComment } else { Mode::Code };
+    let mut readings = vec![Reading::in_code().with_mode(first)];
     let mut next = Vec::with_capacity(MAX_READINGS + 1);
     for i in 0..b.len() {
         let mut ended: Option<Reading> = None;
