@@ -588,6 +588,17 @@ impl Document {
         self.editor.is_some()
     }
 
+    /// The page-label ranges of the working file (ISO 32000-2 §12.4.2), read
+    /// strictly: a tree that cannot be read is an error, not an empty list, so a
+    /// caller that rewrites the labels cannot silently lose them.
+    pub fn page_label_ranges(&self) -> Result<Vec<pdfcraft_organize::LabelRange>, EditError> {
+        let cos = pdfcraft_cos::Document::open_with_password(self.bytes.clone(), self.password.as_deref())
+            .map_err(|error| EditError::Invalid(format!("the page labels cannot be read: {error}")))?;
+        pdfcraft_organize::PageLabels::new(&cos)
+            .map(|labels| labels.ranges().to_vec())
+            .map_err(|error| EditError::Invalid(format!("the page labels cannot be read: {error}")))
+    }
+
     /// What the opening password allows; `None` when the document is not encrypted.
     pub fn permissions(&self) -> Option<pdfcraft_cos::Permissions> {
         self.editor.as_ref().and_then(|e| e.cos.permissions())

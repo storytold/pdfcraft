@@ -227,6 +227,10 @@ impl Peer {
         self.session.get(self.id).expect("the peer document is open").info.pages.len()
     }
 
+    fn labels(&self) -> Vec<String> {
+        self.session.get(self.id).expect("the peer document is open").info.pages.iter().map(|page| page.label.clone()).collect()
+    }
+
     fn saved(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         Ok(self.session.save_bytes(self.id)?.as_ref().clone())
     }
@@ -2291,6 +2295,13 @@ impl Room {
         assert_eq!(self.bo.outline(), self.ada.outline(), "the second replica converged");
         assert_eq!(self.cy.outline(), self.ada.outline(), "and the viewer sees it too");
     }
+
+    /// Every replica shows the same page labels.
+    fn assert_labels(&self, expected: &[&str]) {
+        assert_eq!(self.ada.labels(), expected);
+        assert_eq!(self.bo.labels(), self.ada.labels(), "the second replica converged");
+        assert_eq!(self.cy.labels(), self.ada.labels(), "and the viewer sees them too");
+    }
 }
 
 /// Two editors and a viewer share the outline over a real socket: an item is
@@ -2436,5 +2447,85 @@ fn named_destinations_are_operations_over_a_socket() -> Result<(), Box<dyn std::
     }
     // The bookmark that named it keeps its place and now goes nowhere.
     room.assert_outline(&["Part→0"]);
+    Ok(())
+}
+
+/// Page labels over a real socket: a set and a clear are structural operations
+/// that every replica applies; a set that split a range is undone in one write
+/// over the ranges it left, an undo built on stale ranges is refused without
+/// moving the version, and a viewer is refused before the adapter runs.
+#[test]
+fn page_labels_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    room.assert_labels(&["1", "2"]);
+    let set = |room: &Room, id: &str, start: u32, payload: Value| -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(structural_op(room.doc.clone(), OpId::new(id)?, room.ada.version, room.ada.epoch, Target::PageLabel { start }, payload))
+    };
+    // Front matter in Roman numerals over the first page.
+    let front = set(&room, "label-front", 0, pdfcraft_collab_client_pdf::page_label_set_payload(0, pdfcraft_engine::LabelStyle::LowerRoman, "", 1))?;
+    let applied = room.write(front)?;
+    room.assert_labels(&["i", "2"]);
+    assert_eq!(applied.op.payload["before"], json!({"start": 0, "end": 1, "style": "decimal", "prefix": "", "first": 1, "implicit": true}));
+    // A second range after it, as a different editor: the first page keeps i.
+    let second = set(&room, "label-second", 1, pdfcraft_collab_client_pdf::page_label_set_payload(1, pdfcraft_engine::LabelStyle::Decimal, "A-", 1))?;
+    let applied_second = room.write(second)?;
+    room.assert_labels(&["i", "A-1"]);
+    assert_eq!(applied_second.op.payload["before"], json!({"start": 1, "end": 1, "style": "decimal", "prefix": "", "first": 2}));
+    // The undo of the first set names the two ranges that set left; with the
+    // second set in place they are gone, so it is refused and nothing moves.
+    let mut stale = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the set is undoable")?;
+    stale.base_version = room.ada.version;
+    stale.epoch = room.ada.epoch;
+    room.ada.send(stale)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Conflict));
+    room.assert_labels(&["i", "A-1"]);
+    // In order, both undos go back through the socket: the appendix first, then
+    // the front matter, each writing the whole range the server replaced.
+    let mut undo_second = pdfcraft_collab_client_pdf::inverse_after(&applied_second).ok_or("the set is undoable")?;
+    undo_second.base_version = room.ada.version;
+    undo_second.epoch = room.ada.epoch;
+    room.write(undo_second)?;
+    room.assert_labels(&["i", "2"]);
+    let mut undo_front = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the set is undoable")?;
+    undo_front.base_version = room.ada.version;
+    undo_front.epoch = room.ada.epoch;
+    assert_eq!(undo_front.payload["before"].as_array().map(Vec::len), Some(2), "the undo names the ranges it replaces");
+    room.write(undo_front)?;
+    room.assert_labels(&["1", "2"]);
+    // A redo sends the original intent again, and every replica follows it.
+    let redo = set(&room, "label-redo", 0, pdfcraft_collab_client_pdf::page_label_set_payload(0, pdfcraft_engine::LabelStyle::LowerRoman, "", 1))?;
+    room.write(redo)?;
+    room.assert_labels(&["i", "2"]);
+
+    // A clear removes the range that begins at the target; its undo writes it back.
+    let clear = set(&room, "label-clear", 0, pdfcraft_collab_client_pdf::page_label_clear_payload())?;
+    let cleared = room.write(clear)?;
+    room.assert_labels(&["1", "2"]);
+    let mut undo_clear = pdfcraft_collab_client_pdf::inverse_after(&cleared).ok_or("the clear is undoable")?;
+    undo_clear.base_version = room.ada.version;
+    undo_clear.epoch = room.ada.epoch;
+    room.write(undo_clear)?;
+    room.assert_labels(&["i", "2"]);
+
+    // A set that crosses the range at page 2 is refused; the version stays.
+    let version = room.ada.version;
+    let cross = set(&room, "label-cross", 0, pdfcraft_collab_client_pdf::page_label_set_payload(1, pdfcraft_engine::LabelStyle::Decimal, "", 1))?;
+    room.ada.send(cross)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Conflict));
+    assert_eq!(room.ada.version, version);
+    room.assert_labels(&["i", "2"]);
+
+    // A viewer is refused before the adapter runs.
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-label")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::PageLabel { start: 0 },
+        pdfcraft_collab_client_pdf::page_label_set_payload(0, pdfcraft_engine::LabelStyle::Decimal, "", 1),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    room.assert_labels(&["i", "2"]);
     Ok(())
 }

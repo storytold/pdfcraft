@@ -33,7 +33,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetNamedDestination { .. }
         | Edit::DeleteNamedDestination { .. }
         | Edit::BookmarksFromStructure
-        | Edit::NumberPages { .. } => {
+        | Edit::NumberPages { .. }
+        | Edit::ClearPageLabels { .. } => {
             if p.assemble() {
                 Ok(())
             } else {
@@ -603,6 +604,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
+        Edit::ClearPageLabels { start } => pdfcraft_organize::clear_page_label_range(doc, *start)?,
         Edit::AddMeasurement(m) => {
             measure::add(doc, m, &cx.meta())?;
         }

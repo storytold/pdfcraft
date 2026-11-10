@@ -40,7 +40,9 @@ pub use import::{
     combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, import_value,
     insert_file_pages, page_as_form, reachable, split, split_ranges,
 };
-pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
+pub use labels::{
+    LabelRange, LabelStyle, PageLabels, check_page_label, clear_page_label_range, number_pages, page_label_ranges, page_labels, set_page_label_ranges,
+};
 pub use outline::{
     Bookmark, BookmarkDest, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, add_bookmark_with,
     bookmark_page, bookmarks, delete_bookmark, move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_dest, set_bookmark_open,
@@ -526,6 +528,7 @@ fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), Orga
 pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
+    let before = labels::snapshot(doc);
     let mut sorted = indices.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
@@ -533,7 +536,20 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
     let mut rest: Vec<(ObjRef, Dict)> = all.iter().enumerate().filter(|(i, _)| !sorted.contains(i)).map(|(_, p)| p.clone()).collect();
     let at = to.min(rest.len());
     rest.splice(at..at, moving);
-    rebuild(doc, &rest)
+    // The new order, as the old indices it came from, so every label stays on its page.
+    let plan = match &before {
+        Some(before) => {
+            let mut order: Vec<usize> = (0..all.len()).filter(|i| !sorted.contains(i)).collect();
+            order.splice(at..at, sorted.iter().copied());
+            Some(labels::plan_order(before, &order)?)
+        }
+        None => None,
+    };
+    rebuild(doc, &rest)?;
+    if let Some(plan) = &plan {
+        labels::write_plan(doc, plan.as_deref())?;
+    }
+    Ok(())
 }
 
 /// Reverse the order of the pages at `indices` among the positions they occupy; every other
@@ -566,8 +582,19 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
     let mut order = indices.to_vec();
     order.sort_unstable();
     order.dedup();
+    let at = at.unwrap_or(last + 1).min(n);
+    // The copies bring the labels of the pages they copy; the pages around them keep theirs.
+    // The plan is checked before the pages are copied, so a label problem refuses the whole edit.
+    let plan = match labels::snapshot(doc) {
+        Some(before) => Some(labels::plan_insert(&before, at, &labels::carried_labels(doc, &order))?),
+        None => None,
+    };
     let src = doc.clone();
-    import_pages(doc, &src, &order, at.unwrap_or(last + 1)).map(|_| ())
+    import_pages(doc, &src, &order, at)?;
+    if let Some(plan) = plan {
+        labels::write_plan(doc, plan.as_deref())?;
+    }
+    Ok(())
 }
 
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
@@ -606,15 +633,24 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
 pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64) -> Result<ObjRef, OrganizeError> {
     let mut all = walk(doc)?;
     let root = pages_root(doc)?;
+    let at = at.min(all.len());
+    // A blank page has no label of its own: it takes the numbering it falls into, and the pages
+    // after it keep theirs. Checked before the page tree is rebuilt.
+    let plan = match labels::snapshot(doc) {
+        Some(before) => Some(labels::plan_insert(&before, at, &[None])?),
+        None => None,
+    };
     let mut page = Dict::new();
     page.set(b"Type".to_vec(), Object::name("Page"));
     page.set(b"Parent".to_vec(), Object::Ref(root));
     page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(width), Object::Real(height)]));
     page.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
     let r = doc.add(page);
-    let at = at.min(all.len());
     all.insert(at, (r, Dict::new()));
     rebuild(doc, &all)?;
+    if let Some(plan) = plan {
+        labels::write_plan(doc, plan.as_deref())?;
+    }
     Ok(r)
 }
 

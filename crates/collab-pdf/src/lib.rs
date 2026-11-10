@@ -34,6 +34,8 @@
 //! | `dest.add` | structural | named destination (its name) |
 //! | `dest.update` | structural | named destination (its name) |
 //! | `dest.delete` | structural | named destination (its name) |
+//! | `page.label.set` | structural | page-label range (the page it starts on) |
+//! | `page.label.clear` | structural | page-label range (the page it starts on) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -73,6 +75,11 @@
 //! operation resolves its address against the document before it writes, and the
 //! accepted operation carries what it replaced, so an undo is an operation
 //! rather than a guess. See `outline.rs` and RFC §3.1.7.
+//!
+//! Page labels are structural as well (RFC §3.1.8): a range is addressed by the
+//! page it starts on, `page.label.set` names the span it labels and
+//! `page.label.clear` removes the range; both carry the whole range they
+//! replaced, and page operations keep every page's label on it. See `labels.rs`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -88,6 +95,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod labels;
 mod outline;
 mod store;
 
@@ -1312,6 +1320,8 @@ impl Adapter for PdfAdapter {
             ("dest.add", ConflictClass::Structural) => self.add_named_destination(&effective.target, &mut effective.payload)?,
             ("dest.update", ConflictClass::Structural) => self.update_named_destination(&effective.target, &mut effective.payload)?,
             ("dest.delete", ConflictClass::Structural) => self.delete_named_destination(&effective.target, &mut effective.payload)?,
+            ("page.label.set", ConflictClass::Structural) => self.set_page_label(&effective.target, &mut effective.payload)?,
+            ("page.label.clear", ConflictClass::Structural) => self.clear_page_label(&effective.target, &mut effective.payload)?,
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -4120,6 +4130,244 @@ mod tests {
         assert_eq!((room.version(), room.epoch()), (version, epoch));
         assert_eq!(outline(room.adapter()), before);
         assert!(named(room.adapter(), "mine").is_none());
+        Ok(())
+    }
+
+    // ---- Page labels (RFC §3.1.8) ----------------------------------------
+
+    /// Every page's label, as a reader shows it.
+    fn labels(adapter: &PdfAdapter) -> Vec<String> {
+        adapter.document().map(|document| document.info.pages.iter().map(|page| page.label.clone()).collect()).unwrap_or_default()
+    }
+
+    /// The ranges, as `(start, style, prefix, first)`.
+    fn label_ranges(adapter: &PdfAdapter) -> Vec<(usize, &'static str, String, u32)> {
+        adapter
+            .document()
+            .and_then(|document| document.page_label_ranges().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|range| {
+                let style = match range.style {
+                    pdfcraft_engine::LabelStyle::Decimal => "decimal",
+                    pdfcraft_engine::LabelStyle::UpperRoman => "upper_roman",
+                    pdfcraft_engine::LabelStyle::LowerRoman => "lower_roman",
+                    pdfcraft_engine::LabelStyle::UpperAlpha => "upper_alpha",
+                    pdfcraft_engine::LabelStyle::LowerAlpha => "lower_alpha",
+                    pdfcraft_engine::LabelStyle::None => "none",
+                };
+                (range.start, style, range.prefix, range.first)
+            })
+            .collect()
+    }
+
+    fn page_label_op(id: &str, start: u32, version: u64, epoch: u64, payload: Value) -> Result<Op, Box<dyn std::error::Error>> {
+        op(id, ConflictClass::Structural, Target::PageLabel { start }, version, epoch, payload)
+    }
+
+    /// A range is labelled, split and removed as addressable operations; every
+    /// accepted operation carries the whole range it replaced, which is what an
+    /// undo writes back.
+    #[test]
+    fn page_labels_are_set_and_cleared_as_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("labels.pdf", fixture(6).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        assert_eq!(labels(room.adapter()), ["1", "2", "3", "4", "5", "6"]);
+
+        // Front matter in Roman numerals. The document had no labels, so the undo
+        // image is the implicit decimal range over every page.
+        let set =
+            page_label_op("label-front", 0, 0, 0, json!({"action": "page.label.set", "end": 1, "style": "lower_roman", "prefix": "", "first": 1}))?;
+        let applied = room.apply(&editor, &set, 0)?;
+        assert_eq!(applied.epoch, 1, "a label operation is structural");
+        assert_eq!(labels(room.adapter()), ["i", "ii", "3", "4", "5", "6"]);
+        assert_eq!(applied.op.payload["before"], json!({"start": 0, "end": 5, "style": "decimal", "prefix": "", "first": 1, "implicit": true}));
+        assert_eq!(applied.op.payload["end"], 1, "the accepted operation names the span it wrote");
+
+        // An appendix inside the decimal continuation: the pages after it keep
+        // 5 and 6 (the server writes the continuation), and the undo image is the
+        // whole decimal range the set replaced.
+        let appendix = page_label_op(
+            "label-appendix",
+            2,
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.label.set", "end": 3, "style": "decimal", "prefix": "A-", "first": 1}),
+        )?;
+        let applied = room.apply(&editor, &appendix, 0)?;
+        assert_eq!(labels(room.adapter()), ["i", "ii", "A-1", "A-2", "5", "6"]);
+        assert_eq!(applied.op.payload["before"], json!({"start": 2, "end": 5, "style": "decimal", "prefix": "", "first": 3}));
+
+        // The undo writes that range back: the set split it into the appendix and
+        // a continuation, and the undo names both and replaces them in one write.
+        let undo = page_label_op(
+            "label-undo-appendix",
+            2,
+            room.version(),
+            room.epoch(),
+            json!({
+                "action": "page.label.set", "end": 5, "style": "decimal", "prefix": "", "first": 3,
+                "before": [
+                    {"start": 2, "end": 3, "style": "decimal", "prefix": "A-", "first": 1},
+                    {"start": 4, "end": 5, "style": "decimal", "prefix": "", "first": 5}
+                ]
+            }),
+        )?;
+        let applied = room.apply(&editor, &undo, 0)?;
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(2), "the undo names the ranges it replaced");
+        assert_eq!(labels(room.adapter()), ["i", "ii", "3", "4", "5", "6"]);
+        assert_eq!(label_ranges(room.adapter()), [(0, "lower_roman", String::new(), 1), (2, "decimal", String::new(), 3)]);
+        // The same undo built on stale ranges is refused rather than overwriting them.
+        let stale = page_label_op(
+            "label-undo-stale",
+            2,
+            room.version(),
+            room.epoch(),
+            json!({
+                "action": "page.label.set", "end": 5, "style": "decimal", "prefix": "", "first": 3,
+                "before": [{"start": 2, "end": 5, "style": "decimal", "prefix": "", "first": 4}]
+            }),
+        )?;
+        let rejected = room.apply(&editor, &stale, 0).err().ok_or("a stale undo must be refused")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert_eq!(labels(room.adapter()), ["i", "ii", "3", "4", "5", "6"]);
+
+        // A clear removes the range that begins at the target; its undo image is
+        // the whole range, and the pages go back to the Roman numbering.
+        let clear = page_label_op("label-clear", 2, room.version(), room.epoch(), json!({"action": "page.label.clear"}))?;
+        let applied = room.apply(&editor, &clear, 0)?;
+        assert_eq!(applied.op.payload["before"], json!({"start": 2, "end": 5, "style": "decimal", "prefix": "", "first": 3}));
+        assert_eq!(labels(room.adapter()), ["i", "ii", "iii", "iv", "v", "vi"]);
+        let undo_clear = page_label_op(
+            "label-undo-clear",
+            2,
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.label.set", "end": 5, "style": "decimal", "prefix": "", "first": 3}),
+        )?;
+        room.apply(&editor, &undo_clear, 0)?;
+        assert_eq!(labels(room.adapter()), ["i", "ii", "3", "4", "5", "6"]);
+
+        // Clearing the first range leaves the pages before the next one unlabelled.
+        let clear_front = page_label_op("label-clear-front", 0, room.version(), room.epoch(), json!({"action": "page.label.clear"}))?;
+        room.apply(&editor, &clear_front, 0)?;
+        assert_eq!(labels(room.adapter()), ["1", "2", "3", "4", "5", "6"]);
+        let clear_rest = page_label_op("label-clear-rest", 2, room.version(), room.epoch(), json!({"action": "page.label.clear"}))?;
+        room.apply(&editor, &clear_rest, 0)?;
+        assert!(label_ranges(room.adapter()).is_empty());
+        assert_eq!(labels(room.adapter()), ["1", "2", "3", "4", "5", "6"]);
+        Ok(())
+    }
+
+    /// A set that would swallow another range, a blank or over-long label, an
+    /// empty or unknown range and a past-the-end span are all refused before the
+    /// first write: version, epoch and the document stay as they were.
+    #[test]
+    fn a_bad_label_operation_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("labels.pdf", fixture(6).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        // Two ranges, so a crossing can be expressed: Roman 0..=1, then A- 2..=4.
+        room.apply(
+            &editor,
+            &page_label_op("front", 0, 0, 0, json!({"action": "page.label.set", "end": 1, "style": "lower_roman", "prefix": "", "first": 1}))?,
+            0,
+        )?;
+        room.apply(
+            &editor,
+            &page_label_op(
+                "body",
+                2,
+                room.version(),
+                room.epoch(),
+                json!({"action": "page.label.set", "end": 4, "style": "decimal", "prefix": "A-", "first": 1}),
+            )?,
+            0,
+        )?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let before = labels(room.adapter());
+        let cases: Vec<(&str, u32, Value, ErrorCode)> = vec![
+            ("past", 9, json!({"action": "page.label.set", "end": 9, "style": "decimal", "prefix": "", "first": 1}), ErrorCode::Invalid),
+            ("empty", 2, json!({"action": "page.label.set", "end": 1, "style": "decimal", "prefix": "", "first": 1}), ErrorCode::Invalid),
+            ("style", 2, json!({"action": "page.label.set", "end": 3, "style": "bogus", "prefix": "", "first": 1}), ErrorCode::Invalid),
+            ("first", 2, json!({"action": "page.label.set", "end": 3, "style": "decimal", "prefix": "", "first": 0}), ErrorCode::Invalid),
+            ("blank", 2, json!({"action": "page.label.set", "end": 3, "style": "none", "prefix": "", "first": 1}), ErrorCode::Invalid),
+            ("long", 2, json!({"action": "page.label.set", "end": 3, "style": "none", "prefix": "x".repeat(1_025), "first": 1}), ErrorCode::Limit),
+            // 0..=3 would cross the A- range that begins at 2: refused, so the
+            // undo image stays one range.
+            ("cross", 0, json!({"action": "page.label.set", "end": 3, "style": "decimal", "prefix": "", "first": 1}), ErrorCode::Conflict),
+            ("clear-inside", 3, json!({"action": "page.label.clear"}), ErrorCode::Invalid),
+            ("clear-missing", 1, json!({"action": "page.label.clear"}), ErrorCode::Invalid),
+        ];
+        for (name, start, payload, code) in cases {
+            let attempt = page_label_op(&format!("bad-{name}"), start, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or_else(|| format!("{name} must be refused"))?;
+            assert_eq!(rejected.code, code, "{name}: {}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch), "{name}");
+            assert_eq!(labels(room.adapter()), before, "{name}");
+        }
+        // A page label is structural: a viewer and a commenter are refused before
+        // the adapter runs.
+        for role in [Role::Viewer, Role::Commenter] {
+            let actor = ActorId::new(format!("{role:?}"))?;
+            room.hello(actor.clone(), role, &hello()?, 0)?;
+            let attempt = page_label_op(
+                "label-role",
+                2,
+                version,
+                epoch,
+                json!({"action": "page.label.set", "end": 3, "style": "decimal", "prefix": "", "first": 1}),
+            )?;
+            assert!(matches!(room.apply(&actor, &attempt, 0), Err(rejected) if rejected.code == ErrorCode::Forbidden), "{role:?} must be refused");
+            assert_eq!((room.version(), room.epoch()), (version, epoch));
+        }
+        Ok(())
+    }
+
+    /// Inserting a page keeps every existing page's label: the server splits the
+    /// range the insert lands inside, and the pages after it keep their numbers.
+    #[test]
+    fn page_operations_keep_the_labels_on_their_pages() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("labels.pdf", fixture(4).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        room.apply(
+            &editor,
+            &page_label_op("all", 0, 0, 0, json!({"action": "page.label.set", "end": 3, "style": "lower_roman", "prefix": "", "first": 1}))?,
+            0,
+        )?;
+        assert_eq!(labels(room.adapter()), ["i", "ii", "iii", "iv"]);
+        // Insert a one-page copy at position 2.
+        let bytes = one_page_copy(&fixture(1), 0)?;
+        let insert = op(
+            "insert",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 2, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.insert", "at": 2, "bytes": base64_encode(&bytes)}),
+        )?;
+        room.apply(&editor, &insert, 0)?;
+        let after = labels(room.adapter());
+        assert_eq!(after.len(), 5);
+        assert_eq!((after[0].as_str(), after[1].as_str()), ("i", "ii"));
+        assert_eq!(after[3], "iii", "the page that was third keeps its label");
+        assert_eq!(after[4], "iv", "the page that was fourth keeps its label");
+        // A split takes the inserted page out; the pages left keep theirs.
+        let split = op(
+            "split",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 2, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.split", "count": 1}),
+        )?;
+        room.apply(&editor, &split, 0)?;
+        assert_eq!(labels(room.adapter()), ["i", "ii", "iii", "iv"]);
         Ok(())
     }
 }

@@ -1168,6 +1168,10 @@ impl PdfCraftApp {
                 | Edit::BookmarksFromTextStyles { .. }
                 | Edit::SetNamedDestination { .. }
                 | Edit::DeleteNamedDestination { .. }
+                // Page labels are the document's structure, not a comment: a
+                // commenter may not renumber the pages (TASK §6).
+                | Edit::NumberPages { .. }
+                | Edit::ClearPageLabels { .. }
         );
         if structural && !collab.role.can_structural() {
             collab.error = Some("This role cannot change pages".into());

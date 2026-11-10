@@ -2393,6 +2393,92 @@ fn extracting_unrepresentable_labels_uses_physical_numbers() {
     assert_eq!(crate::page_labels(&extracted).unwrap(), ["ok-1", "2"]);
 }
 
+/// Every page keeps the label it had when pages are inserted, duplicated or moved: an explicit
+/// range follows its pages (a range is split when the move lands inside it), and a page before
+/// the first range keeps showing its physical number. Clearing a range hands its pages back to
+/// the range before it; the undo is the range whole.
+#[test]
+fn page_operations_keep_each_label_on_its_page() {
+    use crate::LabelStyle::{Decimal, LowerRoman};
+    let labelled = || {
+        let mut d = doc_a();
+        for at in 3..10 {
+            crate::insert_blank_page(&mut d, at, 300.0, 400.0).unwrap();
+        }
+        crate::set_page_label_ranges(
+            &mut d,
+            &[
+                LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+                LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 1 },
+                LabelRange { start: 7, style: Decimal, prefix: "A-".into(), first: 1 },
+            ],
+        )
+        .unwrap();
+        d
+    };
+    // A blank page falls into the numbering around it; every page after it keeps its own label.
+    let mut blank = labelled();
+    crate::insert_blank_page(&mut blank, 4, 300.0, 400.0).unwrap();
+    assert_eq!(crate::page_labels(&blank).unwrap(), ["i", "ii", "iii", "1", "2", "2", "3", "4", "A-1", "A-2", "A-3"]);
+    // Deleting it again leaves the same ranges: the labels describe the same pages.
+    crate::delete_pages(&mut blank, &[4]).unwrap();
+    assert_eq!(crate::page_label_ranges(&blank), crate::page_label_ranges(&labelled()));
+    // A duplicate brings the label of the page it copies.
+    let mut duplicate = labelled();
+    crate::duplicate_pages(&mut duplicate, &[0], Some(1)).unwrap();
+    assert_eq!(crate::page_labels(&duplicate).unwrap(), ["i", "i", "ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3"]);
+    // A move keeps every label with its page.
+    let mut moved = labelled();
+    crate::move_pages(&mut moved, &[0], 9).unwrap();
+    assert_eq!(crate::page_labels(&moved).unwrap(), ["ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3", "i"]);
+    // Clearing a range hands its pages back to the range before it.
+    let mut cleared = labelled();
+    crate::clear_page_label_range(&mut cleared, 7).unwrap();
+    assert_eq!(crate::page_labels(&cleared).unwrap(), ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"]);
+    // Its undo is the range whole, as the operation carries it.
+    crate::number_pages(&mut cleared, 7, 9, Decimal, "A-", 1).unwrap();
+    assert_eq!(crate::page_label_ranges(&cleared), crate::page_label_ranges(&labelled()));
+    // A page inside a range begins none: clearing it is refused, not guessed.
+    assert!(crate::clear_page_label_range(&mut cleared, 5).is_err());
+}
+
+/// A page inserted from another file brings its own label; the pages around it keep the number
+/// they showed, an unlabelled one by its physical position.
+#[test]
+fn inserted_pages_bring_their_labels() {
+    use crate::LabelStyle::{Decimal, UpperAlpha};
+    let mut src = doc_b();
+    crate::set_page_label_ranges(&mut src, &[LabelRange { start: 0, style: UpperAlpha, prefix: "B-".into(), first: 1 }]).unwrap();
+    let mut dst = doc_a();
+    crate::insert_file_pages(&mut dst, &src, "b.pdf", &[0, 1], 1, crate::FieldConflicts::Rename).unwrap();
+    assert_eq!(crate::page_labels(&dst).unwrap(), ["1", "B-A", "B-B", "4", "5"]);
+    assert_eq!(
+        crate::page_label_ranges(&dst),
+        [
+            LabelRange { start: 0, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 1, style: UpperAlpha, prefix: "B-".into(), first: 1 },
+            LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 4 },
+        ]
+    );
+    // An unlabelled source leaves the destination unlabelled.
+    let mut plain = doc_a();
+    crate::insert_file_pages(&mut plain, &doc_b(), "b.pdf", &[0], 0, crate::FieldConflicts::Rename).unwrap();
+    assert!(crate::page_label_ranges(&plain).is_empty());
+}
+
+/// The label check refuses what cannot be written, before any range is stored.
+#[test]
+fn a_label_span_is_checked_before_it_is_written() {
+    use crate::LabelStyle::{Decimal, LowerRoman, None as PrefixOnly};
+    let at = |style, prefix: String, first| LabelRange { start: 2, style, prefix, first };
+    assert!(crate::check_page_label(&at(PrefixOnly, String::new(), 1), 3).is_err(), "an empty label");
+    assert!(crate::check_page_label(&at(PrefixOnly, "x".repeat(pdfcraft_cos::page_labels::MAX_LABEL_BYTES + 1), 1), 3).is_err(), "a long prefix");
+    assert!(crate::check_page_label(&at(Decimal, String::new(), 1), 1).is_err(), "an empty span");
+    assert!(crate::check_page_label(&at(Decimal, String::new(), u32::MAX), 5).is_err(), "a number past 32 bits");
+    assert!(crate::check_page_label(&at(LowerRoman, String::new(), 1), 3).is_ok());
+    assert!(crate::check_page_label(&at(PrefixOnly, "Cover".into(), 1), 3).is_ok());
+}
+
 #[test]
 fn page_label_limits_reject_unsupported_edits_before_mutating() {
     use crate::LabelStyle::*;

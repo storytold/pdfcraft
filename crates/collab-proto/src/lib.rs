@@ -96,6 +96,16 @@ pub const MAX_OUTLINE_COPY_BYTES: usize = MAX_MESSAGE_BYTES / 2;
 /// insert, a duplicate or a restore either travels whole or does not happen.
 pub const MAX_PAGE_COPY_BYTES: usize = 160 * 1024;
 
+/// Longest page label, in UTF-8 bytes, and the longest prefix of one: the
+/// ISO 32000-2 bound every reader is asked to accept. A range whose label would
+/// be longer is refused before the document changes.
+pub const MAX_PAGE_LABEL_BYTES: usize = 1024;
+
+/// Most label ranges a room accepts in one document. The PDF number tree can
+/// hold more, but a range list this long no longer fits what one operation can
+/// reasonably rewrite; a set that would cross it is refused (`limit`).
+pub const MAX_PAGE_LABEL_RANGES: usize = 1_024;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
     #[error("unsupported protocol version {0}")]
@@ -208,6 +218,53 @@ pub enum ConflictClass {
     Structural,
 }
 
+/// The numbering style of a page-label range (ISO 32000-2 §12.4.2, Table 159),
+/// as the wire names it. `None` writes the prefix alone, with no number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageLabelStyle {
+    /// 1, 2, 3
+    Decimal,
+    /// I, II, III
+    UpperRoman,
+    /// i, ii, iii
+    LowerRoman,
+    /// A, B, C
+    UpperAlpha,
+    /// a, b, c
+    LowerAlpha,
+    /// The prefix alone.
+    None,
+}
+
+impl PageLabelStyle {
+    /// The style as the wire writes it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Decimal => "decimal",
+            Self::UpperRoman => "upper_roman",
+            Self::LowerRoman => "lower_roman",
+            Self::UpperAlpha => "upper_alpha",
+            Self::LowerAlpha => "lower_alpha",
+            Self::None => "none",
+        }
+    }
+
+    /// The style a wire name means, or `None` for a name this protocol does not
+    /// know (never a guess).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "decimal" => Self::Decimal,
+            "upper_roman" => Self::UpperRoman,
+            "lower_roman" => Self::LowerRoman,
+            "upper_alpha" => Self::UpperAlpha,
+            "lower_alpha" => Self::LowerAlpha,
+            "none" => Self::None,
+            _ => return None,
+        })
+    }
+}
+
 /// One page addressed by its position and the epoch that position belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageRef {
@@ -284,6 +341,12 @@ pub enum Target {
     NamedDest {
         name: String,
     },
+    /// A page-label range, by the page it starts on (0-based). `page.label.set`
+    /// labels a span that begins here; `page.label.clear` removes the range that
+    /// starts here.
+    PageLabel {
+        start: u32,
+    },
 }
 
 impl Target {
@@ -320,6 +383,12 @@ impl Target {
                 }
                 if name.len() > MAX_DEST_NAME {
                     return Err(ProtocolError::TooLong { field: "named destination", len: name.len(), max: MAX_DEST_NAME });
+                }
+                Ok(())
+            }
+            Target::PageLabel { start } => {
+                if *start > MAX_PAGE_INDEX {
+                    return Err(ProtocolError::PageIndex(*start));
                 }
                 Ok(())
             }

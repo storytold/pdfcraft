@@ -277,6 +277,12 @@ impl PageLabels {
     pub fn iter(&self) -> impl Iterator<Item = String> + '_ {
         (0..self.pages).map(|page| self.label(page).unwrap_or_else(|_| (page + 1).to_string()))
     }
+
+    /// The sorted, unique ranges the labels were read from. A range runs from its `start` until
+    /// the next range's start (or the last page), as a PDF number tree does.
+    pub fn ranges(&self) -> &[LabelRange] {
+        &self.ranges
+    }
 }
 
 /// Every page's label, as a viewer shows it. This builds one string per page; for large
@@ -307,6 +313,31 @@ fn check_spans(ranges: &[LabelRange], pages: usize) -> Result<(), OrganizeError>
         if hi > u64::from(u32::MAX) {
             return Err(invalid_label("a page number overflows"));
         }
+    }
+    Ok(())
+}
+
+/// Check that `range` labels `range.start..=end` within the limits a PDF label may have: the
+/// range is not empty, no label is blank, no label exceeds [`MAX_LABEL_BYTES`] and no number
+/// overflows. Everything is checked from the span's ends, so the work does not follow its length.
+pub fn check_page_label(range: &LabelRange, end: usize) -> Result<(), OrganizeError> {
+    if range.start > end {
+        return Err(invalid_label("a label range is empty"));
+    }
+    if range.style == LabelStyle::None && range.prefix.is_empty() {
+        return Err(invalid_label("a label would be empty"));
+    }
+    let remaining = (MAX_LABEL_BYTES as u64)
+        .checked_sub(u64::try_from(range.prefix.len()).unwrap_or(u64::MAX))
+        .ok_or_else(|| invalid_label("a prefix exceeds 1024 UTF-8 bytes"))?;
+    let len = u64::try_from(end - range.start).unwrap_or(u64::MAX);
+    let lo = u64::from(range.first.max(1));
+    let hi = lo.saturating_add(len);
+    if range.style != LabelStyle::None && longest_numeral(range.style, lo, hi.min(u64::from(u32::MAX))) > remaining {
+        return Err(invalid_label("a label exceeds 1024 UTF-8 bytes"));
+    }
+    if range.style != LabelStyle::None && hi > u64::from(u32::MAX) {
+        return Err(invalid_label("a page number overflows"));
     }
     Ok(())
 }
@@ -420,7 +451,21 @@ pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Resul
     if ranges == old {
         return Ok(());
     }
-    set_page_label_ranges(doc, &ranges)
+    // The ranges the remaining pages keep may now only continue each other (undoing an insert,
+    // for one); merge them so the tree is the one the labels describe.
+    let merged = merge_continuations(&ranges).unwrap_or(ranges);
+    set_page_label_ranges(doc, &merged)
+}
+
+/// Merge ranges that only continue the previous one (`i, ii` then `iii, iv`). A tree that would
+/// exceed the aggregate prefix budget is left as it is: the labels are the same either way.
+fn merge_continuations(ranges: &[LabelRange]) -> Result<Vec<LabelRange>, OrganizeError> {
+    let mut merged: Vec<LabelRange> = Vec::with_capacity(ranges.len());
+    let mut prefix_left = MAX_PREFIX_TOTAL_BYTES.saturating_sub(ranges.iter().map(|r| r.prefix.len()).sum::<usize>());
+    for r in ranges {
+        push_merged_range(&mut merged, &mut prefix_left, r.clone())?;
+    }
+    Ok(merged)
 }
 
 /// Acrobat's "Number pages": label pages `from..=to` (0-based) with `style`, `prefix` and
@@ -480,6 +525,172 @@ fn push_merged_range(merged: &mut Vec<LabelRange>, prefix_left: &mut usize, r: L
         merged.push(r);
     }
     Ok(())
+}
+
+/// Remove the label range that begins at `start` (0-based). The pages it labelled take the
+/// numbering of the range before them, as if the range had never been written; the first range
+/// leaves the pages before the next one showing their physical numbers. A page that begins no
+/// range is refused and nothing changes.
+pub fn clear_page_label_range(doc: &mut Document, start: usize) -> Result<(), OrganizeError> {
+    let ranges = checked_ranges(doc)?;
+    let Some(index) = ranges.iter().position(|r| r.start == start) else {
+        return Err(invalid_label("no label range starts at that page"));
+    };
+    let mut remaining = ranges;
+    remaining.remove(index);
+    set_page_label_ranges(doc, &remaining)
+}
+
+/// What the label ranges were before pages moved: enough to keep every page's label on it after
+/// an insert, a duplicate or a move. `None` when the tree cannot be read — the page operation then
+/// goes ahead with the ranges where they are, as [`drop_deleted_pages`] does.
+#[derive(Clone, Debug)]
+pub(crate) struct LabelSnapshot {
+    ranges: Vec<LabelRange>,
+    pages: usize,
+}
+
+pub(crate) fn snapshot(doc: &Document) -> Option<LabelSnapshot> {
+    let ranges = checked_ranges(doc).ok()?;
+    let pages = page_count(doc).ok()?;
+    Some(LabelSnapshot { ranges, pages })
+}
+
+/// The label a page carries in `ranges`: its style, prefix and number there. A page no range
+/// covers has none (it shows its physical number).
+fn spec_at(ranges: &[LabelRange], page: usize) -> Option<(LabelStyle, String, u32)> {
+    let index = ranges.partition_point(|r| r.start <= page).checked_sub(1)?;
+    let range = ranges.get(index)?;
+    Some((range.style, range.prefix.clone(), range.number(page).ok()?))
+}
+
+/// What a page that was already in the document must keep. A page a range covers keeps its
+/// label, wherever it moved; a page before the first range shows its physical number, which is
+/// its new position, so when the result has labels at all it is written out as a decimal range
+/// with that number. `None` only in a document that stays unlabelled.
+fn old_spec(before: &LabelSnapshot, page: usize, new_page: usize, labelled: bool) -> Option<(LabelStyle, String, u32)> {
+    match spec_at(&before.ranges, page) {
+        Some(spec) => Some(spec),
+        None if labelled => Some((LabelStyle::Decimal, String::new(), u32::try_from(new_page.saturating_add(1)).unwrap_or(u32::MAX))),
+        None => None,
+    }
+}
+
+/// The ranges that keep every page's label: pages that came from the snapshot keep theirs, a page
+/// the caller brought keeps the one it carried (`Some`), and a page with neither follows the
+/// numbering around it. Only what a label needs is kept — style, prefix and the number at the
+/// page — so two pages that continue each other's numbering stay one range.
+fn build_plan(specs: &[Option<(LabelStyle, String, u32)>]) -> Vec<LabelRange> {
+    let mut ranges: Vec<LabelRange> = Vec::new();
+    for (page, spec) in specs.iter().enumerate() {
+        let Some((style, prefix, first)) = spec else { continue };
+        let continues = ranges.last().is_some_and(|r| {
+            r.style == *style
+                && r.prefix == *prefix
+                && match style {
+                    LabelStyle::None => true,
+                    _ => r.first.checked_add(u32::try_from(page.saturating_sub(r.start)).unwrap_or(u32::MAX)) == Some(*first),
+                }
+        });
+        if !continues {
+            ranges.push(LabelRange { start: page, style: *style, prefix: prefix.clone(), first: (*first).max(1) });
+        }
+    }
+    ranges
+}
+
+/// Check a plan before the page operation writes anything, so a label problem refuses the whole
+/// operation instead of leaving the document with pages moved and labels lost.
+fn validate_plan(ranges: &[LabelRange], pages: usize) -> Result<(), OrganizeError> {
+    if ranges.len() >= MAX_LABEL_TREE_WORK {
+        return Err(invalid_label("the number tree has too many entries"));
+    }
+    let mut prefix_total: usize = 0;
+    for (i, r) in ranges.iter().enumerate() {
+        let end = ranges.get(i + 1).map_or(pages.saturating_sub(1), |next| next.start.saturating_sub(1));
+        check_page_label(r, end)?;
+        prefix_total = prefix_total.checked_add(r.prefix.len()).ok_or_else(|| invalid_label("decoded prefixes exceed 4 MiB in total"))?;
+    }
+    if prefix_total > MAX_PREFIX_TOTAL_BYTES {
+        return Err(invalid_label("decoded prefixes exceed 4 MiB in total"));
+    }
+    Ok(())
+}
+
+/// The plan for `count` pages inserted at `at`, each carrying the label at its index in `carried`
+/// (`None` follows the numbering around it). `None` when the document had no labels and the new
+/// pages bring none: there is nothing to write.
+pub(crate) fn plan_insert(before: &LabelSnapshot, at: usize, carried: &[Option<LabelRange>]) -> Result<Option<Vec<LabelRange>>, OrganizeError> {
+    let labelled = !before.ranges.is_empty() || carried.iter().any(Option::is_some);
+    if !labelled {
+        return Ok(None);
+    }
+    let at = at.min(before.pages);
+    let mut specs: Vec<Option<(LabelStyle, String, u32)>> = Vec::with_capacity(before.pages + carried.len());
+    for page in 0..at {
+        specs.push(old_spec(before, page, page, labelled));
+    }
+    for label in carried {
+        specs.push(label.as_ref().map(|r| (r.style, r.prefix.clone(), r.first)));
+    }
+    for page in at..before.pages {
+        specs.push(old_spec(before, page, page + carried.len(), labelled));
+    }
+    let ranges = build_plan(&specs);
+    validate_plan(&ranges, specs.len())?;
+    Ok(Some(ranges))
+}
+
+/// The plan for a move: `order` names, for each page of the new order, the index it had before.
+/// `None` when the document had no labels (nothing moves).
+pub(crate) fn plan_order(before: &LabelSnapshot, order: &[usize]) -> Result<Option<Vec<LabelRange>>, OrganizeError> {
+    if before.ranges.is_empty() {
+        return Ok(None);
+    }
+    let specs: Vec<Option<(LabelStyle, String, u32)>> =
+        order.iter().enumerate().map(|(new_page, page)| old_spec(before, *page, new_page, true)).collect();
+    let ranges = build_plan(&specs);
+    validate_plan(&ranges, specs.len())?;
+    Ok(Some(ranges))
+}
+
+/// The label each of `pages` (0-based indices in `src`) carries, as a destination index only for
+/// its span, ready for [`plan_insert`]. A page the source leaves unlabelled gets no label when the
+/// source has no `/PageLabels` at all (so an unlabelled part stays unlabelled), otherwise its
+/// physical number, as extraction does. A tree that cannot be read carries nothing.
+pub(crate) fn carried_labels(src: &Document, pages: &[usize]) -> Vec<Option<LabelRange>> {
+    let (Ok(ranges), Ok(count)) = (checked_ranges(src), page_count(src)) else {
+        return pages.iter().map(|_| None).collect();
+    };
+    if ranges.is_empty() {
+        return pages.iter().map(|_| None).collect();
+    }
+    pages
+        .iter()
+        .enumerate()
+        .map(|(offset, page)| {
+            if *page >= count {
+                return None;
+            }
+            let range = spec_at(&ranges, *page).map(|(style, prefix, first)| LabelRange { start: offset, style, prefix, first })?;
+            // An empty prefix-only range shows the physical number; carry it as
+            // the decimal range that says the same, as extraction does.
+            if (range.style == LabelStyle::None && range.prefix.is_empty()) || !range_writable(&range, offset + 1) {
+                Some(source_physical_range(offset, *page))
+            } else {
+                Some(range)
+            }
+        })
+        .collect()
+}
+
+/// Write a plan after the pages moved. An empty plan removes `/PageLabels`; nothing is written
+/// when the document had no labels and the plan is empty.
+pub(crate) fn write_plan(doc: &mut Document, plan: Option<&[LabelRange]>) -> Result<(), OrganizeError> {
+    match plan {
+        Some(ranges) => set_page_label_ranges(doc, ranges),
+        None => Ok(()),
+    }
 }
 
 /// Decimal numbering that shows the source page's physical number (`src_page` is 0-based).

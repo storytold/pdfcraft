@@ -387,6 +387,48 @@ pub fn named_dest_delete_payload() -> Value {
     json!({"action": "dest.delete"})
 }
 
+/// The wire name of a page-label style, the spelling `pdfcraft_collab_proto`
+/// documents for `PageLabelStyle`.
+pub const fn page_label_style_name(style: pdfcraft_engine::LabelStyle) -> &'static str {
+    use pdfcraft_engine::LabelStyle;
+    match style {
+        LabelStyle::Decimal => "decimal",
+        LabelStyle::UpperRoman => "upper_roman",
+        LabelStyle::LowerRoman => "lower_roman",
+        LabelStyle::UpperAlpha => "upper_alpha",
+        LabelStyle::LowerAlpha => "lower_alpha",
+        LabelStyle::None => "none",
+    }
+}
+
+/// The engine style a wire name means, or `None` for a name this client does
+/// not know (never a guess).
+fn page_label_style(name: &str) -> Option<pdfcraft_engine::LabelStyle> {
+    use pdfcraft_engine::LabelStyle;
+    Some(match name {
+        "decimal" => LabelStyle::Decimal,
+        "upper_roman" => LabelStyle::UpperRoman,
+        "lower_roman" => LabelStyle::LowerRoman,
+        "upper_alpha" => LabelStyle::UpperAlpha,
+        "lower_alpha" => LabelStyle::LowerAlpha,
+        "none" => LabelStyle::None,
+        _ => return None,
+    })
+}
+
+/// The body of a `page.label.set`: label pages `start..=end` (0-based), where
+/// `start` is the operation's page-label target. The server normalises the span
+/// and answers with the whole range it replaced (`before`).
+pub fn page_label_set_payload(end: usize, style: pdfcraft_engine::LabelStyle, prefix: &str, first: u32) -> Value {
+    json!({"action": "page.label.set", "end": end, "style": page_label_style_name(style), "prefix": prefix, "first": first})
+}
+
+/// The body of a `page.label.clear`: remove the range that begins at the
+/// operation's page-label target.
+pub fn page_label_clear_payload() -> Value {
+    json!({"action": "page.label.clear"})
+}
+
 /// The page count a split or a combine names, refusing zero: an operation that
 /// moves no page is a client mistake, not an empty part.
 fn page_count(op: &Op) -> Result<usize, ProjectionError> {
@@ -685,6 +727,27 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             Ok(Edit::SetNamedDestination { name, dest })
         }
         ("dest.delete", ConflictClass::Structural) => Ok(Edit::DeleteNamedDestination { name: named_dest_name(op)? }),
+        // A page-label range: the span the server normalised, applied through the
+        // engine's own "Number pages" so every replica and the journal produce
+        // the same labels. A clear removes the range that begins at the target.
+        ("page.label.set", ConflictClass::Structural) => {
+            let Target::PageLabel { start } = &op.target else { return Err(ProjectionError::Missing("page-label target")) };
+            let end =
+                op.payload.get("end").and_then(Value::as_u64).and_then(|end| usize::try_from(end).ok()).ok_or(ProjectionError::Missing("end"))?;
+            let style = text(op, "style").ok().and_then(page_label_style).ok_or(ProjectionError::Missing("style"))?;
+            let prefix = op.payload.get("prefix").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let first = op
+                .payload
+                .get("first")
+                .and_then(Value::as_u64)
+                .and_then(|first| u32::try_from(first).ok())
+                .ok_or(ProjectionError::Missing("first"))?;
+            Ok(Edit::NumberPages { from: usize::try_from(*start).map_err(|_| ProjectionError::Missing("start"))?, to: end, style, prefix, first })
+        }
+        ("page.label.clear", ConflictClass::Structural) => {
+            let Target::PageLabel { start } = &op.target else { return Err(ProjectionError::Missing("page-label target")) };
+            Ok(Edit::ClearPageLabels { start: usize::try_from(*start).map_err(|_| ProjectionError::Missing("start"))? })
+        }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
 }
@@ -1237,6 +1300,34 @@ pub fn ops_for_edit(
             Target::NamedDest { name: name.clone() },
             named_dest_delete_payload(),
         )]),
+        // Acrobat's "Number pages" is one `page.label.set` over the span: the
+        // server refuses a span that would cross a range it is not replacing, so
+        // the client never silently renumbers another range.
+        Edit::NumberPages { from, to, style, prefix, first } => {
+            if from > to {
+                return Err(ProjectionError::Invalid("the page range is empty".into()));
+            }
+            let start = u32::try_from(*from).map_err(|_| ProjectionError::Invalid("the page index is too large".into()))?;
+            if prefix.len() > pdfcraft_collab_proto::MAX_PAGE_LABEL_BYTES {
+                return Err(ProjectionError::Invalid(format!(
+                    "a page-label prefix is {} bytes; at most {} are written",
+                    prefix.len(),
+                    pdfcraft_collab_proto::MAX_PAGE_LABEL_BYTES
+                )));
+            }
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::PageLabel { start },
+                page_label_set_payload(*to, *style, prefix, *first),
+            )])
+        }
+        Edit::ClearPageLabels { start } => {
+            let start = u32::try_from(*start).map_err(|_| ProjectionError::Invalid("the page index is too large".into()))?;
+            Ok(vec![structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::PageLabel { start }, page_label_clear_payload())])
+        }
         other => Err(ProjectionError::Unsupported(other.label().to_string())),
     }
 }
@@ -1742,6 +1833,9 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         | "dest.add"
         | "dest.update"
         | "dest.delete" => return Ok(None),
+        // A page-label range is undone from the accepted operation: its `before`
+        // is the whole range the server replaced, with its own last page.
+        "page.label.set" | "page.label.clear" => return Ok(None),
         "page.insert" | "page.duplicate" | "page.insert_blank" => {
             // The undo of an insert is a delete of the page it put there; the
             // page is addressed where the operation placed it.
@@ -1790,6 +1884,52 @@ fn move_inverse(document: &Document, op: &Op, op_id: OpId, base: u64, epoch: u64
     Ok(Some(merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, move_annotation_restore_payload(&update, expect))))
 }
 
+/// The undo of a page-label operation, from the accepted operation alone. A set
+/// may have split the range it replaced, so its undo names the ranges now
+/// covering that span (a compare-and-set) and writes one range over them; a
+/// clear's range is not split, so its undo is a plain set over the range it
+/// removed.
+fn page_label_inverse(applied: &Applied) -> Option<Op> {
+    let op = &applied.op;
+    let doc = op.doc.clone();
+    let op_id = OpId::new(format!("undo-{}", op.op_id.as_str())).ok()?;
+    let action = op.payload.get("action").and_then(Value::as_str)?;
+    let before = op.payload.get("before")?.as_object()?;
+    let start = before.get("start")?.as_u64().and_then(|start| u32::try_from(start).ok())?;
+    let end = before.get("end")?.as_u64().and_then(|end| usize::try_from(end).ok())?;
+    let style = before.get("style")?.as_str().and_then(page_label_style)?;
+    let prefix = before.get("prefix").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let first = before.get("first")?.as_u64().and_then(|first| u32::try_from(first).ok())?;
+    let implicit = before.get("implicit").and_then(Value::as_bool).unwrap_or(false);
+    let mut payload = json!({"action": "page.label.set", "end": end, "style": page_label_style_name(style), "prefix": prefix, "first": first});
+    if action == "page.label.set" {
+        // The ranges the set left over its old span: the part before the new
+        // range, the new range, and the continuation after it.
+        let set_start = match &op.target {
+            Target::PageLabel { start } => usize::try_from(*start).ok()?,
+            _ => return None,
+        };
+        let set_end = op.payload.get("end")?.as_u64().and_then(|end| usize::try_from(end).ok())?;
+        let set_style = op.payload.get("style")?.as_str().and_then(page_label_style)?;
+        let set_prefix = op.payload.get("prefix").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let set_first = op.payload.get("first")?.as_u64().and_then(|first| u32::try_from(first).ok())?;
+        let range = |start: usize, end: usize, style, prefix: &str, first| json!({"start": start, "end": end, "style": page_label_style_name(style), "prefix": prefix, "first": first});
+        let mut replaced = Vec::new();
+        // An implicit range covers pages that are not labelled at all: the
+        // part before the new range has no range to name.
+        if !implicit && (start as usize) < set_start {
+            replaced.push(range(start as usize, set_start.saturating_sub(1), style, &prefix, first));
+        }
+        replaced.push(range(set_start, set_end, set_style, &set_prefix, set_first));
+        if set_end < end {
+            let continuation = first.checked_add(u32::try_from(set_end.saturating_add(1).saturating_sub(start as usize)).ok()?)?;
+            replaced.push(range(set_end.saturating_add(1), end, style, &prefix, continuation));
+        }
+        payload["before"] = Value::Array(replaced);
+    }
+    Some(structural_op(doc, op_id, applied.version, applied.epoch, Target::PageLabel { start }, payload))
+}
+
 /// The inverse of a deletion, once the server has answered how to undo it: the
 /// accepted operation carries the `copy` token of what it removed. `None` when
 /// the server kept no copy (the comment was not the room's, or the page was too
@@ -1799,6 +1939,9 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
     let action = op.payload.get("action").and_then(Value::as_str)?;
     let doc = op.doc.clone();
     let op_id = OpId::new(format!("undo-{}", op.op_id.as_str())).ok()?;
+    if action == "page.label.set" || action == "page.label.clear" {
+        return page_label_inverse(applied);
+    }
     // A restyle is undone from the look the server replaced (`before`), not from
     // this replica's guess: `inverse_for` built one before the operation was
     // sent, and this is the authority that patches it.
@@ -2072,11 +2215,11 @@ fn field_text(document: &Document, name: &str, value: &FieldValue) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::{
-        ProjectionError, add_note_payload, apply, edit_for, merge_op, new_annotation_name, ops_for_edit, reply_payload, rotate_payload,
-        set_contents_payload,
+        ProjectionError, add_note_payload, apply, edit_for, inverse_after, merge_op, new_annotation_name, ops_for_edit, reply_payload,
+        rotate_payload, set_contents_payload,
     };
-    use pdfcraft_collab_proto::{DocKey, Op, OpId, PageRef, Target};
-    use pdfcraft_engine::{BookmarkDest, Edit, Session};
+    use pdfcraft_collab_proto::{ActorId, Applied, DocKey, Op, OpId, PageRef, Target};
+    use pdfcraft_engine::{BookmarkDest, Edit, LabelStyle, Session};
     use std::sync::Arc;
 
     fn fixture(n: usize) -> Vec<u8> {
@@ -2249,6 +2392,127 @@ mod tests {
         // A named destination may not be a name of a name in the room.
         let nested = Op { payload: serde_json::json!({"action": "dest.add", "dest": {"kind": "named", "name": "other"}}), ..destination };
         assert!(edit_for(document, &nested).is_err());
+        Ok(())
+    }
+
+    /// Acrobat's "Number pages" becomes one structural `page.label.set`, and a
+    /// clear becomes `page.label.clear`; an empty span and an over-long prefix
+    /// are refused before anything is sent.
+    #[test]
+    fn page_label_edits_become_addressed_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        session.apply(id, Edit::NumberPages { from: 0, to: 1, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 })?;
+        let document = session.get(id).ok_or("open")?;
+        let mut counter = 0;
+        let set = Edit::NumberPages { from: 0, to: 0, style: LabelStyle::UpperAlpha, prefix: "A-".into(), first: 3 };
+        let ops = ops_for_edit(document, &set, doc()?, "ada", 4, 2, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].class, pdfcraft_collab_proto::ConflictClass::Structural);
+        assert_eq!(ops[0].target, Target::PageLabel { start: 0 });
+        assert_eq!(ops[0].payload["action"], "page.label.set");
+        assert_eq!(ops[0].payload["end"], 0);
+        assert_eq!(ops[0].payload["style"], "upper_alpha");
+        assert_eq!(ops[0].payload["prefix"], "A-");
+        assert_eq!(ops[0].payload["first"], 3);
+        assert_eq!((ops[0].base_version, ops[0].epoch), (4, 2));
+        let clear = ops_for_edit(document, &Edit::ClearPageLabels { start: 1 }, doc()?, "ada", 4, 2, &mut counter)?;
+        assert_eq!(clear[0].target, Target::PageLabel { start: 1 });
+        assert_eq!(clear[0].payload["action"], "page.label.clear");
+        let empty = Edit::NumberPages { from: 2, to: 1, style: LabelStyle::Decimal, prefix: String::new(), first: 1 };
+        assert!(ops_for_edit(document, &empty, doc()?, "ada", 4, 2, &mut counter).is_err(), "an empty span is not sent");
+        let long = Edit::NumberPages {
+            from: 0,
+            to: 0,
+            style: LabelStyle::None,
+            prefix: "x".repeat(pdfcraft_collab_proto::MAX_PAGE_LABEL_BYTES + 1),
+            first: 1,
+        };
+        assert!(ops_for_edit(document, &long, doc()?, "ada", 4, 2, &mut counter).is_err(), "a label over the bound is not sent");
+        Ok(())
+    }
+
+    /// An accepted label operation becomes the engine edit every replica applies,
+    /// and its undo is built from the ranges the server says the operation left:
+    /// one write over the whole span the set split.
+    #[test]
+    fn accepted_label_operations_become_edits() -> Result<(), Box<dyn std::error::Error>> {
+        let mut session = Session::new();
+        let id = session.open_new("labels.pdf", fixture(6).into())?;
+        let op = |id: &str, target: Target, payload: serde_json::Value| -> Result<Op, Box<dyn std::error::Error>> {
+            Ok(Op {
+                op_id: OpId::new(id)?,
+                doc: doc()?,
+                base_version: 0,
+                epoch: 0,
+                kind: pdfcraft_collab_proto::OpKind::Structural,
+                class: pdfcraft_collab_proto::ConflictClass::Structural,
+                target,
+                payload,
+                preview: None,
+            })
+        };
+        let set = op(
+            "label-set",
+            Target::PageLabel { start: 2 },
+            serde_json::json!({
+                "action": "page.label.set", "start": 2, "end": 3, "style": "decimal", "prefix": "A-", "first": 1,
+                "before": {"start": 0, "end": 5, "style": "decimal", "prefix": "", "first": 1, "implicit": true}
+            }),
+        )?;
+        {
+            let document = session.get(id).ok_or("open")?;
+            match edit_for(document, &set)? {
+                Edit::NumberPages { from: 2, to: 3, style: LabelStyle::Decimal, ref prefix, first: 1 } => assert_eq!(prefix, "A-"),
+                other => return Err(format!("expected a number-pages edit, got {other:?}").into()),
+            }
+        }
+        apply(&mut session, id, &set)?;
+        let labels = |session: &Session| -> Vec<String> {
+            session.get(id).map(|document| document.info.pages.iter().map(|page| page.label.clone()).collect()).unwrap_or_default()
+        };
+        assert_eq!(labels(&session), ["1", "2", "A-1", "A-2", "5", "6"]);
+
+        // The server's accepted operation, and the undo it supports.
+        let applied = Applied {
+            op_id: set.op_id.clone(),
+            actor_id: ActorId::new("ada")?,
+            version: 1,
+            epoch: 1,
+            op: set.clone(),
+            result: serde_json::json!({}),
+        };
+        let undo = inverse_after(&applied).ok_or("the set is undoable")?;
+        assert_eq!(undo.target, Target::PageLabel { start: 0 });
+        assert_eq!(undo.payload["action"], "page.label.set");
+        assert_eq!(undo.payload["end"], 5);
+        assert_eq!(undo.payload["style"], "decimal");
+        let replaced = undo.payload["before"].as_array().ok_or("the undo names the ranges it replaces")?;
+        assert_eq!(replaced.len(), 2, "the new range and the continuation; the pages before are unlabelled");
+        assert_eq!(replaced[0], serde_json::json!({"start": 2, "end": 3, "style": "decimal", "prefix": "A-", "first": 1}));
+        assert_eq!(replaced[1], serde_json::json!({"start": 4, "end": 5, "style": "decimal", "prefix": "", "first": 5}));
+        apply(&mut session, id, &undo)?;
+        assert_eq!(labels(&session), ["1", "2", "3", "4", "5", "6"]);
+
+        // A clear becomes the edit that removes the range, and its undo is a plain
+        // set over the range the server says it removed.
+        session.apply(id, Edit::NumberPages { from: 0, to: 5, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 })?;
+        let clear = op(
+            "label-clear",
+            Target::PageLabel { start: 0 },
+            serde_json::json!({"action": "page.label.clear", "start": 0, "before": {"start": 0, "end": 5, "style": "lower_roman", "prefix": "", "first": 1}}),
+        )?;
+        assert!(matches!(edit_for(session.get(id).ok_or("open")?, &clear)?, Edit::ClearPageLabels { start: 0 }));
+        apply(&mut session, id, &clear)?;
+        assert_eq!(labels(&session), ["1", "2", "3", "4", "5", "6"]);
+        let applied =
+            Applied { op_id: clear.op_id.clone(), actor_id: ActorId::new("ada")?, version: 2, epoch: 2, op: clear, result: serde_json::json!({}) };
+        let undo = inverse_after(&applied).ok_or("the clear is undoable")?;
+        assert_eq!(undo.payload["action"], "page.label.set");
+        assert_eq!(undo.payload["end"], 5);
+        assert_eq!(undo.payload["style"], "lower_roman");
+        assert!(undo.payload.get("before").is_none(), "a clear's undo is a plain set, not a compare-and-set");
+        apply(&mut session, id, &undo)?;
+        assert_eq!(labels(&session), ["i", "ii", "iii", "iv", "v", "vi"]);
         Ok(())
     }
 

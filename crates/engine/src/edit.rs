@@ -172,6 +172,11 @@ pub enum Edit {
         prefix: String,
         first: u32,
     },
+    /// Remove the label range that begins at `start` (0-based): the pages it labelled take the
+    /// numbering of the range before them. A page that begins no range is refused.
+    ClearPageLabels {
+        start: usize,
+    },
     /// Add a calibrated distance, perimeter or area annotation.
     AddMeasurement(measure::NewMeasurement),
     /// Store a drawing scale for a rectangular viewport (PDF user space).

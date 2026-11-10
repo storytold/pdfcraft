@@ -14,6 +14,7 @@ pdfcraft-collab-annot = { workspace = true }
 pdfcraft-collab-outline = { workspace = true }
 pdfcraft-collab-proto = { workspace = true }
 pdfcraft-engine = { workspace = true }
+pdfcraft-organize = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 base64 = "0.23"
