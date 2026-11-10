@@ -116,6 +116,7 @@ const EDIT: &[&str] = &[
     SELECT_ALL,
     SEP,
     "edit.find",
+    "edit.replace",
     "edit.advanced_search",
     SEP,
     "edit.column_select",
@@ -142,7 +143,7 @@ const DISPLAY: &[&str] = &[
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane", "view.split"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
-const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const MODES: &[&str] = &["view.full_screen", "view.read_mode", crate::viewer_prefs::TOGGLE];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -432,6 +433,7 @@ impl PdfCraftApp {
         let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
         let enabled = text
             || match command.id.as_str() {
+                craft_quit::QUIT_MENU_ID => true,
                 NO_RECENT => false,
                 "file.open_recent" => index.is_none_or(|i| i < self.recent.len()),
                 "file.clear_recent" => !self.recent.is_empty(),
@@ -503,7 +505,7 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
@@ -535,28 +537,66 @@ impl PdfCraftApp {
     /// The menus as a vertical popup: each top-level menu is a submenu button, with its items and
     /// submenus rendered recursively. Used by the "Menu" button in the mode bar.
     pub(crate) fn menu_popup_ui(&mut self, ui: &mut egui::Ui) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
         let ctx = ui.ctx().clone();
         let bar = craft_menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let gate = self.menu_gate(&ctx);
         let mut chosen = Vec::new();
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+
+        let pressed_letter = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. }
+                    if !modifiers.alt && !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd =>
+                {
+                    key_letter(*key)
+                }
+                _ => None,
+            })
+        });
+
+        let target = self.menu_target.take().or(pressed_letter);
+
         for menu in &bar.menus {
+            let mnemonic = menu_mnemonic(menu.role, &menu.title);
+            let is_target = target.is_some() && target == mnemonic;
+            let next_id = ui.next_auto_id();
+            let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(next_id);
+            if is_target {
+                egui::containers::menu::MenuState::from_ui(ui, |state, _| {
+                    state.open_item = Some(submenu_id);
+                });
+            }
             let resp = ui.menu_button(&menu.title, |ui| {
                 ui.set_min_width(220.0);
                 ui.set_max_width(360.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(700.0).show(ui, |ui| {
                     render_nodes(ui, &menu.children, &gate, &mut chosen);
                 });
             });
+            if is_target {
+                resp.response.request_focus();
+            }
             ctx.accesskit_node_builder(resp.response.id, |n| {
                 n.set_role(egui::accesskit::Role::MenuItem);
                 n.set_label(&menu.title);
                 n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                if let Some(m) = mnemonic {
+                    n.set_access_key(m.to_string());
+                }
             });
         }
         for command in chosen {
-            self.run_menu_command(&ctx, &command);
+            if command.id == craft_quit::QUIT_MENU_ID || matches!(craft_menu::Builtin::of(&command), Some(craft_menu::Builtin::Quit)) {
+                self.request_quit(&ctx);
+                craft_quit::on_menu_event(&ctx, craft_quit::QUIT_MENU_ID);
+            } else if matches!(craft_menu::Builtin::of(&command), Some(craft_menu::Builtin::Minimize)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                self.run_menu_command(&ctx, &command);
+            }
         }
     }
 
@@ -691,6 +731,54 @@ fn param_index(command: &CommandRef) -> Option<usize> {
 fn panel(command: &CommandRef) -> Option<RightPanel> {
     let name = command.params.get("panel").and_then(serde_json::Value::as_str)?;
     PANELS.iter().find(|(_, n, _)| *n == name).map(|(p, ..)| *p)
+}
+
+/// Extract the single ASCII character for an alphanumeric Key press, uppercase.
+pub(crate) fn key_letter(key: egui::Key) -> Option<char> {
+    let name = key.name();
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphanumeric() => Some(c.to_ascii_uppercase()),
+        _ => None,
+    }
+}
+
+/// Determine the mnemonic for a top-level menu by checking explicit `(X)` suffixes,
+/// standard English role mappings, and localized fallback for non-Latin titles (e.g. Japanese).
+pub(crate) fn menu_mnemonic(role: craft_menu::MenuRole, title: &str) -> Option<char> {
+    if let Some(open) = title.rfind('(')
+        && let Some(close) = title.rfind(')')
+        && close == open + 2
+    {
+        let ch = title.as_bytes()[open + 1] as char;
+        if ch.is_ascii_alphanumeric() {
+            return Some(ch.to_ascii_uppercase());
+        }
+    }
+    let preferred = match role {
+        craft_menu::MenuRole::File => Some('F'),
+        craft_menu::MenuRole::Edit => Some('E'),
+        craft_menu::MenuRole::View => Some('V'),
+        craft_menu::MenuRole::Window => Some('W'),
+        craft_menu::MenuRole::Help => Some('H'),
+        _ => {
+            if title == "Sign" || title == "Fill & Sign" || title.starts_with("Sign") {
+                Some('S')
+            } else {
+                None
+            }
+        }
+    };
+    let has_ascii = title.chars().any(|c| c.is_ascii_alphanumeric());
+    if has_ascii {
+        if let Some(p) = preferred
+            && title.chars().any(|c| c.to_ascii_uppercase() == p)
+        {
+            return Some(p);
+        }
+        return title.chars().find(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase());
+    }
+    preferred
 }
 
 #[cfg(test)]

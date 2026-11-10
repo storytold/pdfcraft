@@ -61,6 +61,21 @@ impl PdfCraftApp {
     pub(crate) fn select_tool(&mut self, id: &'static str) {
         // The tool's panel shows, not the expanded All tools view over it.
         self.all_tools_full = false;
+        // Edit a PDF turns on Edit text & images at once, as the Edit tab does (`enter_mode`), so
+        // the page is editable without a second click. Leaving it for another tool from All tools
+        // puts editing down again; under the Edit tab the workspace keeps it, as before. Read mode
+        // keeps the quick toolbar on Select and keeps every editing tool down (`enter_mode`), so the control
+        // channel's `tool edit` there leaves editing off.
+        if id == "edit" {
+            if self.mode != Mode::Read {
+                self.quick_tool = QuickTool::EditText;
+            }
+        } else if self.mode != Mode::Edit
+            && self.left == LeftPanel::Tool("edit")
+            && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText)
+        {
+            self.put_down_edit_text();
+        }
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
@@ -104,7 +119,7 @@ impl PdfCraftApp {
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
             self.put_down_edit_text();
         }
-        // Read mode hides the quick toolbar, so no other tool may stay active there. Opening a
+        // Read mode resets the active tool to Select. Opening a
         // document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
             self.quick_tool = QuickTool::Select;
@@ -141,7 +156,7 @@ impl PdfCraftApp {
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
-    /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
+    /// The quick toolbar stays visible in Read mode; entering Read mode resets the active tool to Select.
     pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
         let was_read = self.mode == Mode::Read;
         if select_tools {

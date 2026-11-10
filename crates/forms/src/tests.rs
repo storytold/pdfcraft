@@ -497,6 +497,31 @@ fn opt_export_values_select_button_states() {
     assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
 }
 
+/// Export values that are themselves numbers (`/Opt [(1) (2)]`, as static XFA forms write their
+/// items) name the buttons in `/Opt` order when read as export values, though `1` is also the
+/// second button's on-state name (`/0`, `/1` by position; ISO 32000-2 Table 230).
+#[test]
+fn numeric_opt_export_values_name_their_own_buttons() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Btn /T (lang) /Ff 49152 /Opt [(1) (2)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let lang = field(&all, "lang");
+    assert_eq!((lang.state_for_export("1"), lang.state_for_export("2")), (Some("0"), Some("1")));
+    // A state name no export value matches still names its button; anything else names none.
+    assert_eq!((lang.state_for_export("0"), lang.state_for_export("3")), (Some("0"), None));
+    // On-state names keep their meaning where the caller has one (a click sends the state).
+    assert_eq!(lang.state_for("1"), Some("1"));
+}
+
 /// What fits a text field is measured as its appearance draws it: in the field's own font (its
 /// `/DR` font, Helvetica where that can't show the text), inside the border and padding, at its
 /// size, wrapped for multi-line, at the smallest automatic size, as asterisks for a password,
@@ -1699,6 +1724,70 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!((&total.calculate, total.scripts.calculate.as_deref()), (&af::Calculate::None, Some(js)));
     recalculate_with(&mut doc, &mut Ran).unwrap();
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
+}
+
+/// The `/JS` string of field `name`'s `/AA /C` action, as stored.
+fn calculate_action_js(doc: &Document, name: &str) -> Option<PdfString> {
+    let f = field(&fields(doc), name).obj;
+    let aa = doc.get(f).as_dict().and_then(|d| d.get(b"AA").cloned()).map(|a| doc.resolve(&a))?;
+    let c = aa.as_dict().and_then(|aa| aa.get(b"C").cloned()).map(|c| doc.resolve(&c))?;
+    Some(c.as_dict().and_then(|c| c.get(b"JS")).and_then(|s| s.as_string()).expect("/JS is a string").clone())
+}
+
+/// Field Properties ▸ Calculate ▸ Custom calculation script (#6630): the script is written as
+/// given, as a text string, and reads back as the field's custom script, in the calculation
+/// order; a blank one removes the script and the field's place in the order.
+#[test]
+fn a_custom_calculation_script_is_written_as_given_and_a_blank_one_removes_it() {
+    use crate::af::Calculate;
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("codice")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("barcode")).unwrap();
+    let js = "// Code 39: tra asterischi, così\r\nevent.value = \"*\" + this.getField(\"codice\").value + \"*\";";
+    let custom = |js: &str| FieldProps { calculate: Some(Calculate::Custom(js.into())), ..FieldProps::default() };
+    set_props(&mut doc, "barcode", &custom(js)).unwrap();
+    for doc in [doc.clone(), reopen(&doc)] {
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, Some(js)), "read back as a script");
+        assert!(actions.unsupported.contains(&"calculate"));
+        let stored = calculate_action_js(&doc, "barcode").expect("an /AA /C action");
+        assert_eq!(stored.bytes, pdfcraft_cos::PdfString::text(js).bytes, "a text string, so ì isn't UTF-8 bytes another viewer reads as ì's pieces");
+        let order = calculation_order(&doc, &all);
+        assert_eq!(order.fields.iter().map(|f| (f.name.as_str(), f.listed)).collect::<Vec<_>>(), [("barcode", true)]);
+        assert_eq!(order.fields[0].reads, ["codice"]);
+    }
+    for blank in ["", " \n\t"] {
+        let mut doc = doc.clone();
+        set_props(&mut doc, "barcode", &custom(blank)).unwrap();
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, None), "{blank:?}");
+        assert!(calculate_action_js(&doc, "barcode").is_none(), "{blank:?} writes no /C");
+        assert!(calculation_order(&doc, &all).fields.is_empty(), "{blank:?} leaves the calculation order");
+    }
+}
+
+/// A sum and a notation are still written as the AF calls they are, byte for byte, beside the
+/// custom script that is written as a text string (#6630).
+#[test]
+fn a_sum_and_a_notation_are_written_as_their_af_calls() {
+    use crate::af::{CalcOp, Calculate, calculate_js};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["a", "b", "total"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let sum = Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] };
+    for c in [sum, Calculate::Notation("a * b".into())] {
+        set_props(&mut doc, "total", &FieldProps { calculate: Some(c.clone()), ..FieldProps::default() }).unwrap();
+        let js = calculate_js(&c).unwrap();
+        assert_eq!(calculate_action_js(&doc, "total").map(|s| s.bytes), Some(js.into_bytes()), "{c:?}");
+        let all = fields(&reopen(&doc));
+        assert_eq!((&field(&all, "total").actions.calculate, &field(&all, "total").actions.scripts.calculate), (&c, &None));
+    }
 }
 
 /// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
@@ -3255,14 +3344,14 @@ fn rotated_fields_draw_in_their_quadrant() {
     let turned = field(&fields(&doc), "name").widgets[0].clone();
     assert_eq!(turned.rotation, 90);
     let r = turned.rect;
-    // [50 700 250 720] around its center becomes 20 wide and 200 tall.
-    assert!(close(r[0], 140.0) && close(r[1], 610.0) && close(r[2], 160.0) && close(r[3], 810.0), "{r:?}");
+    // The field stays where it was: only its content turns.
+    assert!(r.iter().zip(before).all(|(a, b)| close(*a, b)), "{r:?} moved from {before:?}");
     let widget = doc.get(turned.obj);
     let mk = widget.as_dict().unwrap().get(b"MK").unwrap().as_dict().cloned().unwrap();
     assert!(mk.contains(b"BG") && mk.contains(b"BC") && mk.int(b"R") == Some(90));
     let (_, matrix) = appearance_box(&doc, &turned);
     assert!(matrix.is_some());
-    // 270 stays on the vertical axis, so the rectangle is not swapped again.
+    // 270 keeps the rectangle too.
     set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 270)), ..FieldProps::default() }).unwrap();
     let r270 = field(&fields(&doc), "name").widgets[0].rect;
     assert!(r270.iter().zip(r).all(|(a, b)| close(*a, b)), "{r270:?}");
@@ -3285,18 +3374,26 @@ fn rotated_fields_draw_in_their_quadrant() {
     assert!(text.contains("(Go) Tj") && matrix.is_some(), "{text}");
 }
 
+/// #4296: a tall field turned a quarter keeps its place, and its text is laid out along the long
+/// side (the appearance box is as wide as the field is tall) and turned onto the field.
 #[test]
-fn a_rotation_refused_as_too_small_changes_nothing_else() {
+fn a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it() {
     let mut doc = one_page();
-    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("thin")).unwrap();
-    // 200 x 3: turned a quarter it would be 3 wide, too small to use.
-    let obj = field(&fields(&doc), "thin").widgets[0].obj;
-    doc.update_dict(obj, |d| d.set(b"Rect".to_vec(), Object::Array([50.0, 700.0, 250.0, 703.0].iter().map(|v| Object::Real(*v)).collect()))).unwrap();
-    let props = FieldProps { tooltip: Some("changed".into()), rotation: Some((0, 90)), ..FieldProps::default() };
-    assert!(set_props(&mut doc, "thin", &props).is_err());
-    let f = field(&fields(&doc), "thin").clone();
-    assert_eq!(f.tooltip, None, "the tooltip was written before the rotation was refused");
-    assert_eq!(f.widgets[0].rotation, 0);
+    let rect = [50.0, 600.0, 70.0, 760.0];
+    add_field(&mut doc, 0, rect, &NewField::Text { multiline: false }, Some("tall")).unwrap();
+    set_value(&mut doc, "tall", &FieldValue::Text("Ada".into())).unwrap();
+    let props = FieldProps { tooltip: Some("Name".into()), rotation: Some((0, 90)), ..FieldProps::default() };
+    set_props(&mut doc, "tall", &props).unwrap();
+    let f = field(&fields(&doc), "tall").clone();
+    let w = &f.widgets[0];
+    assert_eq!((w.rotation, f.tooltip.as_deref()), (90, Some("Name")));
+    assert!(w.rect.iter().zip(rect).all(|(a, b)| close(*a, b)), "the field moved: {:?} -> {:?}", rect, w.rect);
+    let (bbox, matrix) = appearance_box(&doc, w);
+    assert!(close(bbox[2], 160.0) && close(bbox[3], 20.0), "the text is laid out across the field, not up it: {bbox:?}");
+    let m = matrix.unwrap();
+    // (x, y) -> (20 - y, x): the box's 160 pt run goes up the field.
+    assert!(close(m[1], 1.0) && close(m[2], -1.0) && close(m[4], 20.0), "{m:?}");
+    assert!(ap(&doc, w).contains("(Ada) Tj"));
 }
 
 #[test]
@@ -5688,6 +5785,34 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
 
+/// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
+/// form with a thousand rows holds thousands of fields, and reading them all again for each one
+/// took 15 s a relayout. The fields `keep` turns down keep the appearance they had.
+#[test]
+fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
+    for n in [250u32, 1000] {
+        let mut objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        ];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")));
+        objs.push(format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")));
+        for i in 0..n {
+            objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /V (v{i}) /Rect [50 0 250 10] /P 3 0 R >>"));
+        }
+        let mut doc = document(&objs);
+        let before = form_reads();
+        redraw_fields(&mut doc, |_, f| f.name != "f0").unwrap();
+        assert_eq!(form_reads() - before, 1, "{n} fields");
+        let all = fields(&doc);
+        let has_ap = |name: &str| field(&all, name).widgets.iter().all(|w| doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP")));
+        assert!(!has_ap("f0"), "turned down: left as it was");
+        assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
+        assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
+    }
+}
+
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
 /// the group's buttons in the calculation order; and a text field `name` with two widgets.
 fn radio_group_form() -> Document {
@@ -6545,6 +6670,358 @@ fn a_read_only_button_is_not_turned_on_by_number() {
     assert_eq!(on_widgets(&doc, "r").0, [true, false, false]);
     set_value(&mut doc, "r", &FieldValue::Widget(2)).unwrap();
     assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// A reset of named fields costs the same per field however many are named: resetting 60,000
+/// fields by name is not 3.6 billion name comparisons.
+#[test]
+fn resetting_many_named_fields_is_not_quadratic() {
+    const N: usize = 60_000;
+    let kids: String = (0..N).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Fields [{kids}] >>"),
+    ];
+    objs.extend((0..N).map(|i| format!("<< /FT /Tx /T (f{i}) /V (a) /DV (a) >>")));
+    let mut doc = document(&objs);
+    let names: Vec<String> = (0..N).map(|i| format!("f{i}")).collect();
+    let started = std::time::Instant::now();
+    assert_eq!(reset(&mut doc, Some(&names)).unwrap(), 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert!(matches!(reset(&mut doc, Some(&["f0".to_string(), "nope".to_string()])), Err(FormError::NoSuchField(n)) if n == "nope"));
+}
+
+/// Two check box fields of two kids each: `pair` with the on states `A` and `B` (and `/DV /B`),
+/// `same` with `Yes` twice.
+fn check_box_kids() -> Document {
+    let kid = |parent: usize, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{state} 10 0 R /Off 11 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                 // 4
+        "<< /FT /Btn /T (pair) /V /Off /DV /B /Kids [6 0 R 7 0 R] >>".into(),       // 5
+        kid(5, 100, "A"),                                                           // 6
+        kid(5, 200, "B"),                                                           // 7
+        kid(12, 100, "Yes"),                                                        // 8
+        kid(12, 200, "Yes"),                                                        // 9
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 10
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 11
+        "<< /FT /Btn /T (same) /V /Off /Kids [8 0 R 9 0 R] >>".into(),              // 12
+    ];
+    document(&objs)
+}
+
+/// ISO 32000-2 §12.7.5.2.3: a check box field's `/V` is the on state of its kid that is on, and
+/// its kids can have different on states (Table 230). Naming `B` ticks `B` and clears `A`;
+/// "checked" keeps the kid that is on; a reset goes back to `/DV /B`. Kids sharing `Yes` tick
+/// together (EXAMPLE 2).
+#[test]
+fn check_box_kids_with_different_on_states_tick_one_at_a_time() {
+    let mut doc = check_box_kids();
+    set_value(&mut doc, "pair", &FieldValue::Text("A".into())).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![true, false], vec!["A".to_string()]));
+    set_value(&mut doc, "pair", &FieldValue::Text("B".into())).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "B, after a save");
+    set_value(&mut doc, "pair", &FieldValue::Check(true)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair").0, [false, true], "checked keeps the kid that is on");
+    set_value(&mut doc, "pair", &FieldValue::Check(false)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, false], vec![]));
+    set_value(&mut doc, "pair", &FieldValue::Check(true)).unwrap();
+    assert_eq!(on_widgets(&doc, "pair").0, [true, false], "from off, checked takes the first kid");
+    reset(&mut doc, None).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "reset goes back to /DV /B");
+    // Kids sharing an on state tick and untick together.
+    set_value(&mut doc, "same", &FieldValue::Text("Yes".into())).unwrap();
+    assert_eq!(on_widgets(&doc, "same"), (vec![true, true], vec!["Yes".to_string()]));
+    set_value(&mut doc, "same", &FieldValue::Check(false)).unwrap();
+    assert_eq!(on_widgets(&doc, "same").0, [false, false]);
+    assert!(matches!(set_value(&mut doc, "pair", &FieldValue::Text("C".into())), Err(FormError::Invalid(_))));
+    // A script that sets the value to B ticks B.
+    let to_b = FieldChange { name: "pair".into(), value: Some(vec!["B".into()]), ..FieldChange::default() };
+    set_value(&mut doc, "pair", &FieldValue::Text("A".into())).unwrap();
+    apply_script_changes(&mut doc, &[to_b], &mut NoScripts).unwrap();
+    assert_eq!(on_widgets(&doc, "pair"), (vec![false, true], vec!["B".to_string()]), "a script's B");
+}
+
+/// A one-page form with list box `dup` (single select unless `ff` says otherwise) whose first two
+/// options share the export value `1`, plus `extra` entries (`/V`, `/I`) on the field.
+fn duplicate_exports(ff: u32, extra: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff {ff} /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] {extra} /Rect [50 700 200 746] /P 3 0 R >>"
+        ),
+    ];
+    document(&objs)
+}
+
+/// The bottom edges of the highlighted rows in a list box appearance, top row first.
+fn highlighted_rows(appearance: &str) -> Vec<String> {
+    let lines: Vec<&str> = appearance.lines().collect();
+    lines.windows(2).filter(|w| w[0] == "0.6 0.75 0.86 rg").map(|w| w[1].split(' ').nth(1).unwrap_or_default().to_string()).collect()
+}
+
+/// The rows the display copy (`/NeedAppearances`) highlights in `dup`.
+fn shown_rows(doc: &Document) -> Vec<String> {
+    let copy = with_field_appearances(doc).expect("the form leaves its appearances to the viewer");
+    highlighted_rows(&ap(&copy, &field(&fields(&copy), "dup").widgets[0]))
+}
+
+/// ISO 32000-2 Table 234: `/I` "shall be used when two or more elements in the Opt array have
+/// different names but the same export value". `/V (1)` with `/I [1]` selects One-B alone, not
+/// every option exporting `1`.
+#[test]
+fn a_list_box_with_duplicate_export_values_selects_the_option_i_names() {
+    let doc = duplicate_exports(0, "/V (1) /I [1]");
+    let dup = field(&fields(&doc), "dup").clone();
+    assert_eq!(dup.selected, [1]);
+    assert_eq!(dup.display_value(), "One-B");
+    let one_b = shown_rows(&doc);
+    assert_eq!(one_b.len(), 1, "one highlighted row");
+    // The same field with /I [0] highlights the row above it.
+    let one_a = shown_rows(&duplicate_exports(0, "/V (1) /I [0]"));
+    assert_eq!(one_a.len(), 1);
+    assert_ne!(one_a, one_b, "One-A and One-B are different rows");
+    let row = |s: &[String]| s.first().and_then(|y| y.parse::<f64>().ok()).unwrap();
+    assert!(row(&one_b) < row(&one_a), "One-B is drawn below One-A");
+}
+
+/// Without a usable `/I`, `/V` decides (Table 234: "If the items identified by this entry differ
+/// from those in the V entry …, the V entry shall be used"), and an export value two options
+/// share selects the first of them. A malformed `/I` never panics.
+#[test]
+fn an_unusable_i_falls_back_to_the_first_option_with_the_value() {
+    for (extra, multi, want) in [
+        ("/V (1)", 0, vec![0]),                           // no /I: the first option exporting 1
+        ("/V (1) /I [5]", 0, vec![0]),                    // out of range
+        ("/V (1) /I [-1]", 0, vec![0]),                   // negative
+        ("/V (1) /I [(1)]", 0, vec![0]),                  // not an integer
+        ("/V (1) /I [1.5]", 0, vec![0]),                  // not a whole number
+        ("/V (1) /I 1", 0, vec![0]),                      // not an array
+        ("/V (1) /I [2]", 0, vec![0]),                    // names Two, which /V doesn't
+        ("/V (1) /I []", 0, vec![0]),                     // names nothing
+        ("/V [(1) (2)] /I [2 1]", 1 << 21, vec![0, 2]),   // not ascending
+        ("/V [(1) (2)] /I [1 1 2]", 1 << 21, vec![0, 2]), // repeated
+        ("/V [(1) (2)] /I [1 2]", 1 << 21, vec![1, 2]),   // usable: One-B and Two
+        ("/V [(1) (1)] /I [0 1]", 1 << 21, vec![0, 1]),   // usable: both options exporting 1
+        ("/V [(1) (1)] /I [1]", 1 << 21, vec![0]),        // names one item where /V names two
+        ("/V [] /I [1]", 0, vec![]),                      // an empty value selects nothing
+        ("/V (9)", 0, vec![]),                            // no option exports 9
+    ] {
+        let doc = duplicate_exports(multi, extra);
+        assert_eq!(field(&fields(&doc), "dup").selected, want, "{extra}");
+        assert_eq!(shown_rows(&doc).len(), want.len(), "{extra}");
+    }
+    // Pure: positions past the options or unlike the values are ignored.
+    let options = [("1".to_string(), "One-A".to_string()), ("1".to_string(), "One-B".to_string())];
+    assert_eq!(selected_options(&options, &["1".into()], Some(&[1])), [1]);
+    assert_eq!(selected_options(&options, &["1".into()], Some(&[7])), [0]);
+    assert_eq!(selected_options(&options, &[], Some(&[])), Vec::<usize>::new());
+}
+
+/// Picking an option by position writes its export value to `/V` and its position to `/I`, so a
+/// pick of One-A or One-B survives a save and reopen; picking by display text does the same.
+#[test]
+fn picking_one_of_two_options_with_the_same_export_value_round_trips() {
+    for (value, want) in [
+        (FieldValue::ChoiceIndices(vec![0]), 0),
+        (FieldValue::ChoiceIndices(vec![1]), 1),
+        (FieldValue::Text("One-B".into()), 1),
+        (FieldValue::Text("One-A".into()), 0),
+        (FieldValue::Choice(vec!["1".into()]), 0),
+    ] {
+        let mut doc = duplicate_exports(0, "/V (1) /I [1]");
+        set_value(&mut doc, "dup", &value).unwrap();
+        let doc = reopen(&doc);
+        let dup = field(&fields(&doc), "dup").clone();
+        let d = doc.get(dup.obj).as_dict().cloned().unwrap();
+        assert_eq!(d.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("1"), "{value:?}: /V is one string");
+        let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).unwrap().iter().filter_map(Object::as_int).collect();
+        assert_eq!(i, [want as i64], "{value:?}");
+        assert_eq!(dup.selected, [want], "{value:?}");
+        assert_eq!(highlighted_rows(&ap(&doc, &dup.widgets[0])).len(), 1, "{value:?}: its saved look highlights one row");
+    }
+    // The saved look highlights the row picked, not the first with its value.
+    let saved = |pick: usize| {
+        let mut doc = duplicate_exports(0, "");
+        set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![pick])).unwrap();
+        highlighted_rows(&ap(&doc, &field(&fields(&doc), "dup").widgets[0]))
+    };
+    assert_ne!(saved(0), saved(1));
+    // Positions are checked: out of range, or several in a single-select list.
+    let mut doc = duplicate_exports(0, "");
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![3])), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![usize::MAX])), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![0, 1])), Err(FormError::Invalid(_))));
+    // A multi-select list takes both options that share the value, in ascending /I.
+    let mut doc = duplicate_exports(1 << 21, "");
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1, 0])).unwrap();
+    let doc = reopen(&doc);
+    let dup = field(&fields(&doc), "dup").clone();
+    assert_eq!(dup.value, ["1", "1"]);
+    assert_eq!(dup.selected, [0, 1]);
+    assert_eq!(dup.picked_in_order(), [0, 1]);
+    // A check box can't take positions.
+    let mut doc = fixture();
+    assert!(matches!(set_value(&mut doc, "agree", &FieldValue::ChoiceIndices(vec![0])), Err(FormError::Invalid(_))));
+}
+
+/// A file can hold a list box with very many options and values. Matching values to options
+/// takes one lookup per value, not a scan of the options (or of the selection) for each, so
+/// reading and showing such a field stays fast. Two options share each export value, and every
+/// result still names the first option exporting a value, or the next one selected.
+#[test]
+fn many_options_and_values_match_in_linear_time() {
+    const N: usize = 100_000;
+    let options: Vec<(String, String)> = (0..2 * N).map(|i| (format!("e{}", i / 2), format!("d{i}"))).collect();
+    let values: Vec<String> = (0..N).rev().map(|k| format!("e{k}")).collect();
+    let started = std::time::Instant::now();
+    let selected = selected_options(&options, &values, None);
+    assert_eq!(selected, (0..N).map(|k| 2 * k).collect::<Vec<_>>(), "the first option exporting each value");
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "selected_options took {took:?}");
+
+    let mut list = field(&fields(&fixture()), "toppings").clone();
+    list.options = options;
+    list.value = values;
+    list.selected = (0..2 * N).collect();
+    let started = std::time::Instant::now();
+    let order = list.picked_in_order();
+    let shown = list.display_value();
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "picked_in_order and display_value took {took:?}");
+    // The values name e{N-1} first: its first option, then down to e0; the second option of
+    // each value is selected without a value naming it, so it follows in ascending order.
+    assert_eq!(order.first(), Some(&(2 * (N - 1))));
+    assert_eq!(order.get(N - 1), Some(&0));
+    assert_eq!(order.get(N..), Some(&(0..N).map(|k| 2 * k + 1).collect::<Vec<_>>()[..]));
+    assert!(shown.starts_with(&format!("d{}, d{}", 2 * (N - 1), 2 * (N - 2))), "{}", shown.get(..40).unwrap_or(&shown));
+}
+
+/// A one-page form with list box `pair` (single select unless `ff` says otherwise) of three
+/// countries, plus `extra` entries (`/V`, `/DV`, `/I`) on the field.
+fn countries(ff: u32, extra: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (pair) /Ff {ff} /Opt [[(TW) (Taiwan)] [(JP) (Japan)] [(US) (United States)]] {extra} /Rect [50 700 200 746] /P 3 0 R >>"
+        ),
+    ];
+    document(&objs)
+}
+
+/// ISO 32000-2 Table 233, MultiSelect: "if clear, at most one item shall be selected". A list box
+/// without it given `/V [(TW) (JP)]` holds and shows Taiwan alone, and opening it changes nothing
+/// in the file.
+#[test]
+fn a_single_select_list_given_several_values_shows_the_first() {
+    for (extra, multi, value, want) in [
+        ("/V [(TW) (JP)]", 0, vec!["TW"], vec![0]),
+        ("/V [(JP) (TW)]", 0, vec!["JP"], vec![1]),
+        ("/V [(TW) (JP)] /I [0 1]", 0, vec!["TW"], vec![0]), // /I names more than the one value
+        ("/V [(XX) (JP)]", 0, vec!["XX"], vec![]),           // the first value is no option
+        ("/V []", 0, vec![], vec![]),
+        ("/V [(TW) (JP)]", 1 << 21, vec!["TW", "JP"], vec![0, 1]), // multi-select keeps both
+    ] {
+        let doc = countries(multi, extra);
+        let pair = field(&fields(&doc), "pair").clone();
+        assert_eq!(pair.value, value, "{extra}");
+        assert_eq!(pair.selected, want, "{extra}");
+        let copy = with_field_appearances(&doc).expect("left to the viewer");
+        assert_eq!(highlighted_rows(&ap(&copy, &field(&fields(&copy), "pair").widgets[0])).len(), want.len(), "{extra}");
+        // Reading and drawing the display copy leaves the field's own /V as it was.
+        let v = doc.get(pair.obj).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
+        assert!(matches!(v, Object::Array(_)), "{extra}: {v:?}");
+    }
+    // Two options selected by /I alone in a single-select list: the first.
+    let doc = duplicate_exports(0, "/V (1) /I [0 1]");
+    assert_eq!(field(&fields(&doc), "dup").selected, [0]);
+}
+
+/// Picking a row in such a list writes one string to `/V` and that option's position to `/I`,
+/// and Clear form goes back to the first value of an array `/DV` instead of refusing it.
+#[test]
+fn picking_in_a_single_select_list_given_several_values_writes_one() {
+    for (pick, export, index) in [(FieldValue::ChoiceIndices(vec![2]), "US", 2), (FieldValue::Choice(vec!["JP".into()]), "JP", 1)] {
+        let mut doc = countries(0, "/V [(TW) (JP)] /I [0 1]");
+        set_value(&mut doc, "pair", &pick).unwrap();
+        let doc = reopen(&doc);
+        let pair = field(&fields(&doc), "pair").clone();
+        let d = doc.get(pair.obj).as_dict().cloned().unwrap();
+        assert_eq!(d.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some(export), "{pick:?}: /V is one string");
+        let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).unwrap().iter().filter_map(Object::as_int).collect();
+        assert_eq!(i, [index], "{pick:?}");
+        assert_eq!((pair.value, pair.selected), (vec![export.to_string()], vec![index as usize]));
+    }
+    let mut doc = countries(0, "/V (US) /DV [(JP) (TW)]");
+    assert_eq!(reset(&mut doc, None).unwrap(), 1);
+    let pair = field(&fields(&doc), "pair").clone();
+    assert_eq!((pair.value, pair.selected), (vec!["JP".to_string()], vec![1]));
+}
+
+/// A position picked twice is written once in both `/V` and `/I`, so they still match item for
+/// item and the option picked (the second of two sharing an export value) comes back on reopen.
+#[test]
+fn a_position_picked_twice_is_written_once_in_v_and_i() {
+    let mut doc = duplicate_exports(1 << 21, "");
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1, 1])).unwrap();
+    let dup = field(&fields(&doc), "dup").clone();
+    let d = doc.get(dup.obj).as_dict().cloned().unwrap();
+    let v: Vec<String> = match d.get(b"V") {
+        Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_string().map(|s| s.to_text())).collect(),
+        Some(o) => o.as_string().map(|s| vec![s.to_text()]).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).map(|a| a.iter().filter_map(Object::as_int).collect()).unwrap_or_default();
+    assert_eq!((v, i), (vec!["1".to_string()], vec![1]), "one entry each");
+    assert_eq!(dup.selected, [1], "One-B, not One-A");
+}
+
+/// A same-name twin listing the options sharing an export value in another order is given the
+/// option picked, not the one at the same position: `/I` is mapped to the twin's own options.
+#[test]
+fn a_twin_with_options_in_another_order_gets_the_option_picked() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /Rect [50 700 200 746] /P 3 0 R >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(1) (One-B)] [(1) (One-A)] [(2) (Two)]] /Rect [50 600 200 646] /P 3 0 R >>"
+            .into(),
+    ];
+    let mut doc = document(&objs);
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1])).unwrap();
+    let all = fields(&doc);
+    let twin = all.iter().find(|f| f.obj == pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    let i: Vec<i64> = doc
+        .get(twin.obj)
+        .as_dict()
+        .and_then(|d| d.get(b"I").and_then(|i| i.as_array().cloned()))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Object::as_int)
+        .collect();
+    assert_eq!(i, [0], "One-B is first in the twin's options");
+    assert_eq!(twin.selected, [0]);
 }
 
 /// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`

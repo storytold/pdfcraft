@@ -588,15 +588,17 @@ const MODE_BAR_SEARCH_MIN: f32 = 140.0;
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // The document in the active tab may hide the menu or the tools (`crate::viewer_prefs`).
+    let hidden = app.hidden_interface();
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // The menus, unless the native macOS menu bar has them: collapsed into a single
-                // "Menu" button that opens them as a popup.
-                if app.native_menu.is_none() {
+                // The menus, unless the native macOS menu bar has them or the document hides them:
+                // collapsed into a single "Menu" button that opens them as a popup.
+                if app.native_menu.is_none() && !hidden.menubar {
                     let btn = widgets::ghost_button_sized(ui, "panel-left", tl!("Menu"), 48.0);
                     let popup_id = egui::Popup::default_response_id(&btn);
                     ui.ctx().accesskit_node_builder(btn.id, |n| {
@@ -604,13 +606,17 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         n.set_label(tl!("Menu"));
                         n.set_has_popup(egui::accesskit::HasPopup::Menu);
                     });
-                    handle_menu_button_keys(app, ui.ctx(), popup_id);
+                    handle_menu_button_keys(app, ui.ctx(), popup_id, &btn);
                     egui::Popup::menu(&btn).show(|ui| app.menu_popup_ui(ui));
                     ui.add_space(4.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                     ui.add_space(8.0);
                 }
-                let modes = [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+                if hidden.toolbar {
+                    return;
+                }
+                let modes =
+                    [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
                 // What the right side needs (three 32 px buttons, gaps) and the least search box worth showing.
                 let avail = ui.available_width();
                 let tabs_w: f32 = modes.iter().map(|(_, l)| widgets::mode_tab_width(ui, tl!(*l))).sum::<f32>() + 2.0 * (modes.len() as f32 - 1.0);
@@ -675,7 +681,17 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 }
 
 /// Handle Alt-tap, F10, and Alt+letter mnemonics (e.g. Alt+F for File) for the mode bar Menu button.
-fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id: egui::Id) {
+fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id: egui::Id, btn: &egui::Response) {
+    let focus_id = egui::Id::unique("mode_bar_menu_focused");
+    let mut menu_focused: bool = ctx.data(|d| d.get_temp(focus_id)).unwrap_or(false);
+
+    if btn.clicked() {
+        menu_focused = false;
+    }
+    if ctx.input(|i| i.pointer.any_click()) && !btn.hovered() {
+        menu_focused = false;
+    }
+
     let f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F10));
 
     // Track Alt-tap (pressing and releasing Alt with no intervening keys or clicks).
@@ -721,10 +737,56 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
     }
     ctx.data_mut(|d| d.insert_temp(alt_state_id, alt_state));
 
+    let is_open = egui::Popup::is_id_open(ctx, popup_id);
+
     if f10 || alt_tapped {
-        egui::Popup::toggle_id(ctx, popup_id);
+        if is_open {
+            egui::Popup::close_all(ctx);
+            menu_focused = false;
+        } else {
+            menu_focused = !menu_focused;
+            if menu_focused {
+                btn.request_focus();
+            }
+        }
         ctx.request_repaint();
-        return;
+    }
+
+    if menu_focused {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            menu_focused = false;
+            ctx.request_repaint();
+        } else if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+        }) {
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            ctx.request_repaint();
+        } else {
+            let plain_letter = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if !modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+                    {
+                        crate::menus::key_letter(*key).map(|c| (c, *key))
+                    }
+                    _ => None,
+                })
+            });
+            if let Some((c, key)) = plain_letter {
+                ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, key);
+                    i.events
+                        .retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+                });
+                menu_focused = false;
+                egui::Popup::open_id(ctx, popup_id);
+                app.menu_target = Some(c);
+                ctx.request_repaint();
+            }
+        }
     }
 
     // Alt+letter (e.g. Alt+F) opens the Menu popup and selects that submenu.
@@ -743,9 +805,19 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
             i.consume_key(egui::Modifiers::ALT, key);
             i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
         });
+        menu_focused = false;
         egui::Popup::open_id(ctx, popup_id);
         app.menu_target = Some(c);
         ctx.request_repaint();
+    }
+
+    ctx.data_mut(|d| d.insert_temp(focus_id, menu_focused));
+    let pass = ctx.cumulative_pass_nr();
+    if is_open {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
+    }
+    if menu_focused {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-focus"), pass));
     }
 }
 

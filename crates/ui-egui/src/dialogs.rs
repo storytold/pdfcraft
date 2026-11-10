@@ -10,12 +10,14 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
+pub(super) mod convert_colours_ui;
 pub(super) mod credits;
 pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
 pub(super) mod preferences;
+pub(super) mod printer_marks_ui;
 mod prompts;
 pub(super) mod protect;
 pub(super) mod standards_ui;
@@ -24,10 +26,21 @@ pub(super) mod word_count_ui;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use prompts::{PromptButton, save_prompt_key};
+pub(crate) use prompts::{PromptButton, save_prompt_key, shorten_middle};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
+
+/// Drop (and zeroize) password drafts as soon as their owning dialog is inactive.
+/// Commands and control requests also call this: close/reopen can happen between frames.
+pub(crate) fn discard_inactive_password_drafts(app: &mut PdfCraftApp) {
+    if app.dialog != Some(Dialog::Protect) {
+        app.protect_draft = Default::default();
+    }
+    if app.dialog != Some(Dialog::Sign) {
+        app.sign_draft = None;
+    }
+}
 
 /// What the dialog's widgets asked for this frame; acted on after the modal is drawn.
 #[derive(Default)]
@@ -44,6 +57,8 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    printer_marks_now: bool,
+    colours_now: bool,
     fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
@@ -56,10 +71,12 @@ struct Pending {
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
+    lock_answer: Option<bool>,
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
     page_props_now: Option<(pdfcraft_engine::DocId, u64, Edit)>,
+    attachment_description_now: Option<(pdfcraft_engine::DocId, Edit)>,
     replace_now: bool,
     open_revision: Option<usize>,
     a11y_now: bool,
@@ -100,6 +117,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
     }
+    discard_inactive_password_drafts(app);
     // A movable window, not this modal: the page under it shows the table as it changes.
     if app.dialog == Some(Dialog::FieldTable) {
         crate::field_table_ui::show(app, ctx);
@@ -294,6 +312,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::LockSignatures => {
+            if !dialog_lock_signatures(ui, app, req) {
+                return false;
+            }
+        }
         Dialog::Revert => {
             if !dialog_revert(ui, app, req) {
                 return false;
@@ -353,6 +376,27 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.props_now = req.apply;
             req.close = req.apply || cancel;
             return false;
+        }
+        Dialog::AttachmentDescription => {
+            let Some((doc, generation, _, _, _, _)) = app.attachment_description_draft.as_ref() else {
+                req.close = true;
+                return false;
+            };
+            if app.active_ids().is_none_or(|(_, active)| active != *doc)
+                || app.session.get(*doc).is_none_or(|current| current.edit_generation() != *generation)
+            {
+                app.attachment_description_draft = None;
+                req.close = true;
+                return false;
+            }
+            let Some((_, _, _, display_name, description, _)) = app.attachment_description_draft.as_mut() else {
+                req.close = true;
+                return false;
+            };
+            ui.heading(tl!("Edit attachment description"));
+            ui.label(display_name.as_str());
+            let label = ui.label(tl!("Description"));
+            ui.add(widgets::line(description)).labelled_by(label.id);
         }
         Dialog::Signature => {
             if !dialog_signature(ui, app, req) {
@@ -446,6 +490,18 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.protect_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::PrinterMarks => {
+            let (go, cancel) = crate::printer_marks_ui::body(ui, app, &t);
+            req.printer_marks_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::ConvertColours => {
+            let (go, cancel) = crate::convert_colours_ui::body(ui, app, &t);
+            req.colours_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::FixHairlines => {
@@ -1278,6 +1334,31 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     false
 }
 
+/// `Dialog::LockSignatures` content (#2149). Returns `false` when it has its own buttons and no
+/// footer is wanted.
+fn dialog_lock_signatures(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    ui.label(egui::RichText::new(tl!("Lock your signature into the page?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page."));
+    ui.add_space(8.0);
+    ui.add(widgets::checkbox(&mut app.lock_remember, tl!("Don't ask again")));
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Lock and save"), true).clicked() {
+            req.lock_answer = Some(true);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Keep editable"), false).clicked() {
+            req.lock_answer = Some(false);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
 /// `Dialog::Revert` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_revert(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.name.clone()).unwrap_or_default();
@@ -1709,6 +1790,7 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
     true
 }
 
+/// Draw the active dialog's footer and record any requested action in `req`.
 fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     ui.add_space(16.0);
     let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
@@ -1740,6 +1822,30 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
             } else if dialog == Dialog::Split {
                 if ui.add_enabled_ui(req.split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
                     req.split_now = req.split_ready.clone();
+                    req.close = true;
+                }
+                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                    req.close = true;
+                }
+            } else if dialog == Dialog::AttachmentDescription {
+                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                    if let Some((doc, generation, key, _, description, _)) = app.attachment_description_draft.as_ref() {
+                        let current = app.session.get(*doc).and_then(|doc| {
+                            doc.info
+                                .attachments
+                                .iter()
+                                .find(|attachment| matches!(&attachment.source, pdfcraft_render::AttachmentSource::Document { key: attachment_key } if attachment_key == key))
+                                .map(|attachment| (attachment.description.as_deref().unwrap_or_default().trim().to_owned(), attachment.has_description))
+                        });
+                        let normalized = description.trim();
+                        let still_current = app.session.get(*doc).is_some_and(|doc| doc.edit_generation() == *generation);
+                        if still_current && current.as_ref().is_some_and(|(current, has_description)| current != normalized || (normalized.is_empty() && *has_description)) {
+                            req.attachment_description_now = Some((
+                                *doc,
+                                Edit::EditAttachmentDescription { key: key.clone(), description: Some(normalized.to_owned()) },
+                            ));
+                        }
+                    }
                     req.close = true;
                 }
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -1816,10 +1922,26 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
         app.pending_overwrite = None;
     }
+    if let Some(lock) = req.lock_answer {
+        let remember = std::mem::take(&mut app.lock_remember);
+        app.answer_lock_signatures(lock, remember);
+    } else if dialog == Dialog::LockSignatures && (modal_closed || req.close) {
+        // Cancelled or dismissed: nothing is saved.
+        app.pending_lock = None;
+        app.lock_remember = false;
+    }
 }
 
 /// Runs the document actions the dialog asked for.
 fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
+    if let Some((doc, edit)) = req.attachment_description_now.take() {
+        app.attachment_description_draft = None;
+        if app.active_ids().is_some_and(|(_, active)| active == doc) {
+            app.apply_edit(edit);
+        } else {
+            app.notify_tr("The document changed while the dialog was open, so nothing was changed. Open the description editor again.");
+        }
+    }
     if req.summarize_now {
         app.summarize_comments();
     }
@@ -1885,14 +2007,31 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+                    let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+                    view.redactions_applied = view.redactions_applied.saturating_add(1);
+                    // A new step clears the redo history, so the undone saved steps can't come back.
+                    if view.redactions_undone_after_save > 0 || delivered_undone {
+                        view.redactions_undone_after_save = 0;
+                        view.saved_redactions_cut_off = true;
+                    }
+                }
                 if let Some((_, id)) = app.active_ids() {
                     app.renew_recovery(id);
                 }
-                if marks == 1 {
-                    app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
+                let applied = if marks == 1 {
+                    tl!("Applied 1 redaction mark. Save to remove the content from the file.").to_string()
                 } else {
-                    app.notify_fmt("Applied {n} redaction marks. Save to remove the content from the file.", &[("n", &marks.to_string())]);
-                }
+                    crate::i18n::fmt(tl!("Applied {n} redaction marks. Save to remove the content from the file."), &[("n", &marks.to_string())])
+                };
+                // Where the removed text is still held that applying leaves as it is, and what
+                // became of a PDF/A or PDF/UA claim in the document XMP it removed: said in the
+                // same notification, so neither can replace the first sentence.
+                let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
+                let left = doc.and_then(|d| d.redaction_elsewhere()).and_then(|e| still_holding_note(&e));
+                let id = doc.and_then(|d| d.redaction_identification()).and_then(|id| identification_note(&id));
+                let message = [Some(applied), left, id].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                app.notify(message);
             }
         }
         _ => {}
@@ -1941,6 +2080,61 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
     }
 }
 
+/// The sentence telling the user where the removed text is still held that applying redactions
+/// leaves as it is, or `None` when it is nowhere else. When the text couldn't be searched for,
+/// the places are those holding any text, and the sentence says they may hold it.
+pub(crate) fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(tl!(one).to_string()),
+        n => Some(crate::i18n::fmt(tl!(many), &[("n", &n.to_string())])),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "1 bookmark title", "{n} bookmark titles"),
+        count(e.attachments, "1 attachment", "{n} attachments"),
+        count(e.comments, "1 comment", "{n} comments"),
+        count(e.xmp, "1 other metadata stream", "{n} other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let (last, rest) = places.split_last()?;
+    let list = if rest.is_empty() { last.clone() } else { crate::i18n::fmt(tl!("{list} and {last}"), &[("list", &rest.join(", ")), ("last", last)]) };
+    let template = if e.unsearched {
+        "The redacted text couldn't be searched for, so {places} may still hold it. Remove hidden information removes them."
+    } else {
+        "The redacted text also appears in {places}, which redaction doesn't change. Remove hidden information removes them."
+    };
+    Some(crate::i18n::fmt(tl!(template), &[("places", &list)]))
+}
+
+/// The sentence telling the user what became of the document's PDF/A or PDF/UA identification
+/// when applying redactions removed the XMP packet that held it (and the redacted text), or
+/// `None` when no such packet was removed.
+pub(crate) fn identification_note(id: &pdfcraft_engine::RedactionIdentification) -> Option<String> {
+    use pdfcraft_engine::RedactionClaim as Claim;
+    let named = |claim: Claim| -> Option<String> {
+        match (id.pdfa == claim, id.pdfua == claim) {
+            (true, true) => Some(tl!("PDF/A and PDF/UA").to_string()),
+            (true, false) => Some("PDF/A".to_string()),
+            (false, true) => Some("PDF/UA".to_string()),
+            (false, false) => None,
+        }
+    };
+    let kept = named(Claim::Kept).map(|s| crate::i18n::fmt(tl!("Its {standard} identification was written back on its own."), &[("standard", &s)]));
+    let lost = named(Claim::Lost).map(|s| {
+        crate::i18n::fmt(
+            tl!("Its {standard} identification couldn't be kept, so the file no longer says it conforms to {standard}."),
+            &[("standard", &s)],
+        )
+    });
+    if kept.is_none() && lost.is_none() {
+        return None;
+    }
+    let head = tl!("The document's XMP metadata held the redacted text and was removed.").to_string();
+    Some([Some(head), kept, lost].into_iter().flatten().collect::<Vec<_>>().join(" "))
+}
+
 /// Edits built from the dialog's drafts.
 fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.props_now
@@ -1985,6 +2179,12 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
     }
+    if req.printer_marks_now {
+        app.add_printer_marks();
+    }
+    if req.colours_now {
+        app.convert_colours();
+    }
     if req.fix_hairlines_now {
         app.fix_hairlines();
     }
@@ -2010,7 +2210,14 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if modal_closed || req.close || replaces {
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
         app.recent.truncate(app.recent_limit);
-        app.dialog = None;
+        // An answer may have opened another dialog this frame (saving a file that changed on
+        // disk asks about that): it stays.
+        if app.dialog == Some(dialog) {
+            app.dialog = None;
+        }
+        if dialog == Dialog::AttachmentDescription {
+            app.attachment_description_draft = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.custom_draft = None;
@@ -2019,6 +2226,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
     }
+    discard_inactive_password_drafts(app);
     if let Some(cmd) = req.link_command {
         app.execute(cmd);
     }
@@ -2086,4 +2294,135 @@ fn draft_changes(app: &PdfCraftApp) -> Option<Vec<Edit>> {
 
 fn yes(b: bool) -> String {
     tl!(if b { "Yes" } else { "No" }).to_string()
+}
+
+#[cfg(test)]
+mod password_draft_tests {
+    use super::*;
+    use egui_kittest::Harness;
+
+    fn seed_password_drafts(app: &mut PdfCraftApp) {
+        app.start_signing(0, None, None, None);
+        let sign = app.sign_draft.as_mut().unwrap();
+        sign.step = crate::sign_ui::SignStep::Choose;
+        sign.password = "sign password".into();
+        sign.new_id.password = "new ID password".into();
+        sign.new_id.confirm = "new ID password".into();
+        sign.new_id.file_password = "import password".into();
+        app.protect_draft.password = "view password".into();
+        app.protect_draft.confirm = "view password".into();
+        app.protect_draft.protection.open_password = Some("open password".into());
+        app.protect_draft.protection.permissions_password = Some("owner password".into());
+    }
+
+    fn assert_protect_cleared(app: &PdfCraftApp) {
+        assert_eq!(app.protect_draft, crate::protect::ProtectDraft::default());
+    }
+
+    #[test]
+    fn inactive_password_drafts_are_cleared_before_early_returns() {
+        // None and FieldTable return before the ordinary modal-close path; About replaces it.
+        for dialog in [None, Some(Dialog::FieldTable), Some(Dialog::About)] {
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
+                let mut app = PdfCraftApp::new();
+                app.set_option("language", "en").unwrap();
+                seed_password_drafts(&mut app);
+                app.dialog = dialog;
+                app
+            });
+            h.run_steps(2);
+            assert_protect_cleared(h.state());
+            assert!(h.state().sign_draft.is_none());
+        }
+    }
+
+    #[test]
+    fn rendering_preserves_only_the_active_password_draft() {
+        for dialog in [Dialog::Protect, Dialog::Sign] {
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
+                let mut app = PdfCraftApp::new();
+                app.set_option("language", "en").unwrap();
+                seed_password_drafts(&mut app);
+                app.dialog = Some(dialog);
+                app
+            });
+            h.run_steps(2);
+            if dialog == Dialog::Protect {
+                assert_eq!(h.state().protect_draft.password, "view password");
+                assert_eq!(h.state().protect_draft.confirm, "view password");
+                assert!(h.state().sign_draft.is_none());
+            } else {
+                assert_protect_cleared(h.state());
+                let sign = h.state().sign_draft.as_ref().unwrap();
+                assert_eq!(sign.password, "sign password");
+                assert_eq!(sign.new_id.password, "new ID password");
+                assert_eq!(sign.new_id.confirm, "new ID password");
+                assert_eq!(sign.new_id.file_password, "import password");
+            }
+        }
+    }
+
+    #[test]
+    fn control_close_and_reopen_clears_passwords_without_a_render_between_requests() {
+        let mut app = PdfCraftApp::new();
+        // The control queue can handle several ui.set requests before the next rendered frame.
+        // Repeat both close and replacement flows so stale drafts cannot return on later opens.
+        for _ in 0..2 {
+            for replacement in ["none", "about", "sign", "certify"] {
+                app.set_option("dialog", "protect").unwrap();
+                app.protect_draft.password = "old password".into();
+                app.protect_draft.confirm = "old password".into();
+                app.set_option("dialog", replacement).unwrap();
+                assert_protect_cleared(&app);
+                app.set_option("dialog", "protect").unwrap();
+                assert_protect_cleared(&app);
+                assert!(app.sign_draft.is_none());
+            }
+            for replacement in ["none", "about", "protect"] {
+                seed_password_drafts(&mut app);
+                app.set_option("dialog", replacement).unwrap();
+                assert!(app.sign_draft.is_none(), "inactive Sign draft retained after {replacement}");
+                app.set_option("dialog", "sign").unwrap();
+                let sign = app.sign_draft.as_ref().unwrap();
+                assert!(sign.password.is_empty());
+                assert_eq!(sign.new_id, crate::sign_ui::NewIdDraft::default());
+            }
+        }
+    }
+
+    #[test]
+    fn selecting_the_active_protect_dialog_keeps_its_password() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("dialog", "protect").unwrap();
+        app.protect_draft.password = "current password".into();
+        app.protect_draft.confirm = "current password".into();
+        app.set_option("dialog", "protect").unwrap();
+        assert_eq!(app.protect_draft.password, "current password");
+        assert_eq!(app.protect_draft.confirm, "current password");
+    }
+
+    #[test]
+    fn commands_discard_replaced_password_drafts_before_the_next_control_request() {
+        let mut app = PdfCraftApp::new();
+        for _ in 0..2 {
+            seed_password_drafts(&mut app);
+            app.dialog = Some(Dialog::Protect);
+            assert!(app.execute("help.about"));
+            assert_eq!(app.dialog, Some(Dialog::About));
+            assert_protect_cleared(&app);
+            assert!(app.sign_draft.is_none());
+            app.set_option("dialog", "protect").unwrap();
+            assert_protect_cleared(&app);
+
+            seed_password_drafts(&mut app);
+            assert!(app.execute("help.shortcuts"));
+            assert_eq!(app.dialog, Some(Dialog::Shortcuts));
+            assert_protect_cleared(&app);
+            assert!(app.sign_draft.is_none());
+            app.set_option("dialog", "sign").unwrap();
+            let sign = app.sign_draft.as_ref().unwrap();
+            assert!(sign.password.is_empty());
+            assert_eq!(sign.new_id, crate::sign_ui::NewIdDraft::default());
+        }
+    }
 }
