@@ -23,6 +23,10 @@ pub enum EpubLayout {
 pub const FIXED_DPI: f64 = 150.0;
 /// Their JPEG quality.
 const FIXED_QUALITY: u8 = 85;
+/// The most the pictures of a fixed-layout book may come to together: the book is built in memory
+/// (the pictures, then the archive holding them), so a very large document is refused with a
+/// message, not left to run the machine out of memory.
+pub const FIXED_MAX_PICTURE_BYTES: usize = 400 << 20;
 
 /// Everything a book is made from, read from the document. It holds no reference to it, so it can
 /// go to another thread.
@@ -52,12 +56,26 @@ impl EpubBook {
     }
 
     /// The fixed-layout book, its pictures drawn by `exporter` (from the same document); `progress`
-    /// hears each page as it is drawn.
-    pub fn fixed(&self, exporter: &mut Exporter, modified: i64, mut progress: impl FnMut(usize)) -> Result<Vec<u8>, String> {
+    /// hears each page as it is drawn. Refused when the pictures come to more than
+    /// [`FIXED_MAX_PICTURE_BYTES`].
+    pub fn fixed(&self, exporter: &mut Exporter, modified: i64, progress: impl FnMut(usize)) -> Result<Vec<u8>, String> {
+        self.fixed_within(exporter, modified, FIXED_MAX_PICTURE_BYTES, progress)
+    }
+
+    fn fixed_within(&self, exporter: &mut Exporter, modified: i64, limit: usize, mut progress: impl FnMut(usize)) -> Result<Vec<u8>, String> {
         let mut pages = Vec::with_capacity(self.pages.len());
+        let mut held = 0usize;
         for (i, page) in self.pages.iter().enumerate() {
             progress(i);
             let picture = exporter.image(i, FIXED_DPI, ImageFormat::Jpeg { quality: FIXED_QUALITY })?;
+            held = held.saturating_add(picture.len());
+            if held > limit {
+                return Err(format!(
+                    "page {}: the page pictures come to more than {} MB, the most a fixed-layout book holds in memory; export as reflowable instead",
+                    i + 1,
+                    limit >> 20
+                ));
+            }
             pages.push(FixedPage { width: page.width, height: page.height, ext: "jpg", picture, page: page.clone() });
         }
         let modified = pdfcraft_export::iso_utc(modified);
@@ -80,22 +98,123 @@ fn outline_entries(items: &[OutlineItem], level: u8, out: &mut Vec<TocEntry>) {
     }
 }
 
-/// Whether `tag` looks like a BCP 47 language tag the package document can carry: a first subtag
-/// of 2 to 8 letters, then subtags of 2 to 8 letters or digits, none empty.
+/// The grandfathered tags of RFC 5646 §2.2.8, irregular and regular, lowercase: they are tags
+/// though their shape is not the grammar's.
+const GRANDFATHERED: [&str; 26] = [
+    "en-gb-oed",
+    "i-ami",
+    "i-bnn",
+    "i-default",
+    "i-enochian",
+    "i-hak",
+    "i-klingon",
+    "i-lux",
+    "i-mingo",
+    "i-navajo",
+    "i-pwn",
+    "i-tao",
+    "i-tay",
+    "i-tsu",
+    "sgn-be-fr",
+    "sgn-be-nl",
+    "sgn-ch-de",
+    "art-lojban",
+    "cel-gaulish",
+    "no-bok",
+    "no-nyn",
+    "zh-guoyu",
+    "zh-hakka",
+    "zh-min",
+    "zh-min-nan",
+    "zh-xiang",
+];
+
+/// Whether `tag` is a well-formed BCP 47 language tag (RFC 5646 §2.1, the syntax only: whether the
+/// subtags are registered is not asked): a language with its extended languages, a script, a
+/// region, variants, extensions (a singleton then its subtags), a private use part, or a private
+/// use tag alone, or a grandfathered tag.
 fn language_tag(tag: &str) -> bool {
-    let mut subtags = tag.split('-');
-    let first = subtags.next().unwrap_or_default();
-    (2..=8).contains(&first.len())
-        && first.chars().all(|c| c.is_ascii_alphabetic())
-        && subtags.all(|t| (2..=8).contains(&t.len()) && t.chars().all(|c| c.is_ascii_alphanumeric()))
+    let lower = tag.to_ascii_lowercase();
+    if GRANDFATHERED.contains(&lower.as_str()) {
+        return true;
+    }
+    let t: Vec<&str> = lower.split('-').collect();
+    if t.iter().any(|s| s.is_empty() || s.len() > 8 || !s.bytes().all(|c| c.is_ascii_alphanumeric())) {
+        return false;
+    }
+    let alpha = |s: &str| s.bytes().all(|c| c.is_ascii_alphabetic());
+    let digit = |s: &str| s.bytes().all(|c| c.is_ascii_digit());
+    // Private use: `x` then 1 to 8 characters each.
+    let private_from = |i: usize| t.len() > i + 1 && t[i] == "x";
+    if t[0] == "x" {
+        return private_from(0);
+    }
+    if !(2..=8).contains(&t[0].len()) || !alpha(t[0]) {
+        return false;
+    }
+    let mut i = 1;
+    // Extended languages go only with a language of 2 or 3 letters.
+    if t[0].len() <= 3 {
+        let mut ext = 0;
+        while ext < 3 && i < t.len() && t[i].len() == 3 && alpha(t[i]) {
+            (i, ext) = (i + 1, ext + 1);
+        }
+    }
+    if i < t.len() && t[i].len() == 4 && alpha(t[i]) {
+        i += 1;
+    }
+    if i < t.len() && ((t[i].len() == 2 && alpha(t[i])) || (t[i].len() == 3 && digit(t[i]))) {
+        i += 1;
+    }
+    while i < t.len() && ((5..=8).contains(&t[i].len()) || (t[i].len() == 4 && t[i].as_bytes()[0].is_ascii_digit())) {
+        i += 1;
+    }
+    while i < t.len() && t[i].len() == 1 && t[i] != "x" {
+        let from = i + 1;
+        i = from;
+        while i < t.len() && t[i].len() >= 2 {
+            i += 1;
+        }
+        if i == from {
+            return false;
+        }
+    }
+    if i < t.len() && t[i] == "x" {
+        return private_from(i);
+    }
+    i == t.len()
 }
 
-impl crate::Document {
-    /// What an EPUB of this document is made of (Export ▸ EPUB): every page's paragraphs, tables
-    /// and images, its title, author and language, the bookmarks, and a tagged document's heading
-    /// levels and figure descriptions.
-    pub fn epub_book(&self) -> EpubBook {
-        let pages = self.export_pages();
+/// What [`crate::Document::epub_book`] reads from a document, owned (the PDF's objects are shared,
+/// not copied), so the book can be made on another thread, after a place for it is chosen, and not
+/// while the window waits.
+#[derive(Clone)]
+pub struct EpubSource {
+    name: String,
+    bytes: std::sync::Arc<Vec<u8>>,
+    info: pdfcraft_render::DocInfo,
+    cos: Option<pdfcraft_cos::Document>,
+}
+
+impl EpubSource {
+    /// What an EPUB of the document is made of: every page's paragraphs, tables and images, its
+    /// title, author and language, the bookmarks, and a tagged document's heading levels and figure
+    /// descriptions.
+    pub fn book(&self) -> EpubBook {
+        let cos = self.cos.as_ref();
+        let pages = match cos {
+            Some(cos) => {
+                crate::compare::export_pages_of(
+                    &self.info,
+                    cos,
+                    true,
+                    crate::compare::MAX_EXPORT_IMAGE_BYTES,
+                    &mut pdfcraft_cos::ImageBudget::new(cos),
+                )
+                .0
+            }
+            None => Vec::new(),
+        };
         let title = self
             .info
             .title
@@ -107,7 +226,7 @@ impl crate::Document {
         outline_entries(&self.info.outline, 1, &mut toc);
         let mut tags = EpubTags::default();
         let mut language = None;
-        if let Some(cos) = self.editor.as_ref().map(|e| &e.cos) {
+        if let Some(cos) = cos {
             language = cos
                 .root()
                 .and_then(|r| cos.get(r).as_dict().cloned())
@@ -145,6 +264,18 @@ impl crate::Document {
         }
         let identifier = pdfcraft_export::urn_uuid(&Sha256::digest(self.bytes.as_slice()));
         EpubBook { pages, title, author, language: language.unwrap_or_else(|| "und".into()), identifier, toc, tags }
+    }
+}
+
+impl crate::Document {
+    /// What [`Self::epub_book`] reads, to make the book elsewhere.
+    pub fn epub_source(&self) -> EpubSource {
+        EpubSource { name: self.name.clone(), bytes: self.bytes.clone(), info: self.info.clone(), cos: self.editor.as_ref().map(|e| e.cos.clone()) }
+    }
+
+    /// What an EPUB of this document is made of (Export ▸ EPUB).
+    pub fn epub_book(&self) -> EpubBook {
+        self.epub_source().book()
     }
 
     /// The document as an EPUB file laid out as `layout`, dated `modified` (Unix time).
@@ -205,6 +336,10 @@ mod tests {
             let file = doc.export_epub(layout, session.now_secs()).unwrap();
             assert!(file.starts_with(b"PK\x03\x04") && file[30..].starts_with(b"mimetypeapplication/epub+zip"), "{layout:?}");
         }
+        // Pictures past the limit refuse the fixed layout, saying what to do instead.
+        let err = book.fixed_within(&mut Exporter::new(doc), session.now_secs(), 1, |_| {}).unwrap_err();
+        assert!(err.contains("page 1") && err.contains("reflowable"), "{err}");
+        assert!(book.fixed_within(&mut Exporter::new(doc), session.now_secs(), usize::MAX, |_| {}).is_ok());
     }
 }
 

@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::epub::{EpubBook, EpubLayout};
+use pdfcraft_engine::epub::{EpubLayout, EpubSource};
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
 use crate::marks_ui::PageRange;
@@ -156,7 +156,7 @@ struct ExportTask<'a> {
     dpi: f64,
     format: ImageFormat,
     min_side: u32,
-    epub: Option<(EpubBook, EpubLayout, i64)>,
+    epub: Option<(EpubSource, EpubLayout, i64)>,
     pages: Vec<usize>,
     stem: String,
     status: &'a ExportStatus,
@@ -203,8 +203,10 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
         // Handled above.
         ExportKind::AllImages => String::new(),
         ExportKind::Epub => {
-            let Some((book, layout, modified)) = epub else { return String::new() };
+            let Some((source, layout, modified)) = epub else { return String::new() };
             set(0, None);
+            // Read from the document here, on the worker, not while the window waits.
+            let book = source.book();
             let bytes = match layout {
                 EpubLayout::Reflowable => Ok(book.reflowable(modified)),
                 EpubLayout::Fixed => book.fixed(&mut ex, modified, |k| set(k, None)),
@@ -275,8 +277,8 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        // EPUB is the whole document; what it is made of is read once a place is chosen (below),
-        // its pages drawn on the worker.
+        // EPUB is the whole document; what it is made of is read, and its pages drawn, on the
+        // worker once a place is chosen (below).
         let epub_layout = self.export_draft.epub_layout;
         let pages = if kind == ExportKind::Epub { (0..src.pages).collect() } else { self.export_draft.range.pages(src.pages) };
         let dpi = self.export_draft.dpi;
@@ -288,7 +290,7 @@ impl PdfCraftApp {
             let start = move |app: &mut Self, dir: std::path::PathBuf, stem: String, inline: bool| {
                 let epub = match kind {
                     ExportKind::Epub => match app.session.get(id) {
-                        Some(doc) => Some((doc.epub_book(), epub_layout, app.session.now_secs())),
+                        Some(doc) => Some((doc.epub_source(), epub_layout, app.session.now_secs())),
                         None => return,
                     },
                     _ => None,
@@ -337,7 +339,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let epub = match kind {
-                ExportKind::Epub => self.session.get(id).map(|doc| (doc.epub_book(), epub_layout, self.session.now_secs())),
+                ExportKind::Epub => self.session.get(id).map(|doc| (doc.epub_source(), epub_layout, self.session.now_secs())),
                 _ => None,
             };
             let msg = run(

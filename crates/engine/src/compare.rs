@@ -244,81 +244,7 @@ impl crate::Document {
         image_work: &mut pdfcraft_cos::ImageBudget,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
-        let mut truncated = Vec::new();
-        // Each image object is encoded once and shared by every place that draws it.
-        let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
-        let mut image_bytes = image_budget;
-        let pages = self
-            .info
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(i, info)| {
-                // Export uses the visible page in points, y up. Raw PDF coordinates include
-                // CropBox offsets and precede /Rotate and /UserUnit.
-                let visible_rect = |r: [f64; 4]| {
-                    let a = info.user_to_view(r[0] as f32, r[1] as f32);
-                    let b = info.user_to_view(r[2] as f32, r[3] as f32);
-                    [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
-                };
-                let unit = display_unit(info);
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
-                let forms_unread = reading.truncated;
-                let blocks = reading
-                    .blocks
-                    .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
-                        let (bold, italic) = weight_and_slant(&b.base_font);
-                        // `text` is trimmed; the editor text keeps the source's own spaces.
-                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
-                        pdfcraft_export::Block {
-                            space_around,
-                            text: b.text,
-                            rect: visible_rect(b.rect),
-                            size: b.size * unit,
-                            bold,
-                            italic,
-                            color: b.color,
-                            rotation: b.rotation - f64::from(info.rotation),
-                        }
-                    })
-                    .collect();
-                let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
-                let mut over_budget = false;
-                let images = placed
-                    .iter()
-                    .filter_map(|im| {
-                        let object = im.object?;
-                        let prepared = encoded.entry(object).or_insert_with(|| {
-                            let refused = image_work.refused();
-                            let (ext, bytes) =
-                                pdfcraft_create::image_file_within(cos, object, &mut *image_work).map_err(|_| image_work.refused() > refused)?;
-                            image_bytes = image_bytes.checked_sub(bytes.len()).ok_or(true)?;
-                            Ok((if ext == "jpg" { "jpg" } else { "png" }, Arc::from(bytes)))
-                        });
-                        over_budget |= matches!(prepared, Err(true));
-                        let (ext, bytes) = prepared.clone().ok()?;
-                        Some(pdfcraft_export::Image {
-                            ext,
-                            bytes,
-                            rect: visible_rect(im.rect),
-                            size: [im.matrix[0].hypot(im.matrix[1]) * unit, im.matrix[2].hypot(im.matrix[3]) * unit],
-                            rotation: im.matrix[1].atan2(im.matrix[0]).to_degrees() - f64::from(info.rotation),
-                        })
-                    })
-                    .collect();
-                if forms_unread || over_budget {
-                    truncated.push(i);
-                }
-                // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
-                let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                // The ruled lines tell a drawn table from text that merely lines up (#5149).
-                let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
-            })
-            .collect();
-        (pages, truncated)
+        export_pages_of(&self.info, cos, images, image_budget, image_work)
     }
 
     /// The document as a Word, PowerPoint, HTML or RTF file.
@@ -345,4 +271,89 @@ impl crate::Document {
         };
         OfficeExport { bytes, truncated_pages }
     }
+}
+
+/// [`crate::Document::export_pages_within`] over what it reads, so a book can be made on another
+/// thread from a snapshot ([`crate::epub::EpubSource`]).
+pub(crate) fn export_pages_of(
+    info_of: &pdfcraft_render::DocInfo,
+    cos: &pdfcraft_cos::Document,
+    images: bool,
+    image_budget: usize,
+    image_work: &mut pdfcraft_cos::ImageBudget,
+) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+    let mut truncated = Vec::new();
+    // Each image object is encoded once and shared by every place that draws it.
+    let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
+    let mut image_bytes = image_budget;
+    let pages = info_of
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, info)| {
+            // Export uses the visible page in points, y up. Raw PDF coordinates include
+            // CropBox offsets and precede /Rotate and /UserUnit.
+            let visible_rect = |r: [f64; 4]| {
+                let a = info.user_to_view(r[0] as f32, r[1] as f32);
+                let b = info.user_to_view(r[2] as f32, r[3] as f32);
+                [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
+            };
+            let unit = display_unit(info);
+            let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
+            let forms_unread = reading.truncated;
+            let blocks = reading
+                .blocks
+                .into_iter()
+                .filter(|b| !b.text.trim().is_empty())
+                .map(|b| {
+                    let (bold, italic) = weight_and_slant(&b.base_font);
+                    // `text` is trimmed; the editor text keeps the source's own spaces.
+                    let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
+                    pdfcraft_export::Block {
+                        space_around,
+                        text: b.text,
+                        rect: visible_rect(b.rect),
+                        size: b.size * unit,
+                        bold,
+                        italic,
+                        color: b.color,
+                        rotation: b.rotation - f64::from(info.rotation),
+                    }
+                })
+                .collect();
+            let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
+            let mut over_budget = false;
+            let images = placed
+                .iter()
+                .filter_map(|im| {
+                    let object = im.object?;
+                    let prepared = encoded.entry(object).or_insert_with(|| {
+                        let refused = image_work.refused();
+                        let (ext, bytes) =
+                            pdfcraft_create::image_file_within(cos, object, &mut *image_work).map_err(|_| image_work.refused() > refused)?;
+                        image_bytes = image_bytes.checked_sub(bytes.len()).ok_or(true)?;
+                        Ok((if ext == "jpg" { "jpg" } else { "png" }, Arc::from(bytes)))
+                    });
+                    over_budget |= matches!(prepared, Err(true));
+                    let (ext, bytes) = prepared.clone().ok()?;
+                    Some(pdfcraft_export::Image {
+                        ext,
+                        bytes,
+                        rect: visible_rect(im.rect),
+                        size: [im.matrix[0].hypot(im.matrix[1]) * unit, im.matrix[2].hypot(im.matrix[3]) * unit],
+                        rotation: im.matrix[1].atan2(im.matrix[0]).to_degrees() - f64::from(info.rotation),
+                    })
+                })
+                .collect();
+            if forms_unread || over_budget {
+                truncated.push(i);
+            }
+            // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
+            let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
+            // The ruled lines tell a drawn table from text that merely lines up (#5149).
+            let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
+            pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
+        })
+        .collect();
+    (pages, truncated)
 }
