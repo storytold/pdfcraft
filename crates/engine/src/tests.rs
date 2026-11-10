@@ -7135,9 +7135,13 @@ fn comparing_two_versions_of_a_document() {
 #[test]
 fn marking_a_deletion_on_a_page_the_newer_file_lacks() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
-    let text = |n: usize| (1..=n).map(|i| format!("Row {i} of the schedule.")).collect::<Vec<_>>().join("
+    let text = |n: usize| {
+        (1..=n).map(|i| format!("Row {i} of the schedule.")).collect::<Vec<_>>().join(
+            "
 
-");
+",
+        )
+    };
     let v1 = s.create_from_text("t", &text(120)).unwrap();
     let v2 = s.create_from_text("t", &text(20)).unwrap();
     let old = s.open("v1.pdf", None, v1, None).unwrap();
