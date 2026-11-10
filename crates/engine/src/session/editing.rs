@@ -8,6 +8,34 @@ use super::{
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
+/// Add scan cover and ink to edits of invisible OCR text, returning no edit for an unchanged draft.
+fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_render::DocInfo, edit: Edit) -> Option<Edit> {
+    // Rewriting an OCR word (invisible text over a scan) also hides the scanned word: cover it
+    // in the paper's colour and draw the new text in the ink's.
+    Some(match edit {
+        Edit::EditTextBlock { page, block, text, mut style } => {
+            let plain = style == pdfcraft_edit::BlockStyle::default();
+            // Only invisible text is sampled; the blocks are usually cached from opening it.
+            if style.cover.is_none()
+                && let Some(info) = info.pages.get(page)
+                && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
+                && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
+            {
+                style.cover = Some(paper);
+                style.color = style.color.or(Some(ink));
+                // A text edit alone leaves the words it doesn't change as the scan shows them.
+                style.changed_words_only = plain;
+                // Nothing to redraw: leave undo history and the dirty flag alone.
+                if plain && b.same_words(&text) {
+                    return None;
+                }
+            }
+            Edit::EditTextBlock { page, block, text, style }
+        }
+        other => other,
+    })
+}
+
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
@@ -140,29 +168,8 @@ impl Session {
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
         }
-        // Rewriting an OCR word (invisible text over a scan) also hides the scanned word: cover it
-        // in the paper's colour and draw the new text in the ink's.
-        let edit = match edit {
-            Edit::EditTextBlock { page, block, text, mut style } => {
-                let plain = style == pdfcraft_edit::BlockStyle::default();
-                // Only invisible text is sampled; the blocks are usually cached from opening it.
-                if style.cover.is_none()
-                    && let Some(info) = doc.info.pages.get(page)
-                    && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
-                    && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
-                {
-                    style.cover = Some(paper);
-                    style.color = style.color.or(Some(ink));
-                    // A text edit alone leaves the words it doesn't change as the scan shows them.
-                    style.changed_words_only = plain;
-                    // Nothing to redraw: leave undo history and the dirty flag alone.
-                    if plain && b.same_words(&text) {
-                        return Ok(None);
-                    }
-                }
-                Edit::EditTextBlock { page, block, text, style }
-            }
-            other => other,
+        let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
+            return Ok(None);
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {

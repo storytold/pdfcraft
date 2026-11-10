@@ -42,6 +42,30 @@ fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
         });
     }
 }
+/// Consume the current prompt before replying so two UI events cannot resume it twice.
+fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<String>, cancel: bool) {
+    if let Some((prompt, reply)) = pending.prompt.take() {
+        let answer = if cancel {
+            match prompt {
+                Prompt::Alert(m) => Some(
+                    match m.buttons {
+                        pdfcraft_engine::js::MessageButtons::Ok => "1",
+                        pdfcraft_engine::js::MessageButtons::YesNo => "3",
+                        _ => "2",
+                    }
+                    .into(),
+                ),
+                _ => None,
+            }
+        } else {
+            answer
+        };
+        let _ = reply.send(answer);
+    }
+    pending.started = Instant::now();
+    ctx.request_repaint();
+}
+
 impl PdfCraftApp {
     /// Start one explicit button interaction with captured document/view state and leave egui responsive.
     pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>, identity: Option<u64>) {
@@ -132,9 +156,28 @@ impl PdfCraftApp {
     }
     /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
     pub(crate) fn show_script_dialog(&mut self, ctx: &egui::Context) {
+        self.show_script_dialog_with_menu(ctx, |_, _, _| None);
+    }
+
+    /// Let an alternative renderer own a menu until it returns a selection or cancellation.
+    /// Returning `None` uses the built-in modal; the renderer never receives the reply sender.
+    pub fn show_script_dialog_with_menu(
+        &mut self,
+        ctx: &egui::Context,
+        render_menu: impl FnOnce(&egui::Context, DocId, &[MenuItem]) -> Option<std::task::Poll<Option<String>>>,
+    ) {
         let Some(pending) = self.script_pending.as_mut() else { return };
         let Some((prompt, _)) = pending.prompt.as_ref() else { return };
         let Some(doc) = self.session.get(pending.run.id) else { return };
+        if let Prompt::Menu(items) = prompt
+            && let Some(reply) = render_menu(ctx, pending.run.id, items)
+        {
+            if let std::task::Poll::Ready(answer) = reply {
+                let cancel = answer.is_none();
+                reply_to_prompt(ctx, pending, answer, cancel);
+            }
+            return;
+        }
         // Keep the filename in a separate, single-line label. It is document data too.
         let document_name: String = doc
             .name
@@ -150,14 +193,17 @@ impl PdfCraftApp {
         ctx.move_to_top(prompt_modal.area.layer());
         let modal = prompt_modal.show(ctx, |ui| {
             ui.set_width(360.0);
-            ui.heading(tl!("Document JavaScripts"));
-            ui.add(egui::Label::new(format!("{}: {document_name}", tl!("Document"))).truncate());
+            ui.heading(tl!("This document's script is asking"));
+            ui.add(egui::Label::new(crate::i18n::fmt(tl!("Document: {name}"), &[("name", &document_name)])).truncate());
             ui.separator();
             match prompt {
                 Prompt::Menu(items) => {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| menu(ui, items, &mut answer));
                 }
                 Prompt::Text { title, question, password, label, .. } => {
+                    if *password {
+                        ui.label(tl!("This request comes from the document, not PdfCraft. Only enter a password if you trust this document."));
+                    }
                     if !title.is_empty() {
                         ui.label(title);
                     }
@@ -203,26 +249,7 @@ impl PdfCraftApp {
         });
         cancel |= answer.is_none() && modal.should_close();
         if answer.is_some() || cancel {
-            if let Some((prompt, reply)) = pending.prompt.take() {
-                let answer = if cancel {
-                    match prompt {
-                        Prompt::Alert(m) => Some(
-                            match m.buttons {
-                                pdfcraft_engine::js::MessageButtons::Ok => "1",
-                                pdfcraft_engine::js::MessageButtons::YesNo => "3",
-                                _ => "2",
-                            }
-                            .into(),
-                        ),
-                        _ => None,
-                    }
-                } else {
-                    answer
-                };
-                let _ = reply.send(answer);
-            }
-            pending.started = Instant::now();
-            ctx.request_repaint();
+            reply_to_prompt(ctx, pending, answer, cancel);
         }
     }
 }

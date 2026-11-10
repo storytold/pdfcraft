@@ -3550,8 +3550,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card"]
-notes = "Description, Initial View, Security, Fonts, Custom (organize.custom-properties) and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
+evidence = ["crates/ui-egui/tests/it/properties_session.rs::properties_session_does_not_overwrite_a_newer_document_edit", "crates/ui-egui/tests/it/properties_session.rs::properties_session_rejects_undo_back_to_the_original_value", "crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card"]
+notes = "Document Properties binds its draft to document identity, generation and permissions; newer edits, Undo/Redo and reload dismiss stale values before commit. Other dialogs are outside this guard. Description, Initial View, Security, Fonts, Custom (organize.custom-properties) and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
 
 [[feature]]
 id = "organize.edit-metadata"
@@ -3562,8 +3562,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_set_info"]
-evidence = ["crates/organize/src/tests.rs::document_info_edits_round_trip_with_unicode", "crates/organize/src/tests.rs::document_info_edits_update_the_xmp_packet", "crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step"]
-notes = "When the file has an XMP packet, the matching property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed or removed with the /Info entry; a packet that isn't UTF-8 is left as it was. Not yet: xmp:ModifyDate and xmp:MetadataDate on save, other languages of a title kept apart (the new value replaces them)."
+evidence = ["crates/ui-egui/tests/it/properties_session.rs::properties_session_does_not_overwrite_a_newer_document_edit", "crates/ui-egui/tests/it/properties_session.rs::properties_session_rejects_undo_back_to_the_original_value", "crates/organize/src/tests.rs::document_info_edits_round_trip_with_unicode", "crates/organize/src/tests.rs::document_info_edits_update_the_xmp_packet", "crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step"]
+notes = "Document Properties binds its draft to document identity, generation and permissions; newer edits, Undo/Redo and reload dismiss stale values before commit. Other dialogs are outside this guard. When the file has an XMP packet, the matching property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed or removed with the /Info entry; a packet that isn't UTF-8 is left as it was. Not yet: xmp:ModifyDate and xmp:MetadataDate on save, other languages of a title kept apart (the new value replaces them)."
 
 [[feature]]
 id = "organize.fonts-list"
@@ -5375,8 +5375,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["tools.js_console"]
 tools = ["js_run"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "\u2318J: run JavaScript against the document, with console output, results and errors."
+evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::calculate_now_updates_live_fields_in_one_undo_step"]
+notes = "\u2318J: run JavaScript against the document, with console output, results and errors. calculateNow() runs calculated fields synchronously in /CO order against writes already made by the script."
 
 [[feature]]
 id = "form.js-debugger"
@@ -8345,8 +8345,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::printable_link_appearance_survives_vector_print", "crates/print/src/tests/appearances.rs::annotation_placement_preserves_small_transform_coefficients", "crates/print/src/tests/appearances.rs::indirect_annotation_rectangles_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_rectangles_are_skipped_when_printing", "crates/print/src/tests/appearances.rs::indirect_annotation_states_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_states_do_not_select_an_appearance", "crates/print/src/tests/appearances.rs::chained_annotation_values_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_reference_chains_are_skipped_when_printing", "crates/print/src/tests/appearances.rs::vector_print_preserves_no_rotate_appearance_anchors", "crates/print/src/tests/appearances.rs::no_rotate_keeps_user_units_and_sheet_scaling"]
-notes = "Existing field and comment appearances retain direct or indirect rectangle coordinates and appearance-state names, including reference chains of up to 64 objects with cycle detection. State dictionaries require a usable AS name; missing/invalid/unresolved/cyclic/overly deep or unknown names select no appearance, while a single normal stream needs no AS. Print content modes and source objects are preserved. Malformed rectangles are skipped; missing appearances are not generated. Print and Hidden flags honoured; existing Link appearances print as document content, but missing Link appearances are not synthesized. Appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Placement retains small transform coefficients for large appearance bounding boxes and matrices. Existing NoRotate appearances retain orientation and the rectangle upper-left anchor through source page rotation, including Text annotations with implicit NoRotate when the flag is clear; CropBox, UserUnit, sheet scaling and later imposition rotation still apply. NoZoom does not cancel print scale. Missing or unusable appearance streams remain outside this path."
+evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::printable_link_appearance_survives_vector_print", "crates/print/src/tests/appearances.rs::annotation_placement_preserves_small_transform_coefficients", "crates/print/src/tests/appearances.rs::indirect_annotation_rectangles_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_rectangles_are_skipped_when_printing", "crates/print/src/tests/appearances.rs::indirect_annotation_states_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_states_do_not_select_an_appearance", "crates/print/src/tests/appearances.rs::chained_annotation_values_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_reference_chains_are_skipped_when_printing", "crates/print/src/tests/appearances.rs::vector_print_preserves_no_rotate_appearance_anchors", "crates/print/src/tests/appearances.rs::no_rotate_keeps_user_units_and_sheet_scaling", "crates/print/src/tests/optional_content.rs::vector_print_preserves_annotation_layer_membership"]
+notes = "Existing field and comment appearances retain direct or indirect rectangle coordinates and appearance-state names, including reference chains of up to 64 objects with cycle detection. State dictionaries require a usable AS name; missing/invalid/unresolved/cyclic/overly deep or unknown names select no appearance, while a single normal stream needs no AS. Print content modes and source objects are preserved. Malformed rectangles are skipped; missing appearances are not generated. Print and Hidden flags honoured; existing Link appearances print as document content, but missing Link appearances are not synthesized. Appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Placement retains small transform coefficients for large appearance bounding boxes and matrices. Existing NoRotate appearances retain orientation and the rectangle upper-left anchor through source page rotation, including Text annotations with implicit NoRotate when the flag is clear; CropBox, UserUnit, sheet scaling and later imposition rotation still apply. NoZoom does not cancel print scale. Vector output preserves per-annotation OCG/OCMD membership without changing shared appearances, including existing layer overrides; nested policy data remains reader-evaluated, and the separate raster annotation-visibility gap remains. Missing or unusable appearance streams remain outside this path."
 
 [[feature]]
 id = "print.print-with-comment-summary"
@@ -8404,9 +8404,20 @@ tier = "P1"
 milestone = "M10"
 status = "partial"
 commands = ["print.dialog"]
-tools = ["doc_print"]
-evidence = ["crates/ui-egui/tests/it/print.rs::a_custom_paper_prints_at_its_size_and_its_printer_keeps_it", "crates/ui-egui/src/workflows/print_paper.rs::the_paper_list_is_the_standard_sizes_then_the_custom_ones", "crates/ui-egui/src/workflows/print_paper.rs::settings_are_read_as_untrusted", "crates/ui-egui/src/workflows/print_ui/setups.rs::setups_round_trip_through_the_settings_file", "crates/ui-egui/tests/it/print_custom_paper_names.rs::a_custom_paper_cannot_take_a_standard_name", "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own"]
-notes = "In the Print dialog, as the rest of printing is (no separate Page Setup window): Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable. A printer printed to on a custom paper starts on it next time, with the rest of its setup (#2001), the paper kept by name. doc_print takes sizes such as 8.5x14in or 210x297mm. Missing: margins."
+tools = ["doc_print", "printer_papers"]
+evidence = [
+    "crates/ui-egui/tests/it/print.rs::printer_papers_and_properties_selection",
+    "crates/automation/tests/it/automation.rs::printer_papers_through_tools",
+    "crates/print/src/tests.rs::printer_papers_and_default_paper_api",
+    "crates/print/src/tests.rs::overlapping_paper_discovery_two_sided_and_queue_queries",
+    "crates/ui-egui/tests/it/print.rs::a_custom_paper_prints_at_its_size_and_its_printer_keeps_it",
+    "crates/ui-egui/src/workflows/print_paper.rs::the_paper_list_is_the_standard_sizes_then_the_custom_ones",
+    "crates/ui-egui/src/workflows/print_paper.rs::settings_are_read_as_untrusted",
+    "crates/ui-egui/src/workflows/print_ui/setups.rs::setups_round_trip_through_the_settings_file",
+    "crates/ui-egui/tests/it/print_custom_paper_names.rs::a_custom_paper_cannot_take_a_standard_name",
+    "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own",
+]
+notes = "In the Print dialog: Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable. A printer printed to on a custom paper starts on it next time (#2001). The Page Setup button opens the driver's page setup to choose paper size and orientation. printer_papers enumerates driver-reported papers and default paper headlessly. doc_print takes sizes such as 8.5x14in or 210x297mm or driver papers. Missing: margins."
 
 [[feature]]
 id = "print.print-ready-pdf"

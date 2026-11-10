@@ -16,6 +16,9 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 
+/// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
+pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
+
 /// Deepest nesting of `(`, `[` and `{`.
 const MAX_BRACKET_DEPTH: usize = 64;
 
@@ -207,7 +210,7 @@ pub(crate) fn run_in_context(
 ) -> Outcome {
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let (icons, mut objects) = ctx
+    let (icons, mut objects, cached_keys) = ctx
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
@@ -217,17 +220,26 @@ pub(crate) fn run_in_context(
             } else {
                 icons.clear();
             }
-            (icons, h.objects)
+            let same_fields = h.fields.len() == fields.len()
+                && h.fields.iter().zip(fields.iter()).all(|(previous, current)| {
+                    previous.object_id == current.object_id
+                        && previous.instance_id == current.instance_id
+                        && (current.object_id.is_some() || previous.name == current.name)
+                });
+            (icons, h.objects, same_fields.then_some(h.field_keys))
         })
         .unwrap_or_default();
-    let field_keys = fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect::<BTreeSet<_>>();
+    let field_keys =
+        cached_keys.unwrap_or_else(|| fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect());
     objects.retain(|key, _| field_keys.contains(key));
     ctx.insert_data(RefCell::new(Host {
+        event_name: event.name.clone(),
         fields,
         icons,
         objects,
         field_keys,
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
@@ -294,6 +306,7 @@ pub(crate) fn run_in_context(
             out.error = Some("script calculation work limit exceeded".into());
         }
         out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
+        out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);
         out.requests = std::mem::take(&mut h.requests);

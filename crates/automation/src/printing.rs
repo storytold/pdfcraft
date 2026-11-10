@@ -46,45 +46,78 @@ fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
-/// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
-/// index and size (or a size such as "8.5x14in", whose index is past the list); US Letter when
-/// none is given.
-fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
-    // A size of its own: "8.5x14in", "210x297mm", "10x15cm", "612x792pt". It has no place in
-    // `PAPERS` (index `PAPERS.len()`), so no `media` option is sent for it.
-    if let Some(size) = name.and_then(paper_size) {
-        return Ok((PAPERS.len(), size));
-    }
-    let mut papers = PAPERS.iter().enumerate();
-    let found = match name {
-        None => papers.next(),
-        Some(p) => papers.find(|(_, (n, _))| {
-            n.eq_ignore_ascii_case(p)
-                || n.replace("US ", "").eq_ignore_ascii_case(p)
-                || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
-        }),
+/// Parse explicit custom dimensions like "300x500", "300 x 500", "300x500 pt", "300pt x 500pt", "Custom.300x500".
+fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
+    let s = s.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim();
+    let (w_str, h_str) = s.split_once(['x', 'X', '*'])?;
+    let parse_dim = |d: &str| {
+        let d = d.trim().trim_end_matches("points").trim_end_matches("pt").trim();
+        d.parse::<f64>().ok()
     };
-    found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
-        bad(format!(
-            "unknown paper {:?}; choose one of {}, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
-            name.unwrap_or_default(),
+    let w = parse_dim(w_str)?;
+    let h = parse_dim(h_str)?;
+    if w.is_finite() && h.is_finite() && w >= 72.0 && h >= 72.0 && w <= 14400.0 && h <= 14400.0 { Some((w, h)) } else { None }
+}
+
+/// `doc_print`'s `paper`, by its name, short form, driver-detected paper name, or custom dimensions.
+/// Returns `((width, height), media_name)`.
+fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64), Option<String>)> {
+    if let Some(p) = name {
+        // 1. Match standard PAPERS presets.
+        for (index, (n, size)) in PAPERS.iter().enumerate() {
+            if n.eq_ignore_ascii_case(p)
+                || n.replace("US ", "").eq_ignore_ascii_case(p)
+                || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(p))
+            {
+                let media = print::cups_media(index).map(String::from);
+                return Ok((*size, media));
+            }
+        }
+        // 2. Match detected driver papers for the given printer.
+        if let Some(printer_name) = printer {
+            let driver_papers = spool::printer_papers(printer_name);
+            if let Some((name, size)) = driver_papers.iter().find(|(n, _)| n.eq_ignore_ascii_case(p)) {
+                return Ok((*size, Some(print::paper_media(Some(name), *size))));
+            }
+        }
+        // 3. Match custom dimensions ("<w>x<h>").
+        if let Some(size) = parse_custom_dimensions(p) {
+            return Ok((size, Some(print::paper_media(None, size))));
+        }
+        // 4. Explicit units request the same stock as point dimensions.
+        if let Some(size) = paper_size(p) {
+            return Ok((size, Some(print::paper_media(None, size))));
+        }
+        return Err(bad(format!(
+            "unknown paper {p:?}; choose one of {}, a paper from printer_papers, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
             PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
-        ))
-    })
+        )));
+    }
+
+    // When paper is omitted and a printer is given, use the printer's configured default paper if readable.
+    if let Some(printer_name) = printer
+        && let Some((name, size)) = spool::printer_default_paper(printer_name)
+    {
+        return Ok((size, Some(print::paper_media(Some(&name), size))));
+    }
+
+    let (name, size) = PAPERS[0];
+    let media = print::paper_media(Some(name), size);
+    Ok((size, Some(media)))
 }
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
-/// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
-/// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752), and tells
-/// CUPS which way the laid-out `sheets` run, as the Print dialog does (#2713): an orientation the
-/// caller chose in `options` stands. It asks the driver for grayscale only when the pages aren't
-/// grey pictures already ([`print::driver_needs_grayscale`]).
+/// (as `media` after the driver's `options`) rather than the queue's default paper, which a job
+/// naming none got (A4 under Letter sheets on the queue in #3752), and tells CUPS which way the
+/// laid-out `sheets` run, as the Print dialog does (#2713): an orientation the caller chose in
+/// `options` stands. It asks the driver for grayscale only when the pages aren't grey pictures
+/// already ([`print::driver_needs_grayscale`]).
 fn spool_job(
     a: &Args,
     printer: &str,
     title: String,
     duplex: Option<spool::Duplex>,
-    paper: usize,
+    media: Option<&str>,
     raster: Option<print::Raster>,
     sheets: &[print::Sheet],
 ) -> Result<spool::Job> {
@@ -110,7 +143,7 @@ fn spool_job(
         grey_pages: false,
         title,
         options: {
-            let mut options: Vec<(String, String)> = options.into_iter().chain(print::media_option(paper)).collect();
+            let mut options: Vec<(String, String)> = options.into_iter().chain(media.map(|m| ("media".to_string(), m.to_string()))).collect();
             print::add_cups_orientation(&mut options, sheets);
             options
         },
@@ -183,6 +216,21 @@ impl Automation {
             })
             .collect();
         Ok(json!({ "printer": printer, "count": list.len(), "options": list }))
+    }
+
+    /// `printer_papers`: the paper sizes (names and dimensions in points) and default paper
+    /// reported by the printer driver.
+    pub(crate) fn printer_papers(&self, a: &Args) -> Result<Value> {
+        let printer = a.str("printer")?;
+        let resolved = if printer == "default" {
+            spool::printers().into_iter().find(|p| p.default).map(|p| p.name).unwrap_or_else(|| printer.to_string())
+        } else {
+            printer.to_string()
+        };
+        let (papers, default_paper) = spool::printer_paper_info(&resolved);
+        let list: Vec<Value> = papers.into_iter().map(|(name, (width, height))| json!({ "name": name, "width": width, "height": height })).collect();
+        let default_val = default_paper.map(|(name, (width, height))| json!({ "name": name, "width": width, "height": height }));
+        Ok(json!({ "printer": printer, "count": list.len(), "papers": list, "default": default_val }))
     }
 
     /// `doc_print`: lay the document out with the Print dialog's options, then save the
@@ -276,7 +324,18 @@ impl Automation {
         };
         let content = a.opt_str("comments_forms")?.unwrap_or("document-and-markups");
         let content = print::names::parse_content(content).ok_or_else(|| bad(format!("unknown comments_forms {content:?}")))?;
-        let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
+        // Use the same queue for duplex detection, paper discovery and submission, even if the
+        // system default changes while the document is rendered.
+        let resolved_printer = printer.map(|p| {
+            if let Some(asked) = &asked {
+                asked.name.clone()
+            } else if p == "default" {
+                spool::printer_queues().into_iter().find(|pr| pr.default).map(|pr| pr.name).unwrap_or_else(|| p.to_string())
+            } else {
+                p.to_string()
+            }
+        });
+        let (paper, media) = resolve_paper(a.opt_str("paper")?, resolved_printer.as_deref())?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
         let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
@@ -311,8 +370,8 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let printer = asked.as_ref().map_or(printer, |p| p.name.as_str());
-                let mut job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
+                let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
+                let mut job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, media.as_deref(), settings.raster, &laid_out)?;
                 let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
@@ -397,7 +456,7 @@ mod tests {
     #[test]
     fn printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them() {
         let sheets = |sizes: &[(f64, f64)]| sizes.iter().map(|&size| print::Sheet { size, ..Default::default() }).collect::<Vec<_>>();
-        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, 0, None, s).unwrap().options;
+        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, Some("Letter"), None, s).unwrap().options;
         let media = ("media".to_string(), "Letter".to_string());
         let landscape = sheets(&[(792.0, 612.0), (792.0, 612.0)]);
         let turned = if cfg!(windows) { vec![media.clone()] } else { vec![media.clone(), ("orientation-requested".to_string(), "4".to_string())] };
@@ -413,8 +472,8 @@ mod tests {
     #[test]
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
-            let (index, _) = paper_named(paper_name).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index, None, &[]).unwrap()
+            let (_, media) = resolve_paper(paper_name, None).unwrap();
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, media.as_deref(), None, &[]).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -423,18 +482,36 @@ mod tests {
         assert_eq!((letter.printer.as_deref(), letter.title.as_str()), (Some("Office"), "a.pdf"));
         // Every paper, by its full name, goes out as its own media name.
         for (i, (name, size)) in PAPERS.iter().enumerate() {
-            assert_eq!(paper_named(Some(name)).ok(), Some((i, *size)), "{name}");
+            assert_eq!(resolve_paper(Some(name), None).ok(), Some((*size, Some(print::cups_media(i).unwrap().to_string()))), "{name}");
             assert_eq!(job(json!({}), Some(name)).options, print::media_option(i).into_iter().collect::<Vec<_>>(), "{name}");
         }
         // Short forms find the same paper.
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
-        assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        // A size of its own is laid out as asked and names no media.
-        assert_eq!(paper_named(Some("8.5x14in")).ok(), Some((PAPERS.len(), (612.0, 1008.0))));
-        assert!(job(json!({}), Some("8.5x14in")).options.is_empty());
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0, None, &[]).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0, None, &[]).is_err());
+        // Non-preset dimensions and driver papers carry their media selection.
+        assert_eq!(job(json!({}), Some("300x500")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("300 x 500 pt")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("300pt x 500pt")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("300 pt x 500 pt")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("Custom.300x500")).options, [media("Custom.300x500")]);
+        assert_eq!(job(json!({}), Some("Custom.300x500pt")).options, [media("Custom.300x500")]);
+
+        assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
+        // Every accepted dimension syntax requests the same stock from the queue.
+        for (input, size) in [
+            ("8.5x14in", (612.0, 1008.0)),
+            ("210x297mm", (210.0 * 72.0 / 25.4, 297.0 * 72.0 / 25.4)),
+            ("10x15cm", (10.0 * 72.0 / 2.54, 15.0 * 72.0 / 2.54)),
+            ("300x500pt", (300.0, 500.0)),
+        ] {
+            let expected = print::paper_media(None, size);
+            let (resolved_size, resolved_media) = resolve_paper(Some(input), None).unwrap();
+            assert!((resolved_size.0 - size.0).abs() < 0.01 && (resolved_size.1 - size.1).abs() < 0.01, "{input}");
+            assert_eq!(resolved_media.as_deref(), Some(expected.as_str()), "{input}");
+            assert_eq!(job(json!({}), Some(input)).options, [media(&expected)], "{input}");
+        }
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter"), None, &[]).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some("Letter"), None, &[]).is_err());
     }
 
     /// #5806: grayscale with Print as image sends grey pictures, so the driver isn't asked for
@@ -443,8 +520,9 @@ mod tests {
     fn grey_pictures_dont_ask_the_driver_for_grayscale() {
         let grey = print::Raster { dpi: 300.0, grayscale: true };
         let colour = print::Raster { dpi: 300.0, grayscale: false };
-        let job =
-            |args: Value, raster: Option<print::Raster>| spool_job(&Args(&args), "Office", String::new(), None, 0, raster, &[]).unwrap().grayscale;
+        let job = |args: Value, raster: Option<print::Raster>| {
+            spool_job(&Args(&args), "Office", String::new(), None, Some("Letter"), raster, &[]).unwrap().grayscale
+        };
         assert!(job(json!({ "grayscale": true }), None), "vector pages: the driver makes them grey");
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
         assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");

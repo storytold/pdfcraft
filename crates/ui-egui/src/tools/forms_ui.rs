@@ -1138,6 +1138,40 @@ fn arrow_step(ctx: &egui::Context, keys: PageKeys) -> Option<bool> {
     }
 }
 
+/// Apply keyboard navigation for a focused list without consuming page navigation keys elsewhere.
+fn list_overlay_keys(
+    ctx: &egui::Context,
+    keys: PageKeys,
+    form: &[FormField],
+    f: &FormField,
+    clicked_outside: bool,
+) -> (Option<Edit>, bool, Option<bool>) {
+    let mut edit = None;
+    let mut close = false;
+    let mut next = None;
+    // Taken, so the arrows move the selection without also scrolling the page.
+    let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
+    let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+    let shift = ctx.input(|i| i.modifiers.shift);
+    if esc {
+        close = true;
+    } else if tab {
+        next = Some(!shift);
+    } else if (up || down) && !f.options.is_empty() {
+        let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+        let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
+        if next_idx != current_idx && next_idx < f.options.len() {
+            // By position, so the arrows step through options that share an export value,
+            // in the focused twin's own order.
+            edit = Some(list_pick_edit(form, f, vec![next_idx]));
+        }
+    }
+    if clicked_outside {
+        close = true;
+    }
+    (edit, close, next)
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
@@ -1306,26 +1340,7 @@ pub(crate) fn overlay(
             }
         }
         FormFieldKind::List if !read_only => {
-            // Taken, so the arrows move the selection without also scrolling the page.
-            let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
-            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
-            let shift = ctx.input(|i| i.modifiers.shift);
-            if esc {
-                close = true;
-            } else if tab {
-                next = Some(!shift);
-            } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
-                if next_idx != current_idx && next_idx < f.options.len() {
-                    // By position, so the arrows step through options that share an export value,
-                    // in the focused twin's own order.
-                    edit = Some(list_pick_edit(form, f, vec![next_idx]));
-                }
-            }
-            if clicked_outside() {
-                close = true;
-            }
+            (edit, close, next) = list_overlay_keys(ctx, keys, form, f, clicked_outside());
         }
         kind if read_only || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
             // Nothing is drawn over the field, but a widget there holds egui's keyboard focus, so

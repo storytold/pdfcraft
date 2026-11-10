@@ -6,11 +6,13 @@ use super::{
 };
 
 pub(crate) struct Host {
+    pub(crate) event_name: String,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
     pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,
-    pub(crate) field_keys: BTreeSet<(String, Option<u64>, u64)>,
+    pub(crate) field_keys: std::collections::HashSet<(String, Option<u64>, u64)>,
     pub(crate) changed: BTreeSet<usize>,
+    pub(crate) formatted: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,
@@ -202,7 +204,7 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     })
 }
 
-pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
+pub(crate) fn colour(c: Option<&[String]>, ctx: &mut Context) -> JsValue {
     match c {
         None => JsArray::from_iter([s("T")], ctx).into(),
         Some(parts) => {

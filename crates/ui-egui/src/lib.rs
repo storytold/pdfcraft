@@ -42,6 +42,7 @@ pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock
 mod commands;
 pub mod control;
 mod menus;
+mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
@@ -60,8 +61,8 @@ mod hotbar;
 mod panels;
 pub mod panes;
 pub use print_ui::{
-    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
-    system_two_sided,
+    DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
+    TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -437,6 +438,10 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// Where a printer's configured default paper comes from: DEVMODE / driver settings unless a test stands in.
+    pub default_paper_source: Option<DefaultPaperSource>,
+    /// Where a printer's supported paper sizes come from: driver capabilities unless a test stands in.
+    pub printer_papers_source: Option<PrinterPapersSource>,
     /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
     pub spooler: Option<Spooler>,
     /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
@@ -583,6 +588,8 @@ pub struct PdfCraftApp {
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
     pub custom_draft: Option<(DocId, CustomDraft)>,
+    /// Original values and document revision for the editable Properties tabs.
+    pub(crate) props_session: Option<properties_session::Draft>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).

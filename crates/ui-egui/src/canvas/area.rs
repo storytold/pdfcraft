@@ -201,6 +201,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
                 .map(|name| pdfcraft_engine::FieldChange {
                     name,
                     value: None,
+                    formatted: false,
                     read_only: None,
                     required: None,
                     display: Some(if hide { 1 } else { 0 }),

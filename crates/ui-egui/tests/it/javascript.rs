@@ -299,7 +299,12 @@ fn native_script_prompts_show_an_app_owned_caption() {
         let id = h.state().active_ids().unwrap().1;
         h.state_mut().run_button_script(id, "hello", script);
         wait_for(&mut h, body);
-        assert!(h.query_by_label("Document JavaScripts").is_some(), "{script}");
+        assert!(h.query_by_label("This document's script is asking").is_some(), "{script}");
+        assert_eq!(
+            h.query_by_label("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").is_some(),
+            script.contains("bPassword:true"),
+            "{script}"
+        );
         assert!(h.query_by_label("Document: form.pdf").is_some(), "{script}");
         if let Some(title) = title {
             assert!(h.query_by_label(title).is_some(), "{script}");
@@ -307,6 +312,27 @@ fn native_script_prompts_show_an_app_owned_caption() {
         h.get_by_label("Cancel").click();
         h.run_steps(2);
     }
+}
+
+#[test]
+fn native_script_prompt_uses_the_german_catalog_when_available() {
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+
+    let Some(german) = Lang::from_code("de") else { return };
+    let source = "This document's script is asking";
+    let heading = "Das Skript dieses Dokuments fragt";
+    // Older catalog pins can still build the application with the English fallback.
+    if tr(german, source) == source && std::env::var_os("PDFCRAFT_REQUIRE_SCRIPT_PROMPT_TRANSLATIONS").is_none() {
+        return;
+    }
+    assert_eq!(tr(german, source), heading);
+    let mut h = harness();
+    h.state_mut().set_option("language", "de").unwrap();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
+    wait_for(&mut h, heading);
+    assert!(h.query_by_label("Dokument: form.pdf").is_some());
+    assert!(h.query_by_label("Diese Aufforderung stammt aus dem Dokument und wird von dessen Skript angezeigt. Gib ein Passwort nur ein, wenn du diesem Dokument vertraust.").is_some());
 }
 
 #[test]

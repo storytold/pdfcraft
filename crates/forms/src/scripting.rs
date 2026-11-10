@@ -40,6 +40,8 @@ pub struct FieldChange {
     /// Optional exact object target for malformed forms with duplicate field names.
     pub object: Option<ObjRef>,
     pub value: Option<Vec<String>>,
+    /// This value came from a Calculate script; redraw it through the field's Format script.
+    pub formatted: bool,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
@@ -119,7 +121,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all, doc);
-        apply_changes(doc, &r.changes, &f.name, Some(f.obj))?;
+        apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -177,7 +179,13 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
 /// field, whose value the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, except_object: Option<ObjRef>) -> Result<(), FormError> {
+pub(crate) fn apply_changes(
+    doc: &mut Document,
+    changes: &[FieldChange],
+    except: &str,
+    except_object: Option<ObjRef>,
+    scripts: &mut dyn Scripts,
+) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
@@ -220,6 +228,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
                 crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                if c.formatted {
+                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                }
             }
         }
         let mut ff = f.flags;
@@ -331,18 +342,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             if f.kind != FieldKind::PushButton {
                 return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
             }
-            // An unindexed Field object writes widget properties to every child, not just
-            // the first widget used by the getter. Keep each widget's other MK/AP entries.
-            for (index, widget) in f.widgets.iter().enumerate() {
-                if widget.caption.as_deref() != Some(caption.as_str()) {
-                    crate::author::set_props_object(
-                        doc,
-                        &f.name,
-                        f.obj,
-                        &crate::FieldProps { caption: Some((index, caption.clone())), ..Default::default() },
-                    )?;
-                }
-            }
+            crate::author::set_props_object(doc, &f.name, f.obj, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
         }
     }
     Ok(())
@@ -371,7 +371,7 @@ fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
 
 /// Apply button/console field and appearance changes, recalculating after value writes.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "", None)?;
+    apply_changes(doc, changes, "", None, scripts)?;
     // Acrobat's automatic calculation is driven by value changes. A keypad caption,
     // position or visibility update must not execute every calculated field again.
     if changes.iter().any(|change| change.value.is_some()) {

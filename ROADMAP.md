@@ -48,6 +48,7 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
 >
 >
@@ -260,6 +261,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
+- **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
+  Shared appearances and existing layer state remain independent; estimates unchanged.
+
 - **2026-10-29 (M10, #5029):** Vector printing also honours the implicit NoRotate behavior of existing Text appearances when the flag is clear.
   Print eligibility, source dictionaries and shared appearance streams remain unchanged.
 
@@ -317,6 +321,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
 - **2026-10-31 (M3/M4, #5330):** The document quick toolbar offers Crop pages directly through the existing page.crop command, with the command’s assembly-permission check and an active-tool highlight. The existing crop, undo and headless page_set_box paths are unchanged. No toolbar customization or new shortcut. Estimates unchanged.
 
+- **2026-10-30 (M6):** Button scripts can read and change the normal push-button caption with `buttonGetCaption` and `buttonSetCaption`. The caption is drawn and retained through undo/redo and save/reopen; unsupported face indices are refused. Estimates unchanged.
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
@@ -640,6 +645,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
+- **2026-11-09 (M4, #4594):** Reconcile upstream changes in the license ledger, roadmap and UI test registry; retain the vendored draft guard, local interaction replay and upstream split-view tests. Behavior and estimates unchanged; maintainer review remains pending.
+
 - **2026-10-28 (M10, #1595):** Export to Markdown: `doc_export_office` with a `.md` or `.markdown` path writes CommonMark with GitHub pipe tables (headings, paragraphs with bold and italic, tables with their first row as the header, a rule between pages); text that Markdown would read as markup is escaped. Images, lists and links are not in the export's layout model and are left out. No menu item yet. Estimates unchanged.
 - **2026-10-12 (M10, `ocr.ocr-web`):** OCR in the browser, partly. The web zip carries the text recognition models in `models/` beside `index.html`; the first time Recognize Text is needed the web build downloads them (about 12 MB, with a spinner, an error and a retry). Pages are rendered on the page and read in Web Workers (up to two at once, so the page keeps responding), built with WebAssembly SIMD: 8.5 s a page instead of 20.5 s in wasmtime, still about 17× native. Where workers can't start, the page reads the pages itself. No automated browser test yet. Estimates unchanged.
 - **2026-10-12 (M10, `ocr.ocr-web`):** Web OCR shipped: reading scanned pages in Web Workers was checked by hand in a browser (4-page synthetic scan). Still no automated browser test, and a page reads about 17× slower than native.
@@ -870,8 +878,14 @@ Newest first: the date, what moved, and the new overall estimate.
 - M13: common command, batch, inspection and bounded preview tools share the existing confined automation path. MCP tools carry complete hints and reject unknown top-level keys as invalid parameters.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
+- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. The original proposal depended on a shared release exception. The revised proposal vendors the Rust source and keeps the Python replay local. Maintainer review is pending.
+
+- **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
+
 ## Revision history
 
+**2026-10-27 · minor:** M10 #5005: vector printing preserves annotation optional-content membership.
+Source resources and shared appearances remain unchanged.
 **2026-10-31 · patch:** M6/PR #4166 integrated main f137a289 (0.16.1), preserving both roadmap histories. Automatic Keystroke, Validate, Calculate and Format scripts still suppress Print alongside ShowPanel/SaveAs; explicit button and console Print requests, field effects and document-error provenance are retained. The three engine regressions and headless automation regression remain in their current modules. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
 
 **2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.

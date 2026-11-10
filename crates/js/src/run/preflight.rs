@@ -255,7 +255,7 @@ impl<'a> Guard<'a> {
         let comment = c == b'/' && matches!(self.bytes.get(self.i), Some(b'/' | b'*'));
         if matches!(c, b'\n' | b'\r') {
             self.line_break = true;
-        } else if !c.is_ascii_whitespace() && !comment && !(c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
+        } else if !(c.is_ascii_whitespace() || comment || c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
             self.line_break = false;
         }
         match c {

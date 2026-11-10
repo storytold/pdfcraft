@@ -20,15 +20,21 @@ pub struct Job {
 /// Live field instances are independent of restorable PDF object-number allocation.
 #[derive(Default)]
 struct FieldInstances {
-    current: std::collections::BTreeMap<u64, u64>,
+    current: std::collections::HashMap<u64, u64>,
+    last_ids: Vec<u64>,
     next: u64,
 }
 impl FieldInstances {
     /// Retire absent instances immediately, including history changes between two script jobs.
     fn sync(&mut self, ids: impl IntoIterator<Item = u64>) {
-        let ids: std::collections::BTreeSet<_> = ids.into_iter().collect();
-        self.current.retain(|id, _| ids.contains(id));
-        for id in ids {
+        let ids: Vec<_> = ids.into_iter().collect();
+        if ids == self.last_ids {
+            return;
+        }
+        let present: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+        self.last_ids = ids;
+        self.current.retain(|id, _| present.contains(id));
+        for id in present {
             if !self.current.contains_key(&id) {
                 self.next = self.next.saturating_add(1);
                 self.current.insert(id, self.next);
@@ -251,9 +257,17 @@ impl Drop for WorkerPermit {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+type HostTask = Box<dyn FnOnce(&mut crate::Context) -> Outcome + Send>;
+
+#[cfg(not(target_arch = "wasm32"))]
+enum WorkerRequest {
+    Script { job: Box<Job>, english_retry: bool },
+    Host(HostTask),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct WorkerJob {
-    job: Job,
-    english_retry: bool,
+    request: WorkerRequest,
     reset_realm: bool,
     reply: mpsc::Sender<InteractiveEvent>,
 }
@@ -277,11 +291,11 @@ pub struct ScriptSession {
 impl ScriptSession {
     /// Start a bounded-stack native worker lazily and reject a second active job, including during prompts.
     pub fn start(&mut self, job: Job) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
-        self.start_job(job, false)
+        self.start_job(WorkerRequest::Script { job: Box::new(job), english_retry: false })
     }
 
     /// Reserve the document worker and enqueue a job. An English-date retry uses a fresh context and leaves the retained realm alone.
-    fn start_job(&mut self, mut job: Job, english_retry: bool) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
+    fn start_job(&mut self, mut request: WorkerRequest) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.is_executing() {
             return Err("another script is active in this document".into());
@@ -302,27 +316,34 @@ impl ScriptSession {
                     let _lifetime = lifetime;
                     let _permit = permit;
                     let mut realm = Realm::new();
-                    while let Ok(WorkerJob { job, english_retry, reset_realm, reply }) = rx.recv() {
+                    while let Ok(WorkerJob { request, reset_realm, reply }) = rx.recv() {
                         if reset_realm {
                             realm = Realm::new();
                         }
-                        crate::interaction::set_host((!english_retry).then(|| reply.clone()));
-                        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            if english_retry {
-                                crate::with_english_printd(true, || {
-                                    crate::run::run_shared_here(
-                                        &job.script,
-                                        &job.event,
-                                        &job.doc,
-                                        job.fields,
-                                        &job.doc_scripts,
-                                        &job.calculations,
-                                        Limits::default(),
-                                    )
-                                })
-                            } else {
-                                realm.run(job)
-                            }
+                        let interactive = matches!(&request, WorkerRequest::Script { english_retry: false, .. });
+                        crate::interaction::set_host(interactive.then(|| reply.clone()));
+                        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+                            WorkerRequest::Script { job, english_retry: true } => crate::with_english_printd(true, || {
+                                crate::run::run_shared_here(
+                                    &job.script,
+                                    &job.event,
+                                    &job.doc,
+                                    job.fields,
+                                    &job.doc_scripts,
+                                    &job.calculations,
+                                    Limits::default(),
+                                )
+                            }),
+                            WorkerRequest::Script { job, english_retry: false } => realm.run(*job),
+                            WorkerRequest::Host(task) => match realm.context.as_mut() {
+                                Some(context) => task(context),
+                                None => Outcome {
+                                    execution_refused: true,
+                                    realm_untouched: true,
+                                    error: Some("the document script realm has not been initialized".into()),
+                                    ..Default::default()
+                                },
+                            },
                         }));
                         crate::interaction::set_host(None);
                         let out = out.unwrap_or_else(|_| {
@@ -344,9 +365,9 @@ impl ScriptSession {
         if self.busy.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
             return Err("another script is active in this document".into());
         }
-        if !english_retry {
-            self.instances.stamp(&mut job);
-            self.stamp_icons(&mut job);
+        if let WorkerRequest::Script { job, english_retry: false } = &mut request {
+            self.instances.stamp(job);
+            self.stamp_icons(job);
         }
         let (tx, rx) = mpsc::channel();
         let Some(sender) = self.sender.as_ref() else {
@@ -354,7 +375,7 @@ impl ScriptSession {
             return Err("script worker unavailable".into());
         };
         self.executing.store(true, SeqCst);
-        sender.try_send(WorkerJob { job, english_retry, reset_realm: self.reset_realm, reply: tx }).map_err(|_| {
+        sender.try_send(WorkerJob { request, reset_realm: self.reset_realm, reply: tx }).map_err(|_| {
             self.executing.store(false, SeqCst);
             self.busy.store(false, SeqCst);
             "script worker disconnected"
@@ -404,16 +425,22 @@ impl ScriptSession {
     }
     /// Run a callback within the remaining time of a larger operation.
     pub fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
-        self.run_timed(job, answers, limit, false)
+        self.run_timed(WorkerRequest::Script { job: Box::new(job), english_retry: false }, answers, limit)
     }
 
     /// Retry formatting in a fresh context on the document worker, within the caller's remaining time.
     pub fn run_english_retry(&mut self, job: Job, limit: std::time::Duration) -> Outcome {
-        self.run_timed(job, &[], limit, true)
+        self.run_timed(WorkerRequest::Script { job: Box::new(job), english_retry: true }, &[], limit)
+    }
+
+    /// Dispatch trusted host work to the document's already initialized realm.
+    /// The callback stays on the document worker and must return cooperatively on its own.
+    pub fn run_host_task(&mut self, limit: std::time::Duration, task: impl FnOnce(&mut crate::Context) -> Outcome + Send + 'static) -> Outcome {
+        self.run_timed(WorkerRequest::Host(Box::new(task)), &[], limit)
     }
 
     /// Wait within one deadline for startup, prompt replies and completion. Detach a worker that exceeds the deadline.
-    fn run_timed(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration, english_retry: bool) -> Outcome {
+    fn run_timed(&mut self, request: WorkerRequest, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
         if limit.is_zero() {
             return Outcome {
                 execution_refused: true,
@@ -423,7 +450,7 @@ impl ScriptSession {
             };
         }
         let started = std::time::Instant::now();
-        let rx = match self.start_job(job, english_retry) {
+        let rx = match self.start_job(request) {
             Ok(rx) => rx,
             Err(e) => return Outcome { execution_refused: true, realm_untouched: true, error: Some(e), ..Default::default() },
         };
@@ -538,6 +565,27 @@ mod tests {
     }
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn host_work_reads_globals_in_the_correct_document() {
+        let read_counter = |context: &mut crate::Context| {
+            let result = context
+                .global_object()
+                .get(boa_engine::js_string!("counter"), context)
+                .ok()
+                .and_then(|value| value.as_number())
+                .map(|number| number.to_string());
+            Outcome { result, ..Default::default() }
+        };
+        let mut first = ScriptSession::default();
+        let mut second = ScriptSession::default();
+        assert!(first.run(job("var counter = 17;"), &[]).error.is_none());
+        assert!(second.run(job("var counter = 31;"), &[]).error.is_none());
+        let timeout = std::time::Duration::from_secs(5);
+        assert_eq!(first.run_host_task(timeout, read_counter).result.as_deref(), Some("17"));
+        assert_eq!(second.run_host_task(timeout, read_counter).result.as_deref(), Some("31"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     /// A waiting prompt refuses concurrent document runs immediately instead of blocking the caller behind it.
     fn a_waiting_prompt_refuses_reentrant_host_runs_without_blocking_the_ui() {
         let mut session = ScriptSession::default();
@@ -546,6 +594,8 @@ mod tests {
         let started = std::time::Instant::now();
         let refused = session.run(job("buffer;"), &[]);
         assert!(refused.error.as_deref().unwrap().contains("another script is active"));
+        let refused = session.run_host_task(std::time::Duration::from_secs(1), |_| panic!("host task entered a busy realm"));
+        assert!(refused.execution_refused && refused.realm_untouched);
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         reply.send(None).unwrap();
         assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), InteractiveEvent::Complete(_)));

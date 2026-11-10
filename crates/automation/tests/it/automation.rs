@@ -6293,6 +6293,25 @@ fn printing_through_tools() {
 }
 
 #[test]
+fn printer_papers_through_tools() {
+    let dir = workdir("printer-papers");
+    let mut a = auto(&dir);
+    let none = ok(&mut a, "printer_papers", json!({ "printer": "No_Such_Queue_PdfCraft" }));
+    assert_eq!((none["count"].as_u64(), none["papers"].as_array().map(Vec::len)), (Some(0), Some(0)));
+    assert!(none["default"].is_null());
+    assert!(matches!(a.call("printer_papers", &json!({})), Err(ToolError::InvalidArgs(_))));
+
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "paper": "300x500", "path": "custom-paper.pdf" }));
+    assert_eq!(r["sheets"].as_u64(), Some(1));
+    let opened = ok(&mut a, "doc_open", json!({ "path": "custom-paper.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": opened }));
+    let page = &info["pages"][0];
+    assert!((page["width"].as_f64().unwrap() - 300.0).abs() <= 1.0);
+    assert!((page["height"].as_f64().unwrap() - 500.0).abs() <= 1.0);
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();

@@ -510,6 +510,14 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
     Ok(())
 }
 
+/// Forget cached calculation order and field metadata after changing the form structure.
+fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
+    if let Some(js) = cx.js.as_mut() {
+        js.invalidate_calculations();
+        js.invalidate_field_snapshots();
+    }
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -538,6 +546,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
             cx.renamed_fields = outcome.renamed_fields;
+            invalidate_form_script_snapshot(cx);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
@@ -724,7 +733,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             set(doc, typed.as_ref().unwrap_or(value))?;
         }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
-            Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
+            Some(js) => {
+                js.invalidate_field_snapshots();
+                pdfcraft_forms::apply_script_changes(doc, changes, js)?;
+            }
             None => pdfcraft_forms::apply_script_changes(doc, changes, &mut pdfcraft_forms::NoScripts)?,
         },
         Edit::XfaEvent { som, activity } => {
@@ -801,17 +813,26 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
+            invalidate_form_script_snapshot(cx);
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
+            invalidate_form_script_snapshot(cx);
         }
         Edit::DuplicateField { name, pages } => {
             if pdfcraft_forms::duplicate_field(doc, name, pages)? == 0 {
                 return Err(EditError::Form(pdfcraft_forms::FormError::Invalid(format!("{name} is already on those pages"))));
             }
+            invalidate_form_script_snapshot(cx);
         }
-        Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
-        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
+        Edit::DeleteField { name } => {
+            pdfcraft_forms::delete_field(doc, name)?;
+            invalidate_form_script_snapshot(cx);
+        }
+        Edit::DeleteWidget { name, widget } => {
+            pdfcraft_forms::delete_widget(doc, name, *widget)?;
+            invalidate_form_script_snapshot(cx);
+        }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
@@ -1089,36 +1110,40 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             doc.remove_encryption();
         }
-        Edit::Batch { edits, .. } => {
-            // A form-script event runs on its own: in a batch, its scripts and those the batch's
-            // value edits run afterwards (change, exit) would interleave, an exit running twice.
-            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
-                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+        Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
+    }
+    Ok(())
+}
+
+/// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.
+fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx) -> Result<(), EditError> {
+    // A form-script event runs on its own: in a batch, its scripts and those the batch's
+    // value edits run afterwards (change, exit) would interleave, an exit running twice.
+    if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+        return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+    }
+    // Only contiguous resets immediately preceding script value writeback can
+    // defer callbacks. Other edits may read calculated values during validation.
+    let mut script_writeback = vec![false; edits.len()];
+    let mut writes_values = false;
+    for (index, edit) in edits.iter().enumerate().rev() {
+        match edit {
+            Edit::ResetForm { .. } => script_writeback[index] = writes_values,
+            Edit::ApplyScriptChanges { changes } => writes_values = changes.iter().any(|change| change.value.is_some()),
+            _ => writes_values = false,
+        }
+    }
+    let deferred = cx.defer_reset_callbacks;
+    for (index, e) in edits.iter().enumerate() {
+        cx.defer_reset_callbacks = script_writeback[index];
+        let result = run_edit(doc, e, cx);
+        cx.defer_reset_callbacks = deferred;
+        result?;
+        if let Some(js) = cx.js.as_mut() {
+            if js.refused.is_some() {
+                break;
             }
-            // Only contiguous resets immediately preceding script value writeback can
-            // defer callbacks. Other edits may read calculated values during validation.
-            let mut script_writeback = vec![false; edits.len()];
-            let mut writes_values = false;
-            for (index, edit) in edits.iter().enumerate().rev() {
-                match edit {
-                    Edit::ResetForm { .. } => script_writeback[index] = writes_values,
-                    Edit::ApplyScriptChanges { changes } => writes_values = changes.iter().any(|change| change.value.is_some()),
-                    _ => writes_values = false,
-                }
-            }
-            let deferred = cx.defer_reset_callbacks;
-            for (index, e) in edits.iter().enumerate() {
-                cx.defer_reset_callbacks = script_writeback[index];
-                let result = run_edit(doc, e, cx);
-                cx.defer_reset_callbacks = deferred;
-                result?;
-                if let Some(js) = cx.js.as_mut() {
-                    if js.refused.is_some() {
-                        break;
-                    }
-                    js.refresh_after_batch_edit(doc, e);
-                }
-            }
+            js.refresh_after_batch_edit(doc, e);
         }
     }
     Ok(())

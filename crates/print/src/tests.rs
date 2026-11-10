@@ -3,6 +3,12 @@ use std::sync::Arc;
 use super::*;
 use crate::spool::{Duplex, Job, Printer, lp_args, parse_lpstat, parse_windows_printers};
 
+/// What `lp_args` adds on macOS for a job that names no paper tray: Auto Select, as the system
+/// Print dialog asks (#3752, storytold/craft-libs#232). Nothing elsewhere.
+fn macos_auto_tray() -> &'static str {
+    if cfg!(target_os = "macos") { " -o AP_D_InputSlot=" } else { "" }
+}
+
 /// `n` pages of 200×300 (page 3 is landscape 300×200 when n ≥ 3); page i shows "(Page i+1)".
 /// Page 1 carries a printable square comment, a non-printing note, and a stamp.
 fn fixture(n: usize) -> Document {
@@ -423,7 +429,10 @@ fn spooler_arguments_and_printer_list() {
     };
     assert_eq!(
         lp_args(&job).join(" "),
-        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
+        format!(
+            "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false{}",
+            macos_auto_tray()
+        )
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
@@ -766,7 +775,7 @@ fn landscape_sheets_ask_cups_to_turn_the_page() {
     assert_eq!(cups_orientation(&[]), None);
     // `lp` is given it, among the job's other options.
     let job = Job { options: ask.into_iter().collect(), ..Job::default() };
-    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+    assert!(lp_args(&job).join(" ").ends_with(&format!("-o fit-to-page=false -o orientation-requested=4{}", macos_auto_tray())));
 }
 
 /// Both submission paths add the orientation through `add_cups_orientation`: after the job's
@@ -795,6 +804,13 @@ fn a_job_that_names_its_orientation_keeps_it() {
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod cups_options {
     use crate::spool;
+
+    /// The paper tray a CUPS option list shows as its default: on macOS, a queue left on the driver's
+    /// own default tray (`driver_default`) shows Auto Select, which is what a job naming no tray asks
+    /// for (#3752, storytold/craft-libs#232); elsewhere, and for any other tray, `expected` as it is.
+    fn macos_tray<'a>(expected: &'a str, driver_default: &str) -> &'a str {
+        if cfg!(target_os = "macos") && expected == driver_default { spool::AUTO_SELECT } else { expected }
+    }
 
     const RECORD: &str = "PDFCRAFT_LPOPTIONS_TEST_RECORD";
     const ANSWER: &str = "PDFCRAFT_LPOPTIONS_TEST_ANSWER";
@@ -832,7 +848,8 @@ mod cups_options {
         let options = spool::printer_options_via_within("Office", &dir, command(&dir, "HANG"), std::time::Duration::from_millis(500), "en");
         assert!(started.elapsed() < std::time::Duration::from_secs(20), "given up at the deadline, not when the command does");
         assert_eq!(options.len(), 1, "the PPD is still read");
-        assert_eq!(options[0].default, "Auto", "the PPD default stands when the queue does not answer");
+        // On macOS the driver's default tray is shown as Auto Select, what the job then sends (#3752).
+        assert_eq!(options[0].default, macos_tray("Auto", "Auto"), "the PPD default stands when the queue does not answer");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -886,8 +903,13 @@ mod cups_options {
             let options =
                 spool::printer_options_via_within(destination, &dir, command(&dir, &format!("InputSlot/Paper tray: *{current}")), LIMIT, "en");
             assert_eq!(options.len(), 1, "{destination}: the queue's PPD must be read");
-            assert_eq!(options[0].default, expected, "{destination}: only valid instance choices override the PPD default");
-            assert_eq!(options[0].choices, [("Auto".into(), "Automatic".into()), ("Tray2".into(), "Tray 2".into())]);
+            assert_eq!(options[0].default, macos_tray(expected, "Auto"), "{destination}: only valid instance choices override the PPD default");
+            // On macOS, a queue left on the driver's default tray also offers Auto Select first (#3752).
+            let mut choices: Vec<(String, String)> = vec![("Auto".into(), "Automatic".into()), ("Tray2".into(), "Tray 2".into())];
+            if macos_tray(expected, "Auto") != expected {
+                choices.insert(0, (spool::AUTO_SELECT.into(), "Auto Select".into()));
+            }
+            assert_eq!(options[0].choices, choices);
             assert_eq!(std::fs::read_to_string(dir.join("args")).unwrap(), format!("-p\n{destination}\n-l"));
         }
         let job = spool::Job { printer: Some("Office/duplex".into()), ..Default::default() };
@@ -1157,6 +1179,28 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("F4 (210 x 330 mm)", "om_folio_210x330mm"),
         ]
     );
+}
+
+#[test]
+fn paper_media_and_custom_dimensions() {
+    assert_eq!(custom_media((300.0, 500.0)), "Custom.300x500");
+    assert_eq!(custom_media((300.5, 500.25)), "Custom.300.5x500.25");
+
+    // Standard presets match by size regardless of name:
+    assert_eq!(paper_media(None, (612.0, 792.0)), "Letter");
+    assert_eq!(paper_media(Some("Driver Letter"), (612.0, 792.0)), "Letter");
+    assert_eq!(paper_media(Some("Shipping Label"), (288.0, 432.0)), "w288h432");
+
+    // Clean driver keyword that does not match PAPERS presets:
+    assert_eq!(paper_media(Some("Roll80mm"), (226.77, 800.0)), "Roll80mm");
+    assert_eq!(paper_media(Some("Photo5x7"), (360.0, 504.0)), "Photo5x7");
+
+    // Driver paper with spaces or raw dimensions falls back to Custom:
+    assert_eq!(paper_media(Some("Custom 5x7"), (360.0, 504.0)), "Custom.360x504");
+    assert_eq!(paper_media(Some("300x500"), (300.0, 500.0)), "Custom.300x500");
+    assert_eq!(paper_media(None, (300.0, 500.0)), "Custom.300x500");
+
+    assert_eq!(paper_media_option(Some("300x500"), (300.0, 500.0)), ("media".to_string(), "Custom.300x500".to_string()));
 }
 
 /// #4777: Folio (8.5 × 13 in) and F4 (210 × 330 mm) presets are offered, fed by their
@@ -1430,6 +1474,7 @@ fn driver_options_take_the_ppds_own_names_in_the_ui_language() {
 
 mod appearances;
 mod font_names;
+mod optional_content;
 
 #[test]
 fn repeated_content_references_share_one_decode_budget() {
@@ -1679,6 +1724,97 @@ fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
     assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
     SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2630 and #6100: paper discovery must respect the same delay-load guard as submission.
+/// The nonexistent queue makes a missing guard observable without requiring printer hardware.
+#[cfg(windows)]
+#[test]
+fn paper_detection_without_print_dlls_never_reaches_the_driver() {
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paper-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for missing in PRINT_DLLS {
+        SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+        PRINTER_BACKEND_CALLS.with(|c| c.set(0));
+        let name = "PdfCraft test: no such printer";
+        let papers = crate::spool::printer_papers(name);
+        let info = crate::spool::printer_paper_info(name);
+        let default = crate::spool::printer_default_paper(name);
+        let calls = PRINTER_BACKEND_CALLS.with(|c| c.get());
+        // A broken guard must not open a real dialog while this regression fails.
+        let properties = (calls == 0).then(|| crate::spool::show_printer_properties(name, None));
+        SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+        assert!(papers.is_empty());
+        assert_eq!(info, (Vec::new(), None));
+        assert_eq!(default, None);
+        assert_eq!(calls, 0, "paper queries must not reach the backend without {missing}");
+        assert!(matches!(properties, Some(Err(crate::PrintError::Spool(m))) if m.contains(missing)));
+        std::fs::write(dir.join(missing), b"").unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn printer_papers_and_default_paper_api() {
+    // Nonexistent printer returns empty
+    assert!(crate::spool::printer_papers("Nonexistent Printer 12345").is_empty());
+    assert_eq!(crate::spool::printer_default_paper("Nonexistent Printer 12345"), None);
+
+    #[cfg(windows)]
+    {
+        // On Windows with installed printers, test detection if any installed
+        for p in crate::spool::printers() {
+            let papers = crate::spool::printer_papers(&p.name);
+            if !papers.is_empty() {
+                // Every paper has a valid positive size and a non-empty name
+                for (name, (w, h)) in &papers {
+                    assert!(!name.is_empty());
+                    assert!(*w > 0.0 && *h > 0.0);
+                }
+            }
+        }
+    }
+}
+
+/// Overlapping driver discovery, queue queries, and paper detection run concurrently across
+/// worker threads without deadlocking or racing the PrintTicket provider.
+#[test]
+fn overlapping_paper_discovery_two_sided_and_queue_queries() {
+    let queues = crate::spool::printer_queues();
+    let name = queues.first().map(|p| p.name.clone()).unwrap_or_else(|| "Microsoft Print to PDF".to_string());
+
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let printer = name.clone();
+            std::thread::spawn(move || {
+                for _ in 0..5 {
+                    match i % 5 {
+                        0 => {
+                            let _ = crate::spool::printer_papers(&printer);
+                        }
+                        1 => {
+                            let _ = crate::spool::printer_default_paper(&printer);
+                        }
+                        2 => {
+                            let _ = crate::spool::two_sided(&printer);
+                        }
+                        3 => {
+                            let _ = crate::spool::printers();
+                        }
+                        _ => {
+                            let _ = crate::spool::printer_paper_info(&printer);
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in threads {
+        handle.join().unwrap();
+    }
 }
 
 #[test]

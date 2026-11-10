@@ -56,8 +56,8 @@ pub struct FieldState {
     pub options: Vec<(String, String)>,
     pub char_limit: Option<usize>,
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
-    pub text_color: Option<Vec<String>>,
-    pub fill_color: Option<Vec<String>>,
+    pub text_color: Option<std::sync::Arc<[String]>>,
+    pub fill_color: Option<std::sync::Arc<[String]>>,
     /// Normal push-button caption, when this is a button.
     pub caption: Option<String>,
     /// A setter ran, even if its text equals widget 0: other widgets may differ.
@@ -65,7 +65,7 @@ pub struct FieldState {
     pub rect: Option<[f64; 4]>,
     pub page_rotation: i64,
     pub page_crop: [f64; 4],
-    pub stroke_color: Option<Vec<String>>,
+    pub stroke_color: Option<std::sync::Arc<[String]>>,
     pub text_size: f64,
     pub line_width: f64,
     pub border_style: String,
@@ -369,6 +369,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
+    /// Fields updated by Calculate scripts; their Format script must redraw the appearance.
+    pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
     pub console: Vec<String>,

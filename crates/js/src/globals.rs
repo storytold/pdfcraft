@@ -217,6 +217,9 @@ fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let page = if page_value.is_undefined() {
         0
     } else {
+        if !page_value.is_number() {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
         let page = page_value.to_number(ctx)?;
         if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
             return Err(error("getPageBox page must be a non-negative in-range integer"));
@@ -252,7 +255,6 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 /// script. A small depth cap stops calculate scripts from recursing forever.
 fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     const MAX_CALCULATE_DEPTH: usize = 8;
-    const MAX_CALCULATION_EVALUATIONS: usize = 4096;
     let calculations = {
         let shared = host(ctx)?;
         let mut h = shared.borrow_mut();
@@ -282,7 +284,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             {
                 let shared = host(ctx)?;
                 let mut h = shared.borrow_mut();
-                if h.calculation_limit_exceeded || h.calculation_evaluations >= MAX_CALCULATION_EVALUATIONS {
+                if h.calculation_limit_exceeded || h.calculation_evaluations >= super::run::MAX_CALCULATE_STEPS {
                     h.calculation_limit_exceeded = true;
                     return Err(error("script calculation work limit exceeded"));
                 }
@@ -296,15 +298,24 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             event.target_id = field.object_id;
             let (object, value_store) = event_object(ctx, &event)?;
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            let (fields_before, changed_before, formatted_before) = {
+                let shared = host(ctx)?;
+                let h = shared.borrow();
+                (Arc::clone(&h.fields), h.changed.clone(), h.formatted.clone())
+            };
             if let Err(err) = ctx.eval(Source::from_bytes(&script)) {
                 let shared = host(ctx)?;
                 let mut h = shared.borrow_mut();
                 if err.as_engine().is_some() || h.calculation_limit_exceeded || h.reset_limit_exceeded {
                     return Err(err);
                 }
+                h.fields = fields_before;
+                h.changed = changed_before;
+                h.formatted = formatted_before;
                 h.print(format!("Calculate {}: {err}", field.name));
                 continue;
             }
+            drop(fields_before);
             if host(ctx)?.borrow().calculation_limit_exceeded {
                 return Err(error("script calculation work limit exceeded"));
             }
@@ -323,6 +334,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
                 let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
                 super::host::set_value(target, vec![value]);
                 h.changed.insert(index);
+                h.formatted.insert(index);
             }
         }
         Ok(JsValue::undefined())
@@ -353,13 +365,15 @@ fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     if exhausted {
         return Err(error("calculation field lookup exceeds its work limit"));
     }
-    let values = names
+    let mut values = names
         .iter()
         .flat_map(|name| fields.iter().filter(move |f| f.name == *name || f.name.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'))))
         .flat_map(|field| field.value.iter())
-        .map(|v| super::host::as_number(v).unwrap_or(0.0));
+        .map(|v| make_number(v).unwrap_or(0.0))
+        .peekable();
     let result = match op.as_str() {
         "SUM" => values.sum(),
+        "PRD" if values.peek().is_none() => 0.0,
         "PRD" => values.product(),
         "AVG" => {
             let (count, total) = values.fold((0usize, 0.0), |(n, sum), v| (n.saturating_add(1), sum + v));
@@ -369,7 +383,32 @@ fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
         "MAX" => values.reduce(f64::max).unwrap_or(0.0),
         _ => 0.0,
     };
-    Ok(s(&if result.is_finite() { result.to_string() } else { "0".into() }))
+    Ok(s(&if result.is_finite() { js_number(result) } else { "0".into() }))
+}
+
+/// `AFMakeNumber`'s reading of typed text, as `pdfcraft_forms::af::make_number` has it: currency
+/// symbols, spaces, `'` and `%` ignored, `(7)` negative, and a comma the decimal separator when
+/// it comes last (`1.234,56`) or is not followed by exactly three digits.
+fn make_number(s: &str) -> Option<f64> {
+    let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && !matches!(c, '$' | '€' | '£' | '¥' | '\'' | '%')).collect();
+    if t.is_empty() {
+        return None;
+    }
+    let neg = t.starts_with('(') && t.ends_with(')');
+    let t = t.trim_start_matches('(').trim_end_matches(')');
+    let normalized = match (t.rfind(','), t.rfind('.')) {
+        (Some(c), Some(d)) if c > d => t.replace('.', "").replace(',', "."),
+        (Some(c), None) if t.len() - c - 1 != 3 => t.replace(',', "."),
+        _ => t.replace(',', ""),
+    };
+    let v: f64 = normalized.parse().ok()?;
+    v.is_finite().then_some(if neg { -v } else { v })
+}
+
+/// A number as JavaScript prints it (integers without a fraction), as the native calculation
+/// writes it.
+fn js_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {

@@ -1,4 +1,4 @@
-use super::host::{FieldKey, arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
+use super::host::{FieldKey, arg, colour, error, function, host, read, s, set_value, strings, text, text_line, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -100,20 +100,20 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         let idx: Vec<JsValue> = f.options.iter().enumerate().filter(|(_, o)| f.value.contains(&o.0)).map(|(i, _)| JsValue::from(i as f64)).collect();
         if idx.len() == 1 { idx[0].clone() } else { JsArray::from_iter(idx, c).into() }
     });
-    let text_color_get = getter!(ctx, n, |f, c| colour(&f.text_color, c));
+    let text_color_get = getter!(ctx, n, |f, c| colour(f.text_color.as_deref(), c));
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
-            write(c, name, |f| f.text_color = Some(v))?;
+            write(c, name, |f| f.text_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-    let fill_color_get = getter!(ctx, n, |f, c| colour(&f.fill_color, c));
+    let fill_color_get = getter!(ctx, n, |f, c| colour(f.fill_color.as_deref(), c));
     let fill_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
-            write(c, name, |f| f.fill_color = Some(v))?;
+            write(c, name, |f| f.fill_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -170,12 +170,12 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-    let stroke_color_get = getter!(ctx, n, |f, c| colour(&f.stroke_color, c));
+    let stroke_color_get = getter!(ctx, n, |f, c| colour(f.stroke_color.as_deref(), c));
     let stroke_color_set = {
         /// Read the bounded stroke-colour array for validation at the form writeback boundary.
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let v = Some(strings(&arg(args, 0), c)?);
-            write(c, name, |f| f.stroke_color = v)?;
+            let colour = strings(&arg(args, 0), c)?;
+            write(c, name, |f| f.stroke_color = Some(colour.into()))?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -224,10 +224,14 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         if f.kind != FieldType::Button {
             return Err(error("buttonSetCaption is only available on push buttons"));
         }
-        let caption = text(&arg(args, 0), c)?;
+        let caption_arg = args.first().ok_or_else(|| error("buttonSetCaption requires a caption argument"))?;
+        let caption = text_line(caption_arg, c)?;
         let face = if args.get(1).is_none() { 0.0 } else { arg(args, 1).to_number(c)? };
         if !face.is_finite() || face != 0.0 {
             return Err(error("only the normal button face (0) is supported"));
+        }
+        if host(c)?.borrow().event_name == "Format" {
+            return Err(error("buttonSetCaption is not available in a Format event"));
         }
         write(c, name, |f| {
             f.caption = Some(caption);
