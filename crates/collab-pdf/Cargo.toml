@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-collab-annot = { workspace = true }
+pdfcraft-collab-outline = { workspace = true }
 pdfcraft-collab-proto = { workspace = true }
 pdfcraft-collab-server = { workspace = true }
 pdfcraft-engine = { workspace = true }

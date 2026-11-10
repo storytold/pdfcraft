@@ -8,7 +8,10 @@
 //!
 //! Annotation addresses are `/NM` (ADR-0002). The client both proposes a name
 //! for what it creates ([`new_annotation_name`]) and resolves names coming from
-//! other clients against its own document.
+//! other clients against its own document. An outline item is addressed by the
+//! object reference the file gives it and a named destination by its name, so a
+//! page operation that renumbers pages moves neither: a path is only what this
+//! replica uses to find the item in its own list.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -16,8 +19,9 @@ use pdfcraft_collab_annot::{
     AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MoveUpdate, PartsUpdate, PopupState,
     PopupUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
 };
-use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
-use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
+use pdfcraft_collab_outline::{dest_from_value, dest_to_value, tree_from_value, tree_to_value};
+use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, OutlineKey, PageRef, Target};
+use pdfcraft_engine::{BookmarkDest, DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -328,6 +332,61 @@ pub fn combine_pages_payload(part: &[u8], count: usize) -> Value {
     json!({"action": "page.combine", "count": count, "bytes": encode_base64(part)})
 }
 
+/// An outline item added under the parent the operation's target names (`null`
+/// = the top level), at child `index` (past the end appends). The destination is
+/// a page and a point, or a named destination of the same document; the server
+/// resolves the parent, creates the item and answers with the key it got.
+pub fn outline_add_payload(title: &str, dest: &BookmarkDest, index: Option<usize>) -> Value {
+    let mut payload = json!({"action": "outline.item.add", "title": title, "dest": dest_to_value(dest)});
+    if let Some(index) = index {
+        payload["index"] = json!(index);
+    }
+    payload
+}
+
+/// An existing item's title and/or destination, as one step (`outline.item.update`).
+pub fn outline_update_payload(title: Option<&str>, dest: Option<&BookmarkDest>) -> Value {
+    let mut payload = json!({"action": "outline.item.update"});
+    if let Some(title) = title {
+        payload["title"] = json!(title);
+    }
+    if let Some(dest) = dest {
+        payload["dest"] = dest_to_value(dest);
+    }
+    payload
+}
+
+/// An item (and everything under it) removed, with the copy the server keeps for
+/// the undo. The target is the item's key.
+pub fn outline_delete_payload() -> Value {
+    json!({"action": "outline.item.delete"})
+}
+
+/// A deleted subtree put back at `index` of the parent the target names. The
+/// copy travels in the operation, so replaying the journal needs no second
+/// channel; the items come back with new object references.
+pub fn outline_restore_payload(subtree: &Value, index: usize) -> Value {
+    json!({"action": "outline.item.restore", "subtree": subtree, "index": index})
+}
+
+/// An item (with everything under it) moved to child `index` of `parent`
+/// (`None` = the top level). The target is the item's key.
+pub fn outline_move_payload(parent: Option<OutlineKey>, index: usize) -> Value {
+    json!({"action": "outline.item.move", "parent": parent, "index": index})
+}
+
+/// A named destination set to a page and a point (`dest.add` or `dest.update`:
+/// the server refuses an add of a name that exists and an update of one that
+/// does not, so a client asks for what it means).
+pub fn named_dest_payload(action: &str, page: usize, left: Option<f64>, top: Option<f64>) -> Value {
+    json!({"action": action, "dest": {"kind": "page", "page": page, "left": left, "top": top}})
+}
+
+/// A named destination removed (`dest.delete`). The target is its name.
+pub fn named_dest_delete_payload() -> Value {
+    json!({"action": "dest.delete"})
+}
+
 /// The page count a split or a combine names, refusing zero: an operation that
 /// moves no page is a client mistake, not an empty part.
 fn page_count(op: &Op) -> Result<usize, ProjectionError> {
@@ -591,8 +650,69 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
                 field_conflicts: FieldConflicts::Rename,
             })
         }
+        // An outline item's title and destination, as the server normalised them:
+        // the parent and the path are the server's, so every replica inserts at
+        // the same place even when the item was appended after a clamp.
+        ("outline.item.add", ConflictClass::Structural) => {
+            let parent = path_in(op, "parent")?;
+            let title = text(op, "title")?.to_owned();
+            Ok(Edit::AddBookmarkWith { parent, index: index_in(op)?, title, dest: dest_in(op)? })
+        }
+        ("outline.item.update", ConflictClass::Structural) => {
+            let path = path_in(op, "path")?;
+            let title = op.payload.get("title").and_then(Value::as_str).map(str::to_owned);
+            let dest = op.payload.get("dest").map(|_| dest_in(op)).transpose()?;
+            Ok(Edit::UpdateBookmark { path, title, dest })
+        }
+        ("outline.item.delete", ConflictClass::Structural) => Ok(Edit::DeleteBookmark { path: path_in(op, "path")? }),
+        // A deleted subtree comes back whole from the copy the accepted operation
+        // carries; the parent and the position are the server's.
+        ("outline.item.restore", ConflictClass::Structural) => {
+            let parent = path_in(op, "parent")?;
+            let subtree = op.payload.get("subtree").ok_or(ProjectionError::Missing("subtree"))?;
+            let bookmarks = tree_from_value(subtree).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+            Ok(Edit::ImportBookmarks { parent, index: index_in(op)?, bookmarks, replace: false })
+        }
+        ("outline.item.move", ConflictClass::Structural) => {
+            Ok(Edit::MoveBookmark { from: path_in(op, "from")?, to_parent: path_in(op, "to_parent")?, index: index_in(op)? })
+        }
+        ("dest.add" | "dest.update", ConflictClass::Structural) => {
+            let name = named_dest_name(op)?;
+            let dest = dest_in(op)?;
+            if !matches!(dest, BookmarkDest::Page { .. } | BookmarkDest::View { .. }) {
+                return Err(ProjectionError::Invalid("a named destination must name a page".into()));
+            }
+            Ok(Edit::SetNamedDestination { name, dest })
+        }
+        ("dest.delete", ConflictClass::Structural) => Ok(Edit::DeleteNamedDestination { name: named_dest_name(op)? }),
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
+}
+
+/// A child-index path the accepted operation carries (`parent`, `path`, `from`,
+/// `to_parent`).
+fn path_in(op: &Op, field: &'static str) -> Result<Vec<usize>, ProjectionError> {
+    let list = op.payload.get(field).and_then(Value::as_array).ok_or(ProjectionError::Missing(field))?;
+    list.iter().map(|value| value.as_u64().and_then(|index| usize::try_from(index).ok()).ok_or(ProjectionError::Missing(field))).collect()
+}
+
+/// The child index an insert or a move goes to.
+fn index_in(op: &Op) -> Result<usize, ProjectionError> {
+    op.payload.get("index").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok()).ok_or(ProjectionError::Missing("index"))
+}
+
+/// A named destination operation's target: its name.
+fn named_dest_name(op: &Op) -> Result<String, ProjectionError> {
+    match &op.target {
+        Target::NamedDest { name } => Ok(name.clone()),
+        _ => Err(ProjectionError::Missing("named destination target")),
+    }
+}
+
+/// The outline destination an accepted operation carries.
+fn dest_in(op: &Op) -> Result<BookmarkDest, ProjectionError> {
+    let value = op.payload.get("dest").ok_or(ProjectionError::Missing("dest"))?;
+    dest_from_value(value).map_err(|error| ProjectionError::Invalid(error.to_string()))
 }
 
 /// Apply an accepted operation to the local document without touching the
@@ -1025,8 +1145,175 @@ pub fn ops_for_edit(
             Target::Page(PageRef { index: *at as u32, epoch }),
             blank_page_payload(*width, *height),
         )]),
+        // The outline and its named destinations: structural steps, addressed by
+        // the item's object reference (found here from the path this replica's
+        // list shows) and by a destination's name. The server resolves and
+        // normalises both before it writes.
+        Edit::AddBookmark { parent, index, title, page, left, top } => Ok(vec![outline_add_op(
+            document,
+            doc,
+            client_id,
+            base_version,
+            epoch,
+            counter,
+            parent,
+            *index,
+            title,
+            &BookmarkDest::Page { page: *page, left: *left, top: *top },
+        )?]),
+        Edit::AddBookmarkWith { parent, index, title, dest } => {
+            Ok(vec![outline_add_op(document, doc, client_id, base_version, epoch, counter, parent, *index, title, dest)?])
+        }
+        Edit::RenameBookmark { path, title } => {
+            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, Some(title.as_str()), None)?])
+        }
+        Edit::SetBookmarkPage { path, page } => Ok(vec![outline_update_op(
+            document,
+            doc,
+            client_id,
+            base_version,
+            epoch,
+            counter,
+            path,
+            None,
+            Some(&BookmarkDest::Page { page: *page, left: None, top: None }),
+        )?]),
+        Edit::UpdateBookmark { path, title, dest } => {
+            Ok(vec![outline_update_op(document, doc, client_id, base_version, epoch, counter, path, title.as_deref(), dest.as_ref())?])
+        }
+        Edit::DeleteBookmark { path } => {
+            let key = outline_key_at(document, path)?;
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::OutlineItem { key: Some(key) },
+                outline_delete_payload(),
+            )])
+        }
+        Edit::MoveBookmark { from, to_parent, index } => {
+            let key = outline_key_at(document, from)?;
+            let parent = if to_parent.is_empty() { None } else { Some(outline_key_at(document, to_parent)?) };
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::OutlineItem { key: Some(key) },
+                outline_move_payload(parent, *index),
+            )])
+        }
+        // A subtree written back whole, as the undo of a delete does. A `replace`
+        // of the whole outline is not shared: it would overwrite everyone's list.
+        Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
+            if *replace {
+                return Err(ProjectionError::Unsupported("replacing the whole outline".into()));
+            }
+            let key = if parent.is_empty() { None } else { Some(outline_key_at(document, parent)?) };
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::OutlineItem { key },
+                outline_restore_payload(&tree_to_value(bookmarks), *index),
+            )])
+        }
+        Edit::SetNamedDestination { name, dest } => {
+            // Add or update: the room refuses an add of a name that exists and an
+            // update of one that does not, so the intent says which it is.
+            let exists = document.named_destinations().iter().any(|destination| destination.name == *name);
+            let action = if exists { "dest.update" } else { "dest.add" };
+            let mut payload = outline_dest_payload(action, dest);
+            payload["epoch"] = json!(epoch);
+            Ok(vec![structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::NamedDest { name: name.clone() }, payload)])
+        }
+        Edit::DeleteNamedDestination { name } => Ok(vec![structural_op(
+            doc,
+            next_id(client_id, counter)?,
+            base_version,
+            epoch,
+            Target::NamedDest { name: name.clone() },
+            named_dest_delete_payload(),
+        )]),
         other => Err(ProjectionError::Unsupported(other.label().to_string())),
     }
+}
+
+/// The object reference of the outline item at `path`, in this replica's own
+/// list. A path the list does not have cannot be addressed: the operation is not
+/// built at all, rather than sent and refused.
+fn outline_key_at(document: &Document, path: &[usize]) -> Result<OutlineKey, ProjectionError> {
+    document
+        .bookmarks()
+        .into_iter()
+        .find(|row| row.path == path)
+        .and_then(|row| row.object)
+        .map(|(num, generation)| OutlineKey { num, generation })
+        .ok_or_else(|| ProjectionError::Invalid(format!("there is no bookmark at {path:?}")))
+}
+
+/// One `outline.item.add` for an edit that adds a bookmark. The parent is the
+/// key of the item at `parent` (`[]` = the top level): a position would break as
+/// soon as somebody else adds a bookmark above it.
+#[allow(clippy::too_many_arguments)]
+fn outline_add_op(
+    document: &Document,
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+    parent: &[usize],
+    index: usize,
+    title: &str,
+    dest: &BookmarkDest,
+) -> Result<Op, ProjectionError> {
+    let key = if parent.is_empty() { None } else { Some(outline_key_at(document, parent)?) };
+    Ok(structural_op(
+        doc,
+        next_id(client_id, counter)?,
+        base_version,
+        epoch,
+        Target::OutlineItem { key },
+        outline_add_payload(title, dest, Some(index)),
+    ))
+}
+
+/// One `outline.item.update` for an edit that changes a bookmark's title and/or
+/// destination.
+#[allow(clippy::too_many_arguments)]
+fn outline_update_op(
+    document: &Document,
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+    path: &[usize],
+    title: Option<&str>,
+    dest: Option<&BookmarkDest>,
+) -> Result<Op, ProjectionError> {
+    let key = outline_key_at(document, path)?;
+    Ok(structural_op(
+        doc,
+        next_id(client_id, counter)?,
+        base_version,
+        epoch,
+        Target::OutlineItem { key: Some(key) },
+        outline_update_payload(title, dest),
+    ))
+}
+
+/// The `dest` a named destination operation carries: a page and a point for the
+/// wire's own form, the view type too when the value came from a file.
+fn outline_dest_payload(action: &str, dest: &BookmarkDest) -> Value {
+    let mut payload = json!({"action": action, "dest": dest_to_value(dest)});
+    if let BookmarkDest::Page { page, .. } | BookmarkDest::View { page, .. } = dest {
+        payload["page"] = json!(page);
+    }
+    payload
 }
 
 /// The operation that takes `count` pages starting at `from` out of the
@@ -1444,6 +1731,17 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         // exactly alike: this replica no longer has what was removed.
         "page.delete" | "page.replace" | "page.split" => return Ok(None),
         "page.combine" => combine_inverse(op, op_id, doc, base, epoch)?,
+        // An outline item and a named destination are undone from the accepted
+        // operation: an add names the key it created, an update and a delete
+        // carry what they replaced, a move the place it came from.
+        "outline.item.add"
+        | "outline.item.update"
+        | "outline.item.delete"
+        | "outline.item.restore"
+        | "outline.item.move"
+        | "dest.add"
+        | "dest.update"
+        | "dest.delete" => return Ok(None),
         "page.insert" | "page.duplicate" | "page.insert_blank" => {
             // The undo of an insert is a delete of the page it put there; the
             // page is addressed where the operation placed it.
@@ -1617,6 +1915,9 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let target = Target::Page(PageRef { index: at as u32, epoch: applied.epoch });
         return Some(structural_op(doc, op_id, applied.version, applied.epoch, target, split_pages_payload(count)));
     }
+    if let Some(inverse) = outline_inverse(applied, &op_id, &doc) {
+        return Some(inverse);
+    }
     let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     match action {
         "annotation.delete" => {
@@ -1641,6 +1942,78 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         }
         _ => None,
     }
+}
+
+/// The undo of an outline or a named destination operation, from the accepted
+/// operation alone: the server's normalisation is what every replica applies, so
+/// the inverse is built from it too. `None` when the action is not one of these.
+fn outline_inverse(applied: &Applied, op_id: &OpId, doc: &DocKey) -> Option<Op> {
+    let op = &applied.op;
+    let action = op.payload.get("action").and_then(Value::as_str)?;
+    let target = op.target.clone();
+    let base = applied.version;
+    let epoch = applied.epoch;
+    let inverse = match action {
+        "outline.item.add" => {
+            let key = serde_json::from_value::<OutlineKey>(op.payload.get("key")?.clone()).ok()?;
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::OutlineItem { key: Some(key) }, outline_delete_payload())
+        }
+        "outline.item.restore" => {
+            let key = serde_json::from_value::<OutlineKey>(op.payload.get("key")?.clone()).ok()?;
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::OutlineItem { key: Some(key) }, outline_delete_payload())
+        }
+        "outline.item.update" => {
+            let before = op.payload.get("before")?;
+            // Only what the update named is put back; a title the file had as
+            // empty is left alone rather than sent as an invalid rename.
+            let title = before.get("title").and_then(Value::as_str).filter(|title| !title.trim().is_empty());
+            let dest = before.get("dest").and_then(|value| dest_from_value(value).ok());
+            if title.is_none() && dest.is_none() {
+                return None;
+            }
+            structural_op(doc.clone(), op_id.clone(), base, epoch, target, outline_update_payload(title, dest.as_ref()))
+        }
+        "outline.item.delete" => {
+            // The copy goes back under the parent it came from, named by its key:
+            // a path would move while the item is out of the list.
+            let parent = match op.payload.get("parent_key")? {
+                Value::Null => None,
+                value => Some(serde_json::from_value::<OutlineKey>(value.clone()).ok()?),
+            };
+            let index = op.payload.get("index")?.as_u64().and_then(|index| usize::try_from(index).ok())?;
+            let subtree = op.payload.get("subtree")?.clone();
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::OutlineItem { key: parent }, outline_restore_payload(&subtree, index))
+        }
+        "outline.item.move" => {
+            let before = op.payload.get("before")?;
+            let parent = match before.get("parent")? {
+                Value::Null => None,
+                value => Some(serde_json::from_value::<OutlineKey>(value.clone()).ok()?),
+            };
+            let index = before.get("index")?.as_u64().and_then(|index| usize::try_from(index).ok())?;
+            structural_op(doc.clone(), op_id.clone(), base, epoch, target, outline_move_payload(parent, index))
+        }
+        "dest.add" => {
+            let Target::NamedDest { name } = &op.target else { return None };
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::NamedDest { name: name.clone() }, named_dest_delete_payload())
+        }
+        "dest.delete" => {
+            let Target::NamedDest { name } = &op.target else { return None };
+            let before = dest_from_value(op.payload.get("before")?).ok()?;
+            let mut payload = outline_dest_payload("dest.add", &before);
+            payload["epoch"] = json!(epoch);
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::NamedDest { name: name.clone() }, payload)
+        }
+        "dest.update" => {
+            let Target::NamedDest { name } = &op.target else { return None };
+            let before = dest_from_value(op.payload.get("before")?).ok()?;
+            let mut payload = outline_dest_payload("dest.update", &before);
+            payload["epoch"] = json!(epoch);
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::NamedDest { name: name.clone() }, payload)
+        }
+        _ => return None,
+    };
+    Some(inverse)
 }
 
 fn next_id(client_id: &str, counter: &mut u64) -> Result<OpId, ProjectionError> {
@@ -1699,10 +2072,11 @@ fn field_text(document: &Document, name: &str, value: &FieldValue) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::{
-        ProjectionError, add_note_payload, apply, edit_for, merge_op, new_annotation_name, reply_payload, rotate_payload, set_contents_payload,
+        ProjectionError, add_note_payload, apply, edit_for, merge_op, new_annotation_name, ops_for_edit, reply_payload, rotate_payload,
+        set_contents_payload,
     };
-    use pdfcraft_collab_proto::{DocKey, OpId, PageRef, Target};
-    use pdfcraft_engine::Session;
+    use pdfcraft_collab_proto::{DocKey, Op, OpId, PageRef, Target};
+    use pdfcraft_engine::{BookmarkDest, Edit, Session};
     use std::sync::Arc;
 
     fn fixture(n: usize) -> Vec<u8> {
@@ -1740,6 +2114,142 @@ mod tests {
 
     fn doc() -> Result<DocKey, Box<dyn std::error::Error>> {
         Ok(DocKey::new("file-1")?)
+    }
+
+    /// A bookmark edit becomes an operation addressed by the item's object, not
+    /// by its path: the parent's key for an add, the item's own for a change, a
+    /// delete or a move. A named destination becomes an add or an update,
+    /// depending on whether this replica already has the name.
+    #[test]
+    fn bookmark_edits_become_addressed_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        session.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Part".into(), page: 0, left: None, top: None })?;
+        session.apply(id, Edit::AddBookmark { parent: vec![0], index: 0, title: "One".into(), page: 1, left: None, top: None })?;
+        session.apply(id, Edit::SetNamedDestination { name: "intro".into(), dest: BookmarkDest::Page { page: 1, left: None, top: None } })?;
+        let mut counter = 0;
+        {
+            let document = session.get(id).ok_or("open")?;
+            let add = Edit::AddBookmarkWith { parent: vec![0], index: 1, title: "Two".into(), dest: BookmarkDest::Named { name: "intro".into() } };
+            let ops = ops_for_edit(document, &add, doc()?, "ada", 3, 0, &mut counter)?;
+            assert_eq!(ops.len(), 1);
+            assert_eq!(ops[0].class, pdfcraft_collab_proto::ConflictClass::Structural);
+            let key = document.bookmarks().into_iter().find(|row| row.path == vec![0]).and_then(|row| row.object).ok_or("Part is listed")?;
+            assert_eq!(ops[0].target, Target::OutlineItem { key: Some(pdfcraft_collab_proto::OutlineKey::new(key.0, key.1)) });
+            assert_eq!(ops[0].payload["action"], "outline.item.add");
+            assert_eq!(ops[0].payload["index"], serde_json::json!(1));
+            assert_eq!(ops[0].payload["dest"]["kind"], "named", "the parent travels as the target key, the destination in the payload");
+        }
+        // The change, the delete and the move address the item itself.
+        let document = session.get(id).ok_or("open")?;
+        let one = document.bookmarks().into_iter().find(|row| row.path == vec![0, 0]).and_then(|row| row.object).ok_or("One is listed")?;
+        let one = pdfcraft_collab_proto::OutlineKey::new(one.0, one.1);
+        let rename = ops_for_edit(document, &Edit::RenameBookmark { path: vec![0, 0], title: "Uno".into() }, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(rename[0].target, Target::OutlineItem { key: Some(one) });
+        assert_eq!(rename[0].payload["action"], "outline.item.update");
+        assert!(rename[0].payload.get("dest").is_none(), "a rename names no destination");
+        let delete = ops_for_edit(document, &Edit::DeleteBookmark { path: vec![0, 0] }, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(delete[0].payload["action"], "outline.item.delete");
+        let moved = ops_for_edit(document, &Edit::MoveBookmark { from: vec![0, 0], to_parent: vec![], index: 1 }, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(moved[0].payload["action"], "outline.item.move");
+        assert_eq!(moved[0].payload["parent"], serde_json::Value::Null, "the top level is no parent key");
+        // A path this replica's list does not have cannot be addressed.
+        assert!(ops_for_edit(document, &Edit::DeleteBookmark { path: vec![7] }, doc()?, "ada", 3, 0, &mut counter).is_err());
+        // A destination the replica already has is an update; a new one an add.
+        let update = ops_for_edit(
+            document,
+            &Edit::SetNamedDestination { name: "intro".into(), dest: BookmarkDest::Page { page: 0, left: None, top: None } },
+            doc()?,
+            "ada",
+            3,
+            0,
+            &mut counter,
+        )?;
+        assert_eq!(update[0].payload["action"], "dest.update");
+        assert_eq!(update[0].target, Target::NamedDest { name: "intro".into() });
+        let add = ops_for_edit(
+            document,
+            &Edit::SetNamedDestination { name: "fresh".into(), dest: BookmarkDest::Page { page: 0, left: None, top: None } },
+            doc()?,
+            "ada",
+            3,
+            0,
+            &mut counter,
+        )?;
+        assert_eq!(add[0].payload["action"], "dest.add");
+        let removed = ops_for_edit(document, &Edit::DeleteNamedDestination { name: "intro".into() }, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(removed[0].payload["action"], "dest.delete");
+        // Replacing the whole outline is not shared.
+        let replace = Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: Vec::new(), replace: true };
+        assert!(matches!(ops_for_edit(document, &replace, doc()?, "ada", 3, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
+        Ok(())
+    }
+
+    /// An accepted outline operation becomes the edit every replica applies, and
+    /// the subtree a delete carried comes back whole through `ImportBookmarks`.
+    #[test]
+    fn accepted_outline_operations_become_edits() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let key = pdfcraft_collab_proto::OutlineKey::new(12, 0);
+        let document = session.get(id).ok_or("open")?;
+        let add = Op {
+            op_id: OpId::new("o1")?,
+            doc: doc()?,
+            base_version: 0,
+            epoch: 0,
+            kind: pdfcraft_collab_proto::OpKind::Structural,
+            class: pdfcraft_collab_proto::ConflictClass::Structural,
+            target: Target::OutlineItem { key: None },
+            payload: serde_json::json!({
+                "action": "outline.item.add", "title": "Part", "dest": {"kind": "page", "page": 1},
+                "parent": [], "path": [0], "index": 0, "key": key,
+            }),
+            preview: None,
+        };
+        assert!(matches!(edit_for(document, &add)?, Edit::AddBookmarkWith { ref title, .. } if title == "Part"));
+        let update = Op {
+            payload: serde_json::json!({"action": "outline.item.update", "title": "Partie", "path": [0]}),
+            target: Target::OutlineItem { key: Some(key) },
+            ..add.clone()
+        };
+        let edit = edit_for(document, &update)?;
+        assert!(matches!(edit, Edit::UpdateBookmark { ref title, dest: None, .. } if title.as_deref() == Some("Partie")));
+        let restore = Op {
+            payload: serde_json::json!({
+                "action": "outline.item.restore", "parent": [], "index": 0,
+                "subtree": [{"title": "Part", "page": 1, "children": [{"title": "One", "page": 1}]}],
+            }),
+            target: Target::OutlineItem { key: None },
+            ..add.clone()
+        };
+        match edit_for(document, &restore)? {
+            Edit::ImportBookmarks { bookmarks, replace, .. } => {
+                assert!(!replace);
+                assert_eq!(bookmarks.len(), 1);
+                assert_eq!(bookmarks[0].children.len(), 1);
+            }
+            other => return Err(format!("expected an import, got {other:?}").into()),
+        }
+        let moved = Op {
+            payload: serde_json::json!({"action": "outline.item.move", "from": [0], "to_parent": [], "index": 0}),
+            target: Target::OutlineItem { key: Some(key) },
+            ..add.clone()
+        };
+        assert!(matches!(edit_for(document, &moved)?, Edit::MoveBookmark { .. }));
+        let destination = Op {
+            payload: serde_json::json!({"action": "dest.add", "dest": {"kind": "page", "page": 0, "left": 1.0, "top": 2.0}}),
+            target: Target::NamedDest { name: "intro".into() },
+            ..add.clone()
+        };
+        assert!(matches!(
+            edit_for(document, &destination)?,
+            Edit::SetNamedDestination { ref name, dest: BookmarkDest::Page { page: 0, .. } } if name == "intro"
+        ));
+        let removed = Op { payload: serde_json::json!({"action": "dest.delete"}), ..destination.clone() };
+        assert!(matches!(edit_for(document, &removed)?, Edit::DeleteNamedDestination { ref name } if name == "intro"));
+        // A named destination may not be a name of a name in the room.
+        let nested = Op { payload: serde_json::json!({"action": "dest.add", "dest": {"kind": "named", "name": "other"}}), ..destination };
+        assert!(edit_for(document, &nested).is_err());
+        Ok(())
     }
 
     #[test]

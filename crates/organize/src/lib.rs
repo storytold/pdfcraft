@@ -17,6 +17,7 @@ mod attachments;
 mod boxes;
 mod comments;
 mod dedupe;
+mod destinations;
 mod import;
 mod labels;
 mod outline;
@@ -31,6 +32,9 @@ pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_f
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
+pub use destinations::{
+    MAX_NAMED_DESTINATIONS, NamedDestination, delete_named_destination, named_destination, named_destinations, set_named_destination,
+};
 pub use import::{
     CombineOutcome, Combiner, FieldConflicts, ImportOutcome, Run, SplitBy, combine, combine_field_conflicts, combine_grouped, combine_grouped_with,
     combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, import_value,
@@ -38,8 +42,9 @@ pub use import::{
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
-    Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
-    move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
+    Bookmark, BookmarkDest, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, add_bookmark_with,
+    bookmark_page, bookmarks, delete_bookmark, move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_dest, set_bookmark_open,
+    set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};

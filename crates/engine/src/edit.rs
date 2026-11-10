@@ -129,6 +129,33 @@ pub enum Edit {
         bookmarks: Vec<pdfcraft_organize::OutlineNode>,
         replace: bool,
     },
+    /// Add a bookmark to `dest` (a page at a point, or one of this document's named
+    /// destinations) as child `index` of the bookmark at `parent` (`[]` = the top level).
+    AddBookmarkWith {
+        parent: Vec<usize>,
+        index: usize,
+        title: String,
+        dest: pdfcraft_organize::BookmarkDest,
+    },
+    /// Change a bookmark's title and/or where it goes, as one step. A title that is
+    /// only spaces, an empty destination or a name this document does not define is
+    /// refused, and nothing changes.
+    UpdateBookmark {
+        path: Vec<usize>,
+        title: Option<String>,
+        dest: Option<pdfcraft_organize::BookmarkDest>,
+    },
+    /// Point the named destination `name` at `dest` (a page and a point, or a page
+    /// with the view type the file already had), creating it when it does not exist
+    /// yet (`/Names /Dests`). A destination that does not name a page is refused.
+    SetNamedDestination {
+        name: String,
+        dest: pdfcraft_organize::BookmarkDest,
+    },
+    /// Remove the named destination `name`; a name this document does not define is refused.
+    DeleteNamedDestination {
+        name: String,
+    },
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,

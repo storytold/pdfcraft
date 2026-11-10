@@ -58,6 +58,26 @@ pub struct BookmarkPage {
     pub next: Option<usize>,
 }
 
+/// Where a bookmark goes (ISO 32000-2 §12.3.2): a place in this document, or one
+/// of its named destinations. The room shares both forms, so an item's
+/// destination is described by what it names rather than by the array the file
+/// happens to hold for it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BookmarkDest {
+    /// A page (0-based) at the user-space point (`left`, `top`), as `/XYZ`;
+    /// either coordinate may be left out to keep the reader's position.
+    Page { page: usize, left: Option<f64>, top: Option<f64> },
+    /// A page with a destination type from Table 149 and exactly as many values
+    /// as that type takes, each finite (`None` for a hole): a destination the
+    /// file already had, which an undo puts back as it was.
+    View { page: usize, kind: Vec<u8>, values: Vec<Option<f64>> },
+    /// A named destination of this document.
+    Named { name: String },
+    /// The item goes nowhere: a container whose children are the destinations.
+    /// `/Dest` and `/A` are both absent.
+    Nowhere,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OutlineError {
     #[error("there is no bookmark at {0:?}")]
@@ -74,6 +94,12 @@ pub enum OutlineError {
     NoEntries,
     #[error("there are no bookmarks to add")]
     NothingToImport,
+    #[error("a named destination needs a name")]
+    EmptyDestination,
+    #[error("{0}")]
+    InvalidDestination(String),
+    #[error("this document has no named destination {0}")]
+    NoSuchDestination(String),
     #[error("the bookmark at {0:?} has a view that is not a known destination type with its values")]
     BadView(Vec<usize>),
     #[error("bookmarks may nest at most {0} levels deep")]
@@ -94,7 +120,7 @@ fn outline_root(doc: &Document) -> Option<ObjRef> {
 }
 
 /// The children of `parent` (an item or the outline root), in order. Cycle-safe.
-fn children_of(doc: &Document, parent: ObjRef, seen: &mut HashSet<ObjRef>) -> Vec<ObjRef> {
+pub(crate) fn children_of(doc: &Document, parent: ObjRef, seen: &mut HashSet<ObjRef>) -> Vec<ObjRef> {
     let mut out = Vec::new();
     let mut next = doc.get(parent).as_dict().and_then(|d| d.reference(b"First"));
     while let Some(r) = next {
@@ -174,19 +200,19 @@ impl<'a> Visit<'a> {
 
 /// Page targets for a listing: the page index of each page object, and the named destinations
 /// (read once, the first time one is needed).
-struct Targets {
+pub(crate) struct Targets {
     pages: HashMap<ObjRef, usize>,
     names: Option<HashMap<Vec<u8>, Object>>,
 }
 
 impl Targets {
-    fn new(doc: &Document) -> Self {
+    pub(crate) fn new(doc: &Document) -> Self {
         let pages = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r, i)).collect();
         Self { pages, names: None }
     }
 
     /// The named destination `key`: its name-tree entry, else its entry in the `/Dests` dictionary.
-    fn named(&mut self, doc: &Document, key: &[u8]) -> Option<Object> {
+    pub(crate) fn named(&mut self, doc: &Document, key: &[u8]) -> Option<Object> {
         let names = self.names.get_or_insert_with(|| name_tree(doc));
         names.get(key).cloned().or_else(|| dests_dict(doc, key))
     }
@@ -194,7 +220,7 @@ impl Targets {
 
 /// Every entry of the catalog's `/Names /Dests` name tree, by name. The first entry of a name wins.
 /// Iterative, and nodes deeper than `NAME_TREE_DEPTH` are skipped.
-fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
+pub(crate) fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
     let mut out = HashMap::new();
     let Some(root) = doc.root() else { return out };
     let Some(names) = doc.get(root).as_dict().and_then(|c| c.get(b"Names").cloned()) else { return out };
@@ -244,7 +270,7 @@ fn name_key(doc: &Document, key: &Object) -> Option<Vec<u8>> {
 }
 
 /// A named destination in the catalog's PDF 1.1 `/Dests` dictionary.
-fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
+pub(crate) fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
     let root = doc.root()?;
     let dests = doc.get(root).as_dict().and_then(|c| c.get(b"Dests").cloned())?;
     let dests = doc.resolve(&dests);
@@ -253,7 +279,7 @@ fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
 
 /// The explicit destination array (`[page /XYZ …]`) a destination stands for: itself, a dictionary
 /// whose `/D` is one, or a named destination that resolves to one.
-fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<Vec<Object>> {
+pub(crate) fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<Vec<Object>> {
     if depth > DEST_DEPTH {
         return None;
     }
@@ -283,7 +309,7 @@ pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>>
 }
 
 /// The page index an explicit destination array names.
-fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
+pub(crate) fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
         Object::Ref(page) => targets.pages.get(page).copied(),
         // Some producers write a page number in a remote-style destination.
@@ -293,7 +319,7 @@ fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
 }
 
 /// The view an explicit destination array asks for: its type and the numbers after it.
-fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
+pub(crate) fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
     let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec))?;
     // At most the four numbers of /FitR.
     let numbers = dest.iter().skip(2).take(4).map(|n| doc.resolve(n).as_f64().filter(|v| v.is_finite())).collect();
@@ -513,13 +539,9 @@ pub(crate) fn recount(doc: &mut Document) -> Result<()> {
     Ok(())
 }
 
-fn destination(doc: &Document, page: usize) -> Result<Object> {
-    destination_at(doc, page, None, None)
-}
-
 /// A destination on `page` (0-based) at the user-space point (`left`, `top`), either of which
 /// may be left out to keep the reader's position in that direction.
-fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f64>) -> Result<Object> {
+pub(crate) fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f64>) -> Result<Object> {
     if ![left, top].iter().flatten().all(|v| v.is_finite()) {
         return Err(OutlineError::BadPosition);
     }
@@ -555,15 +577,26 @@ pub fn add_bookmark_at(
     left: Option<f64>,
     top: Option<f64>,
 ) -> Result<Vec<usize>> {
+    add_bookmark_with(doc, parent_path, index, title, BookmarkDest::Page { page, left, top })
+}
+
+/// Add a bookmark titled `title` that goes to `dest` (a page at a point, or a
+/// named destination of this document) as child `index` of the bookmark at
+/// `parent_path` (`[]` = the top level; an index past the end appends). Returns
+/// its path. The destination is resolved, and a name this document does not
+/// define is refused, before any object changes.
+pub fn add_bookmark_with(doc: &mut Document, parent_path: &[usize], index: usize, title: &str, dest: BookmarkDest) -> Result<Vec<usize>> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
     }
-    let dest = destination_at(doc, page, left, top)?;
+    let dest = dest_object(doc, &dest)?;
     let parent = container(doc, parent_path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let mut d = Dict::new();
     d.set(b"Title".to_vec(), Object::String(PdfString::text(title)));
-    d.set(b"Dest".to_vec(), dest);
+    if let Some(dest) = dest {
+        d.set(b"Dest".to_vec(), dest);
+    }
     let item = doc.add(Object::Dict(d));
     let at = index.min(kids.len());
     kids.insert(at, item);
@@ -573,6 +606,52 @@ pub fn add_bookmark_at(
     let mut path = parent_path.to_vec();
     path.push(at);
     Ok(path)
+}
+
+/// The `/Dest` value of a [`BookmarkDest`]: a `/XYZ` array for a page, a string
+/// for a named destination, `None` for an item that goes nowhere. A name this
+/// document does not define is refused: a bookmark to it would go nowhere, and
+/// the room's recalculation could not keep it.
+pub(crate) fn dest_object(doc: &Document, dest: &BookmarkDest) -> Result<Option<Object>> {
+    match dest {
+        BookmarkDest::Page { page, left, top } => Ok(Some(destination_at(doc, *page, *left, *top)?)),
+        BookmarkDest::View { page, kind, values } => Ok(Some(view_at(doc, *page, kind, values)?)),
+        BookmarkDest::Named { name } => {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(OutlineError::EmptyDestination);
+            }
+            if crate::destinations::named_destination(doc, name).is_none() {
+                return Err(OutlineError::NoSuchDestination(name.to_owned()));
+            }
+            Ok(Some(Object::String(PdfString::literal(name.as_bytes().to_vec()))))
+        }
+        BookmarkDest::Nowhere => Ok(None),
+    }
+}
+
+/// A destination on `page` with the view type `kind` and its values, as an
+/// explicit array (ISO 32000-2 §12.3.2.2, Table 149). An unknown type, a wrong
+/// number of values, a value that is not finite and a `/FitR` without its whole
+/// rectangle are refused.
+fn view_at(doc: &Document, page: usize, kind: &[u8], values: &[Option<f64>]) -> Result<Object> {
+    let name = std::str::from_utf8(kind).map_err(|_| OutlineError::InvalidDestination("the destination type is not a name".into()))?;
+    let arity =
+        crate::outline_io::view_arity(kind).ok_or_else(|| OutlineError::InvalidDestination("the destination type is not one of Table 149".into()))?;
+    if arity != values.len() {
+        return Err(OutlineError::InvalidDestination(format!("a {} destination takes {arity} values", String::from_utf8_lossy(kind))));
+    }
+    if !values.iter().flatten().all(|v| v.is_finite()) {
+        return Err(OutlineError::BadPosition);
+    }
+    if kind == b"FitR" && values.iter().any(Option::is_none) {
+        return Err(OutlineError::InvalidDestination("a rectangle destination needs all four of its values".into()));
+    }
+    let pages = walk(doc)?;
+    let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
+    let mut array = vec![Object::Ref(*p), Object::name(name)];
+    array.extend(values.iter().map(|v| v.map_or(Object::Null, Object::Real)));
+    Ok(Object::Array(array))
 }
 
 /// One bookmark of a generated tree (New Bookmarks from Structure, or from text styles).
@@ -677,10 +756,17 @@ pub fn set_bookmark_style(doc: &mut Document, path: &[usize], bold: Option<bool>
 
 /// Point a bookmark at `page` (0-based), replacing its destination or GoTo action.
 pub fn set_bookmark_page(doc: &mut Document, path: &[usize], page: usize) -> Result<()> {
-    let dest = destination(doc, page)?;
+    set_bookmark_dest(doc, path, BookmarkDest::Page { page, left: None, top: None })
+}
+
+/// Point a bookmark at `dest` (a page at a point, or a named destination),
+/// replacing its destination or GoTo action. Everything is resolved before an
+/// object changes, and `/Dest` and `/A` are never both present (§12.3.3).
+pub fn set_bookmark_dest(doc: &mut Document, path: &[usize], dest: BookmarkDest) -> Result<()> {
+    let dest = dest_object(doc, &dest)?;
     let (r, _) = resolve_path(doc, path)?;
-    put(doc, r, b"Dest", Some(dest))?;
-    put(doc, r, b"A", None) // `/Dest` and `/A` must not both be present (§12.3.3)
+    put(doc, r, b"Dest", dest)?;
+    put(doc, r, b"A", None)
 }
 
 /// Remove a bookmark and everything under it. The removed items are unlinked (a full save drops

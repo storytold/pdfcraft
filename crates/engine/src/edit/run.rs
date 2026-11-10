@@ -28,6 +28,10 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetBookmarkColor { .. }
         | Edit::SetBookmarkStyle { .. }
         | Edit::ImportBookmarks { .. }
+        | Edit::AddBookmarkWith { .. }
+        | Edit::UpdateBookmark { .. }
+        | Edit::SetNamedDestination { .. }
+        | Edit::DeleteNamedDestination { .. }
         | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
             if p.assemble() {
@@ -558,6 +562,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
+        Edit::AddBookmarkWith { parent, index, title, dest } => {
+            pdfcraft_organize::add_bookmark_with(doc, parent, *index, title, dest.clone())?;
+        }
+        Edit::UpdateBookmark { path, title, dest } => {
+            if let Some(title) = title {
+                pdfcraft_organize::rename_bookmark(doc, path, title)?;
+            }
+            if let Some(dest) = dest {
+                pdfcraft_organize::set_bookmark_dest(doc, path, dest.clone())?;
+            }
+        }
+        Edit::SetNamedDestination { name, dest } => pdfcraft_organize::set_named_destination(doc, name, dest)?,
+        Edit::DeleteNamedDestination { name } => pdfcraft_organize::delete_named_destination(doc, name)?,
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()

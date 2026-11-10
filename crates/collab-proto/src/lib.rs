@@ -61,6 +61,36 @@ pub const MAX_SELECTION_QUADS: usize = 48;
 /// Largest bookmark path accepted.
 pub const MAX_BOOKMARK_DEPTH: usize = 64;
 
+/// Deepest an outline item may sit, counting the top level as 1. This is the
+/// depth the engine's own listing reaches, so an item deeper than this cannot be
+/// addressed by a path at all; an operation that would put one there is refused.
+pub const MAX_OUTLINE_DEPTH: usize = 32;
+
+/// Longest outline item title, in bytes; the frame limit is what a single
+/// operation may carry, this is what a title may be.
+pub const MAX_OUTLINE_TITLE: usize = 512;
+
+/// Most outline items a room accepts in one document (the document's own
+/// outline, plus what the room adds).
+pub const MAX_OUTLINE_ITEMS: usize = 10_000;
+
+/// Longest named destination name, in bytes.
+pub const MAX_DEST_NAME: usize = 128;
+
+/// Most named destinations a room accepts in one document.
+pub const MAX_NAMED_DESTINATIONS: usize = 10_000;
+
+/// Most nodes one `outline.item.move` may carry as its undo image. A subtree
+/// over this is refused before anything changes; the frame bound catches the
+/// rest.
+pub const MAX_OUTLINE_COPY_NODES: usize = 2_000;
+
+/// Largest subtree copy, in bytes, that one operation may carry. The `applied`
+/// frame is [`MAX_MESSAGE_BYTES`], and the copy has to fit in it beside the
+/// operation around it, so the bound is half of it. A delete whose subtree is
+/// bigger is refused with `limit` before the document changes.
+pub const MAX_OUTLINE_COPY_BYTES: usize = MAX_MESSAGE_BYTES / 2;
+
 /// Largest one-page copy an operation may carry (RFC §6.1). Base64 of it still
 /// fits one frame, and a page over this is refused before any mutation: an
 /// insert, a duplicate or a restore either travels whole or does not happen.
@@ -185,6 +215,33 @@ pub struct PageRef {
     pub epoch: u64,
 }
 
+/// An outline item's address: the object reference it has in the document.
+///
+/// A bookmark's path (`[0, 2]`) is a position, and positions move when anything
+/// is added or removed above them; its object does not. Page objects keep their
+/// identity through an insert, a split, a combine and a replacement, which is
+/// why a destination array names a page object rather than a page number, and
+/// an outline item is addressed the same way (`docs/collab/RFC.md` §3.1.7).
+/// The pair is the PDF writer's own indirect reference (`num` `gen` `R`); an
+/// item that no longer exists, or one the room cannot see, is `invalid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct OutlineKey {
+    pub num: u32,
+    pub generation: u16,
+}
+
+impl OutlineKey {
+    pub const fn new(num: u32, generation: u16) -> Self {
+        Self { num, generation }
+    }
+
+    /// The key as the wire writes it: `12 0 R` without the spaces, so a log line
+    /// or an error message can name it.
+    pub fn as_string(self) -> String {
+        format!("{} {} R", self.num, self.generation)
+    }
+}
+
 impl PageRef {
     pub fn new(index: u32, epoch: u64) -> Result<Self, ProtocolError> {
         if index > MAX_PAGE_INDEX {
@@ -200,11 +257,33 @@ impl PageRef {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
     Page(PageRef),
-    Annotation { page: PageRef, nm: String },
-    Field { name: String },
-    Attachment { key: String },
-    Bookmark { path: Vec<u32>, epoch: u64 },
-    Layer { num: u32, generation: u16 },
+    Annotation {
+        page: PageRef,
+        nm: String,
+    },
+    Field {
+        name: String,
+    },
+    Attachment {
+        key: String,
+    },
+    Bookmark {
+        path: Vec<u32>,
+        epoch: u64,
+    },
+    Layer {
+        num: u32,
+        generation: u16,
+    },
+    /// An outline item, by its object reference. `None` is the outline itself:
+    /// the parent of the top level, which an add or a move into it names.
+    OutlineItem {
+        key: Option<OutlineKey>,
+    },
+    /// A named destination, by its name (`/Names /Dests`).
+    NamedDest {
+        name: String,
+    },
 }
 
 impl Target {
@@ -230,6 +309,20 @@ impl Target {
                 Ok(())
             }
             Target::Layer { .. } => Ok(()),
+            Target::OutlineItem { key } => match key {
+                // Object 0 is the free list's head, never an outline item.
+                Some(key) if key.num == 0 => Err(ProtocolError::Empty("outline key")),
+                _ => Ok(()),
+            },
+            Target::NamedDest { name } => {
+                if name.trim().is_empty() {
+                    return Err(ProtocolError::Empty("named destination"));
+                }
+                if name.len() > MAX_DEST_NAME {
+                    return Err(ProtocolError::TooLong { field: "named destination", len: name.len(), max: MAX_DEST_NAME });
+                }
+                Ok(())
+            }
         }
     }
 }

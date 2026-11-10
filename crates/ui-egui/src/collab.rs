@@ -1151,6 +1151,23 @@ impl PdfCraftApp {
                 | Edit::DuplicatePages { .. }
                 | Edit::ReplacePages { .. }
                 | Edit::InsertPagesFrom { .. }
+                // Bookmarks and named destinations change the document's
+                // structure, not just a comment: a commenter may not touch them
+                // (TASK §6), and the room refuses the operation anyway.
+                | Edit::AddBookmark { .. }
+                | Edit::AddBookmarkWith { .. }
+                | Edit::RenameBookmark { .. }
+                | Edit::UpdateBookmark { .. }
+                | Edit::DeleteBookmark { .. }
+                | Edit::MoveBookmark { .. }
+                | Edit::SetBookmarkPage { .. }
+                | Edit::SetBookmarkColor { .. }
+                | Edit::SetBookmarkStyle { .. }
+                | Edit::ImportBookmarks { .. }
+                | Edit::BookmarksFromStructure
+                | Edit::BookmarksFromTextStyles { .. }
+                | Edit::SetNamedDestination { .. }
+                | Edit::DeleteNamedDestination { .. }
         );
         if structural && !collab.role.can_structural() {
             collab.error = Some("This role cannot change pages".into());

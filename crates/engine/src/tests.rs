@@ -2080,6 +2080,62 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
 }
 
+/// Named destinations and the two outline edits the room shares: a bookmark may
+/// go to a name, an update changes title and place in one step, and both survive
+/// an undo and a save.
+#[test]
+fn named_destinations_and_the_shared_outline_edits() {
+    let (mut s, id) = session_with(3);
+    let titles = |s: &Session| outline_titles(&s.get(id).unwrap().info.outline);
+    s.apply(id, Edit::SetNamedDestination { name: "intro".into(), dest: BookmarkDest::Page { page: 2, left: Some(20.0), top: Some(300.0) } })
+        .unwrap();
+    let destinations = s.get(id).unwrap().named_destinations();
+    assert_eq!(destinations.len(), 1);
+    assert_eq!(destinations[0].name, "intro");
+    assert_eq!(destinations[0].page, Some(2));
+    s.apply(id, Edit::AddBookmarkWith { parent: vec![], index: 0, title: "Start".into(), dest: BookmarkDest::Named { name: "intro".into() } })
+        .unwrap();
+    // A name this document does not define is refused, and nothing is added.
+    assert!(
+        s.apply(id, Edit::AddBookmarkWith { parent: vec![], index: 1, title: "Lost".into(), dest: BookmarkDest::Named { name: "nowhere".into() } })
+            .is_err()
+    );
+    assert_eq!(titles(&s), ["Start→3"]);
+    // Title and destination in one step, and both come back with one undo.
+    s.apply(
+        id,
+        Edit::UpdateBookmark { path: vec![0], title: Some("Begin".into()), dest: Some(BookmarkDest::Page { page: 0, left: None, top: None }) },
+    )
+    .unwrap();
+    assert_eq!(titles(&s), ["Begin→1"]);
+    s.undo(id).unwrap();
+    assert_eq!(titles(&s), ["Start→3"]);
+    // A container: an item that goes nowhere keeps its place in the tree.
+    s.apply(id, Edit::AddBookmarkWith { parent: vec![], index: 1, title: "Part".into(), dest: BookmarkDest::Nowhere }).unwrap();
+    assert_eq!(titles(&s), ["Start→3", "Part→0"]);
+    s.apply(id, Edit::DeleteNamedDestination { name: "intro".into() }).unwrap();
+    // The bookmark that named it keeps its place and now goes nowhere, exactly
+    // as a reader resolves the missing name; the undo brings the place back.
+    assert!(s.get(id).unwrap().named_destinations().is_empty());
+    assert_eq!(titles(&s), ["Start→0", "Part→0"]);
+    s.undo(id).unwrap();
+    assert_eq!(titles(&s), ["Start→3", "Part→0"]);
+    // Deleting it again is undoable once more, and undoing the undo is not needed
+    // for the rest of the test.
+    s.apply(id, Edit::DeleteNamedDestination { name: "intro".into() }).unwrap();
+    assert!(s.get(id).unwrap().named_destinations().is_empty());
+    // The bookmark list carries the object each item is, which is what a room
+    // addresses; a position moves, an object does not.
+    let rows = s.get(id).unwrap().bookmarks();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.object.is_some()));
+    let saved = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    let id2 = again.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→0", "Part→0"], "the name the bookmark used is gone");
+    assert!(again.get(id2).unwrap().named_destinations().is_empty());
+}
+
 /// Two pages tagged with an H1 on the first and an H2 on the second.
 fn tagged_headings_fixture() -> Vec<u8> {
     let objs = [

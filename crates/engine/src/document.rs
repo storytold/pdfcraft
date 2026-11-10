@@ -405,6 +405,20 @@ impl Document {
         self.generation
     }
 
+    /// The document's named destinations (`/Names /Dests` and the older `/Dests`
+    /// dictionary), sorted by name. Empty when the document can't be read for editing.
+    pub fn named_destinations(&self) -> Vec<pdfcraft_organize::NamedDestination> {
+        self.editor.as_ref().map(|e| pdfcraft_organize::named_destinations(&e.cos)).unwrap_or_default()
+    }
+
+    /// Every bookmark of the document's own outline, in listing order, with the
+    /// path an edit takes and the object reference that outlives a position. Empty
+    /// when the structure can't be read for editing (the viewer's copy is not
+    /// addressable).
+    pub fn bookmarks(&self) -> Vec<crate::BookmarkRow> {
+        self.editor.as_ref().map(|e| crate::bookmarks::document_rows(&e.cos)).unwrap_or_default()
+    }
+
     /// The styles the document's text is set in, the largest first, for bookmarks from text
     /// styles (#1693).
     /// Empty when the document doesn't allow copying: the samples are its text.

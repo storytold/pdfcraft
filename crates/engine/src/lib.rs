@@ -79,8 +79,9 @@ pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
 pub use pdfcraft_organize::{
-    BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name,
-    split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
+    BookmarkDest, BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, MAX_NAMED_DESTINATIONS, NamedDestination as DocumentNamedDestination, OutlineNode,
+    OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, delete_named_destination, mime_for_name, named_destination, named_destinations,
+    set_named_destination, split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
 };
 
 pub use pdfcraft_organize::LabelStyle;

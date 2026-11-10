@@ -20,7 +20,7 @@ use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome,
 use pdfcraft_collab_ws::{Claims, Config, Hs256Verifier, ServerHandle, TokenError, Verifier, WsServer};
 use pdfcraft_engine::Session;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 use tungstenite::stream::MaybeTlsStream;
@@ -198,6 +198,18 @@ impl Peer {
                 other => return Err(format!("expected a snapshot, got {other:?}").into()),
             }
         }
+    }
+
+    /// The peer's own outline, `title→page` (page 0 = nowhere), as its replica has it.
+    fn outline(&self) -> Vec<String> {
+        let document = self.session.get(self.id).expect("the peer document is open");
+        document.bookmarks().into_iter().map(|row| format!("{}→{}", row.title, row.page.map_or(0, |p| p + 1))).collect()
+    }
+
+    /// The peer's named destinations, `name→page`.
+    fn named_destinations(&self) -> Vec<(String, Option<usize>)> {
+        let document = self.session.get(self.id).expect("the peer document is open");
+        document.named_destinations().into_iter().map(|destination| (destination.name, destination.page)).collect()
     }
 
     fn names(&self) -> Vec<String> {
@@ -2209,5 +2221,220 @@ fn a_cabinet_hs256_ticket_is_welcomed_and_a_forged_one_is_refused() -> Result<()
         },
         other => return Err(format!("expected a text frame, got {other:?}").into()),
     }
+    Ok(())
+}
+
+/// A room of three peers over a real socket, with the editor's writes settled on
+/// every replica: the shape the outline tests below share.
+struct Room {
+    ada: Peer,
+    bo: Peer,
+    cy: Peer,
+    doc: DocKey,
+}
+
+impl Room {
+    fn join(addr: std::net::SocketAddr) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            ada: Peer::join(addr, "editor:ada", "ada")?,
+            bo: Peer::join(addr, "editor:bo", "bo")?,
+            cy: Peer::join(addr, "viewer:cy", "cy")?,
+            doc: DocKey::new("file-1")?,
+        })
+    }
+
+    /// The editor sends `op`; all three replicas apply the accepted operation.
+    fn write(&mut self, op: Op) -> Result<pdfcraft_collab_proto::Applied, Box<dyn std::error::Error>> {
+        self.ada.send(op)?;
+        let applied = match self.ada.settle()? {
+            ServerMessage::Applied(applied) => applied,
+            other => return Err(format!("the editor expected applied, got {other:?}").into()),
+        };
+        for peer in [&mut self.bo, &mut self.cy] {
+            match peer.settle()? {
+                ServerMessage::Applied(_) => {}
+                other => return Err(format!("a peer expected applied, got {other:?}").into()),
+            }
+        }
+        Ok(applied)
+    }
+
+    /// The viewer sends `op`; the room refuses it and nobody applies anything.
+    fn viewer_writes(&mut self, op: Op) -> Result<ErrorCode, Box<dyn std::error::Error>> {
+        self.cy.send(op)?;
+        match self.cy.settle()? {
+            ServerMessage::Rejected(rejected) => Ok(rejected.code),
+            other => Err(format!("the viewer expected rejected, got {other:?}").into()),
+        }
+    }
+
+    fn outline_op(&self, id: &str, target: Target, payload: Value) -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(structural_op(self.doc.clone(), OpId::new(id)?, self.ada.version, self.ada.epoch, target, payload))
+    }
+
+    fn add(
+        &mut self,
+        id: &str,
+        parent: Option<pdfcraft_collab_proto::OutlineKey>,
+        title: &str,
+        page: usize,
+    ) -> Result<pdfcraft_collab_proto::OutlineKey, Box<dyn std::error::Error>> {
+        let dest = pdfcraft_engine::BookmarkDest::Page { page, left: None, top: None };
+        let payload = pdfcraft_collab_client_pdf::outline_add_payload(title, &dest, None);
+        let applied = self.write(self.outline_op(id, Target::OutlineItem { key: parent }, payload)?)?;
+        Ok(serde_json::from_value(applied.op.payload["key"].clone())?)
+    }
+
+    /// Every replica's outline is the same, and it is `expected`.
+    fn assert_outline(&self, expected: &[&str]) {
+        assert_eq!(self.ada.outline(), expected);
+        assert_eq!(self.bo.outline(), self.ada.outline(), "the second replica converged");
+        assert_eq!(self.cy.outline(), self.ada.outline(), "and the viewer sees it too");
+    }
+}
+
+/// Two editors and a viewer share the outline over a real socket: an item is
+/// added under an addressed parent, updated in title and destination, and moved,
+/// and every replica follows each accepted operation.
+#[test]
+fn two_clients_share_the_outline() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    let destination = structural_op(
+        room.doc.clone(),
+        OpId::new("op-dest")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::NamedDest { name: "intro".into() },
+        pdfcraft_collab_client_pdf::named_dest_payload("dest.add", 1, Some(10.0), Some(200.0)),
+    );
+    room.write(destination)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.named_destinations(), [("intro".to_owned(), Some(1))], "every replica has the name");
+    }
+
+    let part = room.add("op-part", None, "Part", 0)?;
+    room.add("op-one", Some(part), "One", 0)?;
+    let two = room.add("op-two", Some(part), "Two", 1)?;
+    room.assert_outline(&["Part→1", "One→1", "Two→2"]);
+
+    // Title and destination in one operation: the item now goes to the name.
+    let update = room.outline_op(
+        "op-update",
+        Target::OutlineItem { key: Some(two) },
+        pdfcraft_collab_client_pdf::outline_update_payload(Some("Deux"), Some(&pdfcraft_engine::BookmarkDest::Named { name: "intro".into() })),
+    )?;
+    room.write(update)?;
+    room.assert_outline(&["Part→1", "One→1", "Deux→2"]);
+
+    // A move, addressed by the item's key rather than by its position.
+    let moved = room.outline_op("op-move", Target::OutlineItem { key: Some(two) }, pdfcraft_collab_client_pdf::outline_move_payload(None, 0))?;
+    room.write(moved)?;
+    room.assert_outline(&["Deux→2", "Part→1", "One→1"]);
+    Ok(())
+}
+
+/// A delete carries the whole subtree, the undo is an ordinary `restore` that
+/// both replicas replay, the redo takes it out again, and an address the room no
+/// longer has is `invalid` without moving the document. A viewer is refused
+/// before the adapter runs.
+#[test]
+fn a_deleted_subtree_comes_back_whole_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    let part = room.add("op-part", None, "Part", 0)?;
+    room.add("op-one", Some(part), "One", 0)?;
+    room.assert_outline(&["Part→1", "One→1"]);
+
+    let delete = room.outline_op("op-delete", Target::OutlineItem { key: Some(part) }, pdfcraft_collab_client_pdf::outline_delete_payload())?;
+    let applied = room.write(delete)?;
+    room.assert_outline(&[]);
+    assert_eq!(applied.op.payload["subtree"][0]["children"].as_array().map(Vec::len), Some(1), "the copy holds the child");
+    assert_eq!(applied.op.payload["parent_key"], Value::Null, "it came from the top level");
+
+    let restore = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the delete is undoable")?;
+    assert_eq!(restore.payload["action"], "outline.item.restore");
+    room.ada.version = applied.version;
+    room.ada.epoch = applied.epoch;
+    let applied = room.write(restore)?;
+    room.assert_outline(&["Part→1", "One→1"]);
+
+    let redo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the restore is undoable")?;
+    assert_eq!(redo.payload["action"], "outline.item.delete");
+    room.ada.version = applied.version;
+    room.ada.epoch = applied.epoch;
+    room.write(redo)?;
+    room.assert_outline(&[]);
+
+    // The key the deleted item had addresses nothing now; the room says so and
+    // neither the version nor a replica moves.
+    let version = room.ada.version;
+    let stale = room.outline_op(
+        "op-stale-outline",
+        Target::OutlineItem { key: Some(part) },
+        pdfcraft_collab_client_pdf::outline_update_payload(Some("Ghost"), None),
+    )?;
+    room.ada.send(stale)?;
+    // A refusal goes to the sender alone; nothing is broadcast.
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Invalid));
+    assert_eq!(room.ada.version, version);
+    room.assert_outline(&[]);
+
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-add")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::OutlineItem { key: None },
+        pdfcraft_collab_client_pdf::outline_add_payload("Mine", &pdfcraft_engine::BookmarkDest::Page { page: 0, left: None, top: None }, None),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    room.assert_outline(&[]);
+    Ok(())
+}
+
+/// Named destinations over a socket: added, moved and deleted as their own
+/// operations, refused for a viewer, and a bookmark that used the name keeps its
+/// place (going nowhere) once the name is gone.
+#[test]
+fn named_destinations_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    let write = |id: &str, payload: Value, room: &mut Room| -> Result<pdfcraft_collab_proto::Applied, Box<dyn std::error::Error>> {
+        let op =
+            structural_op(room.doc.clone(), OpId::new(id)?, room.ada.version, room.ada.epoch, Target::NamedDest { name: "intro".into() }, payload);
+        room.write(op)
+    };
+    write("op-dest-add", pdfcraft_collab_client_pdf::named_dest_payload("dest.add", 1, None, None), &mut room)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.named_destinations(), [("intro".to_owned(), Some(1))]);
+    }
+    // A bookmark that goes to the name, so the rest of the test can watch it.
+    let payload = pdfcraft_collab_client_pdf::outline_add_payload("Part", &pdfcraft_engine::BookmarkDest::Named { name: "intro".into() }, None);
+    let op = structural_op(room.doc.clone(), OpId::new("op-part")?, room.ada.version, room.ada.epoch, Target::OutlineItem { key: None }, payload);
+    room.write(op)?;
+    room.assert_outline(&["Part→2"]);
+    write("op-dest-update", pdfcraft_collab_client_pdf::named_dest_payload("dest.update", 0, Some(5.0), Some(5.0)), &mut room)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert_eq!(peer.named_destinations(), [("intro".to_owned(), Some(0))]);
+    }
+    // A viewer cannot add one.
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-dest")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::NamedDest { name: "mine".into() },
+        pdfcraft_collab_client_pdf::named_dest_payload("dest.add", 0, None, None),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    assert!(room.cy.named_destinations().iter().all(|(name, _)| name == "intro"));
+
+    write("op-dest-delete", pdfcraft_collab_client_pdf::named_dest_delete_payload(), &mut room)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        assert!(peer.named_destinations().is_empty(), "the name is gone on every replica");
+    }
+    // The bookmark that named it keeps its place and now goes nowhere.
+    room.assert_outline(&["Part→0"]);
     Ok(())
 }

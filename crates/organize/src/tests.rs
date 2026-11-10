@@ -4950,3 +4950,123 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// Named destinations (ISO 32000-2 §12.3.2.3) are one list: set, read back,
+/// moved and deleted, with the name tree as the one place a name lives.
+#[test]
+fn named_destinations_are_set_listed_moved_and_deleted() {
+    let mut doc = open(fixture());
+    assert!(named_destinations(&doc).is_empty(), "the fixture has none");
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 1, left: Some(10.0), top: Some(380.0) }).unwrap();
+    let listed = named_destinations(&doc);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "intro");
+    assert_eq!(listed[0].page, Some(1));
+    assert_eq!(listed[0].view, Some((b"XYZ".to_vec(), vec![Some(10.0), Some(380.0), None])));
+    // A reader resolves the name to the same place.
+    let resolved = named_destination(&doc, "intro").unwrap();
+    assert_eq!((resolved.page, resolved.view), (Some(1), listed[0].view.clone()));
+    assert!(named_destination(&doc, "missing").is_none());
+
+    // An update replaces the entry in place (same count, new place).
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 2, left: None, top: None }).unwrap();
+    set_named_destination(&mut doc, "appendix", &BookmarkDest::Page { page: 0, left: None, top: None }).unwrap();
+    let names: Vec<String> = named_destinations(&doc).into_iter().map(|d| d.name).collect();
+    assert_eq!(names, ["appendix", "intro"], "the tree lists its keys in order");
+    assert_eq!(named_destination(&doc, "intro").unwrap().page, Some(2));
+
+    // Details are refused before anything changes.
+    let before = named_destinations(&doc).len();
+    assert!(set_named_destination(&mut doc, "  ", &BookmarkDest::Page { page: 0, left: None, top: None }).is_err());
+    assert!(set_named_destination(&mut doc, "gone", &BookmarkDest::Page { page: 3, left: None, top: None }).is_err());
+    assert!(set_named_destination(&mut doc, "wild", &BookmarkDest::Page { page: 0, left: Some(f64::NAN), top: None }).is_err());
+    assert_eq!(named_destinations(&doc).len(), before);
+
+    delete_named_destination(&mut doc, "intro").unwrap();
+    assert!(named_destination(&doc, "intro").is_none());
+    assert_eq!(named_destinations(&doc).len(), 1);
+    assert!(delete_named_destination(&mut doc, "intro").is_err(), "a name that is not there is refused, not ignored");
+    // The last one takes the slot with it.
+    delete_named_destination(&mut doc, "appendix").unwrap();
+    let root = doc.root().unwrap();
+    assert!(doc.get(root).as_dict().and_then(|c| c.get(b"Names")).is_none(), "an empty tree is not left behind");
+}
+
+/// A legacy `/Dests` dictionary entry is listed, taken over by the name tree when
+/// the same name is set, and removed with it; the other trees in `/Names` stay.
+#[test]
+fn legacy_dests_and_the_other_name_trees_survive_an_edit() {
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    let page = walk(&doc).unwrap()[0].0;
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"old".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+    let mut names = pdfcraft_cos::Dict::new();
+    let mut js = pdfcraft_cos::Dict::new();
+    js.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("doc")), Object::String(PdfString::text("1"))]));
+    names.set(b"JavaScript".to_vec(), Object::Dict(js));
+    doc.update_dict(root, |c| {
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    let listed = named_destinations(&doc);
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].name.as_str(), listed[0].page), ("old", Some(0)));
+    assert_eq!(listed[0].view.as_ref().map(|(kind, _)| kind.as_slice()), Some(b"Fit".as_slice()));
+
+    // Setting the same name moves it into the tree; a reader still resolves it,
+    // and the legacy entry no longer shadows the new place.
+    set_named_destination(&mut doc, "old", &BookmarkDest::Page { page: 1, left: None, top: None }).unwrap();
+    assert_eq!(named_destination(&doc, "old").unwrap().page, Some(1));
+    let root = doc.root().unwrap();
+    let legacy = doc.get(root).as_dict().and_then(|c| c.get(b"Dests")).map(|d| doc.resolve(d).as_dict().is_some_and(|d| d.get(b"old").is_some()));
+    assert_eq!(legacy, Some(false), "the tree owns the name now");
+    let javascript =
+        doc.get(root).as_dict().and_then(|c| c.get(b"Names")).map(|n| doc.resolve(n).as_dict().is_some_and(|d| d.get(b"JavaScript").is_some()));
+    assert_eq!(javascript, Some(true), "another tree in /Names is untouched");
+
+    // A name only the dictionary has is deleted from it.
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    let page = walk(&doc).unwrap()[1].0;
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"only-legacy".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+    doc.update_dict(root, |c| c.set(b"Dests".to_vec(), Object::Dict(dests))).unwrap();
+    delete_named_destination(&mut doc, "only-legacy").unwrap();
+    assert!(named_destinations(&doc).is_empty());
+}
+
+/// A bookmark may go to a named destination or somewhere explicit, and the two
+/// are one edit each; a name nobody defines is refused.
+#[test]
+fn a_bookmark_goes_to_a_named_destination_and_back() {
+    let mut doc = open(fixture());
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 2, left: Some(5.0), top: Some(390.0) }).unwrap();
+    add_bookmark_with(&mut doc, &[], 0, "Start", BookmarkDest::Named { name: "intro".into() }).unwrap();
+    add_bookmark_with(&mut doc, &[], 1, "End", BookmarkDest::Nowhere).unwrap();
+    let items = bookmarks(&doc);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].title, "Start");
+    assert_eq!(items[0].page, Some(2), "the name resolves to its page");
+    assert_eq!(items[1].page, None, "a container goes nowhere");
+
+    // A destination that is not a place, a page this document lacks and a name
+    // nobody defines are refused, and the outline is unchanged.
+    assert!(add_bookmark_with(&mut doc, &[], 2, "Lost", BookmarkDest::Named { name: "nowhere".into() }).is_err());
+    assert!(add_bookmark_with(&mut doc, &[], 2, "Lost", BookmarkDest::Page { page: 3, left: None, top: None }).is_err());
+    assert!(add_bookmark_with(&mut doc, &[], 2, "   ", BookmarkDest::Nowhere).is_err());
+    assert_eq!(bookmarks(&doc).len(), 2);
+
+    // The named destination is rewritten as an explicit place, and the item that
+    // went nowhere gets one.
+    set_bookmark_dest(&mut doc, &[0], BookmarkDest::Page { page: 1, left: None, top: None }).unwrap();
+    set_bookmark_dest(&mut doc, &[1], BookmarkDest::View { page: 0, kind: b"Fit".to_vec(), values: Vec::new() }).unwrap();
+    let items = bookmarks(&doc);
+    assert_eq!((items[0].page, items[1].page), (Some(1), Some(0)));
+    assert_eq!(items[1].view.as_ref().map(|(kind, _)| kind.as_slice()), Some(b"Fit".as_slice()));
+    // And a view of the wrong shape is refused.
+    assert!(set_bookmark_dest(&mut doc, &[1], BookmarkDest::View { page: 0, kind: b"FitR".to_vec(), values: vec![None; 3] }).is_err());
+    set_bookmark_dest(&mut doc, &[1], BookmarkDest::Nowhere).unwrap();
+    assert_eq!(bookmarks(&doc)[1].page, None);
+}

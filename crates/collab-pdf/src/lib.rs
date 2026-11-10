@@ -26,6 +26,14 @@
 //! | `page.insert_blank` | structural | page (insert position) |
 //! | `page.split` | structural | page (first page of the part) |
 //! | `page.combine` | structural | page (insert position) |
+//! | `outline.item.add` | structural | outline item (the parent; `null` = top level) |
+//! | `outline.item.update` | structural | outline item (its object key) |
+//! | `outline.item.delete` | structural | outline item (its object key) |
+//! | `outline.item.restore` | structural | outline item (the parent of the copy) |
+//! | `outline.item.move` | structural | outline item (its object key) |
+//! | `dest.add` | structural | named destination (its name) |
+//! | `dest.update` | structural | named destination (its name) |
+//! | `dest.delete` | structural | named destination (its name) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -58,6 +66,13 @@
 //! are addressed by `/NM` (ADR-0002), never by a client-side index. Commit
 //! writes the working file through `Session::save_bytes`, which keeps the
 //! document valid and applies a full rewrite only where the edit requires it.
+//!
+//! The outline and its named destinations are structural too, and addressed by
+//! the identity the file itself gives them: an item by its object reference (a
+//! path is a position and positions move), a destination by its name. Every
+//! operation resolves its address against the document before it writes, and the
+//! accepted operation carries what it replaced, so an undo is an operation
+//! rather than a guess. See `outline.rs` and RFC §3.1.7.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -73,6 +88,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod outline;
 mod store;
 
 pub use store::{CabinetCopy, JournalRecord, Store};
@@ -1288,6 +1304,14 @@ impl Adapter for PdfAdapter {
                 let at = self.insert_position(page)?;
                 self.combine_pages(at, &mut effective.payload)?
             }
+            ("outline.item.add", ConflictClass::Structural) => self.add_outline_item(&effective.target, &mut effective.payload)?,
+            ("outline.item.update", ConflictClass::Structural) => self.update_outline_item(&effective.target, &mut effective.payload)?,
+            ("outline.item.delete", ConflictClass::Structural) => self.delete_outline_item(&effective.target, &mut effective.payload)?,
+            ("outline.item.restore", ConflictClass::Structural) => self.restore_outline_item(&effective.target, &mut effective.payload)?,
+            ("outline.item.move", ConflictClass::Structural) => self.move_outline_item(&effective.target, &mut effective.payload)?,
+            ("dest.add", ConflictClass::Structural) => self.add_named_destination(&effective.target, &mut effective.payload)?,
+            ("dest.update", ConflictClass::Structural) => self.update_named_destination(&effective.target, &mut effective.payload)?,
+            ("dest.delete", ConflictClass::Structural) => self.delete_named_destination(&effective.target, &mut effective.payload)?,
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -1469,7 +1493,7 @@ mod tests {
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
     use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     /// Commit the way the transport does: the base under the room lock, the
     /// publication outside it (this adapter has none), the outcome after.
@@ -3627,6 +3651,475 @@ mod tests {
         commit(&mut fresh, &editor, version)?;
         let bytes = fresh.adapter().last_commit().cloned().ok_or("no commit bytes")?;
         assert_eq!(page_text(&bytes, 1)?, "Page 2", "the journal put the part back");
+        Ok(())
+    }
+
+    // ---- The outline and its named destinations (RFC §3.1.7) --------------
+
+    /// Four pages, four bookmarks (one per page) and a named destination, built
+    /// with the engine's own edits so the fixture is a real file.
+    fn fixture_with_outline() -> Vec<u8> {
+        use pdfcraft_engine::{BookmarkDest, Edit, Session};
+        let mut session = Session::new();
+        let id = session.open_new("outline.pdf", fixture(4).into()).expect("the fixture opens");
+        session
+            .apply(id, Edit::SetNamedDestination { name: "intro".into(), dest: BookmarkDest::Page { page: 2, left: Some(20.0), top: Some(280.0) } })
+            .expect("the name is set");
+        session
+            .apply(id, Edit::AddBookmarkWith { parent: vec![], index: 0, title: "Start".into(), dest: BookmarkDest::Named { name: "intro".into() } })
+            .expect("the bookmark is added");
+        session
+            .apply(
+                id,
+                Edit::AddBookmarkWith {
+                    parent: vec![],
+                    index: 1,
+                    title: "Chapters".into(),
+                    dest: BookmarkDest::Page { page: 0, left: None, top: None },
+                },
+            )
+            .expect("the parent is added");
+        session
+            .apply(
+                id,
+                Edit::AddBookmarkWith { parent: vec![1], index: 0, title: "One".into(), dest: BookmarkDest::Page { page: 0, left: None, top: None } },
+            )
+            .expect("the child is added");
+        session
+            .apply(
+                id,
+                Edit::AddBookmarkWith { parent: vec![1], index: 1, title: "Two".into(), dest: BookmarkDest::Page { page: 1, left: None, top: None } },
+            )
+            .expect("the child is added");
+        session.save_bytes(id).expect("the fixture saves").as_ref().clone()
+    }
+
+    /// The outline as a room's client reads it: `title→page` (page 0 = nowhere).
+    fn outline(adapter: &PdfAdapter) -> Vec<String> {
+        let page = adapter.session().bookmark_page(adapter.id, 0, usize::MAX).expect("the outline is readable");
+        page.rows.into_iter().map(|row| format!("{}→{}", row.title, row.page.map_or(0, |p| p + 1))).collect()
+    }
+
+    /// The key of the item titled `title`.
+    fn key_of(adapter: &PdfAdapter, title: &str) -> pdfcraft_collab_proto::OutlineKey {
+        let page = adapter.session().bookmark_page(adapter.id, 0, usize::MAX).expect("the outline is readable");
+        let row = page.rows.into_iter().find(|row| row.title == title).expect("the bookmark is there");
+        let (num, generation) = row.object.expect("a document bookmark has an object");
+        pdfcraft_collab_proto::OutlineKey::new(num, generation)
+    }
+
+    /// The named destination `name` as the document has it.
+    fn named(adapter: &PdfAdapter, name: &str) -> Option<pdfcraft_engine::DocumentNamedDestination> {
+        adapter.document().and_then(|document| document.named_destinations().into_iter().find(|destination| destination.name == name))
+    }
+
+    fn room_with_outline() -> Result<(Room<PdfAdapter>, ActorId), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("outline.pdf", fixture_with_outline().into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        Ok((room, editor))
+    }
+
+    /// One page of `bytes` as a PDF of its own, for a replacement or a combine.
+    fn one_page_copy(bytes: &[u8], index: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut scratch = pdfcraft_engine::Session::new();
+        let id = scratch.open("copy.pdf", None, std::sync::Arc::new(bytes.to_vec()), None)?;
+        let count = scratch.get(id).ok_or("open")?.info.pages.len();
+        if count > 1 {
+            let others: Vec<usize> = (0..count).filter(|i| *i != index).collect();
+            scratch.apply(id, pdfcraft_engine::Edit::DeletePages { pages: others })?;
+        }
+        Ok(scratch.save_bytes(id)?.as_ref().clone())
+    }
+
+    /// An item is added under an addressed parent, updated in title and
+    /// destination, moved and deleted with the whole subtree as its copy — every
+    /// step is one version and one epoch, and the accepted operation describes
+    /// what changed.
+    #[test]
+    fn the_outline_is_added_updated_moved_and_deleted() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let chapters = key_of(room.adapter(), "Chapters");
+        let two = key_of(room.adapter(), "Two");
+
+        let add = op(
+            "add-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(chapters) },
+            0,
+            0,
+            json!({"action": "outline.item.add", "title": "Three", "dest": {"kind": "page", "page": 3}}),
+        )?;
+        let applied = room.apply(&editor, &add, 0)?;
+        assert_eq!((applied.version, applied.epoch), (1, 1), "a structural step");
+        let added: pdfcraft_collab_proto::OutlineKey = serde_json::from_value(applied.op.payload["key"].clone())?;
+        assert_eq!(applied.op.payload["path"], json!([1, 2]), "the accepted operation names where it went");
+        assert_eq!(outline(room.adapter()), ["Start→3", "Chapters→1", "One→1", "Two→2", "Three→4"]);
+        assert_eq!(room.adapter().epoch(), 1);
+
+        let update = op(
+            "upd-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(two) },
+            1,
+            1,
+            json!({"action": "outline.item.update", "title": "Deux", "dest": {"kind": "named", "name": "intro"}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!(applied.op.payload["before"]["title"], "Two", "the undo image names what it replaced");
+        assert_eq!(applied.op.payload["before"]["dest"]["kind"], "page");
+        assert_eq!(outline(room.adapter()), ["Start→3", "Chapters→1", "One→1", "Deux→3", "Three→4"]);
+
+        let move_to_top = op(
+            "mov-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(two) },
+            2,
+            2,
+            json!({"action": "outline.item.move", "parent": null, "index": 0}),
+        )?;
+        let applied = room.apply(&editor, &move_to_top, 0)?;
+        assert_eq!(applied.op.payload["from"], json!([1, 1]));
+        assert_eq!(applied.op.payload["before"]["index"], 1);
+        assert_eq!(outline(room.adapter()), ["Deux→3", "Start→3", "Chapters→1", "One→1", "Three→4"]);
+
+        let delete =
+            op("del-1", ConflictClass::Structural, Target::OutlineItem { key: Some(chapters) }, 3, 3, json!({"action": "outline.item.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let subtree = applied.op.payload["subtree"].clone();
+        assert_eq!(applied.op.payload["key"], json!(chapters));
+        let nodes = subtree.as_array().ok_or("the copy is a tree")?;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["title"], "Chapters");
+        assert_eq!(nodes[0]["children"].as_array().map(Vec::len), Some(2), "the whole subtree travels");
+        assert_eq!(outline(room.adapter()), ["Deux→3", "Start→3"]);
+
+        // The undo is an ordinary operation: the subtree goes back where it came
+        // from, with its nesting and destinations, and gets new object keys.
+        let restore = op(
+            "undo-del-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: null_key(&applied.op.payload["parent_key"]) },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.item.restore", "subtree": subtree, "index": 2}),
+        )?;
+        let applied = room.apply(&editor, &restore, 0)?;
+        assert!(applied.op.payload["key"].is_object(), "the restored item answers with its new key");
+        assert_eq!(outline(room.adapter()), ["Deux→3", "Start→3", "Chapters→1", "One→1", "Three→4"]);
+        // And adding to the restored parent works: it is addressed by its new key.
+        let restored: pdfcraft_collab_proto::OutlineKey = serde_json::from_value(applied.op.payload["key"].clone())?;
+        let add_again = op(
+            "add-2",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(restored) },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.item.add", "title": "Four", "dest": {"kind": "page", "page": 0}}),
+        )?;
+        room.apply(&editor, &add_again, 0)?;
+        assert_eq!(outline(room.adapter()), ["Deux→3", "Start→3", "Chapters→1", "One→1", "Three→4", "Four→1"]);
+        let _ = added;
+        Ok(())
+    }
+
+    /// `null` or an object, as the delete's `parent_key` has it.
+    fn null_key(value: &serde_json::Value) -> Option<pdfcraft_collab_proto::OutlineKey> {
+        if value.is_null() { None } else { serde_json::from_value(value.clone()).ok() }
+    }
+
+    /// Hostile or simply wrong addresses are refused before the first write: an
+    /// item nobody has, a page or a name this document lacks, a blank or
+    /// over-long title, a move into the item's own subtree, and a copy that nests
+    /// too deep. The version, the epoch and the document do not move.
+    #[test]
+    fn a_bad_outline_operation_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let chapters = key_of(room.adapter(), "Chapters");
+        let one = key_of(room.adapter(), "One");
+        let before = outline(room.adapter());
+        let (version, epoch) = (room.version(), room.epoch());
+        let missing = pdfcraft_collab_proto::OutlineKey::new(999, 0);
+        let long_title = "t".repeat(pdfcraft_collab_proto::MAX_OUTLINE_TITLE + 1);
+
+        let cases: Vec<(Target, Value, ErrorCode)> = vec![
+            (
+                Target::OutlineItem { key: Some(missing) },
+                json!({"action": "outline.item.add", "title": "Lost", "dest": {"kind": "page", "page": 0}}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": "Lost", "dest": {"kind": "page", "page": 99}}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": "Lost", "dest": {"kind": "named", "name": "nope"}}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": "   ", "dest": {"kind": "page", "page": 0}}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.add", "title": long_title, "dest": {"kind": "page", "page": 0}}),
+                ErrorCode::Limit,
+            ),
+            (Target::OutlineItem { key: Some(missing) }, json!({"action": "outline.item.update", "title": "Lost"}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.update"}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: Some(missing) }, json!({"action": "outline.item.delete"}), ErrorCode::Invalid),
+            // A move into the item's own subtree is a cycle.
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.move", "parent": one, "index": 0}), ErrorCode::Invalid),
+            // A move into itself is the same cycle, one level up.
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.item.move", "parent": chapters, "index": 0}), ErrorCode::Invalid),
+            // A copy that nests deeper than the room carries.
+            (Target::OutlineItem { key: None }, json!({"action": "outline.item.restore", "subtree": deep_copy(40), "index": 0}), ErrorCode::Limit),
+            // A copy whose title is over the limit.
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.restore", "subtree": [{"title": long_title, "page": 0}], "index": 0}),
+                ErrorCode::Limit,
+            ),
+            // A copy that is small in nodes but too large to broadcast and journal:
+            // the accepted operation has to fit the frame on the way out too.
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.item.restore", "subtree": wide_copy(300, 500), "index": 0}),
+                ErrorCode::Limit,
+            ),
+        ];
+        for (index, (target, payload, code)) in cases.into_iter().enumerate() {
+            let attempt = op(&format!("bad-{index}"), ConflictClass::Structural, target, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a bad operation must be refused")?;
+            assert_eq!(rejected.code, code, "{}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch), "a refusal moves nothing");
+            assert_eq!(outline(room.adapter()), before, "a refusal writes nothing");
+        }
+        Ok(())
+    }
+
+    /// A copy of `count` items with `title` bytes each: many nodes that fit the
+    /// count bound but not the copy's byte budget.
+    fn wide_copy(count: usize, title: usize) -> Value {
+        let title = "t".repeat(title);
+        json!((0..count).map(|_| json!({"title": title, "page": 0})).collect::<Vec<_>>())
+    }
+
+    /// A subtree of `depth` nested nodes, for the restore's depth bound.
+    fn deep_copy(depth: usize) -> Value {
+        let mut node = json!({"title": "bottom", "page": 0, "children": []});
+        for _ in 1..depth {
+            node = json!({"title": "level", "page": 0, "children": [node]});
+        }
+        json!([node])
+    }
+
+    /// A page operation renumbers pages but not what a bookmark goes to: an item
+    /// addressed before the operation is still found after it, because the key is
+    /// the page-independent object and the server recomputes the path.
+    #[test]
+    fn page_operations_keep_the_outline_targets_and_the_keys() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let two = key_of(room.adapter(), "Two");
+        let insert = op(
+            "ins-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert_blank", "width": 100.0, "height": 200.0}),
+        )?;
+        room.apply(&editor, &insert, 0)?;
+        assert_eq!(outline(room.adapter()), ["Start→4", "Chapters→2", "One→2", "Two→3"], "each bookmark points at its page, one number later");
+        // The key taken before the insert still addresses the same item.
+        let rename = op(
+            "upd-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(two) },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.item.update", "title": "Deux"}),
+        )?;
+        let applied = room.apply(&editor, &rename, 0)?;
+        assert_eq!(applied.op.payload["path"], json!([1, 1]), "the server recomputed the path");
+        assert_eq!(outline(room.adapter()), ["Start→4", "Chapters→2", "One→2", "Deux→3"]);
+
+        // A split takes the first two pages out: bookmarks to them lose their
+        // destination, the others keep their page and their key.
+        let split = op(
+            "split-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.split", "count": 2}),
+        )?;
+        room.apply(&editor, &split, 0)?;
+        assert_eq!(outline(room.adapter()), ["Start→2", "Chapters→0", "One→0", "Deux→1"]);
+        // The named destination that opened the fourth page still opens that page,
+        // which is now the second: the destination holds the page object, not a
+        // number, so the split moved the number and kept the target.
+        assert_eq!(named(room.adapter(), "intro").and_then(|destination| destination.page), Some(1));
+
+        // A combine inserts a part, which brings its own bookmark: the outline
+        // grows, and every existing key still addresses its item.
+        let part = one_page_copy(&fixture_with_outline(), 2)?;
+        let combine = op(
+            "combine-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.combine", "count": 1, "bytes": base64_encode(&part)}),
+        )?;
+        room.apply(&editor, &combine, 0)?;
+        let after_combine = outline(room.adapter());
+        assert!(after_combine.iter().any(|row| row.starts_with("combined-part")), "the part brings its bookmark: {after_combine:?}");
+        assert!(after_combine.contains(&"Deux→2".to_owned()), "the bookmark kept its page: {after_combine:?}");
+        let rename = op(
+            "upd-2",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(two) },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.item.update", "title": "Deuxième"}),
+        )?;
+        room.apply(&editor, &rename, 0)?;
+        assert!(outline(room.adapter()).iter().any(|row| row.starts_with("Deuxième")), "the key outlived insert, split and combine");
+
+        // A replacement keeps the page object, so a bookmark to it stays put.
+        let replacement = one_page_copy(&fixture(4), 1)?;
+        let page = outline(room.adapter()).iter().position(|row| row.starts_with("One")).ok_or("One is listed")?;
+        let _ = page;
+        let replace = op(
+            "replace-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.replace", "bytes": base64_encode(&replacement)}),
+        )?;
+        room.apply(&editor, &replace, 0)?;
+        assert!(outline(room.adapter()).iter().any(|row| row.starts_with("Deuxième")), "a replacement keeps the outline");
+        Ok(())
+    }
+
+    /// Named destinations are operations of their own: added, moved, deleted, and
+    /// refused when the name is taken, missing or not a page.
+    #[test]
+    fn named_destinations_are_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        assert_eq!(named(room.adapter(), "intro").and_then(|destination| destination.page), Some(2));
+
+        let add = op(
+            "dest-1",
+            ConflictClass::Structural,
+            Target::NamedDest { name: "appendix".into() },
+            0,
+            0,
+            json!({"action": "dest.add", "dest": {"kind": "page", "page": 3, "left": 5.0, "top": 100.0}}),
+        )?;
+        let applied = room.apply(&editor, &add, 0)?;
+        assert_eq!(applied.op.payload["name"], "appendix");
+        assert_eq!(named(room.adapter(), "appendix").and_then(|destination| destination.page), Some(3));
+
+        // An add of a name that is taken is a conflict, not an overwrite.
+        let duplicate = op(
+            "dest-2",
+            ConflictClass::Structural,
+            Target::NamedDest { name: "appendix".into() },
+            room.version(),
+            room.epoch(),
+            json!({"action": "dest.add", "dest": {"kind": "page", "page": 0}}),
+        )?;
+        assert!(matches!(room.apply(&editor, &duplicate, 0), Err(rejected) if rejected.code == ErrorCode::Conflict));
+
+        let update = op(
+            "dest-3",
+            ConflictClass::Structural,
+            Target::NamedDest { name: "appendix".into() },
+            room.version(),
+            room.epoch(),
+            json!({"action": "dest.update", "dest": {"kind": "page", "page": 0}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!(applied.op.payload["before"]["page"], 3, "the undo image names where it was");
+        assert_eq!(named(room.adapter(), "appendix").and_then(|destination| destination.page), Some(0));
+
+        let delete = op(
+            "dest-4",
+            ConflictClass::Structural,
+            Target::NamedDest { name: "appendix".into() },
+            room.version(),
+            room.epoch(),
+            json!({"action": "dest.delete"}),
+        )?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        assert_eq!(applied.op.payload["before"]["page"], 0, "the copy names where it went");
+        assert!(named(room.adapter(), "appendix").is_none());
+
+        // What cannot be kept is refused before anything changes.
+        let (version, epoch) = (room.version(), room.epoch());
+        let cases: Vec<(Value, ErrorCode)> = vec![
+            (json!({"action": "dest.update", "dest": {"kind": "page", "page": 0}}), ErrorCode::Conflict),
+            (json!({"action": "dest.add", "dest": {"kind": "page", "page": 99}}), ErrorCode::Invalid),
+            (json!({"action": "dest.add", "dest": {"kind": "named", "name": "intro"}}), ErrorCode::Invalid),
+            (json!({"action": "dest.add", "dest": {"kind": "nowhere"}}), ErrorCode::Invalid),
+            (json!({"action": "dest.delete"}), ErrorCode::Conflict),
+        ];
+        for (index, (payload, code)) in cases.into_iter().enumerate() {
+            let name = if index == 1 { "fresh".to_owned() } else { "appendix".to_owned() };
+            let attempt = op(&format!("bad-dest-{index}"), ConflictClass::Structural, Target::NamedDest { name }, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a bad destination operation must be refused")?;
+            assert_eq!(rejected.code, code, "{}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch));
+        }
+        // A blank name never reaches the adapter.
+        let blank =
+            op("bad-name", ConflictClass::Structural, Target::NamedDest { name: "  ".into() }, version, epoch, json!({"action": "dest.delete"}))?;
+        assert!(matches!(room.apply(&editor, &blank, 0), Err(rejected) if rejected.code == ErrorCode::Invalid));
+        Ok(())
+    }
+
+    /// A viewer (and a commenter) may not touch the outline: the room refuses it
+    /// before the adapter runs, so neither the version nor the document moves.
+    #[test]
+    fn a_viewer_cannot_change_the_outline() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, _editor) = room_with_outline()?;
+        let viewer = ActorId::new("viewer")?;
+        room.hello(viewer.clone(), Role::Viewer, &hello()?, 0)?;
+        let commenter = ActorId::new("commenter")?;
+        room.hello(commenter.clone(), Role::Commenter, &hello()?, 0)?;
+        let before = outline(room.adapter());
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt = op(
+            "viewer-add",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            0,
+            0,
+            json!({"action": "outline.item.add", "title": "Mine", "dest": {"kind": "page", "page": 0}}),
+        )?;
+        for actor in [&viewer, &commenter] {
+            let rejected = room.apply(actor, &attempt, 0).err().ok_or("a viewer cannot write")?;
+            assert_eq!(rejected.code, ErrorCode::Forbidden);
+        }
+        let destination = op(
+            "viewer-dest",
+            ConflictClass::Structural,
+            Target::NamedDest { name: "mine".into() },
+            0,
+            0,
+            json!({"action": "dest.add", "dest": {"kind": "page", "page": 0}}),
+        )?;
+        assert!(matches!(room.apply(&viewer, &destination, 0), Err(rejected) if rejected.code == ErrorCode::Forbidden));
+        assert_eq!((room.version(), room.epoch()), (version, epoch));
+        assert_eq!(outline(room.adapter()), before);
+        assert!(named(room.adapter(), "mine").is_none());
         Ok(())
     }
 }

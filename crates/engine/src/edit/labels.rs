@@ -195,7 +195,12 @@ impl Edit {
             },
             Edit::InsertPagesFrom { name, .. } => Label::with("Insert pages from {name}", name.as_str()),
             Edit::AddBookmark { .. } => Label::of("Add bookmark"),
+            Edit::AddBookmarkWith { .. } => Label::of("Add bookmark"),
             Edit::RenameBookmark { .. } => Label::of("Rename bookmark"),
+            // A step that changes where a bookmark goes says so; one that only
+            // renames keeps the rename's wording.
+            Edit::UpdateBookmark { dest: Some(_), .. } => Label::of("Set bookmark destination"),
+            Edit::UpdateBookmark { .. } => Label::of("Rename bookmark"),
             Edit::DeleteBookmark { .. } => Label::of("Delete bookmark"),
             Edit::MoveBookmark { .. } => Label::of("Move bookmark"),
             Edit::SetBookmarkPage { .. } => Label::of("Set bookmark destination"),
@@ -203,6 +208,10 @@ impl Edit {
             Edit::SetBookmarkColor { .. } => Label::of("Colour"),
             Edit::SetBookmarkStyle { .. } => Label::of("Style"),
             Edit::ImportBookmarks { .. } => Label::of("Import bookmarks"),
+            // A named destination is where a bookmark goes, and the two wordings
+            // already say that in every language.
+            Edit::SetNamedDestination { .. } => Label::of("Set bookmark destination"),
+            Edit::DeleteNamedDestination { .. } => Label::of("Delete bookmark"),
             Edit::BookmarksFromStructure => Label::of("New bookmarks from structure"),
             Edit::BookmarksFromTextStyles { .. } => Label::of("New bookmarks from text styles"),
             Edit::NumberPages { .. } => Label::of("Number pages"),

@@ -31,6 +31,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["egui"] }
 # internal
 pdfcraft-collab-annot = { path = "crates/collab-annot", version = "0.18.1" }
+pdfcraft-collab-outline = { path = "crates/collab-outline", version = "0.18.1" }
 pdfcraft-collab-client = { path = "crates/collab-client", version = "0.18.1" }
 pdfcraft-collab-client-pdf = { path = "crates/collab-client-pdf", version = "0.18.1" }
 pdfcraft-collab-hub = { path = "crates/collab-hub", version = "0.18.1" }
