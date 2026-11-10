@@ -106,6 +106,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             allowed: true,
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
+            keys: Default::default(),
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
@@ -633,7 +634,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         });
         let mut out = ctx.run_ui(input, |ui| {
             let mut tool = QuickTool::Select;
-            keys(ui.ctx(), &mut view, &shifted, &mut tool, true);
+            keys(ui.ctx(), crate::page_keys::PageKeys::new(false), &mut view, &shifted, &mut tool, true);
         });
         out.textures_delta.clear();
         assert_eq!(view.comments.selected, None);
@@ -749,6 +750,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
         allowed: true,
         hidden: false,
         redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
     };
     let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
     let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);

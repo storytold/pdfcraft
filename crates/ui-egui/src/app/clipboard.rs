@@ -46,7 +46,8 @@ impl PdfCraftApp {
     }
 
     /// ⌘C / ⌘X / ⌘V copy, cut and paste text, images or comments on canvas (unless a text field
-    /// has focus). With no text selected, ⌘C copies the selected comments, each with its replies.
+    /// has focus, or something is over the pages). With no text selected, ⌘C copies the selected
+    /// comments, each with its replies.
     pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let pastes: Vec<_> = ctx.input(|input| {
@@ -60,7 +61,7 @@ impl PdfCraftApp {
                 })
                 .collect()
         });
-        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
+        let free = self.dialog.is_none() && !self.palette_open && !self.page_keys.over() && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
         if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             self.receive_pastes(i, pastes, false);
             return;
