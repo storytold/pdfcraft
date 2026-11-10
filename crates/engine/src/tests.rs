@@ -5327,7 +5327,7 @@ fn summaries_by_date_put_the_page_commented_on_first_first() {
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [11 0 R 6 0 R] >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R 8 0 R 12 0 R] >> endobj
 5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [9 0 R 10 0 R] >> endobj
 6 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (A) /M (D:20260301050000+10'00') >> endobj
 7 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (B) /M (D:20260228235945Z) >> endobj
@@ -5335,6 +5335,7 @@ fn summaries_by_date_put_the_page_commented_on_first_first() {
 9 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (D) >> endobj
 10 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (E) /M (last Tuesday) >> endobj
 11 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (F) /M (D:20260301120000Z) >> endobj
+12 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 8 0 R /T (R) /M (D:20260302000000Z) >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -5349,13 +5350,13 @@ trailer << /Root 1 0 R >>
     assert_eq!(order(SummarySort::Date), want(&[(0, 1, "A"), (0, 2, "F"), (1, 1, "C"), (1, 2, "B"), (2, 1, "E"), (2, 2, "D")]));
     let headings: Vec<String> = summary_comments(all, SummarySort::Date, &dates).iter().map(|c| c.lines[0].1.clone()).collect();
     assert!(headings[2].starts_with("1. ") && headings[3].starts_with("2. "), "numbered as listed: {headings:?}");
-    // By the date of the last comment: page 2 (last commented 23:59:45 on 28 February) before
-    // page 1 (noon on 1 March), each page's comments still oldest first; page 3, whose last dated
-    // comment can't be read in full, after them.
-    assert_eq!(order(SummarySort::LastDate), want(&[(1, 1, "C"), (1, 2, "B"), (0, 1, "A"), (0, 2, "F"), (2, 1, "E"), (2, 2, "D")]));
+    // By the date of the last comment: page 1 (last commented noon on 1 March) before page 2,
+    // whose newest activity is R's reply to C on 2 March, each page's comments still oldest first;
+    // page 3, whose last dated comment can't be read in full, after them.
+    assert_eq!(order(SummarySort::LastDate), want(&[(0, 1, "A"), (0, 2, "F"), (1, 1, "C"), (1, 2, "B"), (2, 1, "E"), (2, 2, "D")]));
     let text = comment_summary_with("dates.pdf", all, SummarySort::LastDate, &dates);
     let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();
-    assert!(at("C") < at("B") && at("B") < at("A") && at("A") < at("F") && at("F") < at("E") && at("E") < at("D"), "{text}");
+    assert!(at("A") < at("F") && at("F") < at("C") && at("C") < at("R") && at("R") < at("B") && at("B") < at("E") && at("E") < at("D"), "{text}");
     assert_eq!(SummarySort::parse("date_of_last_comment"), Some(SummarySort::LastDate));
     // Comments only sorts by the same dates.
     let text = comment_summary_with("dates.pdf", all, SummarySort::Date, &dates);
@@ -5370,7 +5371,7 @@ trailer << /Root 1 0 R >>
     // Its comments are comments again, on the sheets showing their pages, listed and found there.
     let listed: Vec<(usize, Option<String>)> = s.get(summary).unwrap().info.annotations.iter().map(|a| (a.page, a.author.clone())).collect();
     let mut want: Vec<(usize, Option<String>)> =
-        [(0, "A"), (0, "F"), (1, "B"), (1, "C"), (2, "D"), (2, "E")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
+        [(0, "A"), (0, "F"), (1, "B"), (1, "C"), (1, "R"), (2, "D"), (2, "E")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
     want.sort();
     let mut listed = listed;
     listed.sort();

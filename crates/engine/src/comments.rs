@@ -41,7 +41,7 @@ pub enum SummarySort {
     Author,
     /// Oldest first; the layouts that show the pages put first the page commented on first.
     Date,
-    /// Oldest first, the pages by their last (newest) comment: the page commented on most
+    /// Oldest first, the pages by their last (newest) comment or reply: the page commented on most
     /// recently comes last.
     LastDate,
     Type,
@@ -304,11 +304,16 @@ pub fn summary_items<'a>(all: &'a [pdfcraft_render::Annotation], sort: SummarySo
             let when = |a: &'a pdfcraft_render::Annotation| (rank(a), dates.get(&(a.page, a.index)).copied(), a.modified.as_deref());
             items.sort_by(|x, y| when(x.comment).cmp(&when(y.comment)));
             if sort == SummarySort::LastDate {
-                // Each page where its last dated comment comes, each page's comments kept oldest
-                // first; a page with only undated comments last, pages in document order on a tie.
+                // Each page where its last dated comment or reply comes (a reply is the page's newest
+                // activity too), each page's comments kept oldest first; a page with only undated
+                // comments last, pages in document order on a tie. A date that can't be read in full
+                // ranks after the full ones, as in the sort above.
                 let mut last = std::collections::HashMap::new();
-                for item in items.iter().filter(|i| rank(i.comment) < 2) {
-                    last.insert(item.comment.page, when(item.comment));
+                for item in &items {
+                    for a in std::iter::once(item.comment).chain(item.replies.iter().map(|(_, r)| *r)).filter(|a| rank(a) < 2) {
+                        let at = last.entry(item.comment.page).or_insert(when(a));
+                        *at = (*at).max(when(a));
+                    }
                 }
                 items.sort_by_key(|i| (last.get(&i.comment.page).copied().unwrap_or((2, None, None)), i.comment.page));
             }
