@@ -5,7 +5,8 @@
 //! image object**, at the same size and in the same colour space. So everything else on the
 //! page stays as it was: an invisible OCR text layer, comments, links, form fields, other
 //! content, and the image's own soft mask, `/Interpolate` and other entries. A JPEG stays a JPEG
-//! (at quality 90), and a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000);
+//! (at quality 90), a JPEG 2000 image becomes one (it is read, not written back as JPEG 2000;
+//! 8-bit grey or RGB up to 40 million pixels, without a palette or an alpha channel),
 //! any other grey or RGB image is stored losslessly (Flate), and a black and white (1-bit) image
 //! stays 1-bit as Flate, a CCITT fax one included, unless it is a halftone ([`crate::descreen`]),
 //! which is restored to 8-bit grey. An image several pages draw is cleaned once.
@@ -15,6 +16,8 @@
 //! reported, never skipped silently: pages that are no scan, and scan images in a form PdfCraft
 //! can't rewrite yet (CMYK, indexed, JBIG2, a stencil mask, a remapping decode array, a scan
 //! drawn inside grouped Form artwork) or whose data is broken.
+//! The ink layer of a layered (mixed-raster) scan, a picture drawn through a stencil mask, is
+//! reported and left too: its colours are the text's, and cleaning them as paper lightens the text.
 //!
 //! Like Optimize, the work is a job: [`Session::scan_clean_job`] captures the document,
 //! [`ScanCleanJob::run`] cleans anywhere (a worker thread), and [`Session::apply_scan_clean`]
@@ -263,7 +266,10 @@ impl ScanCleanJob {
             }
             let mut skip = |reason: String| report.skipped.push(SkippedImage { pages: target.pages.clone(), name: target.name.clone(), reason });
             let halftone = target.pages.iter().find_map(|p| page_tunings.iter().find(|(q, _)| q == p)).map_or(settings.halftone, |(_, t)| *t);
-            match clean_image(&cos, target.object, ScanCleanSettings { halftone, ..settings }, &mut budget) {
+            // One image a decoder panics on is that image's bad data: the others are still cleaned.
+            let cleaned = guard(|| clean_image(&cos, target.object, ScanCleanSettings { halftone, ..settings }, &mut budget))
+                .unwrap_or_else(|m| Err(format!("its data could not be decoded (the decoder stopped: {m})")));
+            match cleaned {
                 Ok(Some((stream, halftone))) => {
                     if let Some(format) = halftone {
                         report.halftone.push(HalftoneImage { format, pages: target.pages.clone() });
@@ -300,6 +306,14 @@ fn clean_image(
     // A colour-key mask names sample values to leave unpainted: cleaned samples would match others.
     if matches!(s.dict.get(b"Mask").map(|m| cos.resolve(m)).as_deref(), Some(Object::Array(_))) {
         return Err("it has a colour-key mask, which cleaning would change".into());
+    }
+    // A layered (mixed-raster) scan draws its ink as a picture of the ink's colours through a mask
+    // of the text's shapes: a stencil `/Mask`, or a one-bit `/SMask`. Those colours are no paper,
+    // and background removal would lighten the text.
+    let mask = |key: &[u8]| s.dict.get(key).map(|m| cos.resolve(m));
+    let one_bit = |m: &Object| matches!(m, Object::Stream(m) if m.dict.int(b"BitsPerComponent") == Some(1));
+    if matches!(mask(b"Mask").as_deref(), Some(Object::Stream(_))) || mask(b"SMask").as_deref().is_some_and(one_bit) {
+        return Err("it is drawn through a stencil mask: it holds the ink colours of a layered scan, not its paper".into());
     }
     let samples = optimize::decode_samples(cos, s, budget).map_err(|e| e.to_string())?;
     if samples.bilevel && settings.level > 0 && descreen::is_halftone(&samples.data, samples.width, samples.height) {
