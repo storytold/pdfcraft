@@ -77,11 +77,17 @@ impl Session {
         b.check_copying()?;
         let (old_words, new_words) = (a.words_on_pages(pages), b.words_on_pages(pages));
         let mut c = pdfcraft_compare::compare(&old_words, &new_words);
+        let new_pages = b.info.pages.len();
         for ch in &mut c.changes {
-            if ch.new.rects.is_empty() {
-                ch.new.page = ch.old.page;
+            // A deletion keeps the newer document's own anchor when it has one. Otherwise it goes
+            // on the old page when the newer document has that page, or else on the newer
+            // document's last page, at its top left.
+            if ch.new.rects.is_empty() && ch.new.near.is_none() {
+                let page = ch.old.page.min(new_pages.saturating_sub(1));
+                ch.new.page = page;
+                ch.new.near = if ch.old.page == page { ch.old.rects.first().copied() } else { None };
                 if ch.new.near.is_none() {
-                    ch.new.near = ch.old.rects.first().copied();
+                    ch.new.near = b.info.pages.get(page).map(|info| info.crop.map(f64::from));
                 }
             }
             if ch.old.rects.is_empty() {
@@ -345,7 +351,9 @@ impl crate::Document {
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background }
+                // The ruled lines tell a drawn table from text that merely lines up (#5149).
+                let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
             })
             .collect();
         (pages, truncated)
@@ -363,11 +371,13 @@ impl crate::Document {
         let (pages, truncated_pages) =
             self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it.
+        let language = self.initial_view().language;
         let bytes = match format {
-            OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Docx => pdfcraft_export::docx_with_language(&pages, &title, language.as_deref()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
-            OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
-            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
+            OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
