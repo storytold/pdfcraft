@@ -756,10 +756,11 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
         let defaults = app.view_defaults;
         for view in &mut app.views {
             view.set_display(defaults.layout, defaults.continuous);
-            view.show_page_gaps = defaults.show_page_gaps;
+            view.set_page_gaps(defaults.show_page_gaps);
             match defaults.fit {
                 Fit::None => view.set_zoom(defaults.zoom),
-                fit => view.set_fit(fit),
+                fit if view.fit != fit => view.set_fit(fit),
+                _ => {}
             }
         }
     } else if let Some(i) = app.active {
@@ -770,12 +771,13 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             app.views[i].set_continuous(continuous);
         }
         if gaps_changed {
-            app.views[i].show_page_gaps = show_page_gaps;
+            app.views[i].set_page_gaps(show_page_gaps);
         }
         if fit_changed {
             match app.view_defaults.fit {
                 Fit::None => app.views[i].set_zoom(app.view_defaults.zoom),
-                fit => app.views[i].set_fit(fit),
+                fit if app.views[i].fit != fit => app.views[i].set_fit(fit),
+                _ => {}
             }
         }
         if zoom_changed {
