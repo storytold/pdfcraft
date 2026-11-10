@@ -528,12 +528,19 @@ fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::Texture
     for r in blank {
         clipped.rect_filled(*r, CornerRadius::ZERO, Color32::WHITE);
     }
+    // The raster has no pixels beyond the page. Clip the source and its corresponding
+    // destination together, rather than stretching clamped edge texels into the preview.
+    let source = from.intersect(xf.rect);
+    if !source.is_positive() || !from.is_positive() {
+        return;
+    }
+    let target = egui::emath::RectTransform::from_to(from, to).transform_rect(source);
     mapped_picture(
         &clipped,
         xf,
         tex,
-        [from.left_top(), from.right_top(), from.right_bottom(), from.left_bottom()],
-        [to.left_top(), to.right_top(), to.right_bottom(), to.left_bottom()],
+        [source.left_top(), source.right_top(), source.right_bottom(), source.left_bottom()],
+        [target.left_top(), target.right_top(), target.right_bottom(), target.left_bottom()],
     );
 }
 
