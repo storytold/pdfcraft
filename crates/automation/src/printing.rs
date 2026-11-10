@@ -97,6 +97,8 @@ fn spool_job(
         duplex,
         scaling: spool::Scaling::Exact,
         grayscale: print::driver_needs_grayscale(a.opt_bool("grayscale")?.unwrap_or(false), raster),
+        // Set when the copy sent is made grey (`spooler_copy`, #5806).
+        grey_pages: false,
         title,
         options: {
             let mut options: Vec<(String, String)> = options.into_iter().chain(print::media_option(paper)).collect();
@@ -292,8 +294,8 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
-                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
+                let mut job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),

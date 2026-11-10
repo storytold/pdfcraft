@@ -557,7 +557,7 @@ impl PdfCraftApp {
     /// the progress card counts the sheets as they reach the spooler, and the spooler's answer
     /// arrives as a notice.
     #[cfg(not(target_arch = "wasm32"))]
-    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
+    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
         let spooler = self.spooler.clone();
@@ -567,9 +567,9 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
-            // Large pictures become tiles on Windows (#5131): work on the whole file, kept off the
-            // UI thread with the rest.
-            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
+            // On Windows grayscale makes the pages grey (#5806) and large pictures become tiles
+            // (#5131): work on the whole file, kept off the UI thread with the rest.
+            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
             // The receiver may be gone (the app quit): nothing to report to then.
             let result = match &spooler {
                 Some(submit) => submit(&bytes, &job),
