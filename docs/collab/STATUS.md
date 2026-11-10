@@ -35,7 +35,8 @@
   `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
   clippy complexity limit) — **88 commits** not in `origin/main`
   (`git rev-list --count origin/main..HEAD` at `5bad54c40`), **48 behind** and
-  **8 ahead** of the PR head; this STATUS commit makes 89. The numbers the
+  **8 ahead** of the PR head; the STATUS record makes 89 and the follow-up note
+  on top of it 90 (`git rev-list --count origin/main..HEAD` at this docs head). The numbers the
   earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
   86/11/6 at `0c57e2271` — were right when they were measured; `origin/main`
   kept moving (`ba28458ad` → `a71b5124b` → `274b7a042`) and each slice added
@@ -885,7 +886,8 @@ Gates at `b4e9179d8` (host `agents`, rustc 1.99.1):
 | E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **13/13** |
 | UI, the collab module | `cargo test -p pdfcraft-ui-egui --features collab --lib collab::` | pass — 6 (the three new ones and the three token/role ones) |
 
-What this does **not** cover: several selected comments share nothing (only the
+What this does **not** cover (the first three are closed in the next section,
+`5bad54c40`): several selected comments share nothing (only the
 primary selection is sent); a multi-line range is one bounding box, not one quad
 per line (so the box may cover unselected text between lines); a caret/typing
 position is not shared; and selection rendering was not checked in a browser
