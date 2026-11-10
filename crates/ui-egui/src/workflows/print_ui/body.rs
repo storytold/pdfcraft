@@ -1,4 +1,4 @@
-use super::draft::{Handling, PrintDraft, Which};
+use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
     Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
@@ -117,8 +117,25 @@ pub(crate) fn body(
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
-    let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let laid = settings.as_ref().ok().map(|s| print::layout(sizes, s));
+    // Creep within its field's range can still be too much for a thick booklet.
+    let too_much_creep = d.handling == Handling::Booklet && d.creep > 0.0 && matches!(laid, Some(Err(_)));
+    let sheets = laid.and_then(Result::ok).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
+    // Cap the settings+preview area to the screen's available height (#4252, #5317):
+    // on a short screen, or with the driver's own Properties… panel expanded below, this row can
+    // otherwise grow taller than the display and push the Print/Cancel buttons off both edges.
+    // The title and the button row stay outside, so they are always reachable.
+    // `viewport_rect()` is egui's own idea of the current viewport, kept from the latest
+    // `RawInput::screen_rect` it was handed — unlike reading `raw.screen_rect` directly, it
+    // does not go blank on a frame where the backend didn't resend it.
+    let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
+    let max_h = (screen_h - 220.0).max(300.0);
+    // The viewport is `max_h` itself, not what the modal offers this frame: when a different
+    // dialog was shown before, the shared modal remeasures from a height of zero (#5118) and
+    // offers less, which would size this area by the dialog shown before. `auto_shrink` still
+    // shrinks it to contents that fit.
+    egui::ScrollArea::vertical().max_height(max_h).min_scrolled_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
     ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
@@ -182,6 +199,8 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    // What this printer was last printed with (#2001).
+                    d.apply_setup();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -226,15 +245,35 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
-                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                ui.horizontal(|ui| {
+                    // A standard size's name is translated; a custom paper keeps the name it was given.
+                    let shown = if d.paper_is_custom() { d.paper_name() } else { tl!(d.paper_name().as_str()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                        for (i, (name, _)) in PAPERS.iter().enumerate() {
+                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                        }
+                        if !d.custom_papers.is_empty() {
+                            ui.separator();
+                        }
+                        for (i, p) in d.custom_papers.iter().enumerate() {
+                            let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
+                            ui.selectable_value(&mut d.paper, PAPERS.len() + i, label);
+                        }
+                    })
+                    .response
+                    .labelled_by(paper_label.id);
+                    if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
+                        d.custom_new = match d.custom_new {
+                            Some(_) => None,
+                            None => Some((String::new(), String::new(), String::new())),
+                        };
                     }
-                })
-                .response
-                .labelled_by(paper_label.id);
+                    if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
+                        d.remove_custom_paper();
+                    }
+                });
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
@@ -242,11 +281,16 @@ pub(crate) fn body(
                     d.sheet = 0;
                 }
                 ui.end_row();
+                if d.custom_new.is_some() {
+                    ui.label("");
+                    custom_paper_row(ui, d, t);
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
             if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
-                && p.two_sided == Some(false)
+                && p.two_sided.or_else(|| d.two_sided.get(&p.name).copied().flatten()) == Some(false)
             {
                 ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
             }
@@ -339,7 +383,7 @@ pub(crate) fn body(
                         if ui.add(widgets::radio(custom, tl!("Custom scale:"))).clicked() {
                             d.size = SizeMode::Custom(d.custom_scale);
                         }
-                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"))
+                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(CUSTOM_SCALE).suffix(" %"))
                             .accessible_name(tl!("Custom scale"));
                     });
                 }
@@ -361,15 +405,13 @@ pub(crate) fn body(
                     });
                 }
                 Handling::Multiple => {
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Pages per sheet:"));
-                        combo(ui, "per-sheet", tl!("Pages per sheet:"), &mut d.per_sheet, &[(2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 60.0);
+                    let page_order = |ui: &mut egui::Ui, order: &mut PageOrder| {
                         ui.label(tl!("Page order:"));
                         combo(
                             ui,
                             "order",
                             tl!("Page order:"),
-                            &mut d.order,
+                            order,
                             &[
                                 (PageOrder::Horizontal, tl!("Horizontal")),
                                 (PageOrder::HorizontalReversed, tl!("Horizontal reversed")),
@@ -379,7 +421,34 @@ pub(crate) fn body(
                             ],
                             150.0,
                         );
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Pages per sheet:"));
+                        // `None` is Custom: columns by rows, typed in.
+                        let mut per_sheet = (!d.custom_grid).then_some(d.per_sheet);
+                        combo(
+                            ui,
+                            "per-sheet",
+                            tl!("Pages per sheet:"),
+                            &mut per_sheet,
+                            &[(Some(2), "2"), (Some(4), "4"), (Some(6), "6"), (Some(9), "9"), (Some(16), "16"), (None, tl!("Custom"))],
+                            70.0,
+                        );
+                        d.custom_grid = per_sheet.is_none();
+                        if let Some(n) = per_sheet {
+                            d.per_sheet = n;
+                            page_order(ui, &mut d.order);
+                        } else {
+                            let max = print::MAX_GRID;
+                            ui.add(egui::DragValue::new(&mut d.cols).range(1..=max)).accessible_name(tl!("Columns"));
+                            ui.label(tl!("by"));
+                            ui.add(egui::DragValue::new(&mut d.rows).range(1..=max)).accessible_name(tl!("Rows"));
+                        }
                     });
+                    if d.custom_grid {
+                        // The grid's fields take the room the page order had.
+                        ui.horizontal(|ui| page_order(ui, &mut d.order));
+                    }
                     ui.horizontal(|ui| {
                         ui.add(widgets::checkbox(&mut d.border, tl!("Print page border")));
                         ui.add(widgets::checkbox(&mut d.auto_rotate, tl!("Auto-rotate pages")));
@@ -407,6 +476,10 @@ pub(crate) fn body(
                         );
                         ui.label(tl!("Binding:"));
                         combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
+                        let creep_label = ui.label(tl!("Creep:"));
+                        ui.add(egui::DragValue::new(&mut d.creep).range(0.0..=print::MAX_CREEP).speed(0.05).suffix(" pt"))
+                            .labelled_by(creep_label.id)
+                            .on_hover_text(tl!("Moves each sheet's pages toward the fold by this much more than the sheet outside it, so the margins match once the booklet is folded and trimmed."));
                     });
                 }
             }
@@ -465,6 +538,10 @@ pub(crate) fn body(
             match (&settings, sheets.get(d.sheet)) {
                 (Err(e), _) => {
                     ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
+                }
+                (Ok(_), None) if too_much_creep => {
+                    let msg = tl!("The creep moves the innermost sheet's pages too far for this many pages. Reduce Creep.");
+                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(msg).color(t.text_muted)).wrap());
                 }
                 (Ok(_), Some(sheet)) => {
                     let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
@@ -556,6 +633,7 @@ pub(crate) fn body(
             }
         });
     });
+    }); // end ScrollArea (#4252, #5317)
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -571,10 +649,41 @@ pub(crate) fn body(
     (go, cancel)
 }
 
+/// The row that adds a custom paper: name, width and height in the preferences' unit.
+fn custom_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let unit = d.units;
+    let Some((name, width, height)) = d.custom_new.as_mut() else { return };
+    let side = |s: &str| s.trim().replace(',', ".").parse::<f64>().ok().map(|v| v / unit.per_point());
+    let paper = match (side(width), side(height)) {
+        (Some(w), Some(h)) => crate::print_paper::CustomPaper::new(name, w, h),
+        _ => None,
+    };
+    let (mut add, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).hint_text(tl!("Name")).desired_width(110.0)).accessible_name(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(width).hint_text(tl!("Width")).desired_width(52.0)).accessible_name(tl!("Width"));
+        ui.label("×");
+        ui.add(egui::TextEdit::singleline(height).hint_text(tl!("Height")).desired_width(52.0)).accessible_name(tl!("Height"));
+        ui.label(egui::RichText::new(unit.label()).color(t.text_muted));
+        add = ui.add_enabled(paper.is_some(), egui::Button::new(tl!("Add"))).clicked();
+        cancel = ui.button(tl!("Cancel")).clicked();
+    });
+    if add && let Some(paper) = paper {
+        d.add_custom_paper(paper);
+        d.custom_new = None;
+    } else if cancel {
+        d.custom_new = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
     use super::*;
     use crate::i18n::Lang;
+    use crate::{Dialog, PdfCraftApp};
 
     /// The row the settings column really gives the header: `body` sets it to 470 px, less the
     /// frame's 10 px margins.
@@ -625,6 +734,9 @@ mod tests {
     /// rather than by a guess at which locale is the worst one.
     #[test]
     fn the_reset_button_never_covers_the_title_in_any_language() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         for lang in Lang::all() {
             let (title, reset) = header_at(lang.code(), PANEL_ROW);
             assert!(
@@ -641,6 +753,9 @@ mod tests {
     /// are the catalogs that get there first, at the row's own width.
     #[test]
     fn a_row_without_room_for_a_title_leaves_it_out() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         for width in [449.0, 440.0, 400.0, 300.0] {
             for lang in ["bg", "uk", "es", "it", "en"] {
                 let (title, reset) = header_at(lang, width);
@@ -670,6 +785,9 @@ mod tests {
     /// `Label` does that by itself when it elides), and a title that fits whole shows none.
     #[test]
     fn the_truncated_title_is_reachable_through_a_tooltip() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let (whole, _, _) = header_frame("it", 620.0, false);
         let whole = whole.expect("a wide row keeps the title");
         let (cut, _, tooltip) = header_frame("it", PANEL_ROW, true);
@@ -678,5 +796,25 @@ mod tests {
         assert!(tooltip, "hovering the elided title opens a tooltip with the full string");
         let (_, _, tooltip) = header_frame("en", 620.0, true);
         assert!(!tooltip, "a title that fits whole needs no tooltip");
+    }
+
+    /// #4252, #5317: on a short screen the settings+preview area used to grow past
+    /// both the top and bottom of the screen (centered modals overflow both edges equally),
+    /// taking the Cancel button with it. It must now stay reachable, scrolling instead.
+    #[test]
+    fn the_print_dialog_keeps_its_buttons_within_a_short_screen() {
+        let screen = egui::vec2(1000.0, 480.0); // shorter than the settings+preview column alone
+        let mut h = Harness::builder().with_size(screen).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+            app.open_bytes("one-page.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.dialog = Some(Dialog::Print);
+            app
+        });
+        h.run_steps(4);
+
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(cancel.min.y >= 0.0 && cancel.max.y <= screen.y, "Cancel must stay within the {}×{} screen, got {cancel:?}", screen.x, screen.y);
     }
 }

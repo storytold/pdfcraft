@@ -19,6 +19,7 @@ pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 pdfcraft-edit = { workspace = true }
+pdfcraft-content = { workspace = true }
 pdfcraft-audit = { workspace = true }
 pdfcraft-redact = { workspace = true }
 pdfcraft-print = { workspace = true }
@@ -58,3 +59,5 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# JBIG2 fixtures (`encode_jbig2_generic`).
+pdfcraft-filters = { workspace = true }
