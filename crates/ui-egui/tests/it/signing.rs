@@ -831,6 +831,33 @@ fn typing_a_letter_moves_the_picker_selection() {
     assert_eq!(chosen(&h).as_deref(), Some("Nora"));
 }
 
+/// A letter typed while Remove asks for confirmation leaves the question and the selection.
+#[test]
+fn typing_a_letter_keeps_a_removal_waiting_for_its_answer() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    for name in ["Ana", "Nora"] {
+        h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: format!("/ids/{name}.p12"),
+            name: name.into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            expires_at: None,
+            unusable: None,
+        });
+    }
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    draft.confirm_remove = Some(0);
+    h.run_steps(3);
+    h.event(egui::Event::Text("n".into()));
+    h.run_steps(3);
+    let d = h.state().sign_draft.as_ref().unwrap();
+    assert_eq!((d.selected, d.confirm_remove), (Some(0), Some(0)));
+}
+
 /// The ID a letter selects may start below the list's fold: the list scrolls to it.
 #[test]
 fn typing_a_letter_scrolls_to_the_selected_id() {

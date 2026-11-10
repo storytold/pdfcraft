@@ -43,12 +43,14 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     // A letter jumps to the IDs that start with it; this step has no text field to type into.
+    // While a removal waits for its answer, letters do nothing, so they can't cancel it unseen.
     let typed: Vec<char> = ui.input(|i| {
         let text = i.events.iter().filter_map(|e| if let egui::Event::Text(text) = e { Some(text.as_str()) } else { None });
         text.flat_map(str::chars).filter(|c| c.is_alphanumeric()).collect()
     });
     let mut jumped = None;
-    for letter in typed {
+    let answering = d.confirm_remove.is_some();
+    for letter in typed.into_iter().filter(|_| !answering) {
         if let Some(i) = super::next_with_letter(&ids, &order, d.selected, letter) {
             jumped = Some(i);
             d.selected = jumped;

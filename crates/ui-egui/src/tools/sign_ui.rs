@@ -483,7 +483,8 @@ impl PdfCraftApp {
     }
 
     /// Refresh: list the OS key store again, keeping the selection on its ID. Refresh on the
-    /// empty Configure step goes to the picker once there is something to pick.
+    /// empty Configure step goes to the picker once there is something to pick, and a picker
+    /// left empty goes back to Configure, where an ID file can be added.
     fn refresh_digital_ids(&mut self) {
         let selected = self.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| self.digital_ids.get(i)).map(|e| e.path.clone());
         self.refresh_os_key_store_ids();
@@ -492,9 +493,7 @@ impl PdfCraftApp {
             d.selected = selected
                 .and_then(|path| self.digital_ids.iter().position(|e| e.path == path && e.unusable.is_none()))
                 .or_else(|| first_usable(&self.digital_ids));
-            if !self.digital_ids.is_empty() {
-                d.step = SignStep::Choose;
-            }
+            d.step = if self.digital_ids.is_empty() { SignStep::Configure } else { SignStep::Choose };
         }
     }
 
@@ -1000,6 +999,20 @@ mod tests {
         app.refresh_digital_ids();
         let d = app.sign_draft.as_ref().unwrap();
         assert_eq!((d.step, d.selected), (SignStep::Choose, Some(0)));
+    }
+
+    #[test]
+    fn a_picker_that_refresh_empties_goes_back_to_configure() {
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![listed("windows:gone", "Gone")];
+        let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+        draft.step = SignStep::Choose;
+        draft.selected = Some(0);
+        app.sign_draft = Some(draft);
+        app.refresh_digital_ids();
+        assert!(app.digital_ids.is_empty(), "the store no longer lists it");
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!((d.step, d.selected), (SignStep::Configure, None), "where an ID file can be added");
     }
 
     #[test]
