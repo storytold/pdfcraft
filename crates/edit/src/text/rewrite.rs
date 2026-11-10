@@ -1083,10 +1083,6 @@ pub(crate) fn rewrite_block_from(
     Ok(LineEdit { substituted: font.substituted })
 }
 
-/// The cover (when [`BlockStyle::cover`] asks for one) and visible rendering that start a
-/// rewritten invisible paragraph, drawn in the space whose CTM is `ctm`. Nothing for visible text.
-/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it; one
-/// painted over where it was is drawn on top of the page instead ([`crate::draw_on_top`]).
 /// What covering the word in `rect` paints: scanned ink reaches a little past the recognised box,
 /// but not past `between`, the words on either side that stay. It always covers the word itself.
 pub(crate) fn cover_box(rect: [f64; 4], between: Option<[f64; 2]>) -> [f64; 4] {
@@ -1095,6 +1091,10 @@ pub(crate) fn cover_box(rect: [f64; 4], between: Option<[f64; 2]>) -> [f64; 4] {
     [(rect[0] - pad).max(left.min(rect[0])), rect[1] - pad, (rect[2] + pad).min(right.max(rect[2])), rect[3] + pad]
 }
 
+/// The cover (when [`BlockStyle::cover`] asks for one) and visible rendering that start a
+/// rewritten invisible paragraph, drawn in the space whose CTM is `ctm`. Nothing for visible text.
+/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it; one
+/// painted over where it was is drawn on top of the page instead ([`crate::draw_on_top`]).
 pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockStyle, ctm: [f64; 6]) -> Result<Vec<Op>, EditError> {
     if !block.invisible {
         return Ok(Vec::new());
