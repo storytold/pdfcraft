@@ -483,6 +483,9 @@ pub struct DocView {
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
+    /// The document and attached file this tab was opened from, when a form or the Attachments
+    /// panel opened it: asking for that attachment again comes back to this tab.
+    pub from_attachment: Option<(DocId, String)>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -1012,6 +1015,7 @@ impl DocView {
         Self {
             pane: Default::default(),
             id,
+            from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,
