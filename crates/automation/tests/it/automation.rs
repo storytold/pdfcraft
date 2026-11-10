@@ -4397,6 +4397,37 @@ fn accessibility_review_sidecar_tracks_human_decisions_for_exact_pdf_revision() 
     }
 }
 
+/// Find and replace through text_replace: every match (one undo step), the first only, the find
+/// options, and counts that add up to what text_find reports.
+#[test]
+fn replacing_text_through_tools() {
+    let dir = workdir("replace-text");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "page" }))["count"].as_u64();
+    let r = ok(&mut a, "text_replace", json!({ "doc": doc, "find": "page", "replace": "Sheet" }));
+    assert_eq!((r["replaced"].as_u64(), r["skipped"].as_u64(), r["changed"].as_bool()), (Some(3), Some(0), Some(true)));
+    assert_eq!(found, r["replaced"].as_u64(), "what text_find found is what was replaced");
+    assert_eq!(r["pages"], json!([1, 2, 3]));
+    assert_eq!(page_text(&mut a, doc), ["Sheet 1", "Sheet 2", "Sheet 3"]);
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Replace all");
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 3"], "one undo step");
+    // The first match only, on the pages asked for.
+    let r = ok(&mut a, "text_replace", json!({ "doc": doc, "find": "page", "replace": "Sheet", "all": false, "pages": [2, 3] }));
+    assert_eq!((r["replaced"].as_u64(), r["pages"].clone()), (Some(1), json!([2])));
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Sheet 2", "Page 3"]);
+    // Case-sensitive and whole words follow the find bar's options; nothing found changes nothing.
+    let r = ok(&mut a, "text_replace", json!({ "doc": doc, "find": "page", "replace": "x", "case_sensitive": true }));
+    assert_eq!((r["replaced"].as_u64(), r["changed"].as_bool()), (Some(0), Some(false)));
+    let r = ok(&mut a, "text_replace", json!({ "doc": doc, "find": "Pag", "replace": "x", "whole_words": true }));
+    assert_eq!(r["replaced"].as_u64(), Some(0));
+    // An empty replacement deletes the match.
+    ok(&mut a, "text_replace", json!({ "doc": doc, "find": "Page ", "replace": "" }));
+    assert_eq!(page_text(&mut a, doc), ["1", "Sheet 2", "3"]);
+    assert!(matches!(a.call("text_replace", &json!({ "doc": doc, "find": "x" })), Err(ToolError::InvalidArgs(_))), "replace is required");
+    assert!(matches!(a.call("text_replace", &json!({ "doc": doc, "find": "x", "replace": "y", "pages": [9] })), Err(ToolError::InvalidArgs(_))));
+}
+
 #[test]
 fn editing_existing_text_through_tools() {
     let dir = workdir("edit-text");
@@ -12176,6 +12207,32 @@ fn a_missing_path_under_the_root_names_where_it_was_looked_for() {
     assert!(!m.contains("looked for"), "{m}");
     ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }));
     let _ = std::fs::remove_dir_all(base);
+}
+
+/// `doc_print` takes a paper size of its own besides the named ones, in inches, millimetres,
+/// centimetres or points, either way round; a size it can't read or outside 1 to 200 inches is
+/// refused.
+#[test]
+fn doc_print_takes_a_paper_size_of_its_own() {
+    let dir = workdir("print-paper-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (paper, want) in
+        [("8.5x14in", (612.0, 1008.0)), ("297x210mm", (595.28, 841.89)), ("10 x 15 cm", (283.46, 425.2)), ("288x432PT", (288.0, 432.0))]
+    {
+        let file = format!("{}.pdf", want.0);
+        ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "paper": paper, "orientation": "portrait", "path": file }));
+        let bytes = std::fs::read(dir.join(&file)).unwrap();
+        let out = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+        let page = pdfcraft_model::pages(&out)[0].display_size(&out);
+        assert!((page.0 - want.0).abs() < 0.5 && (page.1 - want.1).abs() < 0.5, "{paper}: {page:?}");
+    }
+    for paper in ["8.5xbroad", "8.5x14", "0.5x11in", "8.5x300in", "-8.5x11in", "NaNx11in"] {
+        match a.call("doc_print", &json!({ "doc": doc, "paper": paper, "path": "x.pdf" })) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains("unknown paper"), "{paper}: {m}"),
+            other => panic!("{paper}: {other:?}"),
+        }
+    }
 }
 
 /// `doc_print` prints as image: pictures at `dpi`, grey with `grayscale`; a resolution outside
