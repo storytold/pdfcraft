@@ -64,7 +64,9 @@ impl DocView {
 
     /// The caret of the text selection, in user space: the active end of a run (where
     /// typing would start) or the dragged corner of a column select, as (page, point).
-    /// Presence shares it; the document keeps nothing.
+    /// Presence shares it; the document keeps nothing. Its only reader is `collab.rs`, so
+    /// a build without the feature would carry it as dead code.
+    #[cfg(feature = "collab")]
     pub(crate) fn selection_caret(&self, info: &DocInfo) -> Option<(usize, [f64; 2])> {
         let s = self.selection?;
         let text = self.texts.get(&s.page)?;
