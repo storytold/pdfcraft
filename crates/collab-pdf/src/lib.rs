@@ -218,6 +218,23 @@ impl PdfAdapter {
         self.last_commit.as_ref()
     }
 
+    /// The version of the committed base `CURRENT` names: the last one written
+    /// to disk, whether or not the cabinet took it. `0` without a store.
+    pub fn committed_version(&self) -> u64 {
+        self.store.as_ref().map_or(0, |store| store.base_state().0)
+    }
+
+    /// The bytes of the committed base, read back from the store. A publisher
+    /// needs them after a restart (limitation 6), when the process that wrote
+    /// them is gone and `last_commit` is empty. `None` without a store or
+    /// before the first base.
+    pub fn committed_base(&self) -> Result<Option<Vec<u8>>, AdapterError> {
+        match self.store.as_ref() {
+            Some(store) => store.base(),
+            None => Ok(None),
+        }
+    }
+
     fn apply_edit(&mut self, edit: Edit) -> Result<(), AdapterError> {
         self.session.apply(self.id, edit).map_err(map_edit)
     }

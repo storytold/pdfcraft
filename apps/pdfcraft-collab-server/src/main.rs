@@ -170,9 +170,15 @@ fn run() -> Result<(), String> {
         // Production: rooms arrive through the control plane.
         None => 0,
     };
+    // A room whose committed base the cabinet never took — the POST queued in
+    // the process that just died — is resumed from the store and published at
+    // once (limitation 6). Without this the room waits for the next commit, join
+    // or leave, and a quiet file never reaches the cabinet again.
+    let restored = rooms::restore_publications(&mut hub, &rooms).map_err(|e| format!("could not read the publication state: {e:?}"))?;
 
     let config = Config { app: args.app.clone(), origin: args.origin.clone(), ..Config::default() };
     let server = Arc::new(WsServer::new(hub, verifier.clone(), config));
+    let restored = server.restore_publications(restored);
     let handle = server.clone().bind_arc(&args.listen).map_err(|e| format!("could not listen on {}: {e}", args.listen))?;
     // The publication queue (limitation 6): a commit's cabinet POST that failed
     // is retried here with a backoff, without waiting for the next commit or the
@@ -189,7 +195,7 @@ fn run() -> Result<(), String> {
         None => None,
     };
     println!(
-        "pdfcraft-collab-server: {opened} room(s), ws://{}, health http://{}{}, auth {}, callback {}",
+        "pdfcraft-collab-server: {opened} room(s), {restored} restored publication(s), ws://{}, health http://{}{}, auth {}, callback {}",
         handle.local_addr(),
         health,
         control.map_or_else(String::new, |addr| format!(", control http://{addr}/v1/sessions")),
@@ -258,8 +264,14 @@ fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_coll
         ),
         Ok(metrics) if path == "/metrics" => {
             let mut body = format!(
-                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\npdfcraft_collab_publication_retries_total {}\npdfcraft_collab_conflicts_resolved_total {}\n",
-                metrics.rooms, metrics.clients, metrics.forced_commits, metrics.publication_retries, metrics.conflicts_resolved
+                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\npdfcraft_collab_publication_retries_total {}\npdfcraft_collab_publications_restored_total {}\npdfcraft_collab_publications_after_resolve_total {}\npdfcraft_collab_conflicts_resolved_total {}\n",
+                metrics.rooms,
+                metrics.clients,
+                metrics.forced_commits,
+                metrics.publication_retries,
+                metrics.publications_restored,
+                metrics.publications_after_resolve,
+                metrics.conflicts_resolved
             );
             for (room, version, epoch) in metrics.versions {
                 body.push_str(&format!(
@@ -562,6 +574,8 @@ mod tests {
             forced_commits: 4,
             conflicts_resolved: 1,
             publication_retries: 2,
+            publications_restored: 1,
+            publications_after_resolve: 3,
         };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));
         assert_eq!(status, "200 OK");
@@ -572,6 +586,8 @@ mod tests {
         assert!(body.contains("pdfcraft_collab_rooms 2"));
         assert!(body.contains("pdfcraft_collab_forced_commits_total 4"));
         assert!(body.contains("pdfcraft_collab_publication_retries_total 2"));
+        assert!(body.contains("pdfcraft_collab_publications_restored_total 1"));
+        assert!(body.contains("pdfcraft_collab_publications_after_resolve_total 3"));
         assert!(body.contains("pdfcraft_collab_conflicts_resolved_total 1"));
         assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
         assert!(!body.contains("read_only"), "a healthy room is not reported as read-only");
@@ -585,6 +601,8 @@ mod tests {
             forced_commits: 0,
             conflicts_resolved: 0,
             publication_retries: 0,
+            publications_restored: 0,
+            publications_after_resolve: 0,
         };
         let (_, _, body) = render("/health", Ok(broken.clone()));
         assert!(body.contains(r#""ok":false"#));
@@ -605,6 +623,8 @@ mod tests {
                 forced_commits: 0,
                 conflicts_resolved: 0,
                 publication_retries: 0,
+                publications_restored: 0,
+                publications_after_resolve: 0,
             }),
         );
         assert_eq!(status, "404 Not Found");

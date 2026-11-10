@@ -84,17 +84,29 @@ struct Shared<A: Adapter> {
     /// Publication retries attempted since the process started (limitation 6),
     /// exposed as `pdfcraft_collab_publication_retries_total`.
     publication_retries: u64,
+    /// Publications a restart put back in the queue from the store, exposed as
+    /// `pdfcraft_collab_publications_restored_total` (limitation 6).
+    publications_restored: u64,
+    /// Publications an operator's `resolve` put in the queue without a commit,
+    /// exposed as `pdfcraft_collab_publications_after_resolve_total`.
+    publications_after_resolve: u64,
     /// The retry schedule, copied out of [`Config`] so `Shared` owns its clock.
     backoff: Duration,
     backoff_max: Duration,
 }
 
-/// One failed publication waiting for its next attempt.
+/// One publication waiting for an attempt, or for its next one.
 struct Queued {
     publication: Box<dyn Publication>,
-    /// Retries already made for this publication; `0` before the first one.
+    /// Attempts already made for this publication; `0` before the first one.
     attempts: u32,
     due_ms: u64,
+    /// `true` when a commit's POST failed and the queue owns the retry;
+    /// `false` for a publication a restart or a resolve queued before its first
+    /// attempt. The difference is only the metric: the first attempt of the
+    /// latter is counted by `publications_restored`/`publications_after_resolve`,
+    /// not as a retry.
+    retry: bool,
 }
 
 impl<A: Adapter> Shared<A> {
@@ -151,7 +163,15 @@ impl<A: Adapter> Shared<A> {
     /// Keep a failed publication for a later attempt (limitation 6). The room is
     /// already `publishing`; the queue is the only thing that releases it.
     fn queue_publication(&mut self, doc: DocKey, publication: Box<dyn Publication>, now_ms: u64) {
-        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms: now_ms.saturating_add(backoff_ms(0, self.backoff, self.backoff_max)) });
+        let due_ms = now_ms.saturating_add(backoff_ms(0, self.backoff, self.backoff_max));
+        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms, retry: true });
+    }
+
+    /// Put a publication the process did not run yet — one a restart recovered
+    /// from the store, or one an operator's `resolve` created — at the head of
+    /// the queue: no backoff, because no attempt of this process failed.
+    fn queue_restored(&mut self, doc: DocKey, publication: Box<dyn Publication>, now_ms: u64) {
+        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms: now_ms, retry: false });
     }
 
     /// Take the retries whose backoff has elapsed. They are removed so the
@@ -189,6 +209,8 @@ impl<A: Adapter> WsServer<A> {
             conflicts_resolved: 0,
             retries: HashMap::new(),
             publication_retries: 0,
+            publications_restored: 0,
+            publications_after_resolve: 0,
             backoff: config.publication_backoff,
             backoff_max: config.publication_backoff_max,
         };
@@ -252,8 +274,11 @@ impl<A: Adapter> WsServer<A> {
                 attempts += 1;
                 let outcome = queued.publication.run();
                 let published = outcome.is_ok();
+                let retried = queued.retry || queued.attempts > 0;
                 let Ok(mut shared) = lock(&self.shared) else { return attempts };
-                shared.publication_retries = shared.publication_retries.saturating_add(1);
+                if retried {
+                    shared.publication_retries = shared.publication_retries.saturating_add(1);
+                }
                 let again = shared.hub.finish_retry(&doc, outcome);
                 if again {
                     shared.requeue(doc.clone(), queued, now_ms);
@@ -320,19 +345,52 @@ impl<A: Adapter> WsServer<A> {
     /// moved under the hub lock, so a publication cannot run with the old one,
     /// and a successful resolution is counted for `/metrics`. The answer is the
     /// room's document version and epoch after the marker moved.
+    ///
+    /// The base the cabinet refused is published now, without waiting for a
+    /// commit, a join or a leave (limitation 6): a room that goes quiet after a
+    /// resolution still reaches the cabinet. It is queued like a restored
+    /// publication — no backoff, because no attempt of this call failed — and
+    /// its `409`, if it comes, stops the queue exactly as a commit's does.
     pub fn resolve_conflict(&self, doc: &DocKey, published: Published) -> Result<(u64, u64), ResolveError> {
         let mut shared = lock(&self.shared).map_err(|_| ResolveError::Hub)?;
-        let Some(room) = shared.hub.room_mut(doc) else { return Err(ResolveError::Missing) };
-        room.resolve_conflict(published).map_err(|e| match e.code {
-            ErrorCode::Conflict => ResolveError::NotInConflict,
-            ErrorCode::Busy => ResolveError::Busy,
-            ErrorCode::Invalid => ResolveError::Invalid(e.message),
-            _ => ResolveError::Failed(e.message),
-        })?;
-        let version = room.version();
-        let epoch = room.epoch();
+        let (version, epoch, publication) = {
+            let Some(room) = shared.hub.room_mut(doc) else { return Err(ResolveError::Missing) };
+            room.resolve_conflict(published).map_err(|e| match e.code {
+                ErrorCode::Conflict => ResolveError::NotInConflict,
+                ErrorCode::Busy => ResolveError::Busy,
+                ErrorCode::Invalid => ResolveError::Invalid(e.message),
+                _ => ResolveError::Failed(e.message),
+            })?;
+            let version = room.version();
+            let epoch = room.epoch();
+            // An error here leaves the room as it was; the resolve itself has
+            // already moved the marker. The next commit then publishes, which
+            // is what happened before this method published at all.
+            (version, epoch, room.republish().ok().flatten())
+        };
         shared.conflicts_resolved = shared.conflicts_resolved.saturating_add(1);
+        if let Some(publication) = publication {
+            shared.publications_after_resolve = shared.publications_after_resolve.saturating_add(1);
+            shared.queue_restored(doc.clone(), publication, now_ms());
+        }
         Ok((version, epoch))
+    }
+
+    /// Queue the publications a restart recovered from the store (limitation
+    /// 6). Each room was opened from its base and journal and is already
+    /// `publishing` (`rooms::restore_publications`), so no client commit can
+    /// overtake the restored one; the queue runs them at once, without a
+    /// backoff, and counts them for `/metrics`. Returns how many were queued.
+    pub fn restore_publications(&self, items: Vec<(DocKey, Box<dyn Publication>)>) -> usize {
+        let Ok(mut shared) = lock(&self.shared) else { return 0 };
+        let now = now_ms();
+        let mut queued = 0;
+        for (doc, publication) in items {
+            shared.publications_restored = shared.publications_restored.saturating_add(1);
+            shared.queue_restored(doc, publication, now);
+            queued += 1;
+        }
+        queued
     }
 }
 
@@ -611,6 +669,12 @@ pub struct Metrics {
     /// Publication retries attempted since the process started (limitation 6),
     /// exposed as `pdfcraft_collab_publication_retries_total`.
     pub publication_retries: u64,
+    /// Publications a restart recovered from the store and queued, exposed as
+    /// `pdfcraft_collab_publications_restored_total` (limitation 6).
+    pub publications_restored: u64,
+    /// Publications an operator's `resolve` queued without a commit, exposed as
+    /// `pdfcraft_collab_publications_after_resolve_total`.
+    pub publications_after_resolve: u64,
 }
 
 impl<A: Adapter> WsServer<A> {
@@ -639,6 +703,8 @@ impl<A: Adapter> WsServer<A> {
             forced_commits: shared.forced_commits,
             conflicts_resolved: shared.conflicts_resolved,
             publication_retries: shared.publication_retries,
+            publications_restored: shared.publications_restored,
+            publications_after_resolve: shared.publications_after_resolve,
         })
     }
 }
@@ -781,11 +847,12 @@ mod tests {
     use crate::token::{Claims, TokenError, Verifier};
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{
-        ActorId, BlobRef, ClientMessage, ConflictClass, DocKey, ErrorCode, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target,
+        ActorId, BlobRef, ClientInfo, ClientMessage, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target,
     };
-    use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published, RoomConfig};
+    use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, PublishOutcome, Published, RoomConfig};
     use serde_json::json;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tungstenite::stream::MaybeTlsStream;
     use tungstenite::{Message, WebSocket};
@@ -879,8 +946,8 @@ mod tests {
         }
     }
 
-    fn comment(op_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let op = Op {
+    fn comment_op(op_id: &str) -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(Op {
             op_id: OpId::new(op_id)?,
             doc: DocKey::new("file-1")?,
             base_version: 0,
@@ -890,8 +957,11 @@ mod tests {
             target: Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "ann-1".into() },
             payload: json!({"action": "set_contents", "text": "hello"}),
             preview: None,
-        };
-        Ok(serde_json::to_value(ClientMessage::Op(op))?)
+        })
+    }
+
+    fn comment(op_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        Ok(serde_json::to_value(ClientMessage::Op(comment_op(op_id)?))?)
     }
 
     #[test]
@@ -962,6 +1032,100 @@ mod tests {
         };
         assert!(one.lease.ttl_secs > 0);
         assert_eq!(two.lease.ttl_secs, 0);
+        Ok(())
+    }
+
+    /// An adapter that hands a publication to every commit, the way the
+    /// cabinet adapter does.
+    struct Publishing {
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl Adapter for Publishing {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: op.epoch })
+        }
+
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
+        }
+
+        fn base(&self) -> Option<BlobRef> {
+            None
+        }
+
+        fn take_publication(&mut self) -> Option<Box<dyn super::Publication>> {
+            Some(Box::new(Counted(self.runs.clone())))
+        }
+    }
+
+    /// A publication that counts its runs and answers successfully.
+    struct Counted(Arc<AtomicUsize>);
+
+    impl super::Publication for Counted {
+        fn run(&self) -> PublishOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn a_restored_publication_is_queued_at_once_and_counted() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        assert_eq!(server.restore_publications(vec![(doc.clone(), Box::new(Counted(runs.clone())))]), 1);
+        let metrics = server.metrics()?;
+        assert_eq!(metrics.publications_restored, 1);
+        assert_eq!(metrics.publications_after_resolve, 0);
+        assert_eq!(runs.load(Ordering::Relaxed), 0, "queued, not run under the lock");
+
+        assert_eq!(server.retry_publications(super::now_ms()), 1, "a restored publication has no backoff");
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        let metrics = server.metrics()?;
+        assert_eq!(metrics.publications_restored, 1, "a run is not a second restore");
+        assert_eq!(metrics.publication_retries, 0, "a first attempt of a restored base is not a retry");
+        assert_eq!(server.retry_publications(super::now_ms()), 0, "a success is not queued again");
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_base_is_followed_by_the_journal_tail() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let tails = Arc::new(AtomicUsize::new(0));
+        // A room resumed at base 1 with the cabinet still at 0: the base was
+        // written and never published. Nobody is connected.
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room_at(doc.clone(), Publishing { runs: tails.clone() }, 1, 0)?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let hello = Hello {
+            v: 1,
+            app: "pdfcraft".into(),
+            doc: doc.clone(),
+            jwt: "editor".into(),
+            client: ClientInfo { name: "test".into(), version: "0".into() },
+        };
+        let tail = comment_op("tail-1")?;
+        server.with_hub(|hub| {
+            let editor = ActorId::new("editor").map_err(|e| e.to_string())?;
+            let client = hub.connect(editor, Role::Editor, &hello, 0).map_err(|e| e.message)?;
+            hub.send(client, ClientMessage::Op(tail), 0).map_err(|e| e.message)?;
+            // The operation was acknowledged; the process died before anybody
+            // committed it, and no client is left.
+            hub.disconnect(client);
+            Ok::<(), String>(())
+        })??;
+
+        let base = Arc::new(AtomicUsize::new(0));
+        assert_eq!(server.restore_publications(vec![(doc.clone(), Box::new(Counted(base.clone())))]), 1);
+        assert_eq!(server.retry_publications(super::now_ms()), 1);
+        assert_eq!(base.load(Ordering::Relaxed), 1, "the base went first");
+        assert_eq!(tails.load(Ordering::Relaxed), 1, "then the journal tail, as one commit of its own");
+        let room = server.with_hub(|hub| hub.room(&doc).map(|room| (room.version(), room.is_dirty())))?;
+        assert_eq!(room, Some((2, false)), "the tail reached the cabinet and the room is clean");
         Ok(())
     }
 

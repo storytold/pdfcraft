@@ -10,12 +10,15 @@
 //! - a commit is refused with `409`, `/health` and `/metrics` flag the room;
 //! - a second commit without a resolution is refused the same way, and the
 //!   cabinet sees the same expectation again (the queue is stopped);
+//! - a `409` is not queued, so nothing reaches the cabinet while the room waits;
 //! - the resolve is accepted once, and a second one is refused (`not_conflict`);
-//! - `/health` and `/metrics` no longer flag the room and count the resolution;
-//! - the next commit reaches the cabinet with `expectedVersion: 7` and one new
-//!   version, with its idempotency key still derived from the payload;
-//! - the cabinet answers `{version: 8}`, and the commit after that expects 8 —
-//!   the resolution survives the publication.
+//! - the resolve publishes the base the cabinet refused at once — no commit, no
+//!   join, no leave — with `expectedVersion: 7` and the idempotency key derived
+//!   from that payload, so the cabinet sees the base it never took;
+//! - `/health` and `/metrics` no longer flag the room and count the resolution
+//!   and the publication it made;
+//! - the cabinet answers `{version: 8}`, and the next commit expects 8 — the
+//!   resolution survives the publication.
 
 use pdfcraft_collab_proto::{ClientMessage, CommitRequest, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, ServerMessage, Target};
 use serde::Serialize;
@@ -422,7 +425,23 @@ fn assert_resolved(daemon: &Daemon) -> Result<(), Box<dyn std::error::Error>> {
     let metrics = daemon.get("/metrics")?;
     assert!(!metrics.contains("pdfcraft_collab_room_conflict"), "no room is flagged any more: {metrics}");
     assert!(metrics.contains("pdfcraft_collab_conflicts_resolved_total 1"), "{metrics}");
+    assert!(metrics.contains("pdfcraft_collab_publications_after_resolve_total 1"), "{metrics}");
     Ok(())
+}
+
+/// The cabinet's deliveries, once it has seen at least `count` of them.
+fn wait_for_posted(cabinet: &Cabinet, count: usize) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let posted = cabinet.posted();
+        if posted.len() >= count {
+            return Ok(posted);
+        }
+        if Instant::now() > deadline {
+            return Err(format!("the cabinet saw {} deliveries, not {count}", posted.len()).into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// A delivery of `version` that names `expected` and carries the derived key.
@@ -435,7 +454,7 @@ fn assert_delivery(posted: &Value, version: u64, expected: u64, sha256: &str) ->
 }
 
 #[test]
-fn a_conflict_is_resolved_once_and_the_next_commits_publish_again() -> Result<(), Box<dyn std::error::Error>> {
+fn a_conflict_is_resolved_once_and_the_resolve_publishes_the_base() -> Result<(), Box<dyn std::error::Error>> {
     let (root, daemon, cabinet, token) = environment()?;
     let mut client = daemon.join(&token)?;
     assert_eq!((client.version, client.epoch), (0, 0));
@@ -452,6 +471,13 @@ fn a_conflict_is_resolved_once_and_the_next_commits_publish_again() -> Result<()
     assert_eq!(posted[0]["expectedVersion"], 0);
     assert_eq!(posted[1]["expectedVersion"], 0, "an unresolved room repeats the refused version, it does not guess");
 
+    // A `409` is not a retryable failure: the queue holds nothing, so nothing
+    // reaches the cabinet while the room waits for the operator.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(cabinet.posted().len(), 2, "the refused publication was not retried");
+    let metrics = daemon.get("/metrics")?;
+    assert!(metrics.contains("pdfcraft_collab_publication_retries_total 0"), "a 409 is never queued: {metrics}");
+
     let etag = source_etag();
     let resolve = |version: u64, etag: &str| json!({"expectedVersion": version, "etag": etag});
 
@@ -465,29 +491,39 @@ fn a_conflict_is_resolved_once_and_the_next_commits_publish_again() -> Result<()
     assert_eq!(reply["conflict"], false);
     assert_resolved(&daemon)?;
 
+    // The base the cabinet refused is published by the resolve itself: nobody
+    // committed, joined or left, and the cabinet still gets it — with the same
+    // payload, and therefore the same derived idempotency key, as the refused
+    // attempt.
+    let posted = wait_for_posted(&cabinet, 3)?;
+    assert_eq!(posted.len(), 3, "one publication by the resolve: {posted:?}");
+    let base_sha = posted[0]["sha256"].as_str().ok_or("the refused delivery has no sha256")?;
+    assert_delivery(&posted[2], 1, 7, base_sha)?;
+    assert_eq!(cabinet.held(), 8, "the cabinet stored one version for the base it never took");
+
     // A second resolve has nothing to do.
     let (status, reply) = daemon.resolve(Some(&token), &resolve(8, &format!("sha256:{:064x}", 8)))?;
     assert_eq!(status, 409, "{reply}");
     assert_eq!(reply["code"], "not_conflict");
 
-    // The next commit carries the resolved version and reaches the cabinet
-    // once. The cabinet answers `{version: 8}`, so the commit after that
-    // expects 8: the resolution holds for the rest of the session.
+    // The next commit carries what the cabinet answered for that base and
+    // reaches it once: the resolution holds for the rest of the session.
     client.apply(op("resolve-2", note("resolve-2", "after"), 1, 0)?)?;
     let result = commit_accepted(&mut client, 2)?;
-    let posted = cabinet.posted();
+    let posted = wait_for_posted(&cabinet, 4)?;
     let accepted = posted.last().ok_or("the resolved commit was not delivered")?;
-    assert_delivery(accepted, 2, 7, &result.sha256)?;
-    assert_eq!(cabinet.held(), 8, "the cabinet stored one version for the commit");
+    assert_delivery(accepted, 2, 8, &result.sha256)?;
+    assert_eq!(cabinet.held(), 9, "two versions the cabinet created: the base and the commit");
 
     client.apply(op("resolve-3", note("resolve-3", "later"), 2, 0)?)?;
     let third = commit_accepted(&mut client, 3)?;
-    let posted = cabinet.posted();
+    let posted = wait_for_posted(&cabinet, 5)?;
     let delivered = posted.last().ok_or("the third commit was not delivered")?;
-    assert_delivery(delivered, 3, 8, &third.sha256)?;
-    assert_eq!(cabinet.held(), 9);
+    assert_delivery(delivered, 3, 9, &third.sha256)?;
+    assert_eq!(cabinet.held(), 10);
     let metrics = daemon.get("/metrics")?;
     assert!(metrics.contains("pdfcraft_collab_conflicts_resolved_total 1"), "the refused second resolve was not counted: {metrics}");
+    assert!(metrics.contains("pdfcraft_collab_publications_after_resolve_total 1"), "a refused resolve publishes nothing: {metrics}");
 
     drop(daemon);
     let _ = std::fs::remove_dir_all(&root);

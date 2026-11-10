@@ -273,6 +273,31 @@ impl Adapter for CabinetAdapter {
         self.expected_version = self.pdf.cabinet().map_or(0, |copy| copy.expected_version());
         Ok(())
     }
+
+    /// The committed base the cabinet has not taken: the one a commit wrote and
+    /// whose POST a restart interrupted, or the one an operator's `resolve`
+    /// made publishable again (limitation 6). The bytes come from the store, not
+    /// from `last_commit`, so a fresh process can send exactly the payload —
+    /// and therefore exactly the `fileId:version:sha256` key — the interrupted
+    /// one would have sent.
+    fn pending_publication(&mut self) -> Result<Option<Box<dyn Publication>>, AdapterError> {
+        let Some(publisher) = &self.publisher else { return Ok(None) };
+        let version = self.pdf.committed_version();
+        let published = self.pdf.cabinet().map_or(0, |copy| copy.version);
+        if version <= published {
+            return Ok(None);
+        }
+        let Some(bytes) = self.pdf.committed_base()? else { return Ok(None) };
+        let sha256 = sha256_of(bytes.as_slice());
+        Ok(Some(Box::new(CabinetPublication {
+            publisher: publisher.clone(),
+            file_id: self.file_id.clone(),
+            version,
+            expected_version: self.expected_version,
+            bytes: Arc::new(bytes),
+            sha256,
+        })))
+    }
 }
 
 /// A room opened or resumed from a known file.
@@ -345,9 +370,14 @@ pub fn doc_key(file_id: &str) -> Result<DocKey, String> {
 
 /// The etag of a file: `sha256:<hex>`.
 pub fn etag_of(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_of(bytes))
+}
+
+/// The SHA-256 of a file as lower-case hex, the form the cabinet contract and
+/// the idempotency key use.
+pub fn sha256_of(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("sha256:{hex}")
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub fn etag_of_file(path: &Path) -> Result<String, String> {
@@ -443,6 +473,65 @@ pub fn seed_rooms(hub: &mut Hub<CabinetAdapter>, documents: &Path, config: &Room
         opened += 1;
     }
     Ok(opened)
+}
+
+/// One room's restored publication: the document it belongs to and the POST the
+/// previous process never finished.
+pub type Restored = (DocKey, Box<dyn Publication>);
+
+/// Resume every room whose committed base the cabinet has not taken, and hand
+/// back the publication the previous process was running when it stopped
+/// (limitation 6).
+///
+/// A room is unpublished when the base `CURRENT` names is ahead of the base
+/// the `CABINET` marker names: a commit wrote its base, and the POST either
+/// failed retryably (the queue lived in the process that just died) or was in
+/// flight when the process went away. This function restores the base only; the
+/// queue's existing rule then commits the journal tail and publishes it as the
+/// next version if nobody is connected (`WsServer::retry_publications`).
+///
+/// The room is opened (replayed from its base and journal) and `publishing`, so
+/// nobody's commit overtakes the restored one. The caller queues the returned
+/// publications; each carries the same derived idempotency key the interrupted
+/// attempt would have sent, so the cabinet sees one version, not a second.
+///
+/// A directory that cannot be opened is skipped: one broken room must not stop
+/// the daemon, and its `POST /v1/sessions` will report it.
+pub fn restore_publications(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig) -> Result<Vec<Restored>, RoomError> {
+    let entries = match std::fs::read_dir(&config.data) {
+        Ok(entries) => entries,
+        // Nothing has been committed yet: no room, no publication.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(RoomError::invalid(format!("could not read {}: {e}", config.data.display()))),
+    };
+    let mut restored = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        let Ok(doc) = doc_key(&name) else { continue };
+        // Cheap check first: `CURRENT` and `CABINET` only, no base and no
+        // journal.
+        let unpublished = match Store::open(entry.path()) {
+            Ok(store) => {
+                let (base, _) = store.base_state();
+                base > store.cabinet().map_or(0, |copy| copy.version)
+            }
+            Err(_) => continue,
+        };
+        if !unpublished {
+            continue;
+        }
+        if hub.room(&doc).is_none() && open_room(hub, config, doc.clone(), None).is_err() {
+            continue;
+        }
+        let Some(room) = hub.room_mut(&doc) else { continue };
+        if let Ok(Some(publication)) = room.republish() {
+            restored.push((doc, publication));
+        }
+    }
+    Ok(restored)
 }
 
 /// Standard base64 with padding. Kept here rather than pulled in as a

@@ -748,6 +748,7 @@ mod tests {
         let metrics = control.server.metrics()?;
         assert!(metrics.conflict.is_empty(), "the room is not flagged any more");
         assert_eq!(metrics.conflicts_resolved, 1);
+        assert_eq!(metrics.publications_after_resolve, 1, "the resolve publishes the base itself");
         assert_eq!(control.server.with_hub(|hub| hub.room(&doc).map(|room| room.conflict().is_none()))?, Some(true));
 
         // A second resolve has nothing to resolve and is refused.

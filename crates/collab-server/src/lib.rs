@@ -98,6 +98,20 @@ pub trait Adapter {
         let _ = published;
         Ok(())
     }
+    /// The publication of the committed base the cabinet has not taken: the one
+    /// a commit wrote and whose POST never landed, or the one an operator's
+    /// `resolve` made publishable again (limitation 6). It carries the version,
+    /// the bytes and therefore the derived idempotency key the interrupted
+    /// attempt would have sent, so a cabinet that already took the version
+    /// answers it as a duplicate instead of creating a second one.
+    ///
+    /// The default is `None`: an adapter that only publishes inside `commit`
+    /// (an in-memory session, a test) has nothing to republish. The room asks
+    /// for this in [`Room::republish`]; the transport owns the attempt from
+    /// there and reports it through [`Room::finish_retry`].
+    fn pending_publication(&mut self) -> Result<Option<Box<dyn Publication>>, AdapterError> {
+        Ok(None)
+    }
 }
 
 /// The version and etag of the cabinet's copy of the file.
@@ -748,6 +762,27 @@ impl<A: Adapter> Room<A> {
         }
     }
 
+    /// Take the publication of the base the cabinet has not taken, if there is
+    /// one: a base a commit wrote whose POST never landed, or one an operator
+    /// just resolved (limitation 6). Neither case has a new commit to publish,
+    /// so without this the room waits for the next commit, join or leave.
+    ///
+    /// The room is `publishing` from here until [`Self::finish_retry`] reports
+    /// the outcome, so a newer base cannot overtake the queued one. The payload
+    /// is the adapter's (`fileId`, the committed version, its bytes), so the
+    /// retry carries the same idempotency key as the interrupted attempt.
+    /// `Ok(None)` means there is nothing to republish: no publisher, no base,
+    /// or a cabinet marker that already names the base.
+    pub fn republish(&mut self) -> Result<Option<Box<dyn Publication>>, ServerError> {
+        if self.publishing {
+            return Err(server_error(ErrorCode::Busy, "another commit of this document is being published; try again", true));
+        }
+        let publication = self.adapter.pending_publication().map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        let Some(publication) = publication else { return Ok(None) };
+        self.publishing = true;
+        Ok(Some(publication))
+    }
+
     /// An operator resolved a `conflict` room: the cabinet's copy now is
     /// `published` (its version and etag), so the room adopts that marker and
     /// clears the flag. The document stays dirty — the work the cabinet never
@@ -983,6 +1018,64 @@ mod tests {
 
     fn publishing_room(failure: Option<AdapterError>) -> Result<(Room<Publishing>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
         publishing_room_with(failure, None)
+    }
+
+    /// An adapter whose committed base the cabinet has not taken: what a
+    /// restart finds in the store, and what a `resolve` makes publishable again
+    /// (limitation 6). It has no `commit` to hand out — the base is already on
+    /// disk — so the publication only comes from `pending_publication`.
+    struct Republishing {
+        inner: Fake,
+        runs: Arc<AtomicUsize>,
+        /// What the restored publication answers: `None` is a successful one.
+        failure: Option<AdapterError>,
+        pending: bool,
+    }
+
+    impl Adapter for Republishing {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<BlobRef> {
+            self.inner.base()
+        }
+        fn published(&self) -> Option<Published> {
+            self.inner.published()
+        }
+        fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+            self.inner.set_published(published)
+        }
+        fn pending_publication(&mut self) -> Result<Option<Box<dyn super::Publication>>, AdapterError> {
+            if !self.pending {
+                return Ok(None);
+            }
+            Ok(Some(Box::new(Counting { runs: self.runs.clone(), failure: self.failure.clone() })))
+        }
+        fn finish_publish(&mut self, _version: u64, outcome: super::PublishOutcome) -> Result<(), AdapterError> {
+            // A base the cabinet took is not pending any more; a refused one
+            // still is, which is what `resolve` re-arms.
+            if outcome.is_ok() {
+                self.pending = false;
+            }
+            Ok(())
+        }
+    }
+
+    /// A room resumed from a base at `base` that the cabinet holds at
+    /// `published`: the commit that wrote the base never reached it.
+    fn restored_room(
+        base: u64,
+        published: u64,
+        failure: Option<AdapterError>,
+    ) -> Result<(Room<Republishing>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let adapter = Republishing { inner: Fake::new(), runs: runs.clone(), failure, pending: true };
+        let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, base, 0, RoomConfig::default());
+        room.mark_published(published);
+        Ok((room, runs))
     }
 
     fn publishing_room_with(
@@ -1425,6 +1518,60 @@ mod tests {
         assert!(room.take_retry().is_none());
         assert!(!room.is_publishing(), "the next commit retries it, not the queue");
         assert!(room.is_dirty());
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_base_is_published_without_a_commit_and_blocks_newer_ones() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, runs) = restored_room(3, 1, None)?;
+        assert!(room.is_dirty(), "the base at 3 never reached the cabinet, which holds 1");
+
+        let publication = room.republish()?.ok_or("the unpublished base is published")?;
+        assert_eq!(runs.load(Ordering::Relaxed), 0, "taking it out does not run it");
+        assert!(room.is_publishing(), "a newer base must not overtake the restored one");
+        assert!(matches!(room.commit_now(), Err(e) if e.code == ErrorCode::Busy));
+        assert!(matches!(room.republish(), Err(e) if e.code == ErrorCode::Busy), "one attempt per base");
+
+        room.finish_retry(publication.run())?;
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        assert!(!room.is_publishing());
+        assert!(!room.is_dirty(), "the cabinet now holds the base at 3");
+        assert!(room.republish()?.is_none(), "nothing is left to publish");
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_base_the_cabinet_refuses_flags_the_room_and_stops() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, _runs) = restored_room(2, 1, Some(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false)))?;
+        let publication = room.republish()?.ok_or("the unpublished base is published")?;
+        let refused = room.finish_retry(publication.run()).expect_err("the cabinet refused it");
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert!(!refused.retryable, "a 409 is never retried");
+        assert!(room.conflict().is_some(), "/health has to name the room");
+        assert!(!room.is_publishing(), "the queue is released, not kept busy");
+        assert!(room.is_dirty(), "the work the cabinet never took is still here");
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_base_that_failed_retryably_keeps_the_room_publishing() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, _runs) = restored_room(2, 1, Some(AdapterError::new(ErrorCode::Internal, "the cabinet did not answer", true)))?;
+        let publication = room.republish()?.ok_or("the unpublished base is published")?;
+        let failed = room.finish_retry(publication.run()).expect_err("the cabinet did not answer");
+        assert!(failed.retryable);
+        assert!(room.is_publishing(), "the queue schedules the next attempt");
+        assert!(room.conflict().is_none());
+        assert_eq!(room.adapter().published().map(|published| published.version), None, "a failed attempt advances nothing");
+        Ok(())
+    }
+
+    #[test]
+    fn an_adapter_with_nothing_unpublished_republishes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let adapter = Republishing { inner: Fake::new(), runs, failure: None, pending: false };
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        assert!(room.republish()?.is_none());
+        assert!(!room.is_publishing(), "nothing was taken, nothing is held");
         Ok(())
     }
 
