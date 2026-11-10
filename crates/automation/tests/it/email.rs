@@ -114,6 +114,24 @@ fn unsaved_edits_go_as_a_copy_and_the_open_file_is_left_alone() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// A clean document whose file was replaced on disk after it was opened goes as a copy of the
+/// open version, never as the replacement.
+#[test]
+fn a_file_replaced_on_disk_is_not_what_goes() {
+    let (mut a, path) = session_with("replaced", false);
+    let opened = std::fs::read(&path).unwrap();
+    let replacement = [opened.as_slice(), b"\n% replaced by another program\n"].concat();
+    std::fs::write(&path, &replacement).unwrap();
+    let r = call(&mut a, "doc_email", json!({ "doc": 1 }));
+    assert_eq!((r["opened"].clone(), r["copy"].clone()), (json!(true), json!(true)));
+    let copy = &sent()[0].path;
+    assert_ne!(copy, &path);
+    assert_eq!(std::fs::read(copy).unwrap(), opened, "the open version, as it was loaded");
+    assert_eq!(std::fs::read(&path).unwrap(), replacement, "the file on disk is left as it is");
+    let _ = std::fs::remove_dir_all(copy.parent().unwrap());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// A session confined to a folder writes nothing outside it: an edited document is not copied to
 /// the temp folder, and the caller is told to save it first, after which the saved file goes.
 #[test]

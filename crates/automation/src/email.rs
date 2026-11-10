@@ -5,7 +5,7 @@
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use pdfcraft_platform::attachment::{remove_copy, subject_for, write_private_copy};
+use pdfcraft_platform::attachment::{file_holds, remove_copy, subject_for, write_private_copy};
 use pdfcraft_platform::mail::{self, Answer, Compose, MailError, Why};
 use serde_json::{Value, json};
 
@@ -53,21 +53,23 @@ impl Automation {
         let subject = a.opt_str("subject")?.map_or_else(|| subject_for(&name), str::to_string);
         let body = a.opt_str("body")?.unwrap_or_default().to_string();
 
-        // An unchanged file goes as it is; one with edits goes as a copy that has them, so the
-        // open file is left alone.
+        // What the open document is now (its own bytes when it has no unsaved edits). The file
+        // goes as it is only when it holds exactly that; one with edits, or whose file was
+        // replaced on disk since it was opened, goes as a copy of the open version, so the open
+        // file is left alone and the message holds what the document shows.
+        let bytes = self.session.save_bytes(id)?;
         let mut copy = None;
-        let attach = match path.filter(|p| !dirty && std::path::Path::new(p).is_file()) {
+        let attach = match path.filter(|p| !dirty && file_holds(std::path::Path::new(p), &bytes)) {
             Some(p) => p.into(),
             None => {
                 // The copy goes to the system's temp folder, outside any folder this session is
                 // confined to, so a confined session sends only a file it has saved.
                 if self.root.is_some() || self.roots.as_ref().is_some_and(|r| r.write_root().is_some()) {
                     return Err(ToolError::InvalidArgs(
-                        "the document has unsaved edits, and this session only writes inside its write root, so a copy for the email program can't be made; save the document first (doc_save)"
+                        "the document has unsaved edits (or its file changed on disk since it was opened), and this session only writes inside its write root, so a copy for the email program can't be made; save the document first (doc_save)"
                             .into(),
                     ));
                 }
-                let bytes = self.session.save_bytes(id)?;
                 let target = write_private_copy(&name, &bytes).map_err(|e| failed(format!("the copy to attach couldn't be written: {e}")))?;
                 copy = Some(target.clone());
                 target

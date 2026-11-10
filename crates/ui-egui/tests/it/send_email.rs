@@ -83,6 +83,12 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Still waiting for your email app…"));
     assert_eq!(sent().len(), 1);
 
+    // The notice a second request brings is kept up while the first is still waiting, not left
+    // to fade after a few seconds.
+    h.state_mut().toast.as_mut().unwrap().1 = 100.0;
+    h.run_steps(2);
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.1 < 50.0), "the notice is refreshed while the request is pending");
+
     // Still no answer: nothing changes.
     h.run_steps(2);
     assert!(h.state().send_email.waiting() && h.state().dialog.is_none());
@@ -102,6 +108,29 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     assert_eq!(h.state().dialog, None);
     assert_eq!(h.state().last_opened_url.as_deref(), Some("mailto:?subject=unchanged"));
     assert_eq!(REVEALED.with(|r| r.borrow().clone()), vec![path.clone()]);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A clean document whose file was replaced on disk after it was opened (automatic reload off)
+/// goes as what the person sees, a copy of the open version, never as the replacement.
+#[test]
+fn a_file_replaced_on_disk_is_not_what_goes() {
+    let (mut h, path) = harness("replaced");
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    let replacement = [PDF, b"\n% replaced by another program\n".as_slice()].concat();
+    std::fs::write(&path, &replacement).unwrap();
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+
+    let asked = sent();
+    assert_eq!(asked.len(), 1);
+    let copy = &asked[0].path;
+    assert_ne!(copy, &path, "not the file that changed");
+    assert!(copy.starts_with(std::env::temp_dir()) && copy.ends_with("replaced.pdf"), "{}", copy.display());
+    assert_eq!(std::fs::read(copy).unwrap(), PDF, "the open version, as it was loaded");
+    assert_eq!(std::fs::read(&path).unwrap(), replacement, "the file on disk is left as it is");
+    let _ = std::fs::remove_dir_all(copy.parent().unwrap());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

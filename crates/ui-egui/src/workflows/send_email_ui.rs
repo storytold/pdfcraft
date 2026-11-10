@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{Align, Layout, RichText};
-use pdfcraft_platform::attachment::{remove_copy, subject_for, write_private_copy};
+use pdfcraft_platform::attachment::{file_holds, remove_copy, subject_for, write_private_copy};
 use pdfcraft_platform::mail::{self, Answer, Compose, MailError, Why};
 
 use crate::theme::{self, Tokens};
@@ -113,27 +113,29 @@ impl PdfCraftApp {
         }
         let (name, path, dirty) = (doc.name.clone(), doc.path.clone(), doc.dirty);
         let mut copy = None;
-        let attach = match path.filter(|p| !dirty && Path::new(p).is_file()) {
-            Some(p) => PathBuf::from(p),
-            None => {
-                let bytes = match self.session.save_bytes(id) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        self.notify_error(e);
-                        return;
-                    }
-                };
-                match write_private_copy(&name, &bytes) {
-                    Ok(target) => {
-                        copy = Some(target.clone());
-                        target
-                    }
-                    Err(e) => {
-                        self.notify_fmt("The copy to attach couldn't be written: {e}", &[("e", &e.to_string())]);
-                        return;
-                    }
-                }
+        // What the person sees: the open document as it is now (its own bytes when it has no
+        // unsaved edits). The file on disk goes only when it is exactly that; a clean document
+        // whose file was replaced since it was opened (automatic reload off) goes as a copy of
+        // the open version, never as the replacement.
+        let bytes = match self.session.save_bytes(id) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.notify_error(e);
+                return;
             }
+        };
+        let attach = match path.filter(|p| !dirty && file_holds(Path::new(p), &bytes)) {
+            Some(p) => PathBuf::from(p),
+            None => match write_private_copy(&name, &bytes) {
+                Ok(target) => {
+                    copy = Some(target.clone());
+                    target
+                }
+                Err(e) => {
+                    self.notify_fmt("The copy to attach couldn't be written: {e}", &[("e", &e.to_string())]);
+                    return;
+                }
+            },
         };
         let compose = Compose { path: attach, subject: subject_for(&name), body: String::new(), to: Vec::new() };
         let ctx = self.ctx.clone();
