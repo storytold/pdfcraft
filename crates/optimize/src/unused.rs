@@ -21,6 +21,21 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::{OptimizeError, Stage};
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        match cur {
+            Object::Ref(r) => cur = (*doc.get(r)).clone(),
+            _ => return cur,
+        }
+    }
+    cur
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
 /// Image codecs: a stream encoded with one holds picture data.
 const IMAGE_CODECS: [&[u8]; 6] = [b"DCTDecode", b"DCT", b"JPXDecode", b"JBIG2Decode", b"CCITTFaxDecode", b"CCF"];
 
@@ -65,29 +80,57 @@ fn graph(doc: &Document) -> Graph {
         (_, b"SMask" | b"Mask" | b"Thumb" | b"Image") => Use::Picture,
         _ => Use::Other,
     };
+    let mark_not_picture = |mut cur: ObjRef, g: &mut Graph| {
+        for _ in 0..16 {
+            if !g.not_picture.insert(cur.num) {
+                break;
+            }
+            match &*doc.get(cur) {
+                Object::Ref(next) => cur = *next,
+                _ => break,
+            }
+        }
+    };
     let mut g = Graph { refs: HashMap::new(), not_picture: HashSet::new() };
+    let mut entries_only = HashSet::new();
     let mut stack: Vec<(Object, Use)> = doc.trailer().iter().map(|(_, v)| (v.clone(), Use::Other)).collect();
     while let Some((obj, how)) = stack.pop() {
-        let expand = |d: &Dict, stack: &mut Vec<(Object, Use)>| stack.extend(d.iter().map(|(k, v)| (v.clone(), child(k, how))));
+        let expand = |d: &Dict, how: Use, stack: &mut Vec<(Object, Use)>| stack.extend(d.iter().map(|(k, v)| (v.clone(), child(k, how))));
         match obj {
             Object::Ref(r) => {
                 if how != Use::Picture {
-                    g.not_picture.insert(r.num);
+                    mark_not_picture(r, &mut g);
                 }
                 let n = g.refs.entry(r.num).or_default();
                 *n += 1;
                 if *n > 1 {
+                    if how != Use::Entries
+                        && entries_only.remove(&r.num)
+                        && let Object::Dict(d) | Object::Stream(Stream { dict: d, .. }) = &*doc.get(r)
+                    {
+                        for (k, v) in d.iter() {
+                            if child(k, how) != Use::Picture
+                                && let Object::Ref(cr) = v
+                            {
+                                mark_not_picture(*cr, &mut g);
+                            }
+                        }
+                    }
                     continue;
                 }
+                if how == Use::Entries {
+                    entries_only.insert(r.num);
+                }
                 match &*doc.get(r) {
-                    Object::Dict(d) => expand(d, &mut stack),
-                    Object::Stream(s) => expand(&s.dict, &mut stack),
-                    Object::Array(a) => stack.extend(a.iter().map(|v| (v.clone(), how))),
+                    Object::Dict(d) => expand(d, how, &mut stack),
+                    Object::Stream(s) => expand(&s.dict, how, &mut stack),
+                    Object::Array(a) => stack.extend(a.iter().map(|v| (v.clone(), Use::Other))),
+                    Object::Ref(next) => stack.push((Object::Ref(*next), how)),
                     _ => {}
                 }
             }
-            Object::Dict(d) => expand(&d, &mut stack),
-            Object::Array(a) => stack.extend(a.into_iter().map(|v| (v, how))),
+            Object::Dict(d) => expand(&d, how, &mut stack),
+            Object::Array(a) => stack.extend(a.into_iter().map(|v| (v, Use::Other))),
             _ => {}
         }
     }
@@ -100,7 +143,7 @@ fn own_xobjects(doc: &Document, page: ObjRef, refs: &HashMap<u32, usize>) -> Opt
     let p = doc.get(page);
     let p = p.as_dict()?;
     // A node with kids passes its resources on.
-    if p.name(b"Type") != Some(b"Page") || p.contains(b"Kids") {
+    if dict_name(doc, p, b"Type").as_deref() != Some(b"Page") || p.contains(b"Kids") {
         return None;
     }
     let (res, place) = match p.get(b"Resources")? {
@@ -164,15 +207,15 @@ enum Data {
 fn plain_metadata(doc: &Document) -> bool {
     doc.trailer()
         .get(b"Encrypt")
-        .map(|e| doc.resolve(e))
-        .is_some_and(|e| matches!(e.as_dict().and_then(|e| e.get(b"EncryptMetadata")), Some(Object::Bool(false))))
+        .and_then(|e| resolve(doc, e).as_dict().and_then(|e| e.get(b"EncryptMetadata").cloned()))
+        .is_some_and(|m| matches!(resolve(doc, &m), Object::Bool(false)))
 }
 
-fn data(s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool) -> Data {
+fn data(doc: &Document, s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool) -> Data {
     let d = &s.dict;
     // Streams the security handler leaves as stored, which a viewer may still decrypt.
-    let ty = d.name(b"Type");
-    if encrypted && (ty == Some(b"XRef") || (ty == Some(b"Metadata") && plain_metadata)) {
+    let ty = dict_name(doc, d, b"Type");
+    if encrypted && (ty.as_deref() == Some(b"XRef") || (ty.as_deref() == Some(b"Metadata") && plain_metadata)) {
         return Data::Unknown;
     }
     // External data, or a filter description that is abbreviated, indirect or doesn't line up:
@@ -201,7 +244,7 @@ fn data(s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool) 
     }
     if filters.iter().any(|f| IMAGE_CODECS.contains(f)) {
         // Viewers decode any stream's codec, so picture data skipped here must be a picture.
-        let picture = d.name(b"Subtype") == Some(b"Image") && !g.not_picture.contains(&num);
+        let picture = dict_name(doc, d, b"Subtype").as_deref() == Some(b"Image") && !g.not_picture.contains(&num);
         return if picture { Data::Picture } else { Data::Unknown };
     }
     // Parameters only as direct integers, which this check and viewers read alike.
@@ -236,7 +279,12 @@ pub(crate) fn remove_unused(doc: &mut Document, pages: &[ObjRef], progress: &mut
         }
         let names: Vec<Vec<u8>> = xobjects
             .iter()
-            .filter(|(_, v)| matches!(&*doc.resolve(v), Object::Stream(s) if matches!(s.dict.name(b"Subtype"), Some(b"Image" | b"Form"))))
+            .filter(|(_, v)| {
+                matches!(
+                    resolve(doc, v),
+                    Object::Stream(s) if matches!(dict_name(doc, &s.dict, b"Subtype").as_deref(), Some(b"Image" | b"Form"))
+                )
+            })
             .map(|(name, _)| name.clone())
             .collect();
         if !names.is_empty() {
@@ -254,7 +302,7 @@ pub(crate) fn remove_unused(doc: &mut Document, pages: &[ObjRef], progress: &mut
         }
         let obj = doc.get(ObjRef::new(*num, doc.generation(*num)));
         let Object::Stream(s) = &*obj else { continue };
-        match data(s, *num, &g, encrypted, plain_metadata) {
+        match data(doc, s, *num, &g, encrypted, plain_metadata) {
             Data::Picture => {}
             Data::Decoded(bytes) => {
                 decoded = decoded.saturating_add(bytes.len());
@@ -301,4 +349,116 @@ pub(crate) fn remove_unused(doc: &mut Document, pages: &[ObjRef], progress: &mut
         removed += gone.len();
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page_with_xobjects(doc: &mut Document, xobjects: Dict, content: ObjRef, indirect_page_type: bool) -> ObjRef {
+        let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut p = Dict::new();
+        let page_ty = if indirect_page_type { Object::Ref(doc.add(Object::name("Page"))) } else { Object::name("Page") };
+        p.set(b"Type".to_vec(), page_ty);
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+        p.set(b"Contents".to_vec(), Object::Ref(content));
+        let r = doc.add(Object::Dict(p));
+        doc.update_dict(pages, |d| {
+            let mut kids = d.get(b"Kids").and_then(|k| k.as_array().cloned()).unwrap_or_default();
+            kids.push(Object::Ref(r));
+            d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+            d.set(b"Kids".to_vec(), Object::Array(kids));
+        })
+        .unwrap();
+        r
+    }
+
+    #[test]
+    fn remove_unused_handles_indirect_subtypes_and_chained_refs() {
+        let mut doc = Document::new_empty();
+        let image_sub = doc.add(Object::name("Image"));
+        let mut used_d = Dict::new();
+        used_d.set(b"Subtype".to_vec(), Object::Ref(image_sub));
+        used_d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        let used_img = doc.add(Object::Stream(Stream::from_raw(used_d, vec![0xFF, 0xD8, 0xFF, 0xD9])));
+
+        let mut unused_d = Dict::new();
+        unused_d.set(b"Subtype".to_vec(), Object::Ref(image_sub));
+        let unused_img = doc.add(Object::Stream(Stream::flate(unused_d, b"px")));
+        let unused_chain = doc.add(Object::Ref(unused_img));
+
+        let mut xo = Dict::new();
+        xo.set(b"Used".to_vec(), Object::Ref(used_img));
+        xo.set(b"Unused".to_vec(), Object::Ref(unused_chain));
+
+        // Chained content stream reference that draws /Used.
+        let real_content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Used Do")));
+        let content_chain = doc.add(Object::Ref(real_content));
+        let page = page_with_xobjects(&mut doc, xo, content_chain, true);
+
+        let removed = remove_unused(&mut doc, &[page], &mut |_| true).unwrap();
+        assert_eq!(removed, 1);
+        let p = doc.get(page).as_dict().cloned().unwrap();
+        let res = p.get(b"Resources").and_then(Object::as_dict).unwrap();
+        let x = res.get(b"XObject").and_then(Object::as_dict).unwrap();
+        assert!(x.contains(b"Used"), "stream behind chained ref was scanned");
+        assert!(!x.contains(b"Unused"), "unused XObject with indirect Subtype was removed");
+    }
+
+    #[test]
+    fn remove_unused_keeps_xobjects_drawn_only_behind_chained_stream_ref() {
+        let mut doc = Document::new_empty();
+        let mut img_d = Dict::new();
+        img_d.set(b"Subtype".to_vec(), Object::name("Image"));
+        let img = doc.add(Object::Stream(Stream::flate(img_d, b"px")));
+        let mut xo = Dict::new();
+        xo.set(b"ImChained".to_vec(), Object::Ref(img));
+
+        let real_content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/ImChained Do")));
+        let content_chain = doc.add(Object::Ref(real_content));
+        let page = page_with_xobjects(&mut doc, xo, content_chain, false);
+
+        let removed = remove_unused(&mut doc, &[page], &mut |_| true).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn remove_unused_terminates_on_cyclic_refs_and_respects_indirect_plain_metadata() {
+        let mut doc = Document::new_empty();
+        let cyc = doc.add(Object::Null);
+        doc.set(cyc, Object::Ref(cyc));
+
+        let mut img_d = Dict::new();
+        img_d.set(b"Subtype".to_vec(), Object::name("Image"));
+        let img = doc.add(Object::Stream(Stream::flate(img_d, b"px")));
+        let mut xo = Dict::new();
+        xo.set(b"Unused".to_vec(), Object::Ref(img));
+        xo.set(b"Cyclic".to_vec(), Object::Ref(cyc));
+
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q Q")));
+        let page = page_with_xobjects(&mut doc, xo, content, false);
+
+        // Add a metadata stream with indirect /Type /Metadata and an /Encrypt dict with indirect /EncryptMetadata false.
+        let meta_ty = doc.add(Object::name("Metadata"));
+        let mut meta_d = Dict::new();
+        meta_d.set(b"Type".to_vec(), Object::Ref(meta_ty));
+        let meta = doc.add(Object::Stream(Stream::from_raw(meta_d, b"<x:xmpmeta/>".to_vec())));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Metadata".to_vec(), Object::Ref(meta))).unwrap();
+
+        let false_ref = doc.add(Object::Bool(false));
+        let mut enc = Dict::new();
+        enc.set(b"EncryptMetadata".to_vec(), Object::Ref(false_ref));
+        let enc_ref = doc.add(Object::Dict(enc));
+        doc.trailer_mut().set(b"Encrypt".to_vec(), Object::Ref(enc_ref));
+
+        // Because the document is encrypted with plain metadata, the metadata stream is Data::Unknown,
+        // so remove_unused conservatively drops nothing.
+        let removed = remove_unused(&mut doc, &[page], &mut |_| true).unwrap();
+        assert_eq!(removed, 0);
+    }
 }
