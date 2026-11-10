@@ -1,36 +1,31 @@
 # PdfCraft collaboration — status and handoff
 
-- Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
-- Base: `origin/main` `ba28458ad` ("M3: a password prompt keeps a place in the
-  open queue for its retry (#6731)", 2026-11-09), the tip the branch was rebased
-  onto. All **76 branch commits** were
-  replayed with **four conflict stops in three files**
-  (`crates/ui-egui/src/app.rs` twice, `crates/ui-egui/src/canvas.rs`,
-  `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
-  them. `origin/main` has moved since, faster than any pass followed it: at the
-  presence-selection pass its tip was `a71b5124b` (11 behind), and at this
-  pass's start it was `274b7a042` ("Merge pull request #6800 from
-  storytold/merge/fonts-budget-6239"), so the branch is now **48 behind**
-  `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
-  pass's head `158ab7fa4` (the next bullet); no rebase was done in this pass, so
-  the base stays `ba28458ad`.
-- Local head before this STATUS commit: `f48ec4754` (fix(ui): keep the selection
-  caret behind the collab feature) on `f31f00449` (fix(collab): verify and sign
-  JWTs with aws-lc-rs, not RustCrypto) on `f8e21e29d` (docs(collab): record the
-  CI git-source fix) on `158ab7fa4` (fix(web): take craft-web-host from
-  storytold, not the fork); **110 commits** not in
-  `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
-  local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
-  the remote's tip is not fetched here), and **30 ahead** of the PR head
-  `b27fa89c8`; this STATUS record is the third commit of the pass, so after it
-  the counts are 111/48/31. The branch was not rebased, so the base stays
-  `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `f48ec4754`.
-  The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
-  `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
-  at `c26867e9c` — were right when they were measured; `origin/main` kept
-  moving and each slice added its commits. Commits named below and in §4 by
-  their pre-rebase hashes are mapped in the rebase sections of §4.
+- Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
+- Merge: **`origin/main` is merged into the branch** in `c15cc0f57`
+  (2026-11-10). At that moment the remote tip was `debb826f2` ("M10: preserve
+  annotation placement precision (#4995) (#5002)") and the branch had been
+  **111 commits ahead and 161 behind**; it was rebased onto `ba28458ad` in an
+  earlier pass (§4 records that rebase and its four conflict stops). The merge
+  is a true merge — no rebase and no force — and one file conflicted:
+  `crates/annot/src/tests.rs`, where both sides append tests at the end (this
+  branch's link tests, main's Apple Markup tests). Both were kept unchanged.
+  `Cargo.lock` auto-merged: `craft-print` moves to main's `0e4943cb…`,
+  `craft-web-host` keeps the branch's storytold pin `7666e2b1…`;
+  `cargo metadata --locked` exits 0. `origin/main` has since moved on to
+  `905e9abf6` ("fix(forms): ignore print requests from automatic field scripts
+  (#4166)"), so the branch is **1 behind** again; that commit is not in the
+  tree this record's gates were run on.
+- Head before this STATUS commit: `c1171d941` (fix(automation): link_list
+  names a remote go-to action in `other`) on `c15cc0f57` (the merge) on
+  `a47329154` (docs(collab): record the JWT crypto backend and the deny
+  advisory); **113 commits** not in `origin/main` (`git rev-list --count
+  origin/main..HEAD`), 0 behind `debb826f2`, and this STATUS record is the next
+  commit, so after it the count is 114. The numbers the earlier briefs named —
+  85 commits, 9 behind, 5 ahead for `199076765`, then 86/11/6 at `0c57e2271`,
+  94/48/14 at `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754` —
+  were right when they were measured; `origin/main` kept moving and each slice
+  appended commits. Commits named below and in §4 by their pre-rebase hashes
+  are mapped in the rebase sections of §4.
 - PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
@@ -44,24 +39,32 @@
   restore (`21aaf357a`), the page labels (`c26867e9c`) and their record
   (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, the
   whole-document link operations (`b86c4963a`) and their record (`d2a1bcf64`),
-  the whole-outline replacement (`642dabb5b`) and its record (`1590412aa`), and
-  the CI git-source fix (`158ab7fa4`) and this record. `UNSTABLE` is
+  the whole-outline replacement (`642dabb5b`) and its record (`1590412aa`), the
+  CI git-source fix (`158ab7fa4`), the merge of `origin/main` (`c15cc0f57`),
+  the GoToR report fix (`c1171d941`) and this record. `UNSTABLE` is
   the CI rollup, not a
-  conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
+  conflict: before the merge, `git merge-tree --write-tree origin/main HEAD`
+  (tip `debb826f2`) reported one conflicted file, `crates/annot/src/tests.rs`,
+  resolved by keeping both sides (header). Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
-- State: implemented behind the `collab` feature (off by default). Both reasons
-  the CI run `42720349704` (head `b27fa89c8`) failed on are closed on this tree:
-  the git source (§4, "The CI git-source gate") and the `deny` advisory
-  RUSTSEC-2026-0387 (§4, "The JWT crypto backend"): `cargo deny --log-level
-  error check` exits 0 and `crypto-bigint` 0.5.5 is out of the graph. The
-  workspace `clippy` step of `cargo xtask ci` was red for a third, older reason
-  and is fixed too (`f48ec4754`). `cargo xtask ci` still stops at its `test`
-  step on two targets that fail without these commits and are `origin/main`'s
-  own tests (§4). The earlier gates were run at their own heads
-  (`5bad54c40`, `157f4d239`, `22d29d070`, `0c57e2271`, `2b61ff80f`,
-  `642dabb5b`, `158ab7fa4`, §4) and were not re-run here.
+- State: implemented behind the `collab` feature (off by default). **`CI=1
+  cargo xtask ci` exits 0 on `c1171d941`** — all 10 steps, 156 test targets,
+  **9930 passed, 0 failed, 18 ignored** (§4, "The full CI sweep"). Both `test`
+  targets that stopped the earlier sweep are closed: the automation one by the
+  branch reporting a remote go-to's action in `other` (`c1171d941`) and the UI
+  one because the test needs the craft-i18n catalogs embedded — with them the
+  test passes on a clean `origin/main` and here; without them it panics at
+  `set_option("language", "de")`, which is what an earlier pass mis-read as an
+  area-rect failure. The reasons CI run `42720349704` (head `b27fa89c8`) failed
+  stay closed: the git source (§4, "The CI git-source gate") and the `deny`
+  advisory RUSTSEC-2026-0387 (§4, "The JWT crypto backend") — `cargo deny
+  --log-level error check` exits 0 and `crypto-bigint` 0.5.5 is out of the
+  graph. The workspace `clippy` dead-code fix (`f48ec4754`) is in too. The
+  earlier gates were run at their own heads (`5bad54c40`, `157f4d239`,
+  `22d29d070`, `0c57e2271`, `2b61ff80f`, `642dabb5b`, `158ab7fa4`, §4) and were
+  not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -85,9 +88,9 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   (`c26867e9c`, §4), links as two structural operations over a page's whole
   link list (`2b61ff80f`, §4), and the whole-document link actions as
   `links.add_many`/`links.remove_many` over several pages at once
-  (`b86c4963a`, §4). The whole
-  branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
-  (§4, first table). The one presence item still outside this repository is the
+  (`b86c4963a`, §4). The branch carries an earlier rebase onto `origin/main`
+  `ba28458ad` (§4, first table) and now the merge of `origin/main` `debb826f2`
+  (header, §4, "The full CI sweep"). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
@@ -441,6 +444,49 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
+### The full CI sweep — merge of `origin/main`, both `test` targets closed (2026-11-10, local; not pushed)
+
+The pass before this one left `cargo xtask ci` red at `test` on two targets, both
+`origin/main` tests (the previous subsection records the reading). This pass
+checked them against a clean `origin/main` first, merged the remote, fixed the
+one real cause and ran the whole sweep.
+
+- **Clean `origin/main` (`debb826f2`) on its own tree.** A `git worktree` in
+  `/tmp`, synced to host `agents` as its own directory, built and ran the two
+  tests: `pdfcraft-automation --test it
+  local_gotor_link_open_applies_destinations_and_honors_root` **passes**;
+  `pdfcraft-ui-egui --test it
+  comments::the_selection_bar_stays_inside_the_pages_area` **passes** only with
+  `CRAFT_I18N_DIR` set to the craft-i18n checkout that `craft-i18n.rev` pins
+  (`575cfdef…`, worktree of `~/craft-i18n`) and `CRAFT_FONTS_DIR` set to the
+  craft-fonts ref `ci.yml` passes (`b076417b…`). Without the catalogs it panics
+  at `set_option("language", "de")` — `language must be one of auto, en` — and
+  not at the area-rect expect; the earlier record that called it "no area rect"
+  was a mis-reading of that panic.
+- **The automation failure was this branch's, not main's.** `2b61ff80f` parses a
+  remote go-to into `LinkAction::Remote` (GoToR and named-destination links are
+  editable in a room), so `link_list` reported `remote_file`/`remote_page` and
+  left `other` empty; the upstream test reads `other` as the action's own `/S`
+  name. `c1171d941` reports `GoToR` there beside the remote fields; the upstream
+  assert is unchanged. The same test passes on clean `origin/main` and on this
+  tree.
+- **The merge** (`c15cc0f57`) is described in the header; its one conflict was
+  resolved by keeping both sides' appended tests in `crates/annot/src/tests.rs`.
+- **The sweep.** `CI=1 cargo xtask ci` on host `agents` (rustc 1.99.1,
+  `CARGO_BUILD_JOBS=12`, `CRAFT_I18N_DIR` a craft-i18n worktree at `575cfdef`
+  and `CRAFT_FONTS_DIR` a craft-fonts checkout at `b076417b`, the revisions
+  `craft-i18n.rev` and `ci.yml` pin): **EXIT=0**, `CI: all 10 steps passed` — fmt,
+  clippy, cli-no-default-features, test, i18n-report, layers, wasm,
+  license-check, deny, parity. The `test` step: **156 targets, 9930 passed, 0
+  failed, 18 ignored**. `layers`: 52 crates, no violation; `wasm32`: 44 crates
+  ok; `assets`: 258 repository assets, 7 bundled by dependencies, 22 fetched at
+  build time; `parity`: 858 features (835 counted, 23 na); `deny`: advisories,
+  bans, licences and sources all ok.
+- **What this does not cover.** The host has no `qpdf`/`poppler`, and CI's
+  `PDFCRAFT_ORACLES_REQUIRED=1` is not set here, so oracle-backed tests skip the
+  way they do without those tools; Windows-only checks stay CI's. The sweep ran
+  on the merge plus `c1171d941`, not on the STATUS commit itself.
+
 ### The JWT crypto backend — `deny` and RUSTSEC-2026-0387 (2026-11-10, local; not pushed)
 
 `fix(collab): verify and sign JWTs with aws-lc-rs, not RustCrypto` (`f31f00449`)
@@ -500,29 +546,27 @@ Gates at `f48ec4754` (host `agents`, rustc 1.99.1, `-j 4`; run by
 | Workspace clippy | `cargo clippy --workspace --all-targets -- -D warnings` | EXIT=0 |
 | UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | EXIT=0 |
 | The steps after `test` | `cargo xtask i18n-report --workspace`, `layers`, `wasm`, `license-check`, `parity` | EXIT=0 each — 52 crates with no layering violation, wasm32 44 crates ok, 258 assets ok |
-| `cargo xtask ci` | `CI=1 cargo xtask ci` | **fails at `test`** — see below; `fmt`, `clippy` and `cli-no-default-features` passed |
+| `cargo xtask ci` | `CI=1 cargo xtask ci` | **failed at `test`** at this head — both targets are closed by the merge and `c1171d941` (§4, "The full CI sweep"); `fmt`, `clippy` and `cli-no-default-features` passed |
 
-What `cargo xtask ci` still does not do here: its `test` step stops on two
-targets, and both fail identically with this pass's three files reverted to
-`f8e21e29d` (checked by running the one test each time):
+The two `test` targets that stopped this run, kept for the record — the newer
+subsection above replaces this reading:
 
 - `pdfcraft-automation --test it`:
   `local_gotor_link_open_applies_destinations_and_honors_root` —
-  `assert_eq!(listed["links"][0]["other"], "GoToR")` fails with `left: Null,
-  right: "GoToR"`, so `link_list` names no `other` for a remote go-to. 433 of
-  the target's 434 tests pass. The bus already recorded it as pre-existing
-  (`20261110T100450Z-craft-04d6`).
+  `assert_eq!(listed["links"][0]["other"], "GoToR")` failed with `left: Null,
+  right: "GoToR"`. This was **this branch's** `LinkAction::Remote` reporting,
+  not a pre-existing `origin/main` failure: with a clean `origin/main` the test
+  passes, and `c1171d941` closes it.
 - `pdfcraft-ui-egui --test it`:
-  `comments::the_selection_bar_stays_inside_the_pages_area` — no area rect, so
-  "the selection bar is shown" panics at `comments.rs:4374`. 1779 of the
-  target's 1780 tests pass.
+  `comments::the_selection_bar_stays_inside_the_pages_area` — the panic was at
+  `set_option("language", "de")` (`language must be one of auto, en`), because
+  the build embedded no craft-i18n catalogs; it was not the area rect. With
+  `CRAFT_I18N_DIR` at the pinned `575cfdef` the test passes on a clean
+  `origin/main` and here.
 
 Both are `origin/main` tests (`f28406f68` and `952636315`); the automation one
 lives in a file this branch edited for bookmarks, the UI one in a file the
-branch never touched, and neither exercises the JWT stack. That they predate
-this pass is proven; whether they also fail on `origin/main` in this checkout
-was not tested, because building `main` was outside the pass. They are left for
-their own pass rather than guessed at here.
+branch never touched, and neither exercises the JWT stack.
 
 ### The CI git-source gate — one git source, storytold (2026-11-10, local; not pushed)
 
@@ -848,7 +892,7 @@ Gates at `628f6176e` (host `agents`, rustc 1.99.1, `-j 8`):
 | Tests, the outline and its look | `cargo test -p pdfcraft-collab-outline -p pdfcraft-collab-pdf -p pdfcraft-collab-client-pdf` | pass — outline 8, pdf 65, client-pdf 45; 0 failed, 0 ignored |
 | Tests, the socket | `cargo test -p pdfcraft-collab-ws` | pass — ws 16 unit + 34 e2e; 0 failed |
 | Tests, the engines the edits live in | `cargo test -p pdfcraft-organize -p pdfcraft-engine` | pass — organize 232 + 1 + 1 integration, engine 636 + 9 + 46; 2 ignored (pre-existing) |
-| Tests, automation | `cargo test -p pdfcraft-automation` | 433 of 434 pass, `named_destinations_through_tools`, `bookmarks_through_tools` and `bookmark_list_reports_colour_and_style` included; **the one failure, `local_gotor_link_open_applies_destinations_and_honors_root`, is pre-existing at `aa4f23dc4`** — it was reproduced with this pass's changes stashed, and it is the links' own GoToR listing, not this slice |
+| Tests, automation | `cargo test -p pdfcraft-automation` | 433 of 434 pass, `named_destinations_through_tools`, `bookmarks_through_tools` and `bookmark_list_reports_colour_and_style` included; the one failure, `local_gotor_link_open_applies_destinations_and_honors_root`, was **this branch's** `Remote` reporting and is fixed in `c1171d941` (§4, "The full CI sweep") — the earlier "pre-existing at `aa4f23dc4`" note compared the pass against the branch with its changes stashed, not against `origin/main`, which passes |
 | App wiring | `cargo check -p pdfcraft-ui-egui --features collab --all-targets` | pass |
 | Layers | `cargo xtask layers` | OK — 52 crates, no violations |
 | Parity | `cargo xtask parity` | exit 0 (its notes list shipped features without a tool, as before) |
@@ -3620,9 +3664,11 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   `crates/collab-ws` and `apps/pdfcraft-collab-server`, the lock loses 17
   packages and gains none, `cargo deny --log-level error check` exits 0 and
   `cargo tree -i crypto-bigint@0.5.5` finds nothing (§4, "The JWT crypto
-  backend"). `cargo xtask ci` passes `fmt`, `clippy` — with the older
-  `selection_caret` break fixed in `f48ec4754` — and `cli-no-default-features`,
-  and stops at `test` on two pre-existing failures named in that section.
+  backend"). `cargo xtask ci` passes all 10 steps on `c1171d941` (2026-11-10;
+  §4, "The full CI sweep") — `fmt`, `clippy` (with the older `selection_caret`
+  break fixed in `f48ec4754`), `cli-no-default-features`, `test` (9930 passed,
+  0 failed, 18 ignored), i18n-report, layers, wasm, license-check, deny and
+  parity.
 - **The CI `git-sources` job passes on this tree** (`158ab7fa4`, 2026-11-10,
   not pushed): `craft-web-host` is fetched from `storytold/craft-libs` at
   PR #716's head instead of the fork, so `Cargo.lock` has no git source outside
