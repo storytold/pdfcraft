@@ -692,10 +692,12 @@ impl Anchor {
     }
 }
 
-/// Whether annotation `d` has the NoRotate flag.
+/// Whether annotation `d` stays upright on a turned page: it has the NoRotate flag, or it is a
+/// note, which is NoRotate even without it (ISO 32000-1 §12.5.6.4), as printing places it.
 fn no_rotate(doc: &Document, d: &Dict) -> bool {
     const NO_ROTATE: i64 = 16;
     d.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & NO_ROTATE != 0)
+        || d.get(b"Subtype").is_some_and(|s| doc.resolve(s).as_name() == Some(b"Text"))
 }
 
 /// The matrix placing an annotation at `rect` on a sheet showing its page with `m`. An `upright`

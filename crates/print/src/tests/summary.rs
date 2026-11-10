@@ -187,13 +187,21 @@ fn nothing_points_at_a_comment_the_page_does_not_show() {
 
 #[test]
 fn a_note_stays_upright_on_a_turned_page() {
-    // Page 1 turned a quarter clockwise, its second annotation a NoRotate, printing note at
-    // 60..80 × 10..30 (`/F 28`: Print, NoZoom, NoRotate).
+    // With the NoRotate flag (`/F 28`: Print, NoZoom, NoRotate), and without it (`/F 4`): a note
+    // is NoRotate either way (ISO 32000-1 §12.5.6.4).
+    for flags in [28, 4] {
+        upright_note(flags);
+    }
+}
+
+/// Page 1 turned a quarter clockwise, its second annotation a printing note at 60..80 × 10..30
+/// with `flags`: its copy on the summary sheet stands upright at its top-left corner.
+fn upright_note(flags: i64) {
     let mut src = fixture(1);
     let page = pdfcraft_model::pages(&src)[0].obj;
     let mut annots = src.resolve(pdfcraft_model::pages(&src)[0].dict.get(b"Annots").unwrap()).as_array().cloned().unwrap();
     if let Object::Dict(note) = &mut annots[1] {
-        note.set(b"F".to_vec(), Object::Int(28));
+        note.set(b"F".to_vec(), Object::Int(flags));
     }
     src.update_dict(page, |d| {
         d.set(b"Rotate".to_vec(), Object::Int(90));
@@ -213,7 +221,7 @@ fn a_note_stays_upright_on_a_turned_page() {
     let s = 348.0 / 300.0;
     let (x, y) = (36.0 + 30.0 * s, 410.0 - 60.0 * s);
     let want = [x, y - 20.0 * s, x + 20.0 * s, y];
-    assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{rect:?} {want:?}");
+    assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "/F {flags}: {rect:?} {want:?}");
     let ap = doc.resolve(copy.get(b"AP").unwrap()).as_dict().cloned().unwrap();
     let Object::Stream(form) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("an appearance stream") };
     let body = String::from_utf8(form.decoded().unwrap()).unwrap();
