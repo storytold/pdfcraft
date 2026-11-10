@@ -11338,6 +11338,61 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+/// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
+/// field with a click event of its own, named as the target, asks to open no attached file.
+#[test]
+fn run_javascript_runs_xfa_click_scripts_only_for_buttons() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("guide")).unwrap();
+    assert_eq!(o.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "the button's click: {o:?}");
+    let o = s.run_javascript(id, "", Some("note")).unwrap();
+    assert!(o.requests.is_empty(), "a text field's click script doesn't run here: {o:?}");
+}
+
+/// In an XFA form a button's click script may open an attached file; the same request from a
+/// text field's exit script is noted in the console and not made.
+#[test]
+fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="exit"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].guide[0]".into(), activity: "click".into() }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "{out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "only a click opens a file: {out:?}");
+    assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
+}
+
 /// A field whose layout:ready script only reads the page count keeps the value its script gives
 /// it: only a field the script gives the page call's result is numbered by the layout.
 #[test]
@@ -13239,6 +13294,25 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
     let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
+}
+
+#[test]
+fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
+    let original = s.get(id).unwrap().added()[0].obj;
+    let target = [10.0, 10.0, 60.0, 60.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(target) }).unwrap();
+    let added = s.get(id).unwrap().added();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].obj, original);
+    assert_eq!(added[0].content.rect(), target);
 }
 
 #[test]

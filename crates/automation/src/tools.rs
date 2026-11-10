@@ -212,7 +212,7 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
-        t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
+        t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 },
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
@@ -764,6 +764,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "auto_rotate": { "type": "boolean" },
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
                 "binding": { "type": "string", "enum": ["left", "right"] },
+                "creep": { "type": "number", "minimum": 0, "maximum": 10, "description": "Booklet creep compensation: points each sheet's pages move toward the fold, times the sheet's place from the outside (default 0)." },
                 "overlap": { "type": "number", "minimum": 0 },
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
@@ -773,9 +774,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
                 "collate": { "type": "boolean" },
-                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer sends no setting, so the printer's own default applies." },
+                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer uses the printer's current default: Windows sends its duplex setting when supported, otherwise preserves the driver default, including manual two-sided preferences; CUPS leaves the setting unspecified." },
                 "grayscale": { "type": "boolean" },
-                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey." },
+                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey, so the printer isn't asked for grayscale (a driver without that setting still prints them)." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
                 "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
             }),
@@ -1395,7 +1396,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit, attachment) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
             .cmd("tools.js_console")
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
