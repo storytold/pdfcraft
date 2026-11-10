@@ -63,14 +63,13 @@ impl Automation {
     }
 
     /// The profiles that can be named: the system's, or, when file access is confined, those in
-    /// the read root (as `text_font_files` does), each file checked against it before it is read.
+    /// the read root or `--root` (as `text_font_files` does), each file checked against it, links
+    /// followed, before it is read.
     fn installed_profiles(&self) -> Result<Vec<colour::InstalledProfile>> {
         let Some(roots) = &self.roots else {
-            let folders = match &self.root {
-                Some(root) => vec![root.clone()],
-                None => colour::profile_folders(),
-            };
-            return Ok(colour::installed_profiles_in(&folders));
+            let Some(root) = &self.root else { return Ok(colour::installed_profiles()) };
+            let inside = |path: &std::path::Path| self.resolve(&path.to_string_lossy(), false).is_ok();
+            return Ok(colour::installed_profiles_where(std::slice::from_ref(root), &inside));
         };
         let read = roots
             .read_root()
