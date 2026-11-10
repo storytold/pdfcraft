@@ -198,6 +198,17 @@ pub(crate) fn pdf_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let date = chrono::NaiveDate::from_ymd_opt(year, field(4, 2, 1)?, field(6, 2, 1)?)?;
     let time = date.and_hms_opt(field(8, 2, 0)?, field(10, 2, 0)?, field(12, 2, 0)?.min(59))?;
     let rest = s.get(digits.min(14)..).unwrap_or("");
+    // After the digits only a time zone may follow (`Z`, or `+HH'mm'`); anything else (an ISO
+    // date's `-07-04T10:00`, say) is not a PDF date, rather than a date in some made-up zone.
+    let zone = match rest.as_bytes() {
+        [] => true,
+        [b'Z' | b'z', tail @ ..] => tail.iter().all(|b| b.is_ascii_digit() || *b == b'\''),
+        [b'+' | b'-', h, m, tail @ ..] => h.is_ascii_digit() && m.is_ascii_digit() && tail.iter().all(|b| b.is_ascii_digit() || *b == b'\''),
+        _ => false,
+    };
+    if !zone {
+        return None;
+    }
     let offset = match rest.as_bytes().first() {
         Some(sign @ (b'+' | b'-')) => {
             let nums: Vec<i32> =
@@ -220,7 +231,8 @@ pub struct SummaryItem<'a> {
 
 /// The comments a summary lists, in `sort` order. Checkmarks and status replies are left out,
 /// as are pop-ups; the number is the comment's position on its page. By date, oldest first, by
-/// the full date in `dates` where it has one, else the date as listed; undated comments last.
+/// the full date in `dates` where it has one, then those with only the date as listed; undated
+/// comments last.
 pub fn summary_items<'a>(all: &'a [pdfcraft_render::Annotation], sort: SummarySort, dates: &SummaryDates) -> Vec<SummaryItem<'a>> {
     // Each reply under the annotation its `/IRT` points at, in document order, gathered once.
     type Children<'a> = std::collections::HashMap<(usize, usize), Vec<&'a pdfcraft_render::Annotation>>;
@@ -271,11 +283,17 @@ pub fn summary_items<'a>(all: &'a [pdfcraft_render::Annotation], sort: SummarySo
         SummarySort::Page => {}
         SummarySort::Author => items.sort_by(|x, y| x.comment.author.cmp(&y.comment.author)),
         SummarySort::Date => {
-            let undated = |a: &pdfcraft_render::Annotation| !dates.contains_key(&(a.page, a.index)) && a.modified.is_none();
+            // Fully dated first, then those with only the date as listed (one that can't be read
+            // in full), then the undated.
+            let rank = |a: &pdfcraft_render::Annotation| match (dates.contains_key(&(a.page, a.index)), a.modified.is_some()) {
+                (true, _) => 0,
+                (false, true) => 1,
+                (false, false) => 2,
+            };
             items.sort_by(|x, y| {
                 let (a, b) = (x.comment, y.comment);
-                undated(a)
-                    .cmp(&undated(b))
+                rank(a)
+                    .cmp(&rank(b))
                     .then_with(|| dates.get(&(a.page, a.index)).cmp(&dates.get(&(b.page, b.index))))
                     .then_with(|| a.modified.cmp(&b.modified))
             });

@@ -5308,7 +5308,9 @@ fn pdf_dates_are_read_in_full() {
     assert_eq!(at("D:20260228235930Z").as_deref(), Some("2026-02-28T23:59:30+00:00"));
     assert_eq!(at("D:2026").as_deref(), Some("2026-01-01T00:00:00+00:00"));
     assert_eq!(at("20260704").as_deref(), Some("2026-07-04T00:00:00+00:00"));
-    for bad in ["", "D:", "D:26", "yesterday", "D:20261340", "D:20260230", "D:2026010125"] {
+    assert_eq!(at("D:20260228235930Z00'00'").as_deref(), Some("2026-02-28T23:59:30+00:00"));
+    assert_eq!(at("D:202602282359+01").as_deref(), Some("2026-02-28T22:59:00+00:00"));
+    for bad in ["", "D:", "D:26", "yesterday", "D:20261340", "D:20260230", "D:2026010125", "2026-07-04T10:00:00Z", "D:2026 noon", "D:20260101+1"] {
         assert_eq!(at(bad), None, "{bad:?}");
     }
 }
@@ -5318,17 +5320,19 @@ fn pdf_dates_are_read_in_full() {
 #[test]
 fn summaries_by_date_put_the_page_commented_on_first_first() {
     // Page 1's comment, 05:00 on 1 March at UTC+10, is the oldest: 19:00 on 28 February in UTC.
-    // Page 2's are in the same minute, the second listed 15 seconds older. Page 3's has no date.
+    // Page 2's are in the same minute, the second listed 15 seconds older. Page 3's first has no
+    // date and its second one that can't be read: after every dated one, but before the undated.
     let pdf = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R] >> endobj
 4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R 8 0 R] >> endobj
-5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [9 0 R] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [9 0 R 10 0 R] >> endobj
 6 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (A) /M (D:20260301050000+10'00') >> endobj
 7 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (B) /M (D:20260228235945Z) >> endobj
 8 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (C) /M (D:20260228235930Z) >> endobj
 9 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (D) >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (E) /M (last Tuesday) >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -5340,14 +5344,15 @@ trailer << /Root 1 0 R >>
         .iter()
         .map(|c| (c.page, c.number, c.lines[0].1.split("  ").nth(1).unwrap_or("").to_string()))
         .collect();
-    let want: Vec<(usize, usize, String)> = [(0, 1, "A"), (1, 1, "C"), (1, 2, "B"), (2, 1, "D")].map(|(p, n, a)| (p, n, a.to_string())).to_vec();
+    let want: Vec<(usize, usize, String)> =
+        [(0, 1, "A"), (1, 1, "C"), (1, 2, "B"), (2, 1, "E"), (2, 2, "D")].map(|(p, n, a)| (p, n, a.to_string())).to_vec();
     assert_eq!(order, want);
     let headings: Vec<String> = summary_comments(all, SummarySort::Date, &dates).iter().map(|c| c.lines[0].1.clone()).collect();
     assert!(headings[1].starts_with("1. ") && headings[2].starts_with("2. "), "numbered as listed: {headings:?}");
     // Comments only sorts by the same dates.
     let text = comment_summary_with("dates.pdf", all, SummarySort::Date, &dates);
     let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();
-    assert!(at("A") < at("C") && at("C") < at("B") && at("B") < at("D"), "{text}");
+    assert!(at("A") < at("C") && at("C") < at("B") && at("B") < at("E") && at("E") < at("D"), "{text}");
     // The summary made through the session shows the pages in that order.
     let opts = SummarizeOptions { sort: SummarySort::Date, layout: SummaryLayout::DocumentAndCommentsWithLines, ..Default::default() };
     let bytes = s.summarize_comments(id, &opts).unwrap();
@@ -5356,7 +5361,7 @@ trailer << /Root 1 0 R >>
     assert!(texts[0].contains("Page 1") && texts[1].contains("Page 2") && texts[2].contains("Page 3"), "{texts:?}");
     // Its comments are comments again, on the sheets showing their pages, listed and found there.
     let listed: Vec<(usize, Option<String>)> = s.get(summary).unwrap().info.annotations.iter().map(|a| (a.page, a.author.clone())).collect();
-    let mut want: Vec<(usize, Option<String>)> = [(0, "A"), (1, "B"), (1, "C"), (2, "D")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
+    let mut want: Vec<(usize, Option<String>)> = [(0, "A"), (1, "B"), (1, "C"), (2, "D"), (2, "E")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
     want.sort();
     let mut listed = listed;
     listed.sort();
