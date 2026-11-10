@@ -1190,6 +1190,12 @@ impl Rule for MacGlyphOrder {
                 let c = Some(glyph.gid.to_u32())
                     .filter(|id| *id < *below && mac_order_reads(*id))
                     .and_then(mac_glyph_char)?;
+                // A font that names some of its glyphs (`below` is the relaxed limit) gains no
+                // text from a space the map leaves out: such a fill would only give the page a
+                // recovered layer of the same words, laid out on its own.
+                if *below == MAC_RELAXED_LIMIT && c.is_whitespace() {
+                    return None;
+                }
                 let mode = if *override_strict {
                     RecoveryMode::Override {
                         reason: WINANSI_GUESS,

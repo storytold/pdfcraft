@@ -1903,3 +1903,18 @@ fn a_glyph_of_several_characters_is_not_styled_in_small_capitals() {
     assert_eq!(x.text, hayro::hayro_interpret::hayro_cmap::BfString::Char('c'));
     assert!(x.small_caps && r.style_of(k).is_some_and(|s| s.small_caps));
 }
+
+/// A Type 0 font whose `/ToUnicode` names every glyph it shows but the space, all as the
+/// Macintosh order does, gains nothing from the order: a space read there would only give the
+/// page a recovered layer of the same words, laid out on its own (a book's ligatures came out as
+/// `fl ying`). Nothing is recovered.
+#[test]
+fn a_space_alone_is_no_reason_for_a_recovered_layer() {
+    let text = "Indicadores de estudiantes";
+    let g = gids(text);
+    let tu: String = text.chars().filter(|c| *c != ' ').map(|c| format!("<{:04X}> <{:04X}>\n", mac_gid(c), u32::from(c))).collect();
+    let program = subset(300, &g, Cmap::None, None);
+    let (strict, recovered, _) = layers(&parse(type0_page_with_to_unicode(program, &g, &mac_widths(text, 0), Some(&tu))));
+    assert_eq!(strict.plain_text().replace(' ', ""), text.replace(' ', ""));
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
+}
