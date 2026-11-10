@@ -45,6 +45,7 @@
     <string>hi</string>
     <string>ko</string>
     <string>nb</string>
+    <string>he</string>
   </array>
   <key>CFBundleDisplayName</key>
   <string>PdfCraft</string>

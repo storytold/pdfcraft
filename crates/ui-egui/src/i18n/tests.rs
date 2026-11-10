@@ -584,6 +584,13 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
             _ => 2,
         }
     }
+    fn he(n: u64) -> usize {
+        match n {
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        }
+    }
     fn sl(n: u64) -> usize {
         match n % 100 {
             1 => 0,
@@ -600,6 +607,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         "ar" => ar,
         "pl" => pl,
         "sl" => sl,
+        "he" => he,
         "lt" => lt,
         "ro" => ro,
         _ => one_other,
@@ -1270,7 +1278,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Arabic, Kurdish, Persian and Hebrew are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1364,6 +1372,93 @@ fn plural_fixture(code: &'static str, forms: usize) -> impl Fn(u64) -> usize {
             .and_then(|s| s.split(' ').next())
             .and_then(|i| i.parse().ok())
             .unwrap_or_else(|| panic!("{code}: no form for {n}: {said:?}"))
+    }
+}
+
+fn hebrew() -> Lang {
+    Lang::from_code("he").expect("he registered")
+}
+
+#[test]
+fn hebrew_is_registered_and_persists() {
+    let he = hebrew();
+    assert_eq!(he.english_name(), "Hebrew");
+    assert!(he.rtl());
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    // `iw` is the code Java and older Android systems still report for Hebrew.
+    assert_eq!(candidates("iw_IL.UTF-8"), ["iw-il", "iw", "he"]);
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "HE").unwrap();
+    assert_eq!(app.language, "he");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "he");
+    needs_catalogs!();
+    assert_eq!(he.name(), "עברית");
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "iw", "iw_IL", "iw-IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+}
+
+/// Lookups return Hebrew in logical (typing) order, as craft-i18n's catalog is written; epaint
+/// reorders each line for display.
+#[test]
+fn hebrew_catalog_stays_logical() {
+    needs_catalogs!();
+    let he = hebrew();
+    assert_eq!(tr(he, "File"), "קובץ");
+    assert_eq!(tr(he, "Save as…"), "שמירה בשם…");
+    assert_eq!(tr(he, "About PdfCraft"), "אודות PdfCraft");
+    assert_eq!(fmt(tr(he, "Fill in {name}"), &[("name", "Form")]), "מילוי Form");
+    // Unknown strings and user text are never reordered by a lookup.
+    assert_eq!(tr(he, "דוח סופי {n}.pdf"), "דוח סופי {n}.pdf");
+}
+
+/// Hebrew counts (CLDR `he`, integers): one (1), two (2), other.
+#[test]
+fn hebrew_plurals_follow_the_three_cldr_forms() {
+    let form = plural_fixture("he", 3);
+    assert_eq!([1, 2].map(&form), [0, 1]);
+    assert_eq!([0, 3, 10, 11, 20, 100, u64::MAX].map(&form), [2; 7]);
+}
+
+/// Auto picks Hebrew only where the interface faces draw it; otherwise it goes on to the next
+/// preferred language. An explicit choice still selects Hebrew.
+#[test]
+fn auto_picks_hebrew_only_where_the_interface_draws_it() {
+    let he = hebrew();
+    let face = crate::theme::interface_draws(HEBREW_LETTERS);
+    assert_eq!(auto_can_draw(he), face);
+    assert!(face || pdfcraft_fonts::ui_hebrew_fonts().is_empty(), "a craft-fonts Hebrew face draws Hebrew");
+    assert!(Lang::all().filter(|l| *l != he).all(auto_can_draw), "only Hebrew depends on the build");
+    assert_eq!(Lang::from_pref("he"), he, "choosing Hebrew in Preferences selects it whatever the fonts");
+    needs_catalogs!();
+    assert_eq!(lang_from_tag("he-IL"), Some(he), "a tag still names Hebrew");
+    assert_eq!(first_supported("iw-IL\r\nen-US"), Some(if face { he } else { Lang::EN }));
+    assert_eq!(first_supported("(\n    \"he-IL\",\n    \"fr-FR\"\n)\n"), if face { Some(he) } else { Lang::from_code("fr") });
+    assert_eq!(first_supported_tag(["he", "de-DE"]), if face { Some(he) } else { Lang::from_code("de") });
+    assert_eq!(language_override("he_IL.UTF-8"), face.then_some(he));
+}
+
+/// With a craft-fonts Hebrew face, every Hebrew translation and date name has glyphs in the
+/// interface faces.
+#[test]
+fn hebrew_labels_have_glyphs() {
+    if pdfcraft_fonts::ui_hebrew_fonts().is_empty() {
+        eprintln!("skipping Hebrew glyph checks: build with CRAFT_FONTS_DIR and a Hebrew face to run them");
+        return;
+    }
+    needs_catalogs!();
+    let he = hebrew();
+    // The date names too: the abbreviated ones carry a geresh ("ינו׳").
+    let dates = pdfcraft_engine::dates::date_language("he").expect("Hebrew date names");
+    let date_names = dates.months.iter().chain(&dates.months_short).chain(&dates.days).chain(&dates.days_short).flat_map(|n| n.chars());
+    let labels: String = translations("he").chars().chain(he.name().chars()).chain(date_names).filter(|c| !c.is_control()).collect();
+    assert!(labels.contains('׳'), "the geresh is checked");
+    let mut fonts = egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), crate::theme::font_definitions());
+    for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+        let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
+        assert!(missing.is_empty(), "{id:?} lacks Hebrew label glyphs {missing:?}");
     }
 }
 
