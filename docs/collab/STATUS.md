@@ -12,19 +12,19 @@
   pass's start it was `274b7a042` ("Merge pull request #6800 from
   storytold/merge/fonts-budget-6239"), so the branch is now **48 behind**
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
-  pass's head `b86c4963a` (the next bullet); no rebase was done in this pass, so
+  pass's head `642dabb5b` (the next bullet); no rebase was done in this pass, so
   the base stays `ba28458ad`.
-- Local head before this STATUS commit: `b86c4963a` (feat(collab): share
-  whole-document link operations) on `9adba7257` (docs(collab): record the open
-  state's automation tool) on `628f6176e` (feat(automation): write a
-  bookmark's open state with `bookmark_set_style`); **103 commits** not in
+- Local head before this STATUS commit: `642dabb5b` (feat(collab): replace the
+  whole outline in one operation) on `d2a1bcf64` (docs(collab): record the
+  whole-document link operations) on `b86c4963a` (feat(collab): share
+  whole-document link operations); **105 commits** not in
   `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
   local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
-  the remote's tip is not fetched here), and **23 ahead** of the PR head
+  the remote's tip is not fetched here), and **25 ahead** of the PR head
   `b27fa89c8`; this STATUS record is the second commit of the pass, so after it
-  the counts are 104/48/24. The branch was not rebased, so the base stays
+  the counts are 106/48/26. The branch was not rebased, so the base stays
   `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `b86c4963a`.
+  `642dabb5b`.
   The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
   `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
   at `c26867e9c` — were right when they were measured; `origin/main` kept
@@ -34,26 +34,27 @@
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
   2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the seventeen local commits above it are in
+  through the Split/Combine record; the local commits above it are in
   it only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
   and their record (`3f3bbedb0`), the parts/move/geometry operation
   (`22d29d070`) and its record (`199076765`), the pop-up operation
   (`0c57e2271`) and its record (`38d0bf56d`), the selection operation
   (`5bad54c40`) and its two records (`b6244142c`, `dc773c609`), the publication
   restore (`21aaf357a`), the page labels (`c26867e9c`) and their record
-  (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, and the
-  whole-document link operations (`b86c4963a`) and this record. `UNSTABLE` is
+  (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, the
+  whole-document link operations (`b86c4963a`) and their record (`d2a1bcf64`),
+  and the whole-outline replacement (`642dabb5b`) and this record. `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `b86c4963a` for the crates this pass touched
-  (annot, engine, collab-link, collab-pdf, collab-client-pdf, collab-ws,
+  §4 are green at the local head `642dabb5b` for the crates this pass touched
+  (engine, collab-outline, collab-pdf, collab-client-pdf, collab-ws,
   `pdfcraft-ui-egui --features collab` and the app); the whole-suite gates named
   earlier were run at their own heads (`5bad54c40`, `157f4d239`, `22d29d070`,
-  `0c57e2271`, `2b61ff80f`, §4) and were not re-run here.
+  `0c57e2271`, `2b61ff80f`, `642dabb5b`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -103,20 +104,20 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, pop-up, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert/split/combine, the outline (item add, update of its title, destination and look — colour, weight, slant, open state — delete with its whole subtree, restore, move — addressed by the item's object key), named destinations (add, update, delete — addressed by name), page labels (set, clear — addressed by the page a range starts on) and links (set, clear — a page's whole link list), restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
-| `crates/collab-outline` | Typed wire form of an outline item's destination (a page and a point, a Table 149 view, a named destination, or nowhere), of the look an update or an add names (`ItemLook`: colour as three numbers from 0 to 1 or `null` for the default black, bold, italic, open state) and of the subtree copy a delete carries, with their bounds: title and name length, depth, node count, copy size, colour channels, view types and their values |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, pop-up, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert/split/combine, the outline (item add, update of its title, destination and look — colour, weight, slant, open state — delete with its whole subtree, restore, move — addressed by the item's object key; the whole outline replaced in one operation, with the prior tree as its undo image), named destinations (add, update, delete — addressed by name), page labels (set, clear — addressed by the page a range starts on) and links (set, clear — a page's whole link list), restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-outline` | Typed wire form of an outline item's destination (a page and a point, a Table 149 view, a named destination, or nowhere), of the look an update or an add names (`ItemLook`: colour as three numbers from 0 to 1 or `null` for the default black, bold, italic, open state) and of the subtree copy a delete carries, with their bounds: title and name length, depth, node count, copy size, colour channels, view types and their values; the tree the from-structure/from-text-styles generators build in a replica |
 | `crates/collab-link` | Typed wire form of a link: its area (a rectangle, or the quads of a text area), its target (a page of this document with a view, a named destination, a page of another file, or a web address) and its look, with the bounds of every number and string; a list of them is a page's whole link list |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`), its parts (`PartsUpdate`), its move (`MoveUpdate`) and its geometry (`GeometryUpdate`) and their before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256/HS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter (which publishes the refused base), the publication queue and its recovery of restored publications |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
-| `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit — title, destination, colour, style or open state — is one `outline.item.update` addressed by the item key this replica's list gives it; a link edit is addressed by the page's whole list), inverse operations for undo, including the outline, named destination and link operations, whose inverses are built from the accepted operation |
+| `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit — title, destination, colour, style or open state — is one `outline.item.update` addressed by the item key this replica's list gives it; a whole-outline `ImportBookmarks` with `replace` is one `outline.replace`; the structure and text-style generators build their tree here and send the same operation; a link edit is addressed by the page's whole list), inverse operations for undo, including the outline, named destination and link operations, whose inverses are built from the accepted operation |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `crates/ui-egui/src/dialogs/named_dests_ui.rs` | Bookmarks ▸ Named destinations…: the document's names with the page and view each opens, and add/update/delete as engine edits (`SetNamedDestination`/`DeleteNamedDestination`), so a session sends `dest.add`/`dest.update`/`dest.delete` and the dialog never writes the document itself |
 | `crates/automation/src/named_dests.rs` | Headless parity for named destinations: `destinations` (name → page and view), `destination_set` (add or move a name, with the Table 149 type and its values checked before the write) and `destination_delete` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
-| `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo); `Edit::AddBookmarkWith`/`UpdateBookmark` (title, destination and look in one step) /`SetNamedDestination`/`DeleteNamedDestination` with `BookmarkDest`, `Document::bookmarks()` (paths with the item's object), `Document::named_destinations()` and `Document::bookmark_color()` (a colour at the file's own precision, for an undo); `Edit::SetPageLinks` over a page's whole link list, with `LinkContent` (`LinkBody`), and `LinkAction::Named`/`Remote` with the quads a text link carries |
+| `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo); `Edit::AddBookmarkWith`/`UpdateBookmark` (title, destination and look in one step) /`SetNamedDestination`/`DeleteNamedDestination` with `BookmarkDest`, `Document::bookmarks()` (paths with the item's object), `Document::named_destinations()` and `Document::bookmark_color()` (a colour at the file's own precision, for an undo), `Document::outline_tree()`/`structure_bookmarks()`/`text_style_bookmarks()` for the generators a collaboration client runs in its replica; `Edit::SetPageLinks` over a page's whole link list, with `LinkContent` (`LinkBody`), and `LinkAction::Named`/`Remote` with the quads a text link carries |
 
 Both platforms run the same protocol: `collab-session` compiles on wasm32 with a
 `web-sys` `WebSocket` transport, and `ui-egui --features collab` compiles for
@@ -419,6 +420,101 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The whole outline replaced — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
+
+`feat(collab): replace the whole outline in one operation` (`642dabb5b`) on
+`d2a1bcf64`. This closes the last outline item §6.6 left open: `ImportBookmarks`
+with `replace` was `unsupported` in a room, and so were the from-structure and
+from-text-styles generators, because each replaces more of the outline than one
+addressed item.
+
+- **One operation over the whole tree** (RFC §3.1.7). `outline.replace` is
+  addressed to the outline itself (`Target::OutlineItem { key: None }`, not an
+  item), and its payload is `items` — the complete outline in the same wire form
+  the subtree copy uses (`title`, `page`, `view`, `color`, `italic`, `bold`,
+  `open`, `children`). A node may name its destination in the full `dest` form
+  instead (including `named`): the name is checked against the document and
+  written as that name's page and view, because the accepted operation and the
+  journal carry a tree of pages. `epoch` is the compare-and-set, as for
+  `dest.*`: an operation built on another epoch is `stale` (retryable) before
+  the document is read.
+- **The undo image is the whole tree it replaced.** The accepted operation
+  carries `items` (as written, normalised), `before` (the document's whole
+  outline before the write) and `count`; the undo is one more `outline.replace`
+  over `before`, and a redo repeats the original operation. An empty `items`
+  clears the outline: the engine's import refuses an empty list, so every
+  replica applies a batch of top-level deletions — one edit, one undo step —
+  which is also the undo of a document that had no outline.
+- **Every refusal happens before the first write**: a target that is not the
+  outline root, a missing or non-list `items`, a blank or over-long title
+  (512 bytes), a page past the last, a name this document does not define, a
+  name that opens no page, a view that is not Table 149 or not of its arity, a
+  colour that is not three numbers from 0 to 1, nesting deeper than 32 levels,
+  more than 2 000 nodes or more than 128 KiB of JSON (`limit`), an empty tree on
+  an empty outline (`invalid`), and a passed `epoch` that is not the current one
+  (`stale`). None of them moves `version`, `epoch`, the document or the journal.
+  The same bounds are checked on the document's own outline for `before`: an
+  outline too large for one operation cannot be replaced, because its undo
+  could not travel.
+- **The write is one edit**: `Edit::ImportBookmarks` with `replace: true`, or —
+  for an empty tree — `Edit::Batch` of `DeleteBookmark { path: [0] }` for each
+  top-level item. A replacement rebuilds every bookmark object, so a key a
+  replica took before it is `invalid` afterwards (the same honest boundary as
+  `outline.item.restore`).
+- **Page operations after a replacement keep the targets**: a bookmark is
+  written with the page object, so insert/duplicate/blank/combine/move/split/
+  delete/replace keep each item on its page and only the number moves; the
+  server recomputes key→path before every operation, so a key taken before a
+  page operation still addresses its item (the test checks a blank insert and a
+  rename by a key taken before it).
+- **The client projects both ways**: `Edit::ImportBookmarks` with `replace`
+  becomes one `outline.replace` (`outline_replace_payload`); an accepted
+  operation becomes the same `ImportBookmarks` (or the batch of deletions for an
+  empty tree); `inverse_for` returns `None` and `inverse_after` builds the undo
+  from `before`. `collab_apply_edit` already lists `ImportBookmarks` as
+  structural, so a commenter never builds it and a viewer never sends it.
+- **The generators run in the replica**: `Document::structure_bookmarks()` and
+  `Document::text_style_bookmarks()` read the headings (the engine's own
+  `pdfcraft_a11y::headings` and `text_style_bookmarks::headings`), and
+  `collab-outline::tree_from_entries` nests them the way `add_bookmark_tree`
+  does — one expanded "Untitled" parent first, entries nested by level, each at
+  the top of its page (`/XYZ`, zoom kept). The operation is one
+  `outline.replace` with the new parent followed by the document's own
+  top-level items, so a room leaves the list a lone document would have left
+  (the engine inserts the parent first too). `TextStyle::matches` became public
+  so the client refuses a level list with two equal styles exactly as the
+  engine does; an untagged document, no levels, a duplicate style and no text
+  in the chosen styles are the engine's own messages. A structure link (`/SE`)
+  is not part of the wire, so generated bookmarks carry none.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-outline` | `entries_nest_by_level_under_one_parent` (a parent, nesting by level, each heading's top, the whole tree round-trips through the wire, no entries is an empty parent) |
+| `collab-pdf` | `the_whole_outline_is_replaced_as_one_operation` (one epoch step; the accepted `items`/`before`/`count`; a named destination resolved to its page; look and view written; undo over `before`, redo; a blank insert keeps every target and a key taken before it still renames its item; an empty tree clears and its undo restores), `a_bad_outline_replace_changes_nothing` (13 refusals — an item target, no items, items not a list, a blank and a long title, a missing page, a missing name, an unknown view, a `FitR` with a hole, depth 33, 2 001 nodes, over 128 KiB of JSON, a stale epoch — each leaving version, epoch and outline unchanged; a document whose own outline is over the budget is `limit`) |
+| `collab-client-pdf` | `bookmark_edits_become_addressed_operations` (`replace` → one `outline.replace` at the outline root with `items` and `epoch`; a `replace` with a parent refused), `accepted_outline_operations_become_edits` (an accepted `outline.replace` → `ImportBookmarks` with `replace`), `a_replacement_undoes_into_one_more_replacement` (the undo op over `before`, the empty tree as a batch of top-level deletions, its own undo restoring the tree), `generator_edits_become_one_outline_replacement` (from structure: one operation, the new parent then the document's list, the tree parses; an untagged document refused), `text_style_generators_become_one_outline_replacement` (one operation, a heading per page; no levels, two equal styles and no text refused) |
+| `collab-ws` e2e (socket) | `the_whole_outline_is_replaced_over_a_socket` (two editors and a viewer: a replacement converges on all three replicas, its undo and the redo apply, a stale epoch is `stale` without a version move, a viewer `forbidden`) |
+
+Gates at `642dabb5b` (host `agents`, rustc 1.99.1, `-j 4`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | EXIT=0 |
+| Clippy, the crates this pass touched | `cargo clippy -p pdfcraft-collab-outline -p pdfcraft-collab-client-pdf -p pdfcraft-collab-pdf -p pdfcraft-collab-ws -p pdfcraft-engine --all-targets -- -D warnings` | EXIT=0 |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | EXIT=0 |
+| App wiring | `cargo check -p pdfcraft --features collab` | EXIT=0 |
+| Tests, the collab crates of the slice | `cargo test -p pdfcraft-collab-outline -p pdfcraft-collab-client-pdf -p pdfcraft-collab-pdf -p pdfcraft-collab-ws` | EXIT=0 — client-pdf 48, outline 9, pdf 71, ws 16 unit + 36 e2e; 0 failed, 0 ignored |
+| Tests, the engine the reads and edits live in | `cargo test -p pdfcraft-engine` | EXIT=0 — engine 636 + 9 + 46; 2 ignored (pre-existing) |
+
+What this does **not** cover: an outline over one operation's budget (2 000
+nodes, 128 KiB JSON) cannot be replaced in a room, since its `before` image
+would not fit; a replacement rebuilds every bookmark object, so keys taken
+before it are invalid; a generator loses the structure link (`/SE`) a lone
+document keeps; and `outline.replace` refuses an empty tree on an empty outline
+instead of recording an epoch bump with nothing in it. Nothing was pushed: PR
+#6622 keeps the fork's head `b27fa89c8`, and this pass's two commits are local.
 
 ### Whole-document link operations — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
 
@@ -2979,9 +3075,17 @@ Ordered by the risk they pose to production.
    from 0 to 1, a style that is not a boolean and an open state on an item with
    no children, and the undo image is the whole node. Named destinations have
    an editor of their own now (Bookmarks ▸ Named destinations…, §4) and headless
-   tools (`destinations`, `destination_set`, `destination_delete`). Layers,
-   attachments, form structure and content edits are still not shared, and the
-   "from structure/text styles" generators are still `unsupported` in a room.
+   tools (`destinations`, `destination_set`, `destination_delete`). The whole
+   outline is replaced in one operation since `642dabb5b` (§4, RFC §3.1.7):
+   `outline.replace` carries the complete tree (a node may name its destination
+   by name, which is resolved to its page), the accepted operation carries the
+   whole `before` for the undo, an empty tree clears the outline, and
+   `ImportBookmarks` with `replace` is shared. The from-structure and
+   from-text-styles generators build their tree in the replica and send that
+   same operation, so they are shared too — a structure link (`/SE`) is not
+   carried, and every outline over one operation's budget (2 000 nodes,
+   128 KiB JSON) cannot be replaced, because its undo image would not fit.
+   Layers, attachments, form structure and content edits are still not shared.
 4. ~~**Presence has cursors, not selections.**~~ Closed on the client in
    `b4e9179d8` (§4): presence now carries the selected comment's `/NM` or a
    rectangle in user space (a text range's bounding box, a column select), under
@@ -3365,10 +3469,20 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   document's names, and `bookmark_set_style` writes the open state headlessly.
   Tests: `collab-outline` (2), `organize` (2), `collab-pdf` (1 new, 10 refuse
   cases added), `collab-client-pdf` (1), `collab-ws` e2e (1) and `automation`
-  (3: the named destinations and the open state). What is still outside a room: replacing the whole
-  outline (`ImportBookmarks` with `replace`) and the from-structure/
-  from-text-styles generators. (Links, the rest of TASK §3's list, are done in
-  the bullet below.)
+  (3: the named destinations and the open state).
+- **The whole outline and the generators are done locally in §4**
+  (`642dabb5b`, 2026-11-10, not pushed): `outline.replace` replaces the whole
+  tree in one structural operation addressed to the outline itself, `epoch` is
+  the compare-and-set, the accepted operation carries `items` and the whole
+  `before` for its undo, an empty tree clears the outline, and
+  `ImportBookmarks` with `replace` is no longer `unsupported` on the client.
+  `BookmarksFromStructure` and `BookmarksFromTextStyles` build their tree in the
+  replica (`Document::structure_bookmarks`/`text_style_bookmarks`,
+  `collab-outline::tree_from_entries`) and send the same operation with the
+  document's own list after the new parent. Tests: `collab-outline` (1),
+  `collab-pdf` (2), `collab-client-pdf` (3) and `collab-ws` e2e (1, two editors
+  and a viewer). (Links, the rest of TASK §3's list, are done in the bullet
+  below.)
 - **Links are done locally in §4** (`2b61ff80f`, 2026-11-10, not pushed):
   `page.link.set` and `page.link.clear` over a page's whole link list, a typed
   link body (rectangle or text quads; a page with a view, a named destination,

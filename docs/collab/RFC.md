@@ -78,8 +78,10 @@ Op {
 `annotation.restore`, `field.set_value`, `page.rotate`, `page.move`,
 `page.delete`, `page.restore`, `page.insert`, `page.duplicate`
 (`§3.1.4`) `page.replace`, `page.insert_blank`, `page.split`, `page.combine`
-(`§3.1.5`), `outline.item.add`/`update`/`delete`/`restore`/`move` и
-`dest.add`/`update`/`delete` (`§3.1.7`), `page.label.set`/`clear` (`§3.1.8`).
+(`§3.1.5`), `outline.item.add`/`update`/`delete`/`restore`/`move`,
+`outline.replace` и `dest.add`/`update`/`delete` (`§3.1.7`),
+`page.label.set`/`clear` (`§3.1.8`), `page.link.set`/`clear`,
+`links.add_many`/`remove_many` (`§3.1.9`).
 Остальные
 правки в общей сессии отклоняются как `unsupported`, а не применяются только
 локально.
@@ -469,6 +471,7 @@ Target::NamedDest { name: String }
 | `outline.item.delete` | ключ закладки | — → `path`, `subtree`, `parent`, `parent_key`, `index` |
 | `outline.item.restore` | родитель (ключ или `null`) | `subtree`, `index?` → `path`, `index`, `key` |
 | `outline.item.move` | ключ закладки | `parent` (ключ или `null`), `index?` → `from`, `to_parent`, `index`, `before {parent, index, path}` |
+| `outline.replace` | сам outline (`key = null`) | `items` (полное дерево), `epoch?` → `items`, `before`, `count` |
 | `dest.add` | имя | `dest`, `epoch?` |
 | `dest.update` | имя | `dest`, `epoch?` → `before` |
 | `dest.delete` | имя | — → `before` |
@@ -509,6 +512,42 @@ destination **таким, каким он был в файле**, а не пер
 `open`) — одной undoable-правкой, а `open` у закладки без детей он тоже
 отклоняет.
 
+**Замена всего outline — одна операция (`outline.replace`).** `ImportBookmarks`
+с `replace` правит весь список сразу, и в комнате это одна структурная
+операция с адресом «сам outline» (`Target::OutlineItem { key: None }`), а не
+набор правок по узлам. `items` — то же дерево, что несёт копия поддерева
+(`title`, `page`, `view`, `color`, `italic`, `bold`, `open`, `children`), но
+узел может назвать destination и полной формой `dest` (включая `named`): имя
+проверяется по документу и записывается страницей и видом этого имени, потому
+что принятая операция и журнал хранят дерево страниц. `epoch` в payload —
+compare-and-set, как у `dest.*`: операция, собранная на другой эпохе, — `stale`
+(retryable) до чтения документа. Принятая операция несёт `items` (что записано,
+после нормализации), `before` (прежнее дерево целиком) и `count`. Undo — такая
+же `outline.replace` по `before`, redo — исходная операция. Пустой `items`
+очищает outline; движку для этого нужен не импорт (он отказывает пустому
+списку), а пакет удалений верхнего уровня — всё равно одна правка и один шаг
+undo. Замена пересоздаёт все объекты закладок, поэтому ключи, взятые до неё,
+после неё недействительны (`invalid`) — это та же честная граница, что у
+`outline.item.restore`.
+
+Пределы замены — пределы одной копии: `MAX_OUTLINE_COPY_NODES` (2 000) узлов,
+`MAX_OUTLINE_COPY_BYTES` (128 КиБ) JSON, глубина `MAX_OUTLINE_DEPTH` (32),
+заголовок ≤ 512 байт, вид из Table 149 с его числом значений, страница в
+документе, имя, которое документ определяет. Те же пределы проверяются у
+`before`: если собственный outline документа больше одной операции, замена
+отказывается `limit`, потому что undo не смог бы унести прежнее дерево. Все
+отказы — до первой записи.
+
+**Генераторы from-structure и from-text-styles** в комнате строит клиент:
+`pdfcraft_a11y::headings` (или `text_style_bookmarks::headings`) даёт записи,
+клиент складывает их в дерево так же, как движок (`add_bookmark_tree`): один
+раскрытый родитель «Untitled» первым, записи вложены по уровню, каждая идёт на
+верх своей страницы (`/XYZ`, zoom сохранён). Затем отправляется одна
+`outline.replace`: новое дерево и прежний список документа после него — так
+комната получает то же, что одиночный документ (движок вставляет родителя
+первым и список сохраняет). Ссылка на структуру (`/SE`) в провод не входит: у
+узла её нет, и это та же граница, что у копии поддерева.
+
 **Что проверяется до первой записи** (ни один отказ не двигает `version`,
 `epoch`, документ и журнал):
 
@@ -535,7 +574,13 @@ destination **таким, каким он был в файле**, а не пер
   `conflict` (не перезапись и не «ничего не произошло»); имя, которое открывает
   не страницу (имя имени), на `update`/`delete` — `unsupported`: комната хранит
   страницу на каждое имя и не смогла бы вернуть такое;
-- `dest.*` с `epoch` не текущим (если он назван) — `stale`, retryable.
+- `dest.*` с `epoch` не текущим (если он назван) — `stale`, retryable;
+- `outline.replace`: `items` не список, пустой или длинный заголовок, страница
+  за последней, имя, которого нет, вид не из Table 149 или не с его числом
+  значений, глубина > 32, узлов > 2 000 или JSON > 128 КиБ — `invalid` /
+  `limit`; собственный outline документа больше тех же пределов — `limit`
+  (undo не унёс бы `before`); пустой `items` у пустого outline — `invalid`;
+  `epoch` не текущий — `stale`, retryable.
 
 **Undo-образ.** Принятая операция описывает то, что заменила, поэтому undo —
 обычная операция, а не догадка (ADR-0010):
@@ -551,6 +596,7 @@ destination **таким, каким он был в файле**, а не пер
   реплики и журнал кладут его обратно без второго канала и без серверного
   хранилища копий;
 - `move` → `outline.item.move` в `before {parent, index}`;
+- `outline.replace` → `outline.replace` по `before` (redo — исходная операция);
 - `dest.add` → `dest.delete`; `dest.update` → `dest.update` с `before`;
   `dest.delete` → `dest.add` с `before`.
 
@@ -588,8 +634,14 @@ destination на удалённую страницу удаляется (`delete
 `DeleteBookmark`, `MoveBookmark`, `SetNamedDestination`,
 `DeleteNamedDestination` проецируются в операции
 (`collab-client-pdf::ops_for_edit`) по ключу, который реплика находит в своём
-списке (`Document::bookmarks`), а `ImportBookmarks` с `replace` — не
-разделяется (он затёр бы чужой список) и отклоняется на клиенте. Заголовок,
+списке (`Document::bookmarks`), а `ImportBookmarks` с `replace` — одна
+`outline.replace` с адресом «сам outline» (пустой список — её же с `items: []`).
+`BookmarksFromStructure` и `BookmarksFromTextStyles` клиент выполняет сам,
+повторив движок: он читает заголовки структуры (`Document::structure_bookmarks`)
+или стилей текста (`Document::text_style_bookmarks`), строит дерево
+(`collab-outline::tree_from_entries`) с прежним списком после нового родителя и
+отправляет ту же `outline.replace`. Так одиночный документ и комната дают один
+и тот же список; ссылки на структуру (`/SE`) при этом не переносятся. Заголовок,
 destination и вид закладки — один `outline.item.update`: `UpdateBookmark`
 несёт все четыре поля вида, поэтому цвет, Bold/Italic и «Expanded in the
 document» панели закладок едут той же операцией, а не отдельными правками.
@@ -1409,8 +1461,9 @@ Headless, без GUI, 2–3 клиента:
    custom stamp, redaction, вложения), слои, изменение содержимого
    страницы, повтор/redo структурных правок на сервере. Закладки и named
    destinations разделяются с `d1229deb9`, их вид (цвет, начертание,
-   раскрытость) — с этого среза (§3.1.7); из закладочных правок не разделяется
-   только замена всего outline (`ImportBookmarks` с `replace`). Клиент показывает
+   раскрытость) — с этого среза, а замена всего outline (`ImportBookmarks` с
+   `replace`) и генераторы from-structure/from-text-styles — с `outline.replace`
+   (§3.1.7); закладочных правок вне комнаты больше нет. Клиент показывает
    причину отказа и не применяет их локально. Внешний вид (`/LE`, `font size`,
    автор, subject, иконка заметки) входит в §3.1.2–3.1.3, доли прозрачности,
    перемещение, геометрия и окно комментария — §3.1.6; замена страницы и
