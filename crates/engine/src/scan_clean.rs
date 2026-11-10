@@ -9,8 +9,9 @@
 //! 8-bit grey up to 40 million pixels or RGB up to 20 million, without a palette or an alpha
 //! channel),
 //! any other grey or RGB image is stored losslessly (Flate), and a black and white (1-bit) image
-//! stays 1-bit as Flate, a CCITT fax one included, unless it is a halftone ([`crate::descreen`]),
-//! which is restored to 8-bit grey. An image several pages draw is cleaned once.
+//! stays 1-bit (a CCITT fax one as Group 4, any other as Flate), unless it is a halftone
+//! ([`crate::descreen`]: dots all over, with no crisp ink) and halftone restore is on, when it is
+//! restored to 8-bit grey. An image several pages draw is cleaned once.
 //!
 //! A page is a scan when its pictures cover at least half of it (as for Recognize text); the
 //! pictures each covering at least a tenth of the page are its scan. What is not cleaned is
@@ -55,22 +56,26 @@ pub struct ScanCleanSettings {
     /// Despeckle: isolated dark specks (dust, scanner noise), dark pixels with at most one dark
     /// neighbour, turn white. The only change a black and white (1-bit) scan takes.
     pub despeckle: bool,
+    /// Halftone restore: a black and white (1-bit) scan that is dots all over, a faint page a
+    /// scanner or fax machine dithered, becomes the clean grey picture it was made from
+    /// ([`crate::descreen`]). Off, such a scan is treated as any other 1-bit one.
+    pub restore_halftones: bool,
     /// How a halftone (dotted) 1-bit scan looks once restored: stroke weight, contrast and paper
     /// clean-up. Nothing else takes them.
     pub halftone: HalftoneTuning,
 }
 
 impl ScanCleanSettings {
-    /// The level `level` (capped at 100) with edge shadow removal (unless the level is 0), and
-    /// despeckling from [`DESPECKLE_FROM`] as the camera tool does.
+    /// The level `level` (capped at 100) with edge shadow removal and halftone restore (unless the
+    /// level is 0), and despeckling from [`DESPECKLE_FROM`] as the camera tool does.
     pub fn at(level: u8) -> Self {
         let level = level.min(MAX_LEVEL);
-        Self { level, edge_shadows: level > 0, despeckle: level >= DESPECKLE_FROM, halftone: HalftoneTuning::default() }
+        Self { level, edge_shadows: level > 0, despeckle: level >= DESPECKLE_FROM, restore_halftones: level > 0, halftone: HalftoneTuning::default() }
     }
 
     /// Whether these settings change anything at all.
     pub fn changes_something(self) -> bool {
-        self.level > 0 || self.edge_shadows || self.despeckle
+        self.level > 0 || self.edge_shadows || self.despeckle || self.restore_halftones
     }
 }
 
@@ -98,9 +103,18 @@ pub struct ScanCleanReport {
 /// A halftone scan that was restored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HalftoneImage {
+    /// The image.
+    pub object: ObjRef,
     /// How the image is stored, for example "CCITT fax 1-bit".
     pub format: String,
     pub pages: Vec<usize>,
+}
+
+/// The images an earlier run of a clean-up cleaned, as they are in the document, for a run after
+/// it that changes only some pages ([`ScanCleanJob::keeping`]).
+pub struct ScanCleanKept {
+    cos: pdfcraft_cos::Document,
+    halftone: Vec<HalftoneImage>,
 }
 
 /// A scan image that was not cleaned.
@@ -132,6 +146,8 @@ pub struct ScanCleanJob {
     /// Halftone tunings of single pages (0-based), which take the place of the settings' for the
     /// image drawn on that page.
     page_tunings: Vec<(usize, HalftoneTuning)>,
+    /// An earlier run's images, and the pages (0-based) whose images are cleaned again all the same.
+    kept: Option<(ScanCleanKept, Vec<usize>)>,
 }
 
 /// The cleaned images, ready for [`Session::apply_scan_clean`], and the report.
@@ -208,7 +224,23 @@ impl Session {
                 }
             }
         }
-        Ok(ScanCleanJob { cos: editor.cos.clone(), targets, settings, generation: doc.edit_generation(), report, page_tunings: Vec::new() })
+        Ok(ScanCleanJob {
+            cos: editor.cos.clone(),
+            targets,
+            settings,
+            generation: doc.edit_generation(),
+            report,
+            page_tunings: Vec::new(),
+            kept: None,
+        })
+    }
+
+    /// The scan images of document `id` as a clean-up left them (`halftone` is what its report
+    /// says it restored), taken before that clean-up is undone to be run again with other
+    /// settings for some pages: see [`ScanCleanJob::keeping`].
+    pub fn scan_clean_kept(&self, id: DocId, halftone: Vec<HalftoneImage>) -> Result<ScanCleanKept, EditError> {
+        let editor = self.get(id).and_then(|d| d.editor.as_ref()).ok_or(EditError::NoDocument)?;
+        Ok(ScanCleanKept { cos: editor.cos.clone(), halftone })
     }
 
     /// Write the images [`ScanCleanJob::run`] cleaned into document `id` as one undoable step,
@@ -242,6 +274,15 @@ impl ScanCleanJob {
         self
     }
 
+    /// Clean again only the images drawn on `again` (0-based pages): every other image the earlier
+    /// run `kept` changed is taken from it as it is. The result is what a full run would give when
+    /// nothing but the tuning of those pages differs, without the time: a restore of one page
+    /// takes about a second, and a book has hundreds.
+    pub fn keeping(mut self, kept: ScanCleanKept, again: &[usize]) -> Self {
+        self.kept = Some((kept, again.to_vec()));
+        self
+    }
+
     /// The images to clean (one drawn on several pages counts once).
     pub fn total(&self) -> usize {
         self.targets.len()
@@ -255,7 +296,7 @@ impl ScanCleanJob {
     }
 
     fn work(self, progress: &mut dyn FnMut(usize, usize) -> bool) -> Result<ScanCleaned, EditError> {
-        let ScanCleanJob { cos, targets, settings, generation, mut report, page_tunings } = self;
+        let ScanCleanJob { cos, targets, settings, generation, mut report, page_tunings, kept } = self;
         let total = targets.len();
         let mut images = Vec::new();
         let mut changed_pages: Vec<usize> = Vec::new();
@@ -265,6 +306,16 @@ impl ScanCleanJob {
             if !progress(done, total) {
                 return Err(EditError::Cancelled);
             }
+            // What the earlier run made of an image none of whose pages is cleaned again.
+            if let Some((earlier, again)) = &kept
+                && !target.pages.iter().any(|p| again.contains(p))
+                && let Some(stream) = changed_stream(&cos, &earlier.cos, target.object)
+            {
+                report.halftone.extend(earlier.halftone.iter().find(|h| h.object == target.object).cloned());
+                images.push((target.object, stream));
+                changed_pages.extend(target.pages.iter().copied());
+                continue;
+            }
             let mut skip = |reason: String| report.skipped.push(SkippedImage { pages: target.pages.clone(), name: target.name.clone(), reason });
             let halftone = target.pages.iter().find_map(|p| page_tunings.iter().find(|(q, _)| q == p)).map_or(settings.halftone, |(_, t)| *t);
             // One image a decoder panics on is that image's bad data: the others are still cleaned.
@@ -273,7 +324,7 @@ impl ScanCleanJob {
             match cleaned {
                 Ok(Some((stream, halftone))) => {
                     if let Some(format) = halftone {
-                        report.halftone.push(HalftoneImage { format, pages: target.pages.clone() });
+                        report.halftone.push(HalftoneImage { object: target.object, format, pages: target.pages.clone() });
                     }
                     images.push((target.object, stream));
                     changed_pages.extend(target.pages.iter().copied());
@@ -288,6 +339,15 @@ impl ScanCleanJob {
         report.pages = changed_pages;
         report.skipped.sort_by_key(|s| s.pages.first().copied());
         Ok(ScanCleaned { images, generation, report })
+    }
+}
+
+/// The stream `object` is in `later`, when that is not the one it is in `now`.
+fn changed_stream(now: &pdfcraft_cos::Document, later: &pdfcraft_cos::Document, object: ObjRef) -> Option<Stream> {
+    let (before, after) = (now.get(object), later.get(object));
+    match &*after {
+        Object::Stream(s) if !std::sync::Arc::ptr_eq(&before, &after) && *before != *after => Some(s.clone()),
+        _ => None,
     }
 }
 
@@ -317,7 +377,7 @@ fn clean_image(
         return Err("it is drawn through a stencil mask: it holds the ink colours of a layered scan, not its paper".into());
     }
     let samples = optimize::decode_samples(cos, s, budget).map_err(|e| e.to_string())?;
-    if samples.bilevel && settings.level > 0 && descreen::is_halftone(&samples.data, samples.width, samples.height) {
+    if samples.bilevel && settings.restore_halftones && descreen::is_halftone(&samples.data, samples.width, samples.height) {
         let format = storage(s);
         return descreened(s, samples, settings.halftone).map(|stream| Some((stream, Some(format))));
     }

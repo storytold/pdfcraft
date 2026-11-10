@@ -3205,6 +3205,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // No dialog, close prompt or palette over the page: only then does page input count.
     let modal = app.modal_open();
     let unobstructed = !modal && !app.palette_open;
+    // Scrolling and zooming also go on beside the Enhance scanned file result window, which is
+    // there for the page to be judged; presses on the page do not.
+    let navigable = app.page_navigation_open() && !app.palette_open;
     let organize_zoom = app.organize_zoom;
     let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
@@ -3228,12 +3231,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
     // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
-    let zoom_enabled = unobstructed && ui.is_enabled();
+    let zoom_enabled = navigable && ui.is_enabled();
     let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, navigable, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
@@ -3248,13 +3251,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // (#1924, `single_page_wheel_edge`). Touch drags are untouched: with
     // nothing to pan, touch users turn pages with the rail buttons, the page box and the arrow
     // keys. Runs before `visible_pages` so the frame that turns the page draws it.
-    let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
+    let (single_paging, edge_turned) =
+        single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed: navigable });
     let now = ui.input(|i| i.time);
     let animates = app.animation_effects.animates(app.motion.reduced);
-    let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
+    let wheel_enabled = navigation_enabled && navigable && !middle_gesture;
     let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
         read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
-    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
+    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && navigable && animates;
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
     let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);

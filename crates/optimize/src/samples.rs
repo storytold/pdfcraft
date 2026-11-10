@@ -119,13 +119,12 @@ fn is_jpx(s: &Stream) -> bool {
     }
 }
 
-/// Whether `s` is a CCITT fax image: `/CCITTFaxDecode` as its only filter.
+/// Whether `s` is a CCITT fax image: `/CCITTFaxDecode` as its last filter, behind none but
+/// general-purpose ones (`[/ASCIIHexDecode /CCITTFaxDecode]`), which are undone on the way to it.
 fn is_ccitt(s: &Stream) -> bool {
-    let fax = |f: &Object| matches!(f.as_name(), Some(b"CCITTFaxDecode" | b"CCF"));
-    match s.dict.get(b"Filter") {
-        Some(Object::Array(a)) => matches!(a.as_slice(), [f] if fax(f)),
-        Some(f) => fax(f),
-        None => false,
+    match s.filters().split_last() {
+        Some(((pdfcraft_filters::Filter::CcittFax, _), before)) => before.iter().all(|(f, _)| f.is_decodable()),
+        _ => false,
     }
 }
 
@@ -341,7 +340,8 @@ fn pack_bits(px: &[u8], w: u32, h: u32, inverted: bool) -> Option<Vec<u8>> {
 
 /// Image stream `old` with its samples replaced by `samples` (same size and components): a JPEG
 /// stays a JPEG (at `quality`, 1–100), anything else becomes Flate, and a bi-level image stays
-/// one bit per pixel with its decode array. Filter parameters go (the new data needs none); every
+/// one bit per pixel with its decode array (a CCITT fax one as Group 4, when its rows are not too
+/// wide for that). Filter parameters go (the new data needs none); every
 /// other entry stays. `None` if the samples don't fit the image.
 pub fn encode_samples(old: &Stream, samples: &Samples, quality: u8) -> Option<Stream> {
     let Samples { width, height, components: n, data, jpeg: as_jpeg, bilevel, inverted } = samples;
@@ -364,7 +364,21 @@ pub fn encode_samples(old: &Stream, samples: &Samples, quality: u8) -> Option<St
             return None;
         }
         d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-        return Some(Stream::flate(d, &pack_bits(data, w, h, *inverted)?));
+        let bits = pack_bits(data, w, h, *inverted)?;
+        // A fax image stays one: Group 4 codes a page of text several times smaller than Flate.
+        // The coder writes the bits as they are (a 1 bit white), so the decode array still holds.
+        if is_ccitt(old)
+            && let Ok(g4) = pdfcraft_filters::encode_g4(&bits, w, h)
+        {
+            let mut parms = pdfcraft_cos::Dict::new();
+            parms.set(b"K".to_vec(), Object::Int(-1));
+            parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+            parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+            d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+            d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            return Some(Stream::from_raw(d, g4));
+        }
+        return Some(Stream::flate(d, &bits));
     }
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     if *as_jpeg {

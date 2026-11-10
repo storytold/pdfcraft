@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::scan_clean::{HalftoneImage, HalftoneTuning, ScanCleanReport, ScanCleanSettings, ScanCleaned};
+use pdfcraft_engine::scan_clean::{HalftoneImage, HalftoneTuning, ScanCleanKept, ScanCleanReport, ScanCleanSettings, ScanCleaned};
 use pdfcraft_engine::{DocId, EditError};
 
 use crate::ocr_ui::OcrPages;
@@ -59,6 +59,9 @@ pub struct ScanCleanOutcome {
     pub requested: Vec<usize>,
     /// A slider has moved since the pages were last enhanced.
     pub pending: bool,
+    /// The restored pages (0-based) a slider has moved since: the only ones the next run restores
+    /// again. The rest keep the picture they have.
+    pub again: Vec<usize>,
     /// The pages (0-based, in order) whose halftone scans were restored: the only ones the sliders
     /// ever touch.
     pub pages: Vec<usize>,
@@ -118,6 +121,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             .on_hover_text(tl!("Lightens shadows along the edges of the scan, such as a book's gutter or a copier's dark border"));
         ui.add(widgets::checkbox(&mut d.settings.despeckle, tl!("Despeckle")))
             .on_hover_text(tl!("Removes isolated dark specks such as dust and scanner noise. The only filter black and white scans take."));
+        ui.add(widgets::checkbox(&mut d.settings.restore_halftones, tl!("Restore halftone scans"))).on_hover_text(tl!(
+            "Turns a black and white scan that is fine dots all over, such as a fax of a faint page, back into clean grey with readable text. Pages of crisp text are left as they are."
+        ));
     });
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
@@ -143,7 +149,9 @@ fn tuning_of(o: &ScanCleanOutcome, page: usize) -> HalftoneTuning {
 
 /// The result window, shown while [`crate::Dialog::EnhanceScanResult`] is open: what was detected
 /// and restored, and sliders that tune the restored pages: the one showing, or all of them. It is
-/// a window to move about, not a modal, so the page stays in view and in reach.
+/// a window to move about, not a modal, so the page stays in view, and it can still be scrolled
+/// and zoomed to judge the text ([`PdfCraftApp::page_navigation_open`]). Shortcuts, menus and
+/// clicks on the page wait until the window is closed, as with any dialog.
 pub(crate) fn show_result(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let active = app.active_ids();
     let Some(mut o) = app.scan_clean_result.take().filter(|o| active.map(|(_, id)| id) == Some(o.doc)) else {
@@ -204,14 +212,8 @@ pub(crate) fn show_result(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             // Where the sliders act: the page showing, or every restored page.
             let here = o.pages.contains(&current);
-            let (mut one, mut every) = (!o.all, o.all);
-            let a = ui.add(widgets::checkbox(&mut one, tl!("Apply to current page"))).changed();
-            let b = ui.add(widgets::checkbox(&mut every, tl!("Apply to all"))).changed();
-            if b {
-                o.all = every;
-            } else if a {
-                o.all = !one;
-            }
+            widgets::radio_value(ui, &mut o.all, false, tl!("Apply to current page"));
+            widgets::radio_value(ui, &mut o.all, true, tl!("Apply to all"));
             if !o.all && !here {
                 ui.label(egui::RichText::new(tl!("This page has no restored scan. Use 'Next page' to go to one.")).small().color(t.text_muted));
             }
@@ -239,8 +241,11 @@ pub(crate) fn show_result(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
             if moved {
                 let all = o.all;
-                for (_, tn) in o.tunings.iter_mut().filter(|(p, _)| all || *p == current) {
+                for (page, tn) in o.tunings.iter_mut().filter(|(p, _)| all || *p == current) {
                     *tn = tuning;
+                    if !o.again.contains(page) {
+                        o.again.push(*page);
+                    }
                 }
                 o.pending = true;
             }
@@ -256,7 +261,8 @@ pub(crate) fn show_result(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 next = ui.add_enabled_ui(more && !busy, |ui| widgets::pill_button(ui, tl!("Next page"), false)).inner.clicked();
             });
         });
-    let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && !ctx.egui_wants_keyboard_input();
+    // Escape closes the window, unless a slider's number is being typed: then it is the field's.
+    let escape = !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if next
         && let Some(p) = o.pages.iter().find(|p| **p > current).copied()
         && let Some(v) = app.views.get_mut(vi)
@@ -323,10 +329,15 @@ impl PdfCraftApp {
     }
 
     /// Enhance again the pages of the last run (the result dialog's sliders): its enhancement is
-    /// undone and done again with the new settings. Nothing happens if the document has changed.
+    /// undone and done again with the new settings, as one step. Only the pages a slider moved
+    /// are restored again; every other picture of the run is kept as it is, so a nudge costs one
+    /// page's restore, not the document's. Nothing happens if the document has changed.
     pub fn retune_scan_clean(&mut self) {
         let Some(o) = self.scan_clean_result.as_ref() else { return };
         let (doc, pages, generation, tunings) = (o.doc, o.requested.clone(), o.generation, o.tunings.clone());
+        // With no page named, every restored page is done again.
+        let again = if o.again.is_empty() { o.pages.clone() } else { o.again.clone() };
+        let halftone = o.halftone.clone();
         if self.scan_clean_run.is_some() || self.active_ids().map(|(_, id)| id) != Some(doc) {
             return;
         }
@@ -338,6 +349,11 @@ impl PdfCraftApp {
             self.notify_tr("The document changed since it was enhanced: undo that step, then enhance again to use the sliders");
             return;
         }
+        // The pictures as they are now, before the undo takes them away.
+        let kept = match self.session.scan_clean_kept(doc, halftone) {
+            Ok(kept) => kept,
+            Err(e) => return self.notify(e.to_string()),
+        };
         if let Err(e) = self.session.undo(doc) {
             return self.notify(e.to_string());
         }
@@ -345,7 +361,7 @@ impl PdfCraftApp {
             v.invalidate_content();
         }
         let Some(undone) = self.session.get(doc).map(|d| d.edit_generation()) else { return };
-        if !self.start_scan_clean_on(pages, tunings, Some(undone)) {
+        if !self.start_scan_clean_on(pages, tunings, Some((undone, kept, again))) {
             self.put_back_scan_clean(doc, undone);
         }
     }
@@ -367,7 +383,14 @@ impl PdfCraftApp {
     }
 
     /// Whether a run started.
-    fn start_scan_clean_on(&mut self, pages: Vec<usize>, tunings: Vec<(usize, HalftoneTuning)>, retune: Option<u64>) -> bool {
+    /// `retune` is a slider's run: the edit generation its undo left, the earlier run's pictures
+    /// and the pages to restore again.
+    fn start_scan_clean_on(
+        &mut self,
+        pages: Vec<usize>,
+        tunings: Vec<(usize, HalftoneTuning)>,
+        retune: Option<(u64, ScanCleanKept, Vec<usize>)>,
+    ) -> bool {
         let Some((_, id)) = self.active_ids() else { return false };
         if self.scan_clean_run.is_some() {
             self.notify_tr("Scanned pages are already being enhanced");
@@ -388,6 +411,10 @@ impl PdfCraftApp {
                 self.notify(e.to_string());
                 return false;
             }
+        };
+        let (job, retune) = match retune {
+            Some((undone, kept, again)) => (job.keeping(kept, &again), Some(undone)),
+            None => (job, None),
         };
         let progress = Arc::new(Mutex::new(ScanCleanProgress { total: job.total(), ..Default::default() }));
         let p = progress.clone();
@@ -485,8 +512,18 @@ impl PdfCraftApp {
                         .map(|p| (*p, before.as_ref().and_then(|o| o.tunings.iter().find(|(q, _)| q == p)).map_or(default, |(_, t)| *t)))
                         .collect();
                     let (all, shown) = before.map_or((false, false), |o| (o.all, o.shown));
-                    self.scan_clean_result =
-                        Some(ScanCleanOutcome { doc, generation, requested, pending: false, pages, halftone: report.halftone, tunings, all, shown });
+                    self.scan_clean_result = Some(ScanCleanOutcome {
+                        doc,
+                        generation,
+                        requested,
+                        pending: false,
+                        again: Vec::new(),
+                        pages,
+                        halftone: report.halftone,
+                        tunings,
+                        all,
+                        shown,
+                    });
                     if self.dialog.is_none() || self.dialog == Some(crate::Dialog::EnhanceScanResult) {
                         self.dialog = Some(crate::Dialog::EnhanceScanResult);
                     }

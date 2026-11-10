@@ -999,6 +999,9 @@ impl Automation {
         if let Some(on) = a.opt_bool("despeckle")? {
             settings.despeckle = on;
         }
+        if let Some(on) = a.opt_bool("restore_halftone")? {
+            settings.restore_halftones = on;
+        }
         for (key, slot) in [
             ("text_weight", &mut settings.halftone.weight),
             ("text_contrast", &mut settings.halftone.contrast),

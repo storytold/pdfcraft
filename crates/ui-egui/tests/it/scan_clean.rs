@@ -244,3 +244,76 @@ fn the_result_window_walks_the_restored_pages_and_only_ever_enhances_those() {
         .unwrap();
     assert_eq!(job.total(), 3, "three images, not four pages");
 }
+
+/// The sliders themselves: moving one from the keyboard tunes the page showing and enhances it
+/// again as one step, and with Apply to all it tunes every restored page.
+#[test]
+fn moving_a_slider_tunes_the_page_showing_or_all_of_them_and_enhances_again() {
+    let mut h = halftone_harness(&[true, false, true, true]);
+    let id = h.state().active_ids().unwrap().1;
+    enhance(&mut h);
+    let tunings = |h: &Harness<'static, PdfCraftApp>| {
+        let o = h.state().scan_clean_result.as_ref().unwrap();
+        o.tunings.iter().map(|(_, t)| (t.weight, t.contrast, t.cleanup)).collect::<Vec<_>>()
+    };
+    assert_eq!(tunings(&h), vec![(50, 50, 50); 3]);
+    let before = h.state_mut().session.save_bytes(id).unwrap().to_vec();
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text weight").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(6);
+    assert_eq!(tunings(&h), vec![(51, 50, 50), (50, 50, 50), (50, 50, 50)], "page 1 alone, the page showing");
+    let app = h.state_mut();
+    assert_eq!(app.session.get(id).unwrap().undo_depth(), 1, "enhanced again as the same one step");
+    assert_ne!(app.session.save_bytes(id).unwrap().to_vec(), before, "with another picture");
+    let result = app.scan_clean_result.as_ref().unwrap();
+    assert!(!result.pending && result.again.is_empty(), "and nothing is left to do");
+    assert_eq!(app.dialog, Some(pdfcraft_ui_egui::Dialog::EnhanceScanResult), "the window stays for the next change");
+    // Apply to all: one slider moves every restored page.
+    h.get_by_label("Apply to all").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text contrast").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(6);
+    assert_eq!(tunings(&h), vec![(51, 49, 50); 3], "every restored page takes the sliders as they stand");
+    assert_eq!(h.state().session.get(id).unwrap().undo_depth(), 1);
+}
+
+/// The window is there for the page beside it to be judged: the page still zooms and scrolls
+/// while it is open, and Escape closes it.
+#[test]
+fn the_page_zooms_beside_the_result_window_and_escape_closes_it() {
+    let mut h = halftone_harness(&[true]);
+    enhance(&mut h);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::EnhanceScanResult));
+    let zoom = h.state().views[0].zoom;
+    // Over the page, clear of the window.
+    h.hover_at(egui::pos2(1000.0, 600.0));
+    h.run_steps(1);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(4);
+    assert!((h.state().views[0].zoom - zoom * 1.5).abs() < 0.01, "zoomed from {zoom} to {}", h.state().views[0].zoom);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::EnhanceScanResult), "and the window is still there");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none() && h.state().scan_clean_result.is_none());
+}
+
+/// Restore halftone scans is a choice in the dialog: unticked, a dotted scan is left to the other
+/// filters and no result window opens.
+#[test]
+fn unticking_restore_halftone_scans_leaves_a_dotted_scan_as_it_is() {
+    let mut h = halftone_harness(&[true]);
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state_mut().execute("ocr.enhance"));
+    h.run_steps(2);
+    assert!(h.state().scan_clean_draft.settings.restore_halftones, "on to begin with");
+    h.get_by_label("Restore halftone scans").click();
+    h.run_steps(2);
+    assert!(!h.state().scan_clean_draft.settings.restore_halftones);
+    h.get_by_label("Enhance").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none() && h.state().scan_clean_result.is_none(), "no result window");
+    assert_eq!(h.state().session.get(id).unwrap().undo_depth(), 0, "and nothing changed");
+}

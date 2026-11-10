@@ -4812,6 +4812,66 @@ fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     }
 }
 
+/// A halftone (dotted) 1-bit scan through `page_enhance_scan`: restored to grey, reported, tuned
+/// by the three arguments, and left alone when `restore_halftone` is off.
+#[test]
+fn enhance_scanned_file_restores_a_halftone_scan_through_tools() {
+    let dir = workdir("enhance-halftone");
+    // 96 x 96: grey paper as 20 % dots, a darker block as 70 % dots.
+    let dots = image::GrayImage::from_fn(96, 96, |x, y| {
+        let ink = (30..66).contains(&x) && (30..66).contains(&y);
+        image::Luma([if (x * 7 + y * 3) % 10 < if ink { 7 } else { 2 } { 0 } else { 255 }])
+    });
+    dots.save(dir.join("dots.png")).unwrap();
+    let mut a = auto(&dir);
+    // The total ink of the page's picture after `page_enhance_scan` with `args`, and its report.
+    let enhanced = |a: &mut Automation, name: &str, args: Value| {
+        let doc = ok(a, "doc_create", json!({ "from": "images", "paths": ["dots.png"] }))["doc"].as_u64().unwrap();
+        let mut args = args;
+        args["doc"] = json!(doc);
+        let report = ok(a, "page_enhance_scan", args);
+        ok(a, "image_save", json!({ "doc": doc, "page": 1, "image": 1, "path": name }));
+        let picture = image::open(dir.join(format!("{name}.png"))).unwrap().to_luma8();
+        // Greys between black and white, which a one-bit picture has none of.
+        let grey = picture.pixels().any(|p| (1..255).contains(&p[0]));
+        let ink: u64 = picture.pixels().map(|p| u64::from(255 - p[0])).sum();
+        (report, grey, ink, doc)
+    };
+    let (report, grey, plain, doc) = enhanced(&mut a, "plain", json!({}));
+    assert_eq!(report["undo"], "Enhance scanned file");
+    assert_eq!((report["images"].clone(), report["skipped"].clone()), (json!(1), json!([])));
+    assert_eq!(report["halftone"][0]["pages"], json!([1]));
+    assert!(report["halftone"][0]["format"].as_str().is_some_and(|f| f.ends_with("1-bit halftone")), "{report}");
+    assert!(grey, "the dots became a grey picture");
+    let images = ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(images["images"][0]["pixels"], json!([96, 96]), "at the same size");
+    // Each of the three arguments changes the picture, the way it says.
+    let (_, _, heavy, _) = enhanced(&mut a, "heavy", json!({ "text_weight": 100 }));
+    let (_, _, light, _) = enhanced(&mut a, "light", json!({ "text_weight": 0 }));
+    assert!(heavy > plain && plain > light, "text_weight: {heavy} > {plain} > {light}");
+    let (_, _, dark, _) = enhanced(&mut a, "dark", json!({ "text_contrast": 100 }));
+    let (_, _, pale, _) = enhanced(&mut a, "pale", json!({ "text_contrast": 0 }));
+    assert!(dark > pale, "text_contrast: {dark} > {pale}");
+    let (_, _, cleared, _) = enhanced(&mut a, "cleared", json!({ "background_cleanup": 100 }));
+    let (_, _, kept, _) = enhanced(&mut a, "kept", json!({ "background_cleanup": 0 }));
+    assert!(kept > cleared, "background_cleanup: {kept} > {cleared}");
+    // Off, the scan is a black and white one like any other: nothing changes at the default level.
+    let (report, grey, _, doc) = enhanced(&mut a, "off", json!({ "restore_halftone": false }));
+    assert_eq!((report["images"].clone(), report["halftone"].clone(), report["undo"].clone()), (json!(0), json!([]), Value::Null));
+    assert!(report["skipped"][0]["reason"].as_str().is_some_and(|r| r.contains("black and white")), "{report}");
+    assert!(!grey, "still one bit");
+    // Out of range, or of the wrong kind, is refused.
+    for bad in [
+        json!({ "doc": doc, "text_weight": 101 }),
+        json!({ "doc": doc, "text_contrast": -1 }),
+        json!({ "doc": doc, "background_cleanup": 1000 }),
+        json!({ "doc": doc, "text_weight": "heavy" }),
+        json!({ "doc": doc, "restore_halftone": 1 }),
+    ] {
+        assert!(matches!(a.call("page_enhance_scan", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
 #[test]
 fn enhance_camera_image_finds_the_edges_by_itself() {
     let dir = workdir("enhance-camera-auto");

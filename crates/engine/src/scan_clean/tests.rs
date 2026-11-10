@@ -369,7 +369,7 @@ fn a_halftone_scan_becomes_clean_grey_whatever_its_fax_encoding() {
     let (mut s, id) = open(bytes);
     let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(50)).unwrap();
     assert_eq!((report.images, report.skipped.len()), (1, 0), "{:?}", report.skipped);
-    assert_eq!(report.halftone, vec![HalftoneImage { format: "CCITT fax 1-bit halftone".into(), pages: vec![0] }]);
+    assert_eq!(report.halftone, vec![HalftoneImage { object: ObjRef::new(4, 0), format: "CCITT fax 1-bit halftone".into(), pages: vec![0] }]);
     let Object::Stream(img) = &*object(&s, id, 4) else { panic!("the image") };
     assert_eq!(img.dict.int(b"BitsPerComponent"), Some(8));
     let px = samples(&s, id);
@@ -606,9 +606,9 @@ fn only_the_chosen_pages_scan_is_cleaned() {
     }
 }
 
-#[test]
-fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
-    // Two pages, each with its own copy of the same 96 x 96 halftone scan.
+/// Two pages, each with its own copy (objects 5 and 6) of the same 96 x 96 halftone scan: grey
+/// paper as 20 % dots and a darker block as 70 % dots.
+fn two_halftone_pages() -> Vec<u8> {
     let (w, h) = (96usize, 96usize);
     let mut bits = vec![0u8; w / 8 * h];
     for y in 0..h {
@@ -623,7 +623,7 @@ fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
     let page = |img: u32, contents: u32| {
         format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 96 96] /Resources << /XObject << /Im0 {img} 0 R >> >> /Contents {contents} 0 R >>")
     };
-    let bytes = Pdf::new()
+    Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
         .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
         .obj(page(5, 7))
@@ -632,8 +632,12 @@ fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
         .stream(image, &bits)
         .stream("", "q 96 0 0 96 0 0 cm /Im0 Do Q")
         .stream("", "q 96 0 0 96 0 0 cm /Im0 Do Q")
-        .build();
-    let (mut s, id) = open(bytes);
+        .build()
+}
+
+#[test]
+fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
+    let (mut s, id) = open(two_halftone_pages());
     let heavy = HalftoneTuning { weight: 100, contrast: 100, cleanup: 50 };
     let light = HalftoneTuning { weight: 0, contrast: 0, cleanup: 50 };
     let job = s.scan_clean_job(id, &[], ScanCleanSettings::default()).unwrap().with_page_tunings(vec![(0, heavy), (1, light)]);
@@ -648,4 +652,105 @@ fn a_pages_own_halftone_tuning_changes_only_that_pages_picture() {
         px.data.iter().map(|v| u32::from(255 - v)).sum::<u32>()
     };
     assert!(ink(0) > ink(1), "page 1 was tuned heavier than page 2: {} vs {}", ink(0), ink(1));
+}
+
+/// The total ink of the image page `page` draws: darker is more.
+fn ink(s: &Session, id: DocId, page: usize) -> u32 {
+    let doc = s.get(id).unwrap();
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let Object::Stream(img) = &*cos.get(doc.page_images(page)[0].object.unwrap()) else { panic!("the image") };
+    let px = optimize::decode_samples(cos, img, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
+    px.data.iter().map(|v| u32::from(255 - v)).sum()
+}
+
+/// A slider's run: the enhancement is undone and done again, and only the pages whose tuning
+/// changed are restored again. The others take the earlier run's picture as it is.
+#[test]
+fn a_run_keeping_an_earlier_one_cleans_again_only_the_pages_it_is_told_to() {
+    let (mut s, id) = open(two_halftone_pages());
+    let first = s.enhance_scanned_pages(id, &[], ScanCleanSettings::default()).unwrap();
+    assert_eq!(first.halftone.len(), 2);
+    let earlier = [object(&s, id, 5), object(&s, id, 6)];
+    let before = [ink(&s, id, 0), ink(&s, id, 1)];
+    let kept = s.scan_clean_kept(id, first.halftone.clone()).unwrap();
+    s.undo(id).unwrap();
+    let heavy = HalftoneTuning { weight: 100, contrast: 100, cleanup: 50 };
+    let job = s.scan_clean_job(id, &[], ScanCleanSettings::default()).unwrap().with_page_tunings(vec![(0, heavy)]).keeping(kept, &[0]);
+    let cleaned = job.run(|_, _| true).unwrap();
+    assert_eq!((cleaned.report.images, &cleaned.report.pages), (2, &vec![0, 1]), "both pages are in the step");
+    assert_eq!(cleaned.report.halftone, first.halftone, "and both are reported as restored");
+    s.apply_scan_clean(id, cleaned).unwrap();
+    assert_eq!(*object(&s, id, 6), *earlier[1], "page 2 has the earlier run's picture, byte for byte");
+    assert_ne!(*object(&s, id, 5), *earlier[0]);
+    assert!(ink(&s, id, 0) > before[0], "page 1 was restored again, heavier");
+    assert_eq!(ink(&s, id, 1), before[1]);
+    assert_eq!(s.get(id).unwrap().undo_depth(), 1, "one step, as a full run makes");
+}
+
+/// Halftone restore is its own switch: off, a dotted scan is a black and white scan like any
+/// other, which only Despeckle changes.
+#[test]
+fn halftone_restore_is_its_own_switch() {
+    let (mut s, id) = open(two_halftone_pages());
+    let off = ScanCleanSettings { restore_halftones: false, ..ScanCleanSettings::at(50) };
+    let report = s.enhance_scanned_pages(id, &[], off).unwrap();
+    assert_eq!((report.images, report.halftone.len()), (0, 0));
+    assert!(report.skipped.iter().all(|k| k.reason.contains("black and white")), "{:?}", report.skipped);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+    // On at level 0, it is the only thing done.
+    assert!(!ScanCleanSettings::at(0).restore_halftones && ScanCleanSettings::at(1).restore_halftones);
+    let only = ScanCleanSettings { restore_halftones: true, ..ScanCleanSettings::at(0) };
+    assert!(only.changes_something());
+    assert_eq!(s.enhance_scanned_pages(id, &[], only).unwrap().halftone.len(), 2);
+}
+
+/// A fax (CCITT Group 4) scan of crisp text is no halftone: it is despeckled and stays a 1-bit
+/// fax image, not Flate, which would be several times larger for a page of text.
+#[test]
+fn a_crisp_fax_scan_is_despeckled_and_stays_a_fax_image() {
+    // 320 x 240, 1 = white: rows of solid bars as text, and two specks.
+    let (w, h) = (320usize, 240usize);
+    let mut bits = vec![0xFFu8; w / 8 * h];
+    let mut black = |x: usize, y: usize| bits[y * w / 8 + x / 8] &= !(0x80 >> (x % 8));
+    for row in 0..8 {
+        for word in 0..6 {
+            for y in 0..10 {
+                for x in 0..36 {
+                    black(20 + word * 48 + x, 20 + row * 26 + y);
+                }
+            }
+        }
+    }
+    black(5, 5);
+    black(310, 232);
+    let fax = |filter: &str, parms: &str, data: &[u8]| {
+        let dict = format!(
+            "/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter {filter} /DecodeParms {parms}"
+        );
+        Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"))
+            .stream(&dict, data)
+            .stream("", format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q"))
+            .build()
+    };
+    let g4 = pdfcraft_filters::encode_g4(&bits, w as u32, h as u32).expect("encodable");
+    let parms = format!("<< /K -1 /Columns {w} /Rows {h} >>");
+    // On its own, and behind a general-purpose filter, which is undone on the way to the fax data.
+    let hex: String = g4.iter().map(|b| format!("{b:02x}")).collect::<String>() + ">";
+    for bytes in [fax("/CCITTFaxDecode", &parms, &g4), fax("[/ASCIIHexDecode /CCITTFaxDecode]", &format!("[null {parms}]"), hex.as_bytes())] {
+        let (mut s, id) = open(bytes);
+        let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(100)).unwrap();
+        assert_eq!((report.images, report.halftone.len(), report.skipped.len()), (1, 0, 0), "{:?}", report.skipped);
+        let Object::Stream(img) = &*object(&s, id, 4) else { panic!("the image") };
+        assert_eq!(img.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        assert_eq!(img.dict.int(b"BitsPerComponent"), Some(1));
+        assert!(img.raw.len() <= g4.len(), "no larger than it was: {} vs {}", img.raw.len(), g4.len());
+        let px = samples(&s, id);
+        assert!(px.bilevel);
+        let at = |x: usize, y: usize| px.data[y * w + x];
+        assert_eq!((at(5, 5), at(310, 232)), (255, 255), "specks gone");
+        assert_eq!((at(20, 20), at(55, 29), at(60, 100)), (0, 0, 255), "the text stays");
+    }
 }
