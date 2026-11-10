@@ -434,6 +434,45 @@ fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
     assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
 }
 
+/// The editor's program list reads a legacy Thai font's metrics after its program. With the program
+/// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
+/// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
+/// listed, as with plenty. A ToUnicode with data is refused by the allowance, and the program isn't.
+#[test]
+fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
+    let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let listed = |filter: Option<&str>, data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
+        let program = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes.to_vec()))));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), program);
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("THSarabunPSK")),
+                ("FirstChar", Object::Int(65)),
+                ("LastChar", Object::Int(65)),
+                ("Widths", Object::Array(vec![Object::Int(500)])),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+                ("ToUnicode", unicode),
+            ],
+        );
+        let mut budget = DecodeBudget::new(bytes.len(), 0);
+        let listed = embedded_sfnt_within(&doc, &f, &mut budget).is_some();
+        assert_eq!(budget.remaining(), 0, "the program spends the allowance to the byte");
+        (listed, budget.refused())
+    };
+    assert_eq!(listed(Some("NoSuchFilter"), b""), (true, 0));
+    assert_eq!(listed(None, b"1 beginbfchar <41> <0058> endbfchar"), (false, 1));
+}
+
 /// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
 /// whose Flate data is about 8 MiB reads behind ASCIIHex and Flate as behind Flate alone, though
 /// the two stages make about 20 MiB together. A program of the limit reads behind either, and one a
