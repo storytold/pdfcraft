@@ -182,6 +182,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let mut stack = vec![tree];
     // By object number, as `get` reads a reference: `5 0 R` and `5 1 R` are the same object.
     let mut seen: HashSet<u32> = HashSet::new();
+    let mut queued: HashSet<u32> = HashSet::new();
     let mut visited = 0;
     while let Some(raw) = stack.pop() {
         if let Object::Ref(r) = raw
@@ -214,7 +215,10 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
             // Children already seen are dropped before the room is taken: a long run of repeats
             // would otherwise fill the stack and crowd a distinct node, the script among them, out.
             let room = 10_000usize.saturating_sub(visited + stack.len());
-            stack.extend(kids.into_iter().filter(|k| !matches!(k, Object::Ref(r) if seen.contains(&r.num))).take(room));
+            // A child scheduled but not yet read counts as seen too (`queued`), so repeats of an
+            // unread node take one slot, not thousands.
+            let fresh = |k: &Object| !matches!(k, Object::Ref(r) if seen.contains(&r.num) || !queued.insert(r.num));
+            stack.extend(kids.into_iter().filter(fresh).take(room));
         }
         if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
             for pair in pairs.chunks(2) {

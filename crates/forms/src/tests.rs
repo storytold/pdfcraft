@@ -5551,10 +5551,34 @@ fn repeated_name_tree_kids_do_not_crowd_out_a_script() {
     leaf_d.set(b"Names".to_vec(), pairs);
     let leaf = doc.add(Object::Dict(leaf_d));
     let node = doc.add(Object::Dict(Dict::new()));
-    let kids: Vec<Object> = std::iter::repeat(Object::Ref(node)).take(9_999).chain([Object::Ref(leaf)]).collect();
+    let kids: Vec<Object> = std::iter::repeat_n(Object::Ref(node), 9_999).chain([Object::Ref(leaf)]).collect();
     doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
     let mut names = names;
     names.set(b"JavaScript".to_vec(), Object::Ref(node));
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    assert_eq!(crate::scripting::document_scripts_named(&doc), vec![("Deep".to_string(), "app.alert(1);".to_string())]);
+}
+
+/// The same for repeats of a node not read yet: they take one slot, not one each.
+#[test]
+fn repeated_unread_name_tree_kids_do_not_crowd_out_a_script() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut doc = one_page();
+    crate::scripting::set_document_script(&mut doc, "Deep", Some("app.alert(1);")).unwrap();
+    let root = doc.root().unwrap();
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let names = cat.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let tree = names.get(b"JavaScript").map(|t| doc.resolve(t)).and_then(|t| t.as_dict().cloned()).unwrap();
+    let mut leaf_d = Dict::new();
+    leaf_d.set(b"Names".to_vec(), tree.get(b"Names").cloned().unwrap());
+    let leaf = doc.add(Object::Dict(leaf_d));
+    let empty = doc.add(Object::Dict(Dict::new()));
+    let mut top = Dict::new();
+    let kids: Vec<Object> = std::iter::repeat_n(Object::Ref(empty), 9_999).chain([Object::Ref(leaf)]).collect();
+    top.set(b"Kids".to_vec(), Object::Array(kids));
+    let top = doc.add(Object::Dict(top));
+    let mut names = names;
+    names.set(b"JavaScript".to_vec(), Object::Ref(top));
     doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
     assert_eq!(crate::scripting::document_scripts_named(&doc), vec![("Deep".to_string(), "app.alert(1);".to_string())]);
 }
