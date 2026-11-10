@@ -7719,6 +7719,12 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let found = ok(&mut a, "text_find", json!({ "doc": text, "query": "Sticky" }));
     assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "sort": "colour" })), Err(ToolError::InvalidArgs(_))));
+    // The pages by their newest comment.
+    ok(
+        &mut a,
+        "comments_summarize",
+        json!({ "doc": doc, "sort": "date_of_last_comment", "layout": "document_and_comments_with_lines", "out": "latest.pdf" }),
+    );
     // The pages with their comments (#6791): page 1 beside its comments on one landscape sheet,
     // or on a sheet of its own followed by its comments; here without the pages that have none.
     for (layout, sheets) in [("document_and_comments_with_lines", 1), ("document_and_comments_with_numbers", 2)] {

@@ -39,24 +39,35 @@ pub enum SummarySort {
     #[default]
     Page,
     Author,
+    /// Oldest first; the layouts that show the pages put first the page commented on first.
     Date,
+    /// Oldest first, the pages by their last (newest) comment: the page commented on most
+    /// recently comes last.
+    LastDate,
     Type,
 }
 
 impl SummarySort {
-    pub const ALL: [SummarySort; 4] = [SummarySort::Page, SummarySort::Author, SummarySort::Date, SummarySort::Type];
+    pub const ALL: [SummarySort; 5] = [SummarySort::Page, SummarySort::Author, SummarySort::Date, SummarySort::LastDate, SummarySort::Type];
     /// The name shown in the dialog, also accepted by the tools and saved in the preferences.
     pub fn name(self) -> &'static str {
         match self {
             SummarySort::Page => "Page",
             SummarySort::Author => "Author",
             SummarySort::Date => "Date",
+            SummarySort::LastDate => "Date of last comment",
             SummarySort::Type => "Type",
         }
     }
-    /// The sort order a [`name`](Self::name) stands for, ignoring case; `None` for any other text.
+    /// The sort order a [`name`](Self::name) stands for, ignoring case, with `_` for a space
+    /// (`date_of_last_comment`); `None` for any other text.
     pub fn parse(s: &str) -> Option<SummarySort> {
-        Self::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+        let s = s.replace('_', " ");
+        Self::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(&s))
+    }
+    /// It sorts by the comments' dates, which are then read in full ([`summary_dates`]).
+    pub fn by_date(self) -> bool {
+        matches!(self, SummarySort::Date | SummarySort::LastDate)
     }
 }
 
@@ -282,21 +293,25 @@ pub fn summary_items<'a>(all: &'a [pdfcraft_render::Annotation], sort: SummarySo
     match sort {
         SummarySort::Page => {}
         SummarySort::Author => items.sort_by(|x, y| x.comment.author.cmp(&y.comment.author)),
-        SummarySort::Date => {
+        SummarySort::Date | SummarySort::LastDate => {
             // Fully dated first, then those with only the date as listed (one that can't be read
             // in full), then the undated.
             let rank = |a: &pdfcraft_render::Annotation| match (dates.contains_key(&(a.page, a.index)), a.modified.is_some()) {
-                (true, _) => 0,
+                (true, _) => 0u8,
                 (false, true) => 1,
                 (false, false) => 2,
             };
-            items.sort_by(|x, y| {
-                let (a, b) = (x.comment, y.comment);
-                rank(a)
-                    .cmp(&rank(b))
-                    .then_with(|| dates.get(&(a.page, a.index)).cmp(&dates.get(&(b.page, b.index))))
-                    .then_with(|| a.modified.cmp(&b.modified))
-            });
+            let when = |a: &'a pdfcraft_render::Annotation| (rank(a), dates.get(&(a.page, a.index)).copied(), a.modified.as_deref());
+            items.sort_by(|x, y| when(x.comment).cmp(&when(y.comment)));
+            if sort == SummarySort::LastDate {
+                // Each page where its last dated comment comes, each page's comments kept oldest
+                // first; a page with only undated comments last, pages in document order on a tie.
+                let mut last = std::collections::HashMap::new();
+                for item in items.iter().filter(|i| rank(i.comment) < 2) {
+                    last.insert(item.comment.page, when(item.comment));
+                }
+                items.sort_by_key(|i| (last.get(&i.comment.page).copied().unwrap_or((2, None, None)), i.comment.page));
+            }
         }
         SummarySort::Type => items.sort_by(|x, y| comment_kind(x.comment).cmp(comment_kind(y.comment))),
     }

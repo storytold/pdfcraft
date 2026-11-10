@@ -2257,6 +2257,9 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     sorted.summary_sort = pdfcraft_engine::SummarySort::Author;
     restored.restore(&sorted.persist());
     assert_eq!(restored.summary_sort, pdfcraft_engine::SummarySort::Author);
+    sorted.summary_sort = pdfcraft_engine::SummarySort::LastDate;
+    restored.restore(&sorted.persist());
+    assert_eq!(restored.summary_sort, pdfcraft_engine::SummarySort::LastDate, "Date of last comment is kept too");
     // A paper this version doesn't offer leaves the document's.
     restored.restore(r#"{"comment_summary": {"paper": "Napkin"}}"#);
     assert_eq!(restored.summary_paper, None);

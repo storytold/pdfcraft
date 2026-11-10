@@ -363,13 +363,12 @@ impl Session {
         };
         // Sorting by date reads each comment's full date, not the minute the list shows.
         let dated = |cos: &pdfcraft_cos::Document| {
-            if opts.sort == crate::SummarySort::Date { guard(|| summary_dates(cos)).unwrap_or_default() } else { Default::default() }
+            if opts.sort.by_date() { guard(|| summary_dates(cos)).unwrap_or_default() } else { Default::default() }
         };
         let layout = match opts.layout {
             SummaryLayout::CommentsOnly => {
                 // Without a readable source the dates as listed still sort it.
-                let dates =
-                    if opts.sort == crate::SummarySort::Date { source().map(|cos| dated(&cos)).unwrap_or_default() } else { Default::default() };
+                let dates = if opts.sort.by_date() { source().map(|cos| dated(&cos)).unwrap_or_default() } else { Default::default() };
                 let text = comment_summary_with(&doc.name, &doc.info.annotations, opts.sort, &dates);
                 return self.create_report_on(&title, &text, paper);
             }
