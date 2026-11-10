@@ -81,18 +81,21 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel, open Save As, or open or save an attached file,
-    /// which is noted on the console and dropped.
+    /// except a request to print, show a side panel, open Save As, or open or save an attached
+    /// file, which is noted on the console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, open Save As, or open or save an attached file.
+        // button's or the console's may print, show or hide a side panel, open Save As, or open
+        // or save an attached file (#4088).
         // The warnings go through `say` like any other console line, so they count against the
         // line and byte caps instead of growing the console past them.
         let mut notes = Vec::new();
         for r in &o.requests {
             match r {
+                Request::Print => notes
+                    .push("Print requested by an automatic field script was ignored; use a button or the JavaScript console to print".to_string()),
                 Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
                 Request::OpenAttachment { name, .. } => {

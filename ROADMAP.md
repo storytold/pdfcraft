@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
@@ -39,6 +40,10 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
+>
+>
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector-print appearance transforms retain small coefficients; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
@@ -244,6 +249,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
+- **2026-10-31 (M6, PR #4166/#4088 integration):** Integrated main f137a289 (0.16.1), preserving upstream progress entries and automatic-field Print suppression with its console diagnostic. ShowPanel/SaveAs filtering, explicit button/console printing, field effects and document-error provenance remain intact, together with all three engine regressions and the headless automation regression. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
+
+- **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.
 - **2026-10-27 (M10, annotation print precision):** Vector printing preserves small placement coefficients for existing form, comment and stamp appearances with large bounding boxes or matrices.
   Synthetic render and save/reopen regressions cover the change; estimates unchanged.
 
@@ -340,6 +348,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
   The regression checks two distinct appearances, inherited resources, print/reopen pixels and unchanged source data.
   Estimates unchanged.
 - **2026-10-21 (M3, window resize and move on Wayland):** With PdfCraft's own title bar on GNOME/Wayland, a second resize by a window edge, or a second move by the empty tab strip, works straight after the first; it waited for a click inside the window, because the compositor keeps the button's release from egui. A unit test covers the release given back; checked by hand in a test build. Estimates unchanged.
+- **2026-10-22 (M6, #4088):** Automatic AcroForm Keystroke, Validate, Calculate and Format scripts cannot open the print dialog; ignored requests are reported in the JavaScript console. Explicit button and console printing remain available, including when they trigger automatic calculations. Engine and headless automation regressions cover the boundary. Estimates unchanged.
+
 - **2026-10-24 (M5, move preview):** A comment being moved is drawn where it goes while it is dragged (a rectangle or oval showed only its blue frame): the comment is rendered alone once as the drag starts and laid over the page, which shows it where it was until the move is applied. Engine `Document::comment_layer`; synthetic engine and UI regressions. Estimates unchanged.
 - **2026-10-22 (M10, #3132):** Windows printing no longer swaps the letters of embedded TrueType subsets. A subset renumbers its glyphs (ReportLab's Arial space is glyph 11, the installed Arial's is 3), and the Windows print path drew those numbers with the installed font of the same name: `Revisión` printed as `Wj{nxn`, the bold `z` as `Ä`, on Brother queues and the Adobe PDF printer alike. The copy sent to the Windows spooler now names every embedded TrueType/OpenType program `PdfCraftPrint<n>`, in its `name` table and in the PDF; glyphs, encodings and `/ToUnicode` are untouched and a synthetic test renders the page identically before and after. Not yet checked on a physical Windows printer. Estimates unchanged.
 - **2026-10-24 (M5, border shape):** Text boxes and Fill & Sign's typed text take an oval or a circle for their border (Comment Properties ▸ Border shape, Fill & Sign's toolbar): the text box keeps its place and the shape goes around it, the text centred, a circle snug around the text (its box no wider than the text needs); stored as /RD and /PCBorderShape and drawn in the appearance. comment_add / comment_edit / fill_sign_add `border_shape`. One new label in every catalog. Synthetic annot, UI and automation regressions. Estimates unchanged.
@@ -836,6 +846,9 @@ Newest first: the date, what moved, and the new overall estimate.
 
 ## Revision history
 
+**2026-10-31 · patch:** M6/PR #4166 integrated main f137a289 (0.16.1), preserving both roadmap histories. Automatic Keystroke, Validate, Calculate and Format scripts still suppress Print alongside ShowPanel/SaveAs; explicit button and console Print requests, field effects and document-error provenance are retained. The three engine regressions and headless automation regression remain in their current modules. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
+
+**2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.
 **2026-10-27 · minor:** M10: vector printing retains small appearance placement coefficients.
 Synthetic rendering and save/reopen regressions cover the change.
 Estimates unchanged.
