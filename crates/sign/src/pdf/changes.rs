@@ -694,12 +694,20 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
             i += 1;
         }
     }
-    // Where an entry's offset leads, past any white space before the header. Offsets may count
-    // from a `%PDF-` header that does not start the file.
-    let header_at = |offset: u64| -> Vec<usize> {
-        let skip = |at: usize| data.get(at..).map(|rest| at.saturating_add(rest.iter().take_while(|b| is_white_space(**b)).count()));
+    // Where an entry's offset leads, past any white space before the header, that white space
+    // spent from `work`: many entries can point before one long run of it. Offsets may count from
+    // a `%PDF-` header that does not start the file.
+    let header_at = |offset: u64, work: &mut usize| -> Vec<usize> {
         let Ok(offset) = usize::try_from(offset) else { return Vec::new() };
-        [Some(offset), offset.checked_add(doc.header_offset())].into_iter().flatten().filter_map(skip).collect()
+        let shifted = (doc.header_offset() != 0).then(|| offset.checked_add(doc.header_offset())).flatten();
+        let mut found = Vec::new();
+        for at in [Some(offset), shifted].into_iter().flatten() {
+            let Some(rest) = data.get(at..).filter(|_| *work > 0) else { continue };
+            let blank = rest.iter().take_while(|b| is_white_space(**b)).count();
+            *work = work.saturating_sub(blank);
+            found.push(at.saturating_add(blank));
+        }
+        found
     };
     // A revision's own cross-reference stream with no row for itself, as many writers leave it
     // (ISO 32000-2 §7.5.8.3 asks for one; readers do without): the section this reader followed
@@ -717,12 +725,15 @@ fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
     let mut unlisted: Vec<u32> = last
         .into_iter()
         .filter(|((num, generation), at)| match doc.xref_entry(*num) {
-            Some(pdfcraft_cos::XrefEntry::InFile { offset, generation: g }) => g != *generation || !header_at(offset).contains(at),
+            Some(pdfcraft_cos::XrefEntry::InFile { offset, generation: g }) => g != *generation || !header_at(offset, &mut work).contains(at),
             None => !own_section(*num, *at),
             _ => true,
         })
         .map(|((num, _), _)| num)
         .collect();
+    if work == 0 {
+        return None;
+    }
     unlisted.sort_unstable();
     unlisted.dedup();
     Some(unlisted)
@@ -1341,5 +1352,33 @@ mod tests {
         }
         let doc = Document::open(Arc::new(append_object_3(&signed, b"% an ordinary comment 1 2 3\n"))).unwrap();
         assert_eq!(unlisted_bodies(&doc, &old), Some(Vec::new()));
+    }
+
+    /// Many entries of an appended section that point at one place before a long run of white
+    /// space would make matching each header to its entry read that run again every time. Past
+    /// the same bound on work, the appended bytes are not judged.
+    #[test]
+    fn matching_headers_to_their_entries_is_bounded_too() {
+        let signed = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+        let prev: String =
+            signed.get(at..).unwrap().iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+        let mut bytes = signed.clone();
+        let blank = bytes.len();
+        bytes.extend_from_slice(&b" ".repeat(1 << 20));
+        bytes.push(b'\n');
+        let count = 2_000u32;
+        for num in 3..3 + count {
+            bytes.extend_from_slice(format!("{num} 0 obj\n(x)\nendobj\n").as_bytes());
+        }
+        let section = bytes.len();
+        bytes.extend_from_slice(format!("xref\n3 {count}\n").as_bytes());
+        for _ in 0..count {
+            bytes.extend_from_slice(format!("{blank:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Prev {prev} >>\nstartxref\n{section}\n%%EOF\n", 3 + count).as_bytes());
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(unlisted_bodies(&doc, &old), None);
     }
 }
