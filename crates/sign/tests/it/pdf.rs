@@ -88,6 +88,8 @@ fn opts() -> SignOptions {
     }
 }
 
+/// A signature PdfCraft makes with each test ID is intact: Unknown while its certificate is untrusted, Valid once it is
+/// trusted.
 #[test]
 fn signing_then_validating_with_and_without_trust() {
     for file in ["rsa-aes.p12", "ec-p256.p12", "ec-p384.p12", "chain.p12"] {
@@ -427,6 +429,8 @@ fn change_text(doc: &mut Document) {
     doc.set(pdfcraft_cos::ObjRef { num: 4, generation: 0 }, Object::Stream(s));
 }
 
+/// Changes appended after signing are judged by the signature's permissions: an approval signature allows comments but
+/// not new page content, and certification level 1 allows neither.
 #[test]
 fn later_changes_are_classified_under_the_signature_permissions() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -878,6 +882,8 @@ impl TimestampAuthority for TestTsa {
     }
 }
 
+/// Signing with a timestamp embeds an RFC 3161 token over the signature value, and its time is trusted only when its
+/// authority is.
 #[test]
 fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -903,10 +909,12 @@ fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
     assert!(s.timestamp && s.timestamp_time.is_none());
 }
 
+/// A timestamp response that is not a token fails signing, and no signed file comes out of it.
 #[test]
 fn a_malformed_timestamp_response_fails_signing_without_a_file() {
     struct Bad;
     impl TimestampAuthority for Bad {
+        /// Answer every request with bytes that are not a timestamp token.
         fn timestamp(&self, _request: &[u8]) -> Result<Vec<u8>, SignError> {
             Ok(b"not der".to_vec())
         }
@@ -915,6 +923,8 @@ fn a_malformed_timestamp_response_fails_signing_without_a_file() {
     assert!(pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &Bad).is_err());
 }
 
+/// A document timestamp covers the whole file and validates against a trusted authority; a later change to a byte it
+/// covers breaks it.
 #[test]
 fn a_document_timestamp_covers_the_file_and_validates() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -949,6 +959,8 @@ fn a_document_timestamp_covers_the_file_and_validates() {
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
 }
 
+/// Listing through a shared digest cache still checks the current bytes, byte ranges and trust, not what an earlier
+/// listing found.
 #[test]
 fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -990,6 +1002,8 @@ fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
     assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
 }
 
+/// A later revision may declare the ESIC extension that long-term-validation writers add, but may not change one the
+/// signed catalog already had.
 #[test]
 fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -1019,6 +1033,7 @@ fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE])));
 }
 
+/// Embedding validation data adds a document security store in an incremental update, and the signature stays valid.
 #[test]
 fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
     use pdfcraft_sign::dss::{self, Evidence};
@@ -1052,6 +1067,8 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
     assert_eq!(certs.len(), 1, "byte-identical evidence is not duplicated");
 }
 
+/// Signing, then embedding validation data, then adding a document timestamp gives a PAdES B-LTA file in which each
+/// later step is a permitted change.
 #[test]
 fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
     use pdfcraft_sign::dss::{self, Evidence};
@@ -1139,6 +1156,8 @@ fn what_was_removed_before_signing_is_not_signed() {
     }
 }
 
+/// A CRL in the document security store that verifies and revokes the signer's certificate at the signing time makes
+/// the signature Invalid.
 #[test]
 fn an_embedded_verified_revocation_invalidates_the_signature() {
     use pdfcraft_sign::dss::{self, Evidence};
@@ -1168,6 +1187,7 @@ fn an_embedded_verified_revocation_invalidates_the_signature() {
     assert!(s.details.iter().any(|d| d.message.contains("revoked") && d.message.contains("CRL")), "{:?}", s.details);
 }
 
+/// A signature PdfCraft did not make (OpenSSL's CMS over the byte ranges) validates as PdfCraft's own do.
 #[test]
 fn validates_a_signature_made_by_openssl() {
     let bytes = data("openssl-signed.pdf");
@@ -1394,6 +1414,8 @@ fn xfa_page_swap(doc: &mut Document) {
     .unwrap();
 }
 
+/// A later revision that declares the form XFA and replaces the signed pages is a structure change, not a form fill, at
+/// every permission level.
 #[test]
 fn declaring_a_form_xfa_does_not_excuse_replacing_the_pages() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -1484,6 +1506,7 @@ fn contents_span(pdf: &[u8]) -> (usize, usize) {
     (start, start + pdf[start..].iter().position(|b| *b == b'>').unwrap())
 }
 
+/// A signature value written with BER indefinite lengths, as some signers write it, still validates.
 #[test]
 fn validates_signatures_written_with_ber_indefinite_lengths() {
     for file in ["rsa-aes.p12", "ec-p256.p12"] {
@@ -1917,6 +1940,8 @@ fn fixture_with_indirect_acroform() -> Vec<u8> {
     out
 }
 
+/// Dropping or emptying the form's /Fields after signing removes signed fields, which no signature covering them
+/// permits.
 #[test]
 fn the_forms_signed_fields_are_not_dropped_after_signing() {
     // Signed, then timestamped. A later revision drops the form's /Fields, or empties it: the
@@ -1991,6 +2016,8 @@ fn fixture_with_stream_7(catalog_extra: &str, drawn: bool, dict: &str, body: &[u
     out
 }
 
+/// A drawn stream labelled /Metadata before signing is page content when rewritten later, unless the catalog's
+/// /Metadata names it.
 #[test]
 fn a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it() {
     // A Form XObject the page draws, labelled /Type /Metadata before signing (the renderer ignores
@@ -2011,6 +2038,7 @@ fn a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_cat
     });
 }
 
+/// Rewriting the XMP stream the signed catalog's /Metadata names is a metadata change, allowed at every level.
 #[test]
 fn the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing() {
     // The control for the test above: the stream the signed catalog's /Metadata names is the
@@ -2045,6 +2073,7 @@ fn fixture_with_dss() -> (Vec<u8>, u32, u32) {
     (bytes, ids.0, ids.1)
 }
 
+/// A signed document security store may gain validation data later, but may not lose or swap the entries it had.
 #[test]
 fn a_signed_store_may_grow_but_not_lose_or_swap_entries() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -2080,6 +2109,8 @@ fn a_signed_store_may_grow_but_not_lose_or_swap_entries() {
     }
 }
 
+/// A drawn Form XObject rewritten after signing and labelled /Metadata is still judged by what it draws, not as a
+/// metadata change.
 #[test]
 fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -2125,6 +2156,8 @@ fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     assert_eq!(s.modification, Modification::Allowed(vec!["metadata"]));
 }
 
+/// A drawn Form XObject rewritten after signing and labelled as an object or cross-reference stream is still judged by
+/// what it draws.
 #[test]
 fn a_form_xobject_relabelled_as_file_plumbing_is_still_judged() {
     // Whether a changed stream is an xref or object stream is what it was when signed: a
@@ -2180,6 +2213,7 @@ fn fixture_with_info() -> Vec<u8> {
     out
 }
 
+/// A signed page rewritten with another /Type, or none, is still judged as page content.
 #[test]
 fn a_signed_page_relabelled_or_stripped_of_type_is_still_page_content() {
     // A page is judged by the role it had when signed, not by the /Type its new version carries.
@@ -2239,6 +2273,8 @@ fn self_crl(id: &pkcs12::DigitalId, this: Time, next: Time, revoked_at: Time) ->
     der::seq(&[&tbs, &alg, &der::bit_string(&sig)])
 }
 
+/// A certificate the embedded revocation data revokes keeps the signature Invalid, even when it had also expired by the
+/// signing time.
 #[test]
 fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     use pdfcraft_sign::dss::{self, Evidence};
@@ -2258,6 +2294,7 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     }
 }
 
+/// A revocation listed behind many other /DSS entries, or behind one stream listed many times, is never reported Valid.
 #[test]
 fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2289,6 +2326,8 @@ fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
     assert_eq!(found, Status::Unknown, "{details:?}");
 }
 
+/// An untrusted timestamp's time does not decide whether the signer's certificate was valid: the signer's own clock
+/// does.
 #[test]
 fn an_untrusted_timestamp_does_not_set_the_validation_time() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2389,6 +2428,7 @@ struct Certificates(Vec<String>);
 
 #[cfg(windows)]
 impl Drop for Certificates {
+    /// Remove the temporary certificates and their keys from the Current User store.
     fn drop(&mut self) {
         for thumbprint in &self.0 {
             // New-SelfSignedCertificate also leaves a public copy of a self-signed or CA
@@ -2550,6 +2590,8 @@ fn fixture_timestamped_in_a_field(tsa: &TestTsa) -> Vec<u8> {
     stamped
 }
 
+/// A document timestamp stored as a signature field's value is listed once and checked as a timestamp, not as a
+/// signature over the document.
 #[test]
 fn a_document_timestamp_held_by_a_signature_field_is_checked_as_a_timestamp() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -2616,6 +2658,7 @@ fn a_field_timestamp_from_a_trusted_tsa_outside_its_validity_is_not_valid() {
     assert!(!s.details.iter().any(|d| d.message.contains("its authority is trusted")), "{:?}", s.details);
 }
 
+/// A document timestamp typed /Sig, as older writers have it, is still found and checked as a timestamp.
 #[test]
 fn a_standalone_timestamp_typed_sig_by_an_older_writer_is_still_a_timestamp() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -2645,6 +2688,8 @@ fn a_legacy_x509_signature_with_a_malformed_rsa_key_is_invalid() {
     assert!(!s.details.iter().any(|d| d.message.contains("can't check this signature yet")), "{:?}", s.details);
 }
 
+/// The legacy adbe.x509.rsa_sha1 format (a PKCS #1 signature with the certificate in /Cert) validates, and says it is
+/// legacy.
 #[test]
 fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -2735,6 +2780,8 @@ const FILL_AND_SIGN_ONLY: i32 = -3132;
 const ALL_ALGORITHMS: [pdfcraft_cos::Algorithm; 4] =
     [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256];
 
+/// Signing an encrypted document leaves its /Contents unencrypted, as the byte ranges require, for every encryption
+/// algorithm.
 #[test]
 fn encrypted_documents_are_signed_with_an_unencrypted_contents() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2783,6 +2830,7 @@ fn encrypted_documents_are_signed_with_an_unencrypted_contents() {
     }
 }
 
+/// A signature graphic added to an encrypted document is encrypted with the rest of it.
 #[test]
 fn an_encrypted_documents_signature_graphic_is_encrypted_with_it() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2805,6 +2853,8 @@ fn an_encrypted_documents_signature_graphic_is_encrypted_with_it() {
     }
 }
 
+/// An encrypted document opened with the user password is signed only as its permissions allow; otherwise signing is
+/// refused, naming the permissions password.
 #[test]
 fn encrypted_documents_are_signed_only_as_their_permissions_allow() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2847,6 +2897,7 @@ fn signing_waits_for_a_pending_security_change_to_be_saved() {
     }
 }
 
+/// An encrypted document can take a document timestamp, written as an incremental update.
 #[test]
 fn encrypted_documents_take_a_document_timestamp() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -3103,6 +3154,7 @@ fn append_content_revision(signed: &[u8], text: &str, xref: impl Fn(usize) -> St
     out
 }
 
+/// One in-use cross-reference row pointing at `offset`.
 fn xref_entry(offset: usize) -> String {
     format!("{offset:010} 00000 n \n")
 }
@@ -3379,6 +3431,8 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
     );
 }
 
+/// Under certification level 1, a later revision that drops the catalog's /Perms or points it elsewhere breaks the
+/// certification.
 #[test]
 fn the_catalogs_perms_do_not_change_under_no_changes() {
     // /Perms names the certification signature (DocMDP). Under P=1 nothing may change, so a later

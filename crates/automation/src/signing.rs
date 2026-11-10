@@ -376,6 +376,8 @@ impl Automation {
         Err(bad(kinds))
     }
 
+    /// The `sign_trust` tool: add certificates to the trust store under one scope (roots by default, or signers only),
+    /// or clear it, and revalidate every open document.
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
         // What the certificates are trusted for (#6758): as roots, which vouch for every
         // certificate they may issue and are timestamp authorities, or as signers only, as the

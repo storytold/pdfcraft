@@ -76,6 +76,8 @@ fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
     }
 }
 
+/// Validate signature dictionary `v` into `info`: its byte range and value, its signer's chain against `trust`, and
+/// what changed after it. A document timestamp held by a signature field is checked as a timestamp.
 pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the

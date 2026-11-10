@@ -236,6 +236,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
 }
 
+/// A certificate's key usage bits as the interface names them, or None when no bit is set.
 fn key_usage(bits: u16) -> String {
     const NAMES: [&str; 9] = [
         "Digital Signature",
