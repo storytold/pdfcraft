@@ -1,8 +1,10 @@
-//! Comment summaries that show each page beside its comments, as Acrobat's Summarize Options
-//! "Document and comments" layouts do: the page, scaled down, on the left half of a landscape
-//! sheet, its comments listed in boxes on the right, and a connector line (or the comment's
-//! number) tying each box to the comment's place on the page. A page whose comments don't fit
-//! beside it continues on another sheet showing the same page again.
+//! Comment summaries that show the pages with their comments, as two of Acrobat's Summarize
+//! Options layouts do:
+//! - [`PageLayout::LinesOnSinglePages`]: the page, scaled down, on the left half of a landscape
+//!   sheet, its comments in boxes on the right, and a connector line from each comment to its box.
+//!   Comments that don't fit beside the page continue on another sheet showing the page again.
+//! - [`PageLayout::NumbersOnSeparatePages`]: the page on a sheet of its own with each comment's
+//!   number on it, then its comments, numbered, on the sheets after it.
 
 use super::imposition::{page_form, prints};
 use super::settings::Content;
@@ -16,7 +18,7 @@ use std::io::Write as _;
 pub struct SummaryComment {
     /// The page it is on (0-based).
     pub page: usize,
-    /// Its number on the page, drawn on the page by [`Connect::Numbers`].
+    /// Its number on the page, drawn on the page by [`PageLayout::NumbersOnSeparatePages`].
     pub number: usize,
     /// Its position in the page's `/Annots`, when known: a comment that doesn't print (hidden,
     /// or without the Print flag) isn't drawn on the page, so nothing points at it.
@@ -30,17 +32,28 @@ pub struct SummaryComment {
     pub lines: Vec<(usize, String)>,
 }
 
-/// How a comment's box is tied to its place on the page.
+/// How a summary shows the pages with their comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Connect {
-    /// A connector line from the comment to its box ("with connector lines on single pages").
-    Lines,
-    /// The comment's number on the page, beside it ("on single pages").
-    Numbers,
+pub enum PageLayout {
+    /// "Document and comments with connector lines on single pages".
+    LinesOnSinglePages,
+    /// "Document and comments with sequence numbers on separate pages".
+    NumbersOnSeparatePages,
 }
 
-/// The sheet: US Letter, landscape.
-const SHEET: (f64, f64) = (792.0, 612.0);
+/// What [`summary_with_pages`] makes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummaryOptions<'a> {
+    /// The title at the top of every sheet and in the document's properties.
+    pub title: &'a str,
+    pub layout: PageLayout,
+    /// The paper (width, height in points, either way round): each sheet is turned to suit what
+    /// it holds. A size outside 2 in to 200 in on a side is taken as US Letter.
+    pub paper: (f64, f64),
+    /// Pages without comments get their sheet too.
+    pub pages_without_comments: bool,
+}
+
 const MARGIN: f64 = 36.0;
 /// The band at the top holding the title and the page number.
 const HEADER: f64 = 24.0;
@@ -54,21 +67,21 @@ const PAD: f64 = 4.0;
 const BOX_GAP: f64 = 6.0;
 /// Per reply level.
 const INDENT: f64 = 10.0;
-/// The sheets one summary may have: each comment's box makes at most a few, so this is only hit
-/// by a document with an absurd number of comments, which gets an error rather than a huge file.
-const MAX_SHEETS: usize = 20_000;
+/// The sheets one summary may have: a page makes one or two, and each comment's box at most a
+/// few, so this is only hit by an absurd document, which gets an error rather than a huge file.
+const MAX_SHEETS: usize = 100_000;
 /// The colour of a comment without one.
 const GREY: [f64; 3] = [0.45, 0.45, 0.45];
 
-/// A summary of `comments` beside their pages, titled `title`, as a new unencrypted document
-/// whose pages are the sheets. `comments` come grouped by page in the order they are listed;
-/// a page's comments that come apart (another page's between them) start a new group. Comments
-/// on pages `src` doesn't have are left out. With no comments the summary is one sheet saying so.
+/// A summary of `comments` with their pages, as a new unencrypted document whose pages are the
+/// sheets. The pages come in document order; each page's comments in the order given. Comments
+/// on pages `src` doesn't have are left out. With no page to show the summary is one sheet saying
+/// the document has no comments.
 ///
 /// The pages are drawn as they print ([`Content::DocumentAndMarkups`]): with the comments that
 /// have the Print flag, without pop-ups and links. A comment that doesn't print still gets its
 /// box, without a connector or number pointing at a place where nothing is drawn.
-pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryComment], connect: Connect) -> Result<Document, PrintError> {
+pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &SummaryOptions<'_>) -> Result<Document, PrintError> {
     let pages = pdfcraft_model::pages(src);
     let mut doc = src.clone();
     if doc.trailer().contains(b"Encrypt") {
@@ -76,102 +89,57 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
     }
     // A new file, not a version of the source: its own identifier.
     doc.require_full_save_with_new_id();
-    let shown_title = drawn(title).replace(['\n', '\r'], " ");
-    let empty = "This document has no comments.";
+    let (pw, ph) = opts.paper;
+    let usable = |v: f64| v.is_finite() && (144.0..=14_400.0).contains(&v);
+    let paper = if usable(pw) && usable(ph) { (pw.min(ph), pw.max(ph)) } else { (612.0, 792.0) };
+    let title = drawn(opts.title).replace(['\n', '\r'], " ");
     // Each comment's text as it is laid out and drawn.
     let texts: Vec<Vec<(usize, String)>> = comments.iter().map(|c| c.lines.iter().map(|(level, t)| (*level, drawn(t))).collect()).collect();
-    let mut all_text: Vec<&str> = vec![&shown_title, empty, "Page", "(continued)", ELLIPSIS];
+    let mut all_text: Vec<&str> = vec![&title, NO_COMMENTS, "Page", "(continued)", "Comments on page", ELLIPSIS];
     all_text.extend(texts.iter().flatten().map(|(_, t)| t.as_str()));
     let font = SummaryFont::choose(&mut doc, &all_text)?;
 
-    let col_x = MARGIN + (SHEET.0 - 2.0 * MARGIN - GAP) / 2.0 + GAP;
-    let col_w = SHEET.0 - MARGIN - col_x;
-    let top = SHEET.1 - MARGIN - HEADER;
-    let mut promoted = std::collections::HashMap::new();
-    let mut forms: std::collections::HashMap<usize, (ObjRef, Matrix, [f64; 4])> = std::collections::HashMap::new();
-    let mut sheets: Vec<Sheet> = Vec::new();
-    let mut groups: Vec<(usize, Vec<Listed<'_>>)> = Vec::new();
+    // Each page's comments, in the order given.
+    let mut by_page: std::collections::BTreeMap<usize, Vec<Listed<'_>>> = std::collections::BTreeMap::new();
     for (c, lines) in comments.iter().zip(&texts).filter(|(c, _)| c.page < pages.len()) {
-        match groups.last_mut() {
-            Some((page, list)) if *page == c.page => list.push((c, lines)),
-            _ => groups.push((c.page, vec![(c, lines)])),
-        }
+        by_page.entry(c.page).or_default().push((c, lines));
     }
-    for (page, list) in groups {
-        let placed = match forms.get(&page) {
-            Some(p) => *p,
-            None => {
-                let form = page_form(&mut doc, &pages, page, Content::DocumentAndMarkups, &mut promoted)?;
-                let p = place(src, &pages, page, form);
-                forms.insert(page, p);
-                p
-            }
-        };
-        let annots = pages.get(page).and_then(|p| p.dict.get(b"Annots")).and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
-        let mut sheet = Sheet::new(page, placed, false);
-        let mut y = top;
-        for (c, lines) in list {
-            let printed = c.index.is_none_or(|i| {
-                annots.get(i).and_then(|a| doc.resolve(a).as_dict().map(|d| prints(&doc, d, Content::DocumentAndMarkups))).unwrap_or(false)
-            });
-            let color = c.color.filter(|c| c.iter().all(|v| v.is_finite())).map_or(GREY, |c| c.map(|v| v.clamp(0.0, 1.0)));
-            let mut rows: Vec<(usize, String)> = Vec::new();
-            for (level, text) in lines {
-                // Deep reply chains stop indenting at a quarter of the column.
-                let indent = (*level as f64 * INDENT).min(col_w / 4.0);
-                let width = (col_w - 2.0 * PAD - indent).max(FONT);
-                for row in pdfcraft_fonts::wrap_with(text, FONT, width, |s, size| font.width(s, size)) {
-                    rows.push((*level, row));
-                }
-            }
-            if rows.is_empty() {
-                rows.push((0, String::new()));
-            }
-            let mut first = true;
-            let mut rest: &[(usize, String)] = &rows;
-            while !rest.is_empty() {
-                let room = ((y - MARGIN - 2.0 * PAD) / LEADING).floor().max(0.0) as usize;
-                // A box goes whole onto the next sheet unless it is too tall for any sheet, or
-                // part of it is already placed; then it is split where the sheet ends.
-                let fresh = sheet.boxes.is_empty();
-                let take = if room >= rest.len() {
-                    rest.len()
-                } else if fresh || !first {
-                    room
-                } else {
-                    0
-                };
-                if take == 0 {
-                    sheets.push(std::mem::replace(&mut sheet, Sheet::new(page, placed, true)));
-                    if sheets.len() >= MAX_SHEETS {
-                        return Err(PrintError::Invalid("the comment summary would have too many pages".into()));
-                    }
-                    y = top;
-                    if fresh && room == 0 {
-                        // Not even one line fits an empty sheet; can't happen with these constants.
-                        return Err(PrintError::Invalid("the comment summary sheet is too small".into()));
-                    }
-                    continue;
-                }
-                let (now, later) = rest.split_at(take);
-                let height = now.len() as f64 * LEADING + 2.0 * PAD;
-                sheet.boxes.push(SummaryBox { top: y, height, rows: now.to_vec(), color, anchor: (first && printed).then_some((c.rect, c.number)) });
-                y -= height + BOX_GAP;
-                first = false;
-                rest = later;
-            }
-        }
-        sheets.push(sheet);
-        if sheets.len() >= MAX_SHEETS {
-            return Err(PrintError::Invalid("the comment summary would have too many pages".into()));
+    if opts.pages_without_comments {
+        for page in 0..pages.len() {
+            by_page.entry(page).or_default();
         }
     }
 
+    let mut out = Out { font, sheets: Vec::new(), title };
+    let mut promoted = std::collections::HashMap::new();
+    for (page, list) in by_page {
+        let form = page_form(&mut doc, &pages, page, Content::DocumentAndMarkups, &mut promoted)?;
+        let annots = pages.get(page).and_then(|p| p.dict.get(b"Annots")).and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
+        let printed = |c: &SummaryComment| {
+            c.index.is_none_or(|i| {
+                annots.get(i).and_then(|a| doc.resolve(a).as_dict().map(|d| prints(&doc, d, Content::DocumentAndMarkups))).unwrap_or(false)
+            })
+        };
+        let items: Vec<Item> = list
+            .iter()
+            .map(|(c, lines)| Item {
+                lines,
+                color: c.color.filter(|c| c.iter().all(|v| v.is_finite())).map_or(GREY, |c| c.map(|v| v.clamp(0.0, 1.0))),
+                anchor: printed(c).then_some((c.rect, c.number)),
+            })
+            .collect();
+        match opts.layout {
+            PageLayout::LinesOnSinglePages => out.lines_on_single_pages(src, &pages, page, form, &items, paper)?,
+            PageLayout::NumbersOnSeparatePages => out.numbers_on_separate_pages(src, &pages, page, form, &items, paper)?,
+        }
+    }
+    let Out { font, sheets, title } = out;
+
     let pages_root = doc.add(Object::Null);
-    let mut kids = Vec::new();
     let mut fonts = Dict::new();
     fonts.set(b"F1".to_vec(), Object::Ref(font.font));
-    let draw_sheet = |doc: &mut Document, content: Vec<u8>, xobjects: Dict| {
+    let mut kids = Vec::new();
+    let mut add = |doc: &mut Document, size: (f64, f64), content: Vec<u8>, xobjects: Dict| {
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts.clone()));
         if !xobjects.is_empty() {
@@ -181,105 +149,24 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
         let mut p = Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages_root));
-        p.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, SHEET.0, SHEET.1].iter().map(|v| Object::Real(*v)).collect()));
+        p.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, size.0, size.1].iter().map(|v| Object::Real(*v)).collect()));
         p.set(b"Resources".to_vec(), Object::Dict(res));
         p.set(b"Contents".to_vec(), Object::Ref(contents));
-        doc.add(Object::Dict(p))
+        kids.push(Object::Ref(doc.add(Object::Dict(p))));
     };
     if sheets.is_empty() {
-        let mut c: Vec<u8> = Vec::new();
-        let fitted = fit(&font, &shown_title, TITLE_FONT, SHEET.0 - 2.0 * MARGIN);
-        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, SHEET.1 - MARGIN - TITLE_FONT, &fitted)?;
-        text(&mut c, &font, &[0.0; 3], FONT + 1.5, MARGIN, top - LEADING * 2.0, empty)?;
-        kids.push(Object::Ref(draw_sheet(&mut doc, c, Dict::new())));
+        let size = paper;
+        let mut c = Vec::new();
+        let fitted = fit(&font, &title, TITLE_FONT, size.0 - 2.0 * MARGIN);
+        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, size.1 - MARGIN - TITLE_FONT, &fitted)?;
+        text(&mut c, &font, &[0.0; 3], FONT + 1.5, MARGIN, size.1 - MARGIN - HEADER - LEADING * 2.0, NO_COMMENTS)?;
+        add(&mut doc, size, c, Dict::new());
     }
-    for sheet in &sheets {
-        let mut c: Vec<u8> = Vec::new();
-        let mut xobjects = Dict::new();
-        let (form, m, frame) = sheet.placed;
-        // Header: the title on the left, the page on the right.
-        let base = SHEET.1 - MARGIN - TITLE_FONT;
-        let label = if sheet.continued { format!("Page {} (continued)", sheet.page + 1) } else { format!("Page {}", sheet.page + 1) };
-        let label_x = SHEET.0 - MARGIN - font.width(&label, TITLE_FONT);
-        // A long document name is cut short before the page label rather than run under it.
-        let fitted = fit(&font, &shown_title, TITLE_FONT, label_x - MARGIN - GAP);
-        text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, base, &fitted)?;
-        text(&mut c, &font, &[0.0; 3], TITLE_FONT, label_x, base, &label)?;
-        let _ = writeln!(
-            c,
-            "q 0.75 G 0.5 w {} {} m {} {} l S Q",
-            n(MARGIN),
-            n(top + HEADER / 2.0 - 4.0),
-            n(SHEET.0 - MARGIN),
-            n(top + HEADER / 2.0 - 4.0)
-        );
-        // The page, framed.
-        xobjects.set(b"P0".to_vec(), Object::Ref(form));
-        let [a, b, cc, d, e, f] = m.0;
-        let _ = writeln!(c, "q {} {} {} {} {} {} cm /P0 Do Q", n(a), n(b), n(cc), n(d), n(e), n(f));
-        let _ = writeln!(c, "q 0.6 G 0.5 w {} {} {} {} re S Q", n(frame[0]), n(frame[1]), n(frame[2] - frame[0]), n(frame[3] - frame[1]));
-        for bx in &sheet.boxes {
-            let [r, g, bl] = bx.color;
-            let tint = bx.color.map(|v| 1.0 - (1.0 - v) * 0.12);
-            let y0 = bx.top - bx.height;
-            let _ = writeln!(
-                c,
-                "q {} {} {} rg {} {} {} RG 1 w {} {} {} {} re B Q",
-                n(tint[0]),
-                n(tint[1]),
-                n(tint[2]),
-                n(r),
-                n(g),
-                n(bl),
-                n(col_x),
-                n(y0),
-                n(col_w),
-                n(bx.height)
-            );
-            let mut ty = bx.top - PAD - FONT;
-            for (level, row) in &bx.rows {
-                let indent = (*level as f64 * INDENT).min(col_w / 4.0);
-                text(&mut c, &font, &[0.0; 3], FONT, col_x + PAD + indent, ty, row)?;
-                ty -= LEADING;
-            }
-            let Some((rect, number)) = bx.anchor else { continue };
-            let Some(spot) = spot_on_page(&m, rect, frame, connect) else { continue };
-            match connect {
-                Connect::Lines => {
-                    let end = (col_x, bx.top - PAD - FONT / 2.0);
-                    let _ = writeln!(
-                        c,
-                        "q {} {} {} RG {} {} {} rg 0.6 w {} {} m {} {} l S {} Q",
-                        n(r),
-                        n(g),
-                        n(bl),
-                        n(r),
-                        n(g),
-                        n(bl),
-                        n(spot.0),
-                        n(spot.1),
-                        n(end.0),
-                        n(end.1),
-                        circle(spot.0, spot.1, 1.8) + " f"
-                    );
-                }
-                Connect::Numbers => {
-                    let label = number.to_string();
-                    let size = 7.5;
-                    let radius = (font.width(&label, size) / 2.0 + 2.5).max(6.5);
-                    // A white ring keeps the number apart from a comment of the same colour.
-                    let _ = writeln!(c, "q {} {} {} rg 1 G 1.2 w {} b Q", n(r), n(g), n(bl), circle(spot.0, spot.1, radius));
-                    let x = spot.0 - font.width(&label, size) / 2.0;
-                    // Black on a light colour (a yellow note), white on a dark one.
-                    let ink = if 0.299 * r + 0.587 * g + 0.114 * bl > 0.6 { [0.0; 3] } else { [1.0; 3] };
-                    text(&mut c, &font, &ink, size, x, spot.1 - size * 0.35, &label)?;
-                }
-            }
-        }
-        kids.push(Object::Ref(draw_sheet(&mut doc, c, xobjects)));
+    for sheet in sheets {
+        add(&mut doc, sheet.size, sheet.content, sheet.xobjects);
     }
 
-    let count = i64::try_from(kids.len()).map_err(|_| PrintError::Invalid("the comment summary would have too many pages".into()))?;
+    let count = i64::try_from(kids.len()).map_err(|_| too_many())?;
     let mut tree = Dict::new();
     tree.set(b"Type".to_vec(), Object::name("Pages"));
     tree.set(b"Count".to_vec(), Object::Int(count));
@@ -296,74 +183,294 @@ pub fn summary_with_pages(src: &Document, title: &str, comments: &[SummaryCommen
     let root = doc.add(Object::Dict(cat));
     doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
     let mut info = Dict::new();
-    info.set(b"Title".to_vec(), PdfString::text(title));
+    info.set(b"Title".to_vec(), PdfString::text(opts.title));
     info.set(b"Producer".to_vec(), PdfString::text("PdfCraft"));
     let info = doc.add(info);
     doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
     Ok(doc)
 }
 
+const NO_COMMENTS: &str = "This document has no comments.";
+
+fn too_many() -> PrintError {
+    PrintError::Invalid("the comment summary would have too many pages".into())
+}
+
 /// A comment and its text as drawn ([`drawn`]).
 type Listed<'a> = (&'a SummaryComment, &'a [(usize, String)]);
 
-/// One sheet: a page and the comment boxes beside it.
-struct Sheet {
-    page: usize,
-    /// The page's form, the matrix from its user space to the sheet, and its frame on the sheet.
-    placed: (ObjRef, Matrix, [f64; 4]),
-    /// The page's comments continue from the sheet before.
-    continued: bool,
-    boxes: Vec<SummaryBox>,
+/// A comment as its box shows it.
+struct Item<'a> {
+    lines: &'a [(usize, String)],
+    color: [f64; 3],
+    /// Its rectangle and number, when the page draws it: where its connector or number goes.
+    anchor: Option<([f64; 4], usize)>,
 }
 
-impl Sheet {
-    fn new(page: usize, placed: (ObjRef, Matrix, [f64; 4]), continued: bool) -> Self {
-        Self { page, placed, continued, boxes: Vec::new() }
-    }
-}
-
-/// A comment's box (or the part of it on this sheet).
+/// A comment's box (or the part of it on one sheet).
 struct SummaryBox {
     top: f64,
     height: f64,
     rows: Vec<(usize, String)>,
     color: [f64; 3],
-    /// The comment's rectangle and number, on the part with its heading: where its connector or
-    /// number goes.
+    /// On the part with its heading: the comment's rectangle and number.
     anchor: Option<([f64; 4], usize)>,
 }
 
-/// Page `index` fitted into the left half of the sheet, centred: its form, the matrix from its
+/// One finished sheet.
+struct Sheet {
+    size: (f64, f64),
+    content: Vec<u8>,
+    xobjects: Dict,
+}
+
+/// The sheets made so far, and what they are set with.
+struct Out {
+    font: SummaryFont,
+    sheets: Vec<Sheet>,
+    title: String,
+}
+
+impl Out {
+    fn push(&mut self, sheet: Sheet) -> Result<(), PrintError> {
+        if self.sheets.len() >= MAX_SHEETS {
+            return Err(too_many());
+        }
+        self.sheets.push(sheet);
+        Ok(())
+    }
+
+    /// The title on the left of the header band and `label` on the right, over a rule.
+    fn header(&self, c: &mut Vec<u8>, size: (f64, f64), label: &str) -> Result<(), PrintError> {
+        let base = size.1 - MARGIN - TITLE_FONT;
+        let label_x = size.0 - MARGIN - self.font.width(label, TITLE_FONT);
+        // A long document name is cut short before the label rather than run under it.
+        let fitted = fit(&self.font, &self.title, TITLE_FONT, label_x - MARGIN - GAP);
+        text(c, &self.font, &[0.0; 3], TITLE_FONT, MARGIN, base, &fitted)?;
+        text(c, &self.font, &[0.0; 3], TITLE_FONT, label_x, base, label)?;
+        let rule = size.1 - MARGIN - HEADER / 2.0 - 4.0;
+        let _ = writeln!(c, "q 0.75 G 0.5 w {} {} m {} {} l S Q", n(MARGIN), n(rule), n(size.0 - MARGIN), n(rule));
+        Ok(())
+    }
+
+    /// Lay `items` out in a column `width` wide, from `top` down to the margin, sheet after
+    /// sheet: a box goes whole onto the next sheet unless it is too tall for any sheet, or part of
+    /// it is already placed; then it is split where the sheet ends. At least one sheet, empty
+    /// when there are no items.
+    fn flow(&self, items: &[Item<'_>], width: f64, top: f64) -> Result<Vec<Vec<SummaryBox>>, PrintError> {
+        let mut sheets: Vec<Vec<SummaryBox>> = vec![Vec::new()];
+        let mut y = top;
+        for item in items {
+            let mut rows: Vec<(usize, String)> = Vec::new();
+            for (level, text) in item.lines {
+                // Deep reply chains stop indenting at a quarter of the column.
+                let indent = (*level as f64 * INDENT).min(width / 4.0);
+                let room = (width - 2.0 * PAD - indent).max(FONT);
+                for row in pdfcraft_fonts::wrap_with(text, FONT, room, |s, size| self.font.width(s, size)) {
+                    rows.push((*level, row));
+                }
+            }
+            if rows.is_empty() {
+                rows.push((0, String::new()));
+            }
+            let mut first = true;
+            let mut rest: &[(usize, String)] = &rows;
+            while !rest.is_empty() {
+                let room = ((y - MARGIN - 2.0 * PAD) / LEADING).floor().max(0.0) as usize;
+                let fresh = sheets.last().is_none_or(Vec::is_empty);
+                let take = if room >= rest.len() {
+                    rest.len()
+                } else if fresh || !first {
+                    room
+                } else {
+                    0
+                };
+                if take == 0 {
+                    if fresh {
+                        // Not even one line fits an empty sheet; can't happen with these sizes.
+                        return Err(PrintError::Invalid("the comment summary sheet is too small".into()));
+                    }
+                    if sheets.len() >= MAX_SHEETS {
+                        return Err(too_many());
+                    }
+                    sheets.push(Vec::new());
+                    y = top;
+                    continue;
+                }
+                let (now, later) = rest.split_at(take);
+                let height = now.len() as f64 * LEADING + 2.0 * PAD;
+                if let Some(sheet) = sheets.last_mut() {
+                    sheet.push(SummaryBox { top: y, height, rows: now.to_vec(), color: item.color, anchor: if first { item.anchor } else { None } });
+                }
+                y -= height + BOX_GAP;
+                first = false;
+                rest = later;
+            }
+        }
+        Ok(sheets)
+    }
+
+    /// Draw `boxes` in the column at `x`, `width` wide.
+    fn boxes(&self, c: &mut Vec<u8>, boxes: &[SummaryBox], x: f64, width: f64) -> Result<(), PrintError> {
+        for bx in boxes {
+            let [r, g, b] = bx.color;
+            let tint = bx.color.map(|v| 1.0 - (1.0 - v) * 0.12);
+            let _ = writeln!(
+                c,
+                "q {} {} {} rg {} {} {} RG 1 w {} {} {} {} re B Q",
+                n(tint[0]),
+                n(tint[1]),
+                n(tint[2]),
+                n(r),
+                n(g),
+                n(b),
+                n(x),
+                n(bx.top - bx.height),
+                n(width),
+                n(bx.height)
+            );
+            let mut ty = bx.top - PAD - FONT;
+            for (level, row) in &bx.rows {
+                let indent = (*level as f64 * INDENT).min(width / 4.0);
+                text(c, &self.font, &[0.0; 3], FONT, x + PAD + indent, ty, row)?;
+                ty -= LEADING;
+            }
+        }
+        Ok(())
+    }
+
+    /// The page beside its comments on landscape sheets, each comment's box tied to its place on
+    /// the page by a connector line.
+    fn lines_on_single_pages(
+        &mut self,
+        src: &Document,
+        pages: &[pdfcraft_model::Page],
+        page: usize,
+        form: ObjRef,
+        items: &[Item<'_>],
+        paper: (f64, f64),
+    ) -> Result<(), PrintError> {
+        let size = (paper.1, paper.0);
+        let top = size.1 - MARGIN - HEADER;
+        let half = (size.0 - 2.0 * MARGIN - GAP) / 2.0;
+        let area = [MARGIN, MARGIN, MARGIN + half, top];
+        let (col_x, col_w) = (MARGIN + half + GAP, half);
+        let (m, frame) = place(src, pages, page, area);
+        for (k, boxes) in self.flow(items, col_w, top)?.into_iter().enumerate() {
+            let mut c = Vec::new();
+            let label = if k == 0 { format!("Page {}", page + 1) } else { format!("Page {} (continued)", page + 1) };
+            self.header(&mut c, size, &label)?;
+            let xobjects = draw_page(&mut c, form, &m, frame);
+            self.boxes(&mut c, &boxes, col_x, col_w)?;
+            for bx in &boxes {
+                let Some((rect, _)) = bx.anchor else { continue };
+                let Some(b) = on_sheet(&m, rect) else { continue };
+                // From the middle of the comment's right edge, toward the column.
+                let spot = (b[2].clamp(frame[0], frame[2]), ((b[1] + b[3]) / 2.0).clamp(frame[1], frame[3]));
+                let end = (col_x, bx.top - PAD - FONT / 2.0);
+                let [r, g, bl] = bx.color;
+                let _ = writeln!(
+                    c,
+                    "q {} {} {} RG {} {} {} rg 0.6 w {} {} m {} {} l S {} f Q",
+                    n(r),
+                    n(g),
+                    n(bl),
+                    n(r),
+                    n(g),
+                    n(bl),
+                    n(spot.0),
+                    n(spot.1),
+                    n(end.0),
+                    n(end.1),
+                    circle(spot.0, spot.1, 1.8)
+                );
+            }
+            self.push(Sheet { size, content: c, xobjects })?;
+        }
+        Ok(())
+    }
+
+    /// The page on a sheet of its own, turned to suit it, with each comment's number on it; then
+    /// its comments, numbered, on portrait sheets after it (none for a page without comments).
+    fn numbers_on_separate_pages(
+        &mut self,
+        src: &Document,
+        pages: &[pdfcraft_model::Page],
+        page: usize,
+        form: ObjRef,
+        items: &[Item<'_>],
+        paper: (f64, f64),
+    ) -> Result<(), PrintError> {
+        let shown = pages.get(page).map_or((612.0, 792.0), |p| p.display_size(src));
+        let size = if shown.0 > shown.1 { (paper.1, paper.0) } else { paper };
+        let top = size.1 - MARGIN - HEADER;
+        let (m, frame) = place(src, pages, page, [MARGIN, MARGIN, size.0 - MARGIN, top]);
+        let mut c = Vec::new();
+        self.header(&mut c, size, &format!("Page {}", page + 1))?;
+        let xobjects = draw_page(&mut c, form, &m, frame);
+        for item in items {
+            let Some((rect, number)) = item.anchor else { continue };
+            let Some(b) = on_sheet(&m, rect) else { continue };
+            // On the comment's top-right corner, clear of what it marks.
+            let spot = (b[2].clamp(frame[0], frame[2]), b[3].clamp(frame[1], frame[3]));
+            let [r, g, bl] = item.color;
+            let label = number.to_string();
+            let size = 7.5;
+            let radius = (self.font.width(&label, size) / 2.0 + 2.5).max(6.5);
+            // A white ring keeps the number apart from a comment of the same colour.
+            let _ = writeln!(c, "q {} {} {} rg 1 G 1.2 w {} b Q", n(r), n(g), n(bl), circle(spot.0, spot.1, radius));
+            let x = spot.0 - self.font.width(&label, size) / 2.0;
+            // Black on a light colour (a yellow note), white on a dark one.
+            let ink = if 0.299 * r + 0.587 * g + 0.114 * bl > 0.6 { [0.0; 3] } else { [1.0; 3] };
+            text(&mut c, &self.font, &ink, size, x, spot.1 - size * 0.35, &label)?;
+        }
+        self.push(Sheet { size, content: c, xobjects })?;
+        if items.is_empty() {
+            return Ok(());
+        }
+        let size = paper;
+        let top = size.1 - MARGIN - HEADER;
+        let width = size.0 - 2.0 * MARGIN;
+        for (k, boxes) in self.flow(items, width, top)?.into_iter().enumerate() {
+            let mut c = Vec::new();
+            let label = if k == 0 { format!("Comments on page {}", page + 1) } else { format!("Comments on page {} (continued)", page + 1) };
+            self.header(&mut c, size, &label)?;
+            self.boxes(&mut c, &boxes, MARGIN, width)?;
+            self.push(Sheet { size, content: c, xobjects: Dict::new() })?;
+        }
+        Ok(())
+    }
+}
+
+/// Draw the page's `form` with `m`, framed, as `/P0`; returns the sheet's XObjects.
+fn draw_page(c: &mut Vec<u8>, form: ObjRef, m: &Matrix, frame: [f64; 4]) -> Dict {
+    let [a, b, cc, d, e, f] = m.0;
+    let _ = writeln!(c, "q {} {} {} {} {} {} cm /P0 Do Q", n(a), n(b), n(cc), n(d), n(e), n(f));
+    let _ = writeln!(c, "q 0.6 G 0.5 w {} {} {} {} re S Q", n(frame[0]), n(frame[1]), n(frame[2] - frame[0]), n(frame[3] - frame[1]));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"P0".to_vec(), Object::Ref(form));
+    xobjects
+}
+
+/// Page `index` fitted into `area` (`[x0 y0 x1 y1]` on the sheet), centred: the matrix from its
 /// user space to the sheet (through its display space, so a turned page shows upright), and its
 /// frame on the sheet.
-fn place(src: &Document, pages: &[pdfcraft_model::Page], index: usize, form: ObjRef) -> (ObjRef, Matrix, [f64; 4]) {
-    let area_w = (SHEET.0 - 2.0 * MARGIN - GAP) / 2.0;
-    let area_h = SHEET.1 - 2.0 * MARGIN - HEADER;
-    let Some(page) = pages.get(index) else { return (form, Matrix::IDENTITY, [MARGIN, MARGIN, MARGIN + area_w, MARGIN + area_h]) };
+fn place(src: &Document, pages: &[pdfcraft_model::Page], index: usize, area: [f64; 4]) -> (Matrix, [f64; 4]) {
+    let (area_w, area_h) = (area[2] - area[0], area[3] - area[1]);
+    let Some(page) = pages.get(index) else { return (Matrix::IDENTITY, area) };
     let (w, h) = page.display_size(src);
     let (w, h) = (if w.is_finite() && w > 0.0 { w } else { 612.0 }, if h.is_finite() && h > 0.0 { h } else { 792.0 });
     let s = (area_w / w).min(area_h / h);
     let (pw, ph) = (w * s, h * s);
-    let (x, y) = (MARGIN + (area_w - pw) / 2.0, MARGIN + (area_h - ph) / 2.0);
+    let (x, y) = (area[0] + (area_w - pw) / 2.0, area[1] + (area_h - ph) / 2.0);
     let to_display = Matrix(page.view_matrix(src)).invert().unwrap_or_default();
-    let m = to_display.then(&Matrix([s, 0.0, 0.0, s, x, y]));
-    (form, m, [x, y, x + pw, y + ph])
+    (to_display.then(&Matrix([s, 0.0, 0.0, s, x, y])), [x, y, x + pw, y + ph])
 }
 
-/// Where on the sheet a comment at `rect` (user space) is marked, kept inside the page's
-/// `frame` (a comment can sit partly off its page): a connector starts at the middle of its right
-/// edge, toward the comment list; a number sits on its top-right corner, clear of what it marks.
-/// `None` for a rectangle that doesn't map to finite numbers.
-fn spot_on_page(m: &Matrix, rect: [f64; 4], frame: [f64; 4], connect: Connect) -> Option<(f64, f64)> {
+/// A comment's rectangle (user space) on the sheet; `None` when it doesn't map to finite numbers.
+fn on_sheet(m: &Matrix, rect: [f64; 4]) -> Option<[f64; 4]> {
     let b = m.bbox(rect);
-    if !b.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let y = match connect {
-        Connect::Lines => (b[1] + b[3]) / 2.0,
-        Connect::Numbers => b[3],
-    };
-    Some((b[2].clamp(frame[0], frame[2]), y.clamp(frame[1], frame[3])))
+    b.iter().all(|v| v.is_finite()).then_some(b)
 }
 
 /// What is drawn for `s`: tabs as four spaces, a soft hyphen as a hyphen (as Helvetica draws

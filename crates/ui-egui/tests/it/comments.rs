@@ -2215,6 +2215,40 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     assert_eq!(s.summary_layout, pdfcraft_engine::SummaryLayout::DocumentAndCommentsWithLines, "the choice is kept for next time");
     let info = &s.session.get(s.views[2].id).unwrap().info;
     assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
+
+    // Sequence numbers on separate pages, on A4, without the pages that have no comments.
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Document and comments with sequence numbers on separate pages").click();
+    h.run_steps(1);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v.starts_with("Match the document ("))).click();
+    h.run_steps(2);
+    h.get_by_label("A4").click();
+    h.run_steps(1);
+    h.get_by_label("Pages containing no comments").click();
+    h.run_steps(1);
+    h.get_by_label("Create PDF Comment Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.views.len(), 4);
+    assert_eq!((s.summary_paper, s.summary_pages_without_comments), (Some("A4"), false));
+    let info = &s.session.get(s.views[3].id).unwrap().info;
+    let a4 = |w: f32, h: f32| (w.min(h) - 595.28).abs() < 0.01 && (w.max(h) - 841.89).abs() < 0.01;
+    assert!(info.pages.iter().all(|p| a4(p.width, p.height)), "{:?}", info.pages);
+    assert_eq!(info.pages.len(), 2, "the commented page and its comments; the other pages left out");
+
+    // The choices survive a restart.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.summary_layout, pdfcraft_engine::SummaryLayout::DocumentAndCommentsWithNumbers);
+    assert_eq!((restored.summary_paper, restored.summary_pages_without_comments), (Some("A4"), false));
+    // A paper this version doesn't offer leaves the document's.
+    restored.restore(r#"{"comment_summary": {"paper": "Napkin"}}"#);
+    assert_eq!(restored.summary_paper, None);
 }
 
 #[test]

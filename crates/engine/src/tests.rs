@@ -1447,7 +1447,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
     );
     let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
-    let summary = s.summarize_comments(id, SummarySort::Page, SummaryLayout::CommentsOnly).unwrap();
+    let summary = s.summarize_comments(id, &SummarizeOptions::default()).unwrap();
     let id = s.open_new("summary.pdf", summary).unwrap();
     let shown = page_texts(&s, id).join("\n");
     assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
@@ -1682,7 +1682,7 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
     // The comment summary copies comment text out like the exports do.
     for layout in SummaryLayout::ALL {
-        assert_eq!(s.summarize_comments(id, SummarySort::Page, layout).map(|_| ()), refused());
+        assert_eq!(s.summarize_comments(id, &SummarizeOptions { layout, ..Default::default() }).map(|_| ()), refused());
     }
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
@@ -5178,50 +5178,90 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(text.contains("Page: 2\nNumber: 1  Author: Reviewer  Subject: Rectangle"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
-    let pdf = s.summarize_comments(id, SummarySort::Author, SummaryLayout::CommentsOnly).unwrap();
+    let pdf = s.summarize_comments(id, &SummarizeOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
 }
 
-/// Summarize Comments ▸ Document and comments (#6791): each page with comments, beside them,
-/// on a landscape sheet; with connector lines or with the comments' numbers on the page.
+/// Summarize Comments ▸ Document and comments (#6791): the pages with their comments, beside
+/// them with connector lines, or on separate sheets with the comments' numbers on the page.
 #[test]
-fn comment_summary_shows_each_commented_page_beside_its_comments() {
+fn comment_summary_shows_the_pages_with_their_comments() {
     let (mut s, id) = session_with(3);
     s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
     s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Agreed".into(), author: "Ada".into() }).unwrap();
-    for layout in [SummaryLayout::DocumentAndCommentsWithLines, SummaryLayout::DocumentAndComments] {
-        let pdf = s.summarize_comments(id, SummarySort::Page, layout).unwrap();
-        let n = s.open_new("summary.pdf", pdf).unwrap();
-        let info = &s.get(n).unwrap().info;
-        assert_eq!(info.pages.len(), 1, "{layout:?}: only page 2 has comments");
-        assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
-        let text = page_texts(&s, n).join("\n");
-        for want in ["Summary of Comments on fixture.pdf", "Page 2", "1. Rectangle  Reviewer", "Look here", "Reply  Ada", "Agreed"] {
-            assert!(text.contains(want), "{layout:?}: {want:?} in {text}");
-        }
-        assert!(!text.contains("Page 1") && !text.contains("Page 3"), "{layout:?}: pages without comments are left out: {text}");
-        // The comment shows red on the page (left half) and as its box's border (right half).
+    let summary = |s: &mut Session, layout, pages_without_comments| {
+        let pdf = s.summarize_comments(id, &SummarizeOptions { layout, pages_without_comments, ..Default::default() }).unwrap();
+        s.open_new("summary.pdf", pdf).unwrap()
+    };
+    // Red pixels between x0 and x1 on sheet `page` at 1 px/pt.
+    let red = |s: &Session, n: DocId, page: usize, x0: u32, x1: u32| {
         let doc = s.get(n).unwrap();
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
-        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        let out = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
         assert!(out.error.is_none(), "{:?}", out.error);
-        let red = |x0: u32, x1: u32| {
-            (0..out.height)
-                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
-                .filter(|&(x, y)| {
-                    let i = ((y * out.width + x) * 4) as usize;
-                    out.rgba[i] > 200 && out.rgba[i + 1] < 120 && out.rgba[i + 2] < 120
-                })
-                .count()
-        };
-        assert!(red(0, 384) > 400, "{layout:?}: the comment is drawn on the page");
-        assert!(red(408, out.width) > 100, "{layout:?}: its box");
+        (0..out.height)
+            .flat_map(|y| (x0..x1.min(out.width)).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let i = ((y * out.width + x) * 4) as usize;
+                out.rgba[i] > 200 && out.rgba[i + 1] < 120 && out.rgba[i + 2] < 120
+            })
+            .count()
+    };
+    let wanted = ["1. Rectangle  Reviewer", "Look here", "Reply  Ada", "Agreed"];
+
+    // Connector lines: page 2 beside its comments on a landscape sheet (the 200 × 300 pt pages
+    // are no standard paper, so US Letter).
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithLines, false);
+    let info = &s.get(n).unwrap().info;
+    assert_eq!(info.pages.len(), 1, "only page 2 has comments");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
+    let text = page_texts(&s, n).join("\n");
+    for want in wanted.iter().chain(&["Summary of Comments on fixture.pdf", "Page 2"]) {
+        assert!(text.contains(want), "{want:?} in {text}");
     }
+    assert!(!text.contains("Page 1") && !text.contains("Page 3"), "pages without comments are left out: {text}");
+    assert!(red(&s, n, 0, 0, 384) > 400, "the comment is drawn on the page");
+    assert!(red(&s, n, 0, 408, 792) > 100, "its box");
+    // With pages without comments: every page.
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithLines, true);
+    assert_eq!(page_texts(&s, n).len(), 3);
+
+    // Sequence numbers: page 2 on a sheet of its own, then its comments.
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithNumbers, false);
+    let texts = page_texts(&s, n);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[0].contains("Page 2") && !texts[0].contains("Look here"), "{}", texts[0]);
+    assert!(texts[1].contains("Comments on page 2") && wanted.iter().all(|w| texts[1].contains(w)), "{}", texts[1]);
+    assert!(red(&s, n, 0, 0, 612) > 1000, "the page shows the comment, at nearly twice its size");
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithNumbers, true);
+    assert_eq!(page_texts(&s, n).len(), 4, "pages 1 and 3 without a comment sheet");
+
+    // A chosen paper.
+    let a4 = PAPERS_A4;
+    let pdf = s.summarize_comments(id, &SummarizeOptions { layout: SummaryLayout::CommentsOnly, paper: Some(a4), ..Default::default() }).unwrap();
+    let n = s.open_new("summary.pdf", pdf).unwrap();
+    let p = &s.get(n).unwrap().info.pages[0];
+    assert!((f64::from(p.width) - a4.0).abs() < 0.01 && (f64::from(p.height) - a4.1).abs() < 0.01, "comments only on A4 too: {p:?}");
     // The names comments_summarize takes.
-    assert_eq!(SummaryLayout::parse("Document_And_Comments"), Some(SummaryLayout::DocumentAndComments));
+    assert_eq!(SummaryLayout::parse("Document_And_Comments_With_Numbers"), Some(SummaryLayout::DocumentAndCommentsWithNumbers));
     assert_eq!(SummaryLayout::parse("side_by_side"), None);
+}
+
+const PAPERS_A4: (f64, f64) = (595.28, 841.89);
+
+/// Without a chosen paper the summary is on the paper the document is: A4 for an A4 document,
+/// either way round; US Letter for a page of no standard size.
+#[test]
+fn the_summary_paper_matches_the_document() {
+    assert_eq!(summary_paper(Some(PAPERS_A4)), ("A4", PAPERS_A4));
+    assert_eq!(summary_paper(Some((841.89, 595.28))), ("A4", PAPERS_A4));
+    assert_eq!(summary_paper(Some((200.0, 300.0))).0, "US Letter");
+    assert_eq!(summary_paper(None).0, "US Letter");
+    let (s, id) = session_with(1);
+    assert_eq!(s.summary_paper(id).0, "US Letter");
+    assert!(SUMMARY_PAPERS.iter().all(|name| pdfcraft_print::PAPERS.iter().any(|(p, _)| p == name)), "every offered paper is one printing knows");
 }
 
 /// The page layouts list each page's comments together, in the chosen order within the page.

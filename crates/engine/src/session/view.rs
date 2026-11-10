@@ -1,7 +1,7 @@
 use super::{
-    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummaryLayout,
-    SummarySort, apply_layer_state, comment_summary, display_config, guard, local_utc_offset, outline_rows, parse_ymd, render_threads,
-    summary_comments, use_layer_choices,
+    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session,
+    SummarizeOptions, SummaryLayout, apply_layer_state, comment_summary, display_config, guard, local_utc_offset, outline_rows, parse_ymd,
+    render_threads, summary_comments, summary_paper, use_layer_choices,
 };
 
 impl Session {
@@ -344,20 +344,21 @@ impl Session {
 
     /// Acrobat's Summarize Comments: a new PDF listing every comment with its number, author,
     /// type, date, text and replies. [`SummaryLayout::CommentsOnly`] lists them grouped by page;
-    /// the other layouts show each page that has comments beside them, tied to their places on
-    /// the page by connector lines or by their numbers.
-    pub fn summarize_comments(&self, id: DocId, sort: SummarySort, layout: SummaryLayout) -> Result<Arc<Vec<u8>>, EditError> {
+    /// the other layouts show the pages too, with each comment tied to its place on the page by
+    /// a connector line or by its number. See [`SummarizeOptions`].
+    pub fn summarize_comments(&self, id: DocId, opts: &SummarizeOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         // The summary copies the comments' text out into a new document.
         doc.check_copying()?;
         let title = format!("Summary of Comments on {}", doc.name);
-        let connect = match layout {
+        let paper = opts.paper.unwrap_or_else(|| self.summary_paper(id).1);
+        let layout = match opts.layout {
             SummaryLayout::CommentsOnly => {
-                let text = comment_summary(&doc.name, &doc.info.annotations, sort);
-                return self.create_report(&title, &text);
+                let text = comment_summary(&doc.name, &doc.info.annotations, opts.sort);
+                return self.create_report_on(&title, &text, paper);
             }
-            SummaryLayout::DocumentAndCommentsWithLines => pdfcraft_print::Connect::Lines,
-            SummaryLayout::DocumentAndComments => pdfcraft_print::Connect::Numbers,
+            SummaryLayout::DocumentAndCommentsWithLines => pdfcraft_print::PageLayout::LinesOnSinglePages,
+            SummaryLayout::DocumentAndCommentsWithNumbers => pdfcraft_print::PageLayout::NumbersOnSeparatePages,
         };
         let mut cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
@@ -369,13 +370,20 @@ impl Session {
         if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
             cos = displayed;
         }
-        let comments = summary_comments(&doc.info.annotations, sort);
+        let comments = summary_comments(&doc.info.annotations, opts.sort);
+        let print_opts = pdfcraft_print::SummaryOptions { title: &title, layout, paper, pages_without_comments: opts.pages_without_comments };
         // The pages are drawn from the document's own content: a panic in that code must not take
         // the app down.
-        let summary = guard(|| pdfcraft_print::summary_with_pages(&cos, &title, &comments, connect))
+        let summary = guard(|| pdfcraft_print::summary_with_pages(&cos, &comments, &print_opts))
             .map_err(|_| EditError::Write("the comment summary could not be made".into()))?
             .map_err(|e| EditError::Write(e.to_string()))?;
         self.write_new(&summary)
+    }
+
+    /// The paper a comment summary of document `id` is made on when none is chosen: its name and
+    /// size ([`summary_paper`]).
+    pub fn summary_paper(&self, id: DocId) -> (&'static str, (f64, f64)) {
+        summary_paper(self.get(id).and_then(|d| d.info.pages.first()).map(|p| (f64::from(p.width), f64::from(p.height))))
     }
 
     pub fn close(&mut self, id: DocId) {

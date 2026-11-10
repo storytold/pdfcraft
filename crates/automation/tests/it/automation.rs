@@ -7719,17 +7719,22 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let found = ok(&mut a, "text_find", json!({ "doc": text, "query": "Sticky" }));
     assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "sort": "colour" })), Err(ToolError::InvalidArgs(_))));
-    // Each page with comments beside them (#6791): one landscape sheet for page 1, its comments
-    // listed beside it.
-    for layout in ["document_and_comments_with_lines", "document_and_comments"] {
-        ok(&mut a, "comments_summarize", json!({ "doc": doc, "layout": layout, "out": "pages.pdf" }));
+    // The pages with their comments (#6791): page 1 beside its comments on one landscape sheet,
+    // or on a sheet of its own followed by its comments; here without the pages that have none.
+    for (layout, sheets) in [("document_and_comments_with_lines", 1), ("document_and_comments_with_numbers", 2)] {
+        ok(&mut a, "comments_summarize", json!({ "doc": doc, "layout": layout, "pages_without_comments": false, "paper": "a4", "out": "pages.pdf" }));
         let pages = ok(&mut a, "doc_open", json!({ "path": "pages.pdf" }))["doc"].as_u64().unwrap();
         let info = ok(&mut a, "doc_info", json!({ "doc": pages }));
-        assert_eq!(info["pages"].as_array().unwrap().len(), 1, "{layout}: {info}");
-        assert_eq!((info["pages"][0]["width"].as_f64(), info["pages"][0]["height"].as_f64()), (Some(792.0), Some(612.0)), "{layout}");
+        assert_eq!(info["pages"].as_array().unwrap().len(), sheets, "{layout}: {info}");
+        let (w, h) = (info["pages"][0]["width"].as_f64().unwrap(), info["pages"][0]["height"].as_f64().unwrap());
+        assert!((w.min(h) - 595.28).abs() < 0.01 && (w.max(h) - 841.89).abs() < 0.01, "{layout}: A4, {w} × {h}");
         let text = page_text(&mut a, pages).join("\n");
         assert!(text.contains("Page 1") && text.contains("Sticky Note  Ada") && text.contains("Sticky"), "{layout}: {text}");
         ok(&mut a, "doc_close", json!({ "doc": pages }));
+    }
+    match a.call("comments_summarize", &json!({ "doc": doc, "paper": "napkin" })) {
+        Err(ToolError::InvalidArgs(e)) => assert!(e.contains("A4") && e.contains("document"), "says what is allowed: {e}"),
+        other => panic!("{other:?}"),
     }
     match a.call("comments_summarize", &json!({ "doc": doc, "layout": "side_by_side" })) {
         Err(ToolError::InvalidArgs(e)) => assert!(e.contains("document_and_comments_with_lines"), "says what is allowed: {e}"),

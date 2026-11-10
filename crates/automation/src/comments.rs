@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use pdfcraft_engine::{
-    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummaryLayout, SummarySort,
+    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, SUMMARY_PAPERS, Shape, StampGroup, StampKind, Style,
+    SummarizeOptions, SummaryLayout, SummarySort,
 };
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -753,7 +754,19 @@ impl Automation {
             })?,
             None => SummaryLayout::CommentsOnly,
         };
-        let bytes = self.session.summarize_comments(id, sort, layout).map_err(failed)?;
+        // A paper by name, or the one the document's first page is printed on.
+        let paper = match a.opt_str("paper")? {
+            None => None,
+            Some(s) if s.eq_ignore_ascii_case("document") => None,
+            Some(s) => {
+                let name = SUMMARY_PAPERS.iter().find(|p| p.eq_ignore_ascii_case(s)).ok_or_else(|| {
+                    ToolError::InvalidArgs(format!("unknown paper {s:?}; use \"document\" or one of {}", SUMMARY_PAPERS.join(", ")))
+                })?;
+                pdfcraft_engine::print::PAPERS.iter().find(|(p, _)| p == name).map(|(_, size)| *size)
+            }
+        };
+        let opts = SummarizeOptions { sort, layout, paper, pages_without_comments: a.opt_bool("pages_without_comments")?.unwrap_or(true) };
+        let bytes = self.session.summarize_comments(id, &opts).map_err(failed)?;
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 

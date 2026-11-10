@@ -1303,6 +1303,19 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
         widgets::radio_value(ui, &mut app.summary_layout, layout, tl!(layout.name()));
     }
     ui.add_space(6.0);
+    // "Match the document" names the paper it is (A4 for an A4 document).
+    let matched = app.active_ids().map_or("US Letter", |(_, id)| app.session.summary_paper(id).0);
+    let match_label = crate::i18n::fmt(tl!("Match the document ({name})"), &[("name", tl!(matched))]);
+    let paper_label = app.summary_paper.map_or_else(|| match_label.clone(), |p| tl!(p).to_string());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Paper size:"));
+        craft_ui::ComboBox::from_id_salt("summary-paper").selected_text(paper_label).show_ui(ui, |ui| {
+            ui.selectable_value(&mut app.summary_paper, None, match_label.as_str());
+            for p in pdfcraft_engine::SUMMARY_PAPERS {
+                ui.selectable_value(&mut app.summary_paper, Some(p), tl!(p));
+            }
+        });
+    });
     ui.horizontal(|ui| {
         ui.label(tl!("Sort comments by:"));
         craft_ui::ComboBox::from_id_salt("summary-sort").selected_text(tl!(app.summary_sort.name())).show_ui(ui, |ui| {
@@ -1310,6 +1323,10 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
                 ui.selectable_value(&mut app.summary_sort, s, tl!(s.name()));
             }
         });
+    });
+    // Comments only lists comments, not pages.
+    ui.add_enabled_ui(app.summary_layout.shows_pages(), |ui| {
+        ui.add(widgets::checkbox(&mut app.summary_pages_without_comments, tl!("Pages containing no comments")));
     });
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

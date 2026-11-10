@@ -94,40 +94,73 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     }
 }
 
-/// Layout of Summarize Comments (Acrobat's Summarize Options).
+/// Layout of Summarize Comments (Acrobat's Summarize Options), in the order the dialog lists
+/// them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SummaryLayout {
+    /// Each page beside its comments, with a connector line from each comment to its entry.
+    DocumentAndCommentsWithLines,
     /// A list of the comments, grouped by page.
     #[default]
     CommentsOnly,
-    /// Each page beside its comments, with a connector line from each comment to its entry.
-    DocumentAndCommentsWithLines,
-    /// Each page beside its comments, with each comment's number marked on the page.
-    DocumentAndComments,
+    /// Each page on a sheet of its own with its comments' numbers on it, then its comments.
+    DocumentAndCommentsWithNumbers,
 }
 
 impl SummaryLayout {
     pub const ALL: [SummaryLayout; 3] =
-        [SummaryLayout::CommentsOnly, SummaryLayout::DocumentAndCommentsWithLines, SummaryLayout::DocumentAndComments];
+        [SummaryLayout::DocumentAndCommentsWithLines, SummaryLayout::CommentsOnly, SummaryLayout::DocumentAndCommentsWithNumbers];
     /// The name Summarize Options shows.
     pub fn name(self) -> &'static str {
         match self {
-            SummaryLayout::CommentsOnly => "Comments only",
             SummaryLayout::DocumentAndCommentsWithLines => "Document and comments with connector lines on single pages",
-            SummaryLayout::DocumentAndComments => "Document and comments on single pages",
+            SummaryLayout::CommentsOnly => "Comments only",
+            SummaryLayout::DocumentAndCommentsWithNumbers => "Document and comments with sequence numbers on separate pages",
         }
     }
-    /// The name `comments_summarize` takes.
+    /// The name `comments_summarize` and the settings file use.
     pub fn key(self) -> &'static str {
         match self {
-            SummaryLayout::CommentsOnly => "comments_only",
             SummaryLayout::DocumentAndCommentsWithLines => "document_and_comments_with_lines",
-            SummaryLayout::DocumentAndComments => "document_and_comments",
+            SummaryLayout::CommentsOnly => "comments_only",
+            SummaryLayout::DocumentAndCommentsWithNumbers => "document_and_comments_with_numbers",
         }
     }
     pub fn parse(s: &str) -> Option<SummaryLayout> {
         Self::ALL.into_iter().find(|k| k.key().eq_ignore_ascii_case(s))
     }
+    /// The layout shows the pages, so pages without comments can be left in or out.
+    pub fn shows_pages(self) -> bool {
+        self != SummaryLayout::CommentsOnly
+    }
+}
+
+/// The papers Summarize Options offers, by their names in `pdfcraft_print::PAPERS`.
+pub const SUMMARY_PAPERS: [&str; 6] = ["US Letter", "US Legal", "Tabloid", "A3", "A4", "A5"];
+
+/// What Summarize Comments makes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeOptions {
+    pub sort: SummarySort,
+    pub layout: SummaryLayout,
+    /// The paper (width, height in points); `None` takes the paper the document's first page is
+    /// printed on ([`summary_paper`]).
+    pub paper: Option<(f64, f64)>,
+    /// Pages without comments are shown too (layouts that show the pages).
+    pub pages_without_comments: bool,
+}
+
+impl Default for SummarizeOptions {
+    fn default() -> Self {
+        Self { sort: SummarySort::Page, layout: SummaryLayout::CommentsOnly, paper: None, pages_without_comments: true }
+    }
+}
+
+/// The paper a summary of a document whose first page is `first` (display size, points) is made
+/// on when none is chosen: the standard paper that page is (A4 for an A4 page, either way round),
+/// or US Letter for a page of no standard size.
+pub fn summary_paper(first: Option<(f64, f64)>) -> (&'static str, (f64, f64)) {
+    first.and_then(pdfcraft_print::matching_paper).and_then(|i| pdfcraft_print::PAPERS.get(i).copied()).unwrap_or(("US Letter", (612.0, 792.0)))
 }
 
 /// One comment of a summary: its number on its page, and its replies (each with its depth,
@@ -234,7 +267,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     out
 }
 
-/// The comments of a summary that shows each page beside them, for `pdfcraft_print::summary_with_pages`:
+/// The comments of a summary that shows the pages, for `pdfcraft_print::summary_with_pages`:
 /// grouped by page, in `sort` order within each page.
 pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> Vec<pdfcraft_print::SummaryComment> {
     let mut items = summary_items(all, sort);
