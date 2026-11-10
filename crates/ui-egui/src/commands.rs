@@ -114,7 +114,7 @@ impl PdfCraftApp {
     /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, id: &str) -> bool {
-        match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
+        let done = match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
                 // A command stopped part way through closing or replacing a tab must not leave
@@ -123,7 +123,9 @@ impl PdfCraftApp {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
-        }
+        };
+        crate::dialogs::discard_inactive_password_drafts(self);
+        done
     }
 
     /// Why the command can't run right now, for the user.
@@ -142,6 +144,7 @@ impl PdfCraftApp {
                     pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
                     pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
                     pdfcraft_engine::MarkKind::Background => tl!("background"),
+                    pdfcraft_engine::MarkKind::PrinterMarks => tl!("printer marks"),
                 };
                 crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
             }
@@ -224,6 +227,7 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),
             "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
@@ -277,6 +281,16 @@ impl PdfCraftApp {
             }
             "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
             "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
+            // Find and replace changes page text, so it runs in Edit text mode (as Acrobat's
+            // does): the command turns the mode on, and the find bar shows its Replace row there.
+            "edit.replace" => {
+                if let Some(i) = active {
+                    self.quick_tool = crate::QuickTool::EditText;
+                    self.left = crate::LeftPanel::Tool("edit");
+                    self.reveal_tools();
+                    self.views[i].open_replace();
+                }
+            }
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -338,6 +352,7 @@ impl PdfCraftApp {
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.split" => self.toggle_split(),
+            crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -527,11 +542,13 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
-            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
                     "edit.header_footer.remove" => K::HeaderFooter,
                     "edit.watermark.remove" => K::Watermark,
+                    "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });
@@ -832,6 +849,11 @@ impl PdfCraftApp {
             let Some(s) = spec.shortcut else { continue };
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
+                continue;
+            }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
                 continue;
             }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
