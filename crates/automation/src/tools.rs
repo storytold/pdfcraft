@@ -183,7 +183,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
             .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
-        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
+        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
@@ -212,7 +212,7 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
-        t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
+        t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 },
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
@@ -276,6 +276,17 @@ pub fn tools() -> Vec<ToolDef> {
                 "start_page": { "type": "integer", "minimum": 1, "description": "Page to start searching from (default 1)." },
                 "skip": { "type": "integer", "minimum": 0, "description": "Matches to pass over on start_page before returning any (default 0)." },
                 "stop_at_limit": { "type": "boolean", "description": "Stop at the limit-th match without looking for another (default false). The answer then has stopped_at_limit; when true, complete is false and next is only where to resume, so following it may find nothing more." } }), &["doc", "query"])),
+        t("text_replace", "Replace text", "Find and replace (Edit text ▸ Replace): each match of find, with the find bar's rules (whitespace-normalised; case-insensitive unless case_sensitive; whole_words: no letter or digit may adjoin a match), is rewritten inside its own paragraph, which keeps its fonts, sizes and colours and rewraps; the replacement takes the style of the run it lands in. A longer replacement is measured in the paragraph's fonts and is not shrunk or hyphenated: one row grows right to the page's margin, then wraps; several rows keep their width. New rows go below and nothing else moves, so they can overlap what follows, unreported; a word wider than the width overruns it. replace may be empty (deletes the match). all (default true) replaces every match on pages (default all) as one undo step; false only the first match the find bar shows (page text order; when no paragraph holds it nothing is replaced and it is reported as not_editable). Matches are left alone and counted in skipped_by when they span two paragraphs (spans_paragraphs), are invisible text over a scan (scanned_text), would need another font because the paragraph's own can't draw the new text (missing_glyphs), the paragraph can't be rewritten (refused, with refusals), or the page text holds them outside any editable paragraph, such as form fields, comments or text inside a form XObject (not_editable, counted when all). A page whose text can't be read is counted once as refused and named in refusals. Returns replaced, skipped, skipped_by, the 1-based pages changed and whether the document changed.")
+            .cmd("edit.replace")
+            .with(schema(
+                json!({
+                    "doc": doc(), "find": { "type": "string", "minLength": 1 }, "replace": { "type": "string" },
+                    "pages": pages("to search (default: all)"),
+                    "case_sensitive": { "type": "boolean" }, "whole_words": { "type": "boolean" },
+                    "all": { "type": "boolean", "description": "Every match (default) or only the first." },
+                }),
+                &["doc", "find", "replace"],
+            )),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(
@@ -764,6 +775,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "auto_rotate": { "type": "boolean" },
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
                 "binding": { "type": "string", "enum": ["left", "right"] },
+                "creep": { "type": "number", "minimum": 0, "maximum": 10, "description": "Booklet creep compensation: points each sheet's pages move toward the fold, times the sheet's place from the outside (default 0)." },
                 "overlap": { "type": "number", "minimum": 0 },
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
@@ -773,9 +785,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
                 "collate": { "type": "boolean" },
-                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer sends no setting, so the printer's own default applies." },
+                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer uses the printer's current default: Windows sends its duplex setting when supported, otherwise preserves the driver default, including manual two-sided preferences; CUPS leaves the setting unspecified." },
                 "grayscale": { "type": "boolean" },
-                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey." },
+                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey, so the printer isn't asked for grayscale (a driver without that setting still prints them)." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
                 "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
             }),
@@ -854,7 +866,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom). A relative url also has resolved_url, the address resolved against the document's base URI (catalog /URI /Base); a link active only in its /QuadPoints has active_areas, one rect per quadrilateral. With text_links: true, also the web and email addresses written as plain page text with no link over them, which the viewer opens on a click: page, rects (one per line), url, and blocked (why it won't open) when the link check refuses it. Only http, https and mailto addresses are found. At most 100 pages are read per call, from text_links_from (default 1); text_links_next_page then gives the page to continue from.")
             .ro()
             .with(schema(json!({ "doc": doc(), "text_links": { "type": "boolean" }, "text_links_from": { "type": "integer", "minimum": 1 } }), &["doc"])),
-        t("link_open", "Open a linked PDF", "Follow a local GoToR link in PdfCraft: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. Named destinations are reported but not applied. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
+        t("link_open", "Open a linked PDF", "Follow a local GoToR link in PdfCraft: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. A named destination is looked up in the target, as the app does; one the target doesn't define is reported with a warning. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
             .with(schema(
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "password": { "type": "string", "description": "Optional password for the linked PDF." }, "allow_absolute": { "type": "boolean", "description": "Explicitly allow an absolute local GoToR target (default false). Existing validation and --root confinement still apply." } }),
                 &["doc", "page", "index"],
@@ -1395,7 +1407,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit, attachment) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
             .cmd("tools.js_console")
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),

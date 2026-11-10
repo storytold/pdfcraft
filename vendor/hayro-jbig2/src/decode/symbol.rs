@@ -24,10 +24,14 @@ use crate::reader::Reader;
 
 const MAX_SYMBOLS: u32 = u16::MAX as u32;
 
-/// PdfCraft patch: the most symbol pixels one dictionary may decode (2^26). Symbols are
-/// decoded pixel by pixel, and up to 65535 of them of up to 65535 × 65535 each kept a fuzzed
-/// file decoding for minutes; real dictionaries hold about a million pixels.
-const MAX_DICTIONARY_PIXELS: u64 = 1 << 26;
+/// PdfCraft patch: the most symbol pixels one dictionary may decode, as many as the largest page
+/// bitmap holds (2^28, `bitmap::MAX_PIXELS`). Symbols are decoded pixel by pixel, and up to 65535
+/// of them of up to 65535 × 65535 each kept a fuzzed file decoding for minutes; each symbol now
+/// pays for its pixels out of the stream's decoding work (`bitmap::MAX_WORK`), which bounds the
+/// time, and holds them in the retained bitmaps (`room`), which bounds the memory. The bound was
+/// 2^26, a quarter of this, which a real scan passes: the soft mask of a 14,642 × 8,879 drawing
+/// with one dictionary of 7,559 symbols (#6722) needed more, and was refused.
+const MAX_DICTIONARY_PIXELS: u64 = crate::bitmap::MAX_PIXELS;
 
 /// PdfCraft patch: decoding steps that decode nothing, allowed beyond what a valid dictionary can
 /// need. A height class without a symbol and an export run of length 0 don't move their loops
@@ -135,7 +139,7 @@ pub(crate) fn decode(
                 .pixels
                 .saturating_add(u64::from(symbol_width) * u64::from(ctx.height_class_height));
             if ctx.pixels > MAX_DICTIONARY_PIXELS {
-                bail!(OverflowError::BitmapDimension);
+                bail!(OverflowError::BitmapLimit);
             }
             // PdfCraft patch: see `bitmap::INTEGER_WORK`. Its width, and a stream can hold thousands
             // of dictionaries of symbols of no pixels. An aggregated one reads its count, a symbol
