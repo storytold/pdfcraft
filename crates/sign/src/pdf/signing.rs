@@ -125,19 +125,99 @@ const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 /// dictionaries and document timestamps are found in one pass over the file (by `/ByteRange`,
 /// or as timestamps), not through the field tree.
 pub fn has_signatures(doc: &Document) -> bool {
-    let signed = |d: &Dict| {
-        let contents = d.get(b"Contents").map(|c| doc.resolve(c));
-        // Hex strings decode to the DER when parsed; a literal string carries hex text.
-        let der = contents
-            .as_deref()
-            .and_then(Object::as_string)
-            .and_then(|s| if s.hex { Some(s.bytes.clone()) } else { super::validate::unhex(&s.bytes) });
-        der.is_some_and(|der| der.iter().any(|b| *b != 0))
-    };
+    let signed = |d: &Dict| holds_signature(doc, d);
     sig_fields(doc).iter().any(|f| f.dict.get(b"V").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_dict).is_some_and(signed))
         || doc
             .scan_objects()
             .any(|(_, o)| o.as_dict().is_some_and(|d| (d.contains(b"ByteRange") || super::validate::is_doc_timestamp(d)) && signed(d)))
+}
+
+/// Whether signature dictionary `d` is signed: its `/Contents` holds a nonzero byte.
+fn holds_signature(doc: &Document, d: &Dict) -> bool {
+    let contents = d.get(b"Contents").map(|c| doc.resolve(c));
+    // Hex strings decode to the DER when parsed; a literal string carries hex text.
+    let der =
+        contents.as_deref().and_then(Object::as_string).and_then(|s| if s.hex { Some(s.bytes.clone()) } else { super::validate::unhex(&s.bytes) });
+    der.is_some_and(|der| der.iter().any(|b| *b != 0))
+}
+
+/// Whether `/P` of `d`, a signature field lock or a reference's transform parameters, is "no
+/// changes to the document are permitted" (1, ISO 32000-2 §12.7.5.5). It is read through a
+/// reference, and a level below 1 counts as 1, as a DocMDP level does when it is validated. No
+/// `/P`, or one that is not a number, sets no level.
+fn permits_no_changes(doc: &Document, d: &Dict) -> bool {
+    d.get(b"P").and_then(|p| doc.resolve(p).as_f64()).is_some_and(|p| p < 2.0)
+}
+
+/// Whether signature value `v` carries a FieldMDP `/Reference` whose `/TransformParams` allow no
+/// changes: what other signers write for "lock the document after signing", next to the field's
+/// `/Lock`. The method and the parameters are followed through references.
+fn reference_permits_no_changes(doc: &Document, v: &Dict) -> bool {
+    let Some(references) = v.get(b"Reference").map(|r| doc.resolve(r)) else { return false };
+    references.as_array().into_iter().flatten().any(|r| {
+        let r = doc.resolve(r);
+        let Some(r) = r.as_dict() else { return false };
+        let method = r.get(b"TransformMethod").map(|m| doc.resolve(m));
+        let params = r.get(b"TransformParams").map(|p| doc.resolve(p));
+        method.as_deref().and_then(Object::as_name) == Some(b"FieldMDP".as_slice())
+            && params.as_deref().and_then(Object::as_dict).is_some_and(|p| permits_no_changes(doc, p))
+    })
+}
+
+/// Refuse to sign a document that an earlier signature allows no further change to: any new
+/// signature would invalidate that one, and nothing warned the signer (#6865). Three things say
+/// so, each only once its signature is signed (a lock on an empty field is not in effect):
+/// - the certification, when its DocMDP level is 1;
+/// - a signature field's `/Lock` with `/P 1`;
+/// - a FieldMDP `/Reference` in a signature whose parameters carry `/P 1`.
+///
+/// Document timestamps and validation data are added by other entry points and stay allowed, as
+/// level 1 permits them. Where the walk did not read the whole form, a signature it did not list
+/// may hold the lock: those are found as [`has_signatures`] finds them, in one pass over the file.
+fn check_earlier_locks(doc: &Document) -> Result<(), SignError> {
+    let certified = |who: &str| {
+        Err(SignError::Pdf(format!(
+            "{who} certified the document with no changes allowed; signing it would invalidate the certification (a document timestamp can still be added)"
+        )))
+    };
+    let locked = |who: &str| {
+        Err(SignError::Pdf(format!(
+            "{who} locked the document against further changes; signing it again would invalidate that signature (a document timestamp can still be added)"
+        )))
+    };
+    let field_locks =
+        |field: &Dict| field.get(b"Lock").map(|l| doc.resolve(l)).as_deref().and_then(Object::as_dict).is_some_and(|l| permits_no_changes(doc, l));
+    let (fields, whole) = walk_sig_fields(doc);
+    for f in &fields {
+        let Some(v) = f.signature(doc).filter(|v| holds_signature(doc, v)) else { continue };
+        let who = format!("the signature in \"{}\"", f.name);
+        if super::validate::certifies_no_changes(doc, &v) {
+            return certified(&who);
+        }
+        if field_locks(&f.dict) || reference_permits_no_changes(doc, &v) {
+            return locked(&who);
+        }
+    }
+    if whole {
+        return Ok(());
+    }
+    for (_, o) in doc.scan_objects() {
+        let Some(d) = o.as_dict() else { continue };
+        if d.contains(b"ByteRange") && holds_signature(doc, d) {
+            if super::validate::certifies_no_changes(doc, d) {
+                return certified("an earlier signature");
+            }
+            if reference_permits_no_changes(doc, d) {
+                return locked("an earlier signature");
+            }
+        }
+        // A signed field the walk passed over, by its own lock.
+        let value = d.get(b"V").map(|v| doc.resolve(v));
+        if field_locks(d) && value.as_deref().and_then(Object::as_dict).is_some_and(|v| holds_signature(doc, v)) {
+            return locked("an earlier signature");
+        }
+    }
+    Ok(())
 }
 
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
@@ -149,6 +229,10 @@ pub fn has_signatures(doc: &Document) -> bool {
 /// stored appearance draws no text (an empty placeholder such as `/Tx BMC EMC`, or a look left
 /// from an earlier value) shows that instead of its value. A caller that wants the values kept
 /// draws the fields first, as `Session::sign` in the engine does.
+///
+/// Signing is refused when an earlier signature allows no further change to the document (a
+/// no-changes certification, or a signature that locked the document with `/P 1`): the new
+/// signature would invalidate it.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     sign_inner(doc, id, opts, None)
 }
@@ -184,6 +268,9 @@ fn sign_inner(
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
     let earlier_signatures = has_signatures(&doc);
+    if earlier_signatures {
+        check_earlier_locks(&doc)?;
+    }
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
