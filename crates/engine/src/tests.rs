@@ -5236,7 +5236,9 @@ fn comment_summary_shows_the_pages_with_their_comments() {
     assert!(texts[1].contains("Comments on page 2") && wanted.iter().all(|w| texts[1].contains(w)), "{}", texts[1]);
     assert!(red(&s, n, 0, 0, 612) > 1000, "the page shows the comment, at nearly twice its size");
     let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithNumbers, true);
-    assert_eq!(page_texts(&s, n).len(), 4, "pages 1 and 3 without a comment sheet");
+    let texts = page_texts(&s, n);
+    assert_eq!(texts.len(), 6, "each page beside its comments or a sheet saying it has none: {texts:?}");
+    assert!(texts[1].contains("No comments on this page.") && texts[3].contains("Comments on page 2"), "{texts:?}");
 
     // A chosen paper.
     let a4 = PAPERS_A4;
@@ -5272,7 +5274,8 @@ fn the_summary_paper_matches_the_document() {
     assert!(SUMMARY_PAPERS.iter().all(|name| pdfcraft_print::PAPERS.iter().any(|(p, _)| p == name)), "every offered paper is one printing knows");
 }
 
-/// The page layouts list each page's comments together, in the chosen order within the page.
+/// The page layouts list each page's comments together: the pages in the order of their first
+/// comment, each page's comments in the chosen order, numbered in that order.
 #[test]
 fn page_layout_summaries_sort_within_each_page() {
     let (mut s, id) = session_with(3);
@@ -5282,14 +5285,78 @@ fn page_layout_summaries_sort_within_each_page() {
         s.apply(id, Edit::AddAnnotation(a)).unwrap();
     }
     let all = &s.get(id).unwrap().info.annotations;
-    let order = |sort| summary_comments(all, sort).iter().map(|c| (c.page, c.number, c.lines[0].1.clone())).collect::<Vec<_>>();
+    let order = |sort| summary_comments(all, sort, &SummaryDates::new()).iter().map(|c| (c.page, c.number, c.lines[0].1.clone())).collect::<Vec<_>>();
+    // By author: Ann's page first, with Zed's comment after hers; then Mia's.
     let by_author = order(SummarySort::Author);
-    assert_eq!(by_author.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 2), (2, 1)], "{by_author:?}");
-    assert!(by_author[1].2.contains("Ann") && by_author[2].2.contains("Zed"), "{by_author:?}");
+    assert_eq!(by_author.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(2, 1), (2, 2), (0, 1)], "{by_author:?}");
+    assert!(by_author[0].2.contains("Ann") && by_author[1].2.contains("Zed"), "{by_author:?}");
     // By page: top to bottom on each page, numbered so.
     let by_page = order(SummarySort::Page);
     assert_eq!(by_page.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 1), (2, 2)], "{by_page:?}");
     assert!(by_page[1].2.contains("Zed"), "{by_page:?}");
+}
+
+/// PDF dates are read to the second and in their own time zone; the fields after the year may be
+/// left out; what isn't a date reads as none rather than as some other moment.
+#[test]
+fn pdf_dates_are_read_in_full() {
+    let at = |s: &str| crate::comments::pdf_date(s).map(|d| d.to_rfc3339());
+    assert_eq!(at("D:20260301050000+10'00'").as_deref(), Some("2026-02-28T19:00:00+00:00"));
+    assert_eq!(at("D:20260228235930-05'30'").as_deref(), Some("2026-03-01T05:29:30+00:00"));
+    assert_eq!(at("D:20260228235930Z").as_deref(), Some("2026-02-28T23:59:30+00:00"));
+    assert_eq!(at("D:2026").as_deref(), Some("2026-01-01T00:00:00+00:00"));
+    assert_eq!(at("20260704").as_deref(), Some("2026-07-04T00:00:00+00:00"));
+    for bad in ["", "D:", "D:26", "yesterday", "D:20261340", "D:20260230", "D:2026010125"] {
+        assert_eq!(at(bad), None, "{bad:?}");
+    }
+}
+
+/// By date, the page commented on first comes first, each page's comments oldest first, by their
+/// full dates: to the second, and in their own time zones. Undated comments come last.
+#[test]
+fn summaries_by_date_put_the_page_commented_on_first_first() {
+    // Page 1's comment, 05:00 on 1 March at UTC+10, is the oldest: 19:00 on 28 February in UTC.
+    // Page 2's are in the same minute, the second listed 15 seconds older. Page 3's has no date.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [9 0 R] >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (A) /M (D:20260301050000+10'00') >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (B) /M (D:20260228235945Z) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (C) /M (D:20260228235930Z) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (D) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("dates.pdf", None, Arc::new(pdf.to_vec()), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let dates = summary_dates(&doc.editor.as_ref().unwrap().cos);
+    let all = &doc.info.annotations;
+    let order: Vec<(usize, usize, String)> = summary_comments(all, SummarySort::Date, &dates)
+        .iter()
+        .map(|c| (c.page, c.number, c.lines[0].1.split("  ").nth(1).unwrap_or("").to_string()))
+        .collect();
+    let want: Vec<(usize, usize, String)> = [(0, 1, "A"), (1, 1, "C"), (1, 2, "B"), (2, 1, "D")].map(|(p, n, a)| (p, n, a.to_string())).to_vec();
+    assert_eq!(order, want);
+    // Comments only sorts by the same dates.
+    let text = comment_summary_with("dates.pdf", all, SummarySort::Date, &dates);
+    let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();
+    assert!(at("A") < at("C") && at("C") < at("B") && at("B") < at("D"), "{text}");
+    // The summary made through the session shows the pages in that order.
+    let opts = SummarizeOptions { sort: SummarySort::Date, layout: SummaryLayout::DocumentAndCommentsWithLines, ..Default::default() };
+    let bytes = s.summarize_comments(id, &opts).unwrap();
+    let summary = s.open_new("summary.pdf", bytes).unwrap();
+    let texts = page_texts(&s, summary);
+    assert!(texts[0].contains("Page 1") && texts[1].contains("Page 2") && texts[2].contains("Page 3"), "{texts:?}");
+    // Its comments are comments again, on the sheets showing their pages, listed and found there.
+    let listed: Vec<(usize, Option<String>)> = s.get(summary).unwrap().info.annotations.iter().map(|a| (a.page, a.author.clone())).collect();
+    let mut want: Vec<(usize, Option<String>)> = [(0, "A"), (1, "B"), (1, "C"), (2, "D")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
+    want.sort();
+    let mut listed = listed;
+    listed.sort();
+    assert_eq!(listed, want);
 }
 
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every

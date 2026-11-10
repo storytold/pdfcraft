@@ -4,9 +4,15 @@
 //!   sheet, its comments in boxes on the right, and a connector line from each comment to its box.
 //!   Comments that don't fit beside the page continue on another sheet showing the page again.
 //! - [`PageLayout::NumbersOnSeparatePages`]: the page on a sheet of its own with each comment's
-//!   number on it, then its comments, numbered, on the sheets after it.
+//!   number on it, then its comments, numbered, on the sheet after it. Page and comment sheets
+//!   take turns, so a two-page view shows each page beside its comments: a page without comments
+//!   is followed by a sheet saying so, and when its comments need more than one sheet the page
+//!   is shown again beside each further one. The summary opens in a two-page view.
+//!
+//! On each page's first sheet its comments (and their replies) are annotations again, placed
+//! where the page shows them, so the summary's comment list lists them and goes to them.
 
-use super::imposition::{page_form, prints};
+use super::imposition::{appearance, appearance_matrix, form_xobject, page_form, page_form_where, prints};
 use super::settings::Content;
 use super::{Dict, Document, Matrix, ObjRef, Object, PrintError, Stream};
 use pdfcraft_cos::PdfString;
@@ -21,7 +27,8 @@ pub struct SummaryComment {
     /// Its number on the page, drawn on the page by [`PageLayout::NumbersOnSeparatePages`].
     pub number: usize,
     /// Its position in the page's `/Annots`, when known: a comment that doesn't print (hidden,
-    /// or without the Print flag) isn't drawn on the page, so nothing points at it.
+    /// or without the Print flag) isn't drawn on the page, so nothing points at it. A comment
+    /// with one is put on the page's first sheet as an annotation, with its replies.
     pub index: Option<usize>,
     /// Where it is on its page, in user space (`[x0 y0 x1 y1]`).
     pub rect: [f64; 4],
@@ -74,13 +81,16 @@ const MAX_SHEETS: usize = 100_000;
 const GREY: [f64; 3] = [0.45, 0.45, 0.45];
 
 /// A summary of `comments` with their pages, as a new unencrypted document whose pages are the
-/// sheets. The pages come in document order; each page's comments in the order given. Comments
-/// on pages `src` doesn't have are left out. Without comments the summary is one sheet saying the
-/// document has none, whether or not pages without comments are asked for.
+/// sheets. The pages come in the order of their first comment, each page's comments in the order
+/// given; pages without comments, when asked for, come in document order: among the others when
+/// those are in document order too, else after them. Comments on pages `src` doesn't have are
+/// left out. Without comments the summary is one sheet saying the document has none, whether or
+/// not pages without comments are asked for.
 ///
 /// The pages are drawn as they print ([`Content::DocumentAndMarkups`]): with the comments that
 /// have the Print flag, without pop-ups and links. A comment that doesn't print still gets its
-/// box, without a connector or number pointing at a place where nothing is drawn.
+/// box, without a connector or number pointing at a place where nothing is drawn. On a page's
+/// first sheet the listed comments are annotations rather than part of the drawing.
 pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &SummaryOptions<'_>) -> Result<Document, PrintError> {
     let pages = pdfcraft_model::pages(src);
     let mut doc = src.clone();
@@ -95,26 +105,33 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
     let title = drawn(opts.title).replace(['\n', '\r'], " ");
     // Each comment's text as it is laid out and drawn.
     let texts: Vec<Vec<(usize, String)>> = comments.iter().map(|c| c.lines.iter().map(|(level, t)| (*level, drawn(t))).collect()).collect();
-    let mut all_text: Vec<&str> = vec![&title, NO_COMMENTS, "Page", "(continued)", "Comments on page", ELLIPSIS];
+    let mut all_text: Vec<&str> = vec![&title, NO_COMMENTS, NO_PAGE_COMMENTS, "Page", "(continued)", "Comments on page", ELLIPSIS];
     all_text.extend(texts.iter().flatten().map(|(_, t)| t.as_str()));
     let font = SummaryFont::choose(&mut doc, &all_text)?;
 
-    // Each page's comments, in the order given.
-    let mut by_page: std::collections::BTreeMap<usize, Vec<Listed<'_>>> = std::collections::BTreeMap::new();
+    // Each page's comments, in the order given, and the pages in the order of their first.
+    let mut by_page: std::collections::HashMap<usize, Vec<Listed<'_>>> = std::collections::HashMap::new();
+    let mut order: Vec<usize> = Vec::new();
     for (c, lines) in comments.iter().zip(&texts).filter(|(c, _)| c.page < pages.len()) {
+        if !by_page.contains_key(&c.page) {
+            order.push(c.page);
+        }
         by_page.entry(c.page).or_default().push((c, lines));
     }
     // A document without comments says so, rather than showing its pages beside nothing.
-    if opts.pages_without_comments && !by_page.is_empty() {
-        for page in 0..pages.len() {
-            by_page.entry(page).or_default();
+    if opts.pages_without_comments && !order.is_empty() {
+        if order.is_sorted() {
+            order = (0..pages.len()).collect();
+        } else {
+            order.extend((0..pages.len()).filter(|p| !by_page.contains_key(p)));
         }
     }
 
     let mut out = Out { font, sheets: Vec::new(), title };
     let mut promoted = std::collections::HashMap::new();
-    for (page, list) in by_page {
-        let form = page_form(&mut doc, &pages, page, Content::DocumentAndMarkups, &mut promoted)?;
+    let mut shown: std::collections::HashMap<usize, ShownPage> = std::collections::HashMap::new();
+    for page in order {
+        let list = by_page.get(&page).map_or(&[][..], Vec::as_slice);
         let annots = pages.get(page).and_then(|p| p.dict.get(b"Annots")).and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
         let printed = |c: &SummaryComment| {
             c.index.is_none_or(|i| {
@@ -129,9 +146,14 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
                 anchor: printed(c).then_some((c.rect, c.number)),
             })
             .collect();
+        // The comments that become annotations on the page's first sheet, drawn there by
+        // themselves rather than as part of the page.
+        let copied = with_replies(&doc, &annots, list.iter().filter_map(|(c, _)| c.index));
+        let bare = page_form_where(&mut doc, &pages, page, Content::DocumentAndMarkups, &|i| !copied.contains(&i), &mut promoted)?;
+        shown.insert(page, ShownPage { bare, full: copied.is_empty().then_some(bare), annots, copied });
         match opts.layout {
-            PageLayout::LinesOnSinglePages => out.lines_on_single_pages(src, &pages, page, form, &items, paper)?,
-            PageLayout::NumbersOnSeparatePages => out.numbers_on_separate_pages(src, &pages, page, form, &items, paper)?,
+            PageLayout::LinesOnSinglePages => out.lines_on_single_pages(src, &pages, page, &items, paper)?,
+            PageLayout::NumbersOnSeparatePages => out.numbers_on_separate_pages(src, &pages, page, &items, paper)?,
         }
     }
     let Out { font, sheets, title } = out;
@@ -140,7 +162,7 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
     let mut fonts = Dict::new();
     fonts.set(b"F1".to_vec(), Object::Ref(font.font));
     let mut kids = Vec::new();
-    let mut add = |doc: &mut Document, size: (f64, f64), content: Vec<u8>, xobjects: Dict| {
+    let mut add = |doc: &mut Document, page: ObjRef, size: (f64, f64), content: Vec<u8>, xobjects: Dict, annots: Vec<Object>| {
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts.clone()));
         if !xobjects.is_empty() {
@@ -153,7 +175,11 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
         p.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, size.0, size.1].iter().map(|v| Object::Real(*v)).collect()));
         p.set(b"Resources".to_vec(), Object::Dict(res));
         p.set(b"Contents".to_vec(), Object::Ref(contents));
-        kids.push(Object::Ref(doc.add(Object::Dict(p))));
+        if !annots.is_empty() {
+            p.set(b"Annots".to_vec(), Object::Array(annots));
+        }
+        doc.set(page, Object::Dict(p));
+        kids.push(Object::Ref(page));
     };
     if sheets.is_empty() {
         let size = paper;
@@ -161,21 +187,56 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
         let fitted = fit(&font, &title, TITLE_FONT, size.0 - 2.0 * MARGIN);
         text(&mut c, &font, &[0.0; 3], TITLE_FONT, MARGIN, size.1 - MARGIN - TITLE_FONT, &fitted)?;
         text(&mut c, &font, &[0.0; 3], FONT + 1.5, MARGIN, size.1 - MARGIN - HEADER - LEADING * 2.0, NO_COMMENTS)?;
-        add(&mut doc, size, c, Dict::new());
+        let page = doc.add(Object::Null);
+        add(&mut doc, page, size, c, Dict::new(), Vec::new());
     }
+    let opens_in = match opts.layout {
+        PageLayout::LinesOnSinglePages => "OneColumn",
+        PageLayout::NumbersOnSeparatePages => "TwoPageLeft",
+    };
+    let opens_page_sheets = !sheets.is_empty();
     for sheet in sheets {
-        add(&mut doc, sheet.size, sheet.content, sheet.xobjects);
+        let page = doc.add(Object::Null);
+        let mut xobjects = Dict::new();
+        let mut annots = Vec::new();
+        if let Some(on) = sheet.page
+            && let Some(p) = shown.get_mut(&on.page)
+        {
+            // The page's first sheet carries its comments as annotations, so its drawing leaves
+            // them out; a further sheet showing the page again draws them.
+            let form = match (on.first, p.full) {
+                (true, _) => p.bare,
+                (false, Some(full)) => full,
+                (false, None) => {
+                    let full = page_form(&mut doc, &pages, on.page, Content::DocumentAndMarkups, &mut promoted)?;
+                    p.full = Some(full);
+                    full
+                }
+            };
+            xobjects.set(b"P0".to_vec(), Object::Ref(form));
+            if on.first {
+                annots = copy_annotations(&mut doc, &p.annots, &p.copied, &on.m, page, &mut promoted);
+            }
+        }
+        add(&mut doc, page, sheet.size, sheet.content, xobjects, annots);
     }
 
     let count = i64::try_from(kids.len()).map_err(|_| too_many())?;
     let mut tree = Dict::new();
     tree.set(b"Type".to_vec(), Object::name("Pages"));
     tree.set(b"Count".to_vec(), Object::Int(count));
+    let first_sheet = kids.first().cloned();
     tree.set(b"Kids".to_vec(), Object::Array(kids));
     doc.set(pages_root, Object::Dict(tree));
     let mut cat = Dict::new();
     cat.set(b"Type".to_vec(), Object::name("Catalog"));
     cat.set(b"Pages".to_vec(), Object::Ref(pages_root));
+    // The summary opens with each sheet whole in view; sequence numbers on separate pages in a
+    // two-page view, each page beside its comments.
+    if opens_page_sheets && let Some(first) = first_sheet {
+        cat.set(b"PageLayout".to_vec(), Object::name(opens_in));
+        cat.set(b"OpenAction".to_vec(), Object::Array(vec![first, Object::name("Fit")]));
+    }
     // A layer that is off in the document stays off on the pages shown (as `impose` keeps it).
     let layers = src.trailer().get(b"Root").and_then(|r| src.resolve(r).as_dict().and_then(|root| root.get(b"OCProperties").cloned()));
     if let Some(layers) = layers {
@@ -192,6 +253,27 @@ pub fn summary_with_pages(src: &Document, comments: &[SummaryComment], opts: &Su
 }
 
 const NO_COMMENTS: &str = "This document has no comments.";
+/// Beside a page without comments, in [`PageLayout::NumbersOnSeparatePages`].
+const NO_PAGE_COMMENTS: &str = "No comments on this page.";
+
+/// A page the summary shows: its drawing without the comments its first sheet carries as
+/// annotations (`bare`), its drawing with them (`full`, made when a further sheet shows the page
+/// again), its `/Annots`, and the positions in them of the comments carried.
+struct ShownPage {
+    bare: ObjRef,
+    full: Option<ObjRef>,
+    annots: Vec<Object>,
+    copied: std::collections::BTreeSet<usize>,
+}
+
+/// Where a sheet shows a page: which, whether it is the page's first sheet, and the matrix from
+/// the page's user space to the sheet.
+#[derive(Clone, Copy)]
+struct OnSheet {
+    page: usize,
+    first: bool,
+    m: Matrix,
+}
 
 /// The error for a summary that would pass [`MAX_SHEETS`].
 fn too_many() -> PrintError {
@@ -219,11 +301,11 @@ struct SummaryBox {
     anchor: Option<([f64; 4], usize)>,
 }
 
-/// One finished sheet.
+/// One finished sheet. A sheet showing a page draws it as `/P0`.
 struct Sheet {
     size: (f64, f64),
     content: Vec<u8>,
-    xobjects: Dict,
+    page: Option<OnSheet>,
 }
 
 /// The sheets made so far, and what they are set with.
@@ -349,7 +431,6 @@ impl Out {
         src: &Document,
         pages: &[pdfcraft_model::Page],
         page: usize,
-        form: ObjRef,
         items: &[Item<'_>],
         paper: (f64, f64),
     ) -> Result<(), PrintError> {
@@ -363,7 +444,7 @@ impl Out {
             let mut c = Vec::new();
             let label = if k == 0 { format!("Page {}", page + 1) } else { format!("Page {} (continued)", page + 1) };
             self.header(&mut c, size, &label)?;
-            let xobjects = draw_page(&mut c, form, &m, frame);
+            draw_page(&mut c, &m, frame);
             self.boxes(&mut c, &boxes, col_x, col_w)?;
             for bx in &boxes {
                 let Some((rect, _)) = bx.anchor else { continue };
@@ -388,33 +469,55 @@ impl Out {
                     circle(spot.0, spot.1, 1.8)
                 );
             }
-            self.push(Sheet { size, content: c, xobjects })?;
+            self.push(Sheet { size, content: c, page: Some(OnSheet { page, first: k == 0, m }) })?;
         }
         Ok(())
     }
 
     /// The page on a sheet of its own, turned to suit it, with each comment's number on it; then
-    /// its comments, numbered, on portrait sheets after it (none for a page without comments).
+    /// its comments, numbered, on a portrait sheet after it, or a sheet saying it has none. When
+    /// the comments need more sheets the page comes again before each, so page and comment
+    /// sheets keep taking turns.
     fn numbers_on_separate_pages(
         &mut self,
         src: &Document,
         pages: &[pdfcraft_model::Page],
         page: usize,
-        form: ObjRef,
         items: &[Item<'_>],
         paper: (f64, f64),
     ) -> Result<(), PrintError> {
         let shown = pages.get(page).map_or((612.0, 792.0), |p| p.display_size(src));
         let size = if shown.0 > shown.1 { (paper.1, paper.0) } else { paper };
-        let top = size.1 - MARGIN - HEADER;
-        let (m, frame) = place(src, pages, page, [MARGIN, MARGIN, size.0 - MARGIN, top]);
-        let mut c = Vec::new();
-        self.header(&mut c, size, &format!("Page {}", page + 1))?;
-        let xobjects = draw_page(&mut c, form, &m, frame);
+        let (m, frame) = place(src, pages, page, [MARGIN, MARGIN, size.0 - MARGIN, size.1 - MARGIN - HEADER]);
+        let width = paper.0 - 2.0 * MARGIN;
+        let top = paper.1 - MARGIN - HEADER;
+        let comment_sheets = if items.is_empty() { vec![Vec::new()] } else { self.flow(items, width, top)? };
+        for (k, boxes) in comment_sheets.into_iter().enumerate() {
+            let more = if k == 0 { "" } else { " (continued)" };
+            let mut c = Vec::new();
+            self.header(&mut c, size, &format!("Page {}{more}", page + 1))?;
+            draw_page(&mut c, &m, frame);
+            self.numbers(&mut c, items, &m, frame)?;
+            self.push(Sheet { size, content: c, page: Some(OnSheet { page, first: k == 0, m }) })?;
+
+            let mut c = Vec::new();
+            self.header(&mut c, paper, &format!("Comments on page {}{more}", page + 1))?;
+            if boxes.is_empty() {
+                text(&mut c, &self.font, &[0.0; 3], FONT + 1.5, MARGIN, top - LEADING, NO_PAGE_COMMENTS)?;
+            } else {
+                self.boxes(&mut c, &boxes, MARGIN, width)?;
+            }
+            self.push(Sheet { size: paper, content: c, page: None })?;
+        }
+        Ok(())
+    }
+
+    /// Each comment's number in a coloured circle on the comment's top-right corner, clear of
+    /// what it marks, on a page placed with `m` inside `frame`.
+    fn numbers(&self, c: &mut Vec<u8>, items: &[Item<'_>], m: &Matrix, frame: [f64; 4]) -> Result<(), PrintError> {
         for item in items {
             let Some((rect, number)) = item.anchor else { continue };
-            let Some(b) = on_sheet(&m, rect) else { continue };
-            // On the comment's top-right corner, clear of what it marks.
+            let Some(b) = on_sheet(m, rect) else { continue };
             let spot = (b[2].clamp(frame[0], frame[2]), b[3].clamp(frame[1], frame[3]));
             let [r, g, bl] = item.color;
             let label = number.to_string();
@@ -425,34 +528,129 @@ impl Out {
             let x = spot.0 - self.font.width(&label, size) / 2.0;
             // Black on a light colour (a yellow note), white on a dark one.
             let ink = if 0.299 * r + 0.587 * g + 0.114 * bl > 0.6 { [0.0; 3] } else { [1.0; 3] };
-            text(&mut c, &self.font, &ink, size, x, spot.1 - size * 0.35, &label)?;
-        }
-        self.push(Sheet { size, content: c, xobjects })?;
-        if items.is_empty() {
-            return Ok(());
-        }
-        let size = paper;
-        let top = size.1 - MARGIN - HEADER;
-        let width = size.0 - 2.0 * MARGIN;
-        for (k, boxes) in self.flow(items, width, top)?.into_iter().enumerate() {
-            let mut c = Vec::new();
-            let label = if k == 0 { format!("Comments on page {}", page + 1) } else { format!("Comments on page {} (continued)", page + 1) };
-            self.header(&mut c, size, &label)?;
-            self.boxes(&mut c, &boxes, MARGIN, width)?;
-            self.push(Sheet { size, content: c, xobjects: Dict::new() })?;
+            text(c, &self.font, &ink, size, x, spot.1 - size * 0.35, &label)?;
         }
         Ok(())
     }
 }
 
-/// Draw the page's `form` with `m`, framed, as `/P0`; returns the sheet's XObjects.
-fn draw_page(c: &mut Vec<u8>, form: ObjRef, m: &Matrix, frame: [f64; 4]) -> Dict {
+/// Draw the page (the sheet's `/P0`) with `m`, framed.
+fn draw_page(c: &mut Vec<u8>, m: &Matrix, frame: [f64; 4]) {
     let [a, b, cc, d, e, f] = m.0;
     let _ = writeln!(c, "q {} {} {} {} {} {} cm /P0 Do Q", n(a), n(b), n(cc), n(d), n(e), n(f));
     let _ = writeln!(c, "q 0.6 G 0.5 w {} {} {} {} re S Q", n(frame[0]), n(frame[1]), n(frame[2] - frame[0]), n(frame[3] - frame[1]));
-    let mut xobjects = Dict::new();
-    xobjects.set(b"P0".to_vec(), Object::Ref(form));
-    xobjects
+}
+
+/// The positions in `annots` of the comments at `listed`, with their replies and the replies to
+/// those (an annotation whose `/IRT` is one of them), so a comment comes with its thread.
+fn with_replies(doc: &Document, annots: &[Object], listed: impl Iterator<Item = usize>) -> std::collections::BTreeSet<usize> {
+    let mut set: std::collections::BTreeSet<usize> = listed.filter(|i| *i < annots.len()).collect();
+    let in_reply_to = |a: &Object| doc.resolve(a).as_dict().and_then(|d| d.get(b"IRT").cloned()).and_then(|r| r.as_ref());
+    // Each round adds at least one, so this ends within `annots.len()` rounds.
+    loop {
+        let refs: std::collections::HashSet<ObjRef> = set.iter().filter_map(|i| annots.get(*i).and_then(Object::as_ref)).collect();
+        let more: Vec<usize> = annots
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| !set.contains(i) && in_reply_to(a).is_some_and(|r| refs.contains(&r)))
+            .map(|(i, _)| i)
+            .collect();
+        if more.is_empty() {
+            return set;
+        }
+        set.extend(more);
+    }
+}
+
+/// The annotations at `copied` in `annots`, as new annotations on sheet `page` where the page
+/// placed with `m` shows them: their rectangle and points moved there, their normal appearance
+/// drawn there by a form placing the original, a reply's `/IRT` pointing at its comment's copy.
+/// Pop-ups, actions and structure links, which would point back into the original, are left
+/// out. An annotation without a usable rectangle is skipped.
+fn copy_annotations(
+    doc: &mut Document,
+    annots: &[Object],
+    copied: &std::collections::BTreeSet<usize>,
+    m: &Matrix,
+    page: ObjRef,
+    promoted: &mut std::collections::HashMap<ObjRef, ObjRef>,
+) -> Vec<Object> {
+    // Each copy's reference first, so a reply can point at its comment's copy.
+    let mut copies: std::collections::HashMap<ObjRef, ObjRef> = std::collections::HashMap::new();
+    let mut todo = Vec::new();
+    for &i in copied {
+        let Some(a) = annots.get(i) else { continue };
+        let new = doc.add(Object::Null);
+        if let Some(r) = a.as_ref() {
+            copies.insert(r, new);
+        }
+        todo.push((a, new));
+    }
+    let scale = m.0[0].hypot(m.0[1]);
+    let mut out = Vec::new();
+    for (a, new) in todo {
+        let Some(mut d) = doc.resolve(a).as_dict().cloned() else { continue };
+        let nums = |doc: &Document, o: Option<&Object>| -> Option<Vec<f64>> {
+            let v: Vec<f64> = doc.resolve(o?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+            v.iter().all(|x| x.is_finite()).then_some(v)
+        };
+        let Some(rect) = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4) else { continue };
+        let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+        let Some(placed) = on_sheet(m, rect) else { continue };
+        let normal = appearance(doc, &d);
+        for key in [&b"P"[..], b"Popup", b"Parent", b"StructParent", b"A", b"AA", b"AP", b"AS"] {
+            d.remove(key);
+        }
+        let reals = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+        d.set(b"P".to_vec(), Object::Ref(page));
+        d.set(b"Rect".to_vec(), reals(&placed));
+        match d.get(b"IRT").and_then(Object::as_ref).and_then(|r| copies.get(&r)) {
+            Some(parent) => d.set(b"IRT".to_vec(), Object::Ref(*parent)),
+            None => {
+                d.remove(b"IRT");
+                d.remove(b"RT");
+            }
+        }
+        let moved = |v: &[f64]| v.as_chunks::<2>().0.iter().flat_map(|[x, y]| <[f64; 2]>::from(m.apply(*x, *y))).collect::<Vec<f64>>();
+        for key in [&b"QuadPoints"[..], b"Vertices", b"L", b"CL"] {
+            if let Some(v) = nums(doc, d.get(key)).filter(|v| v.len() % 2 == 0) {
+                d.set(key.to_vec(), reals(&moved(&v)));
+            }
+        }
+        if let Some(ink) = d.get(b"InkList").and_then(|o| doc.resolve(o).as_array().cloned()) {
+            let paths: Vec<Object> = ink.iter().filter_map(|p| nums(doc, Some(p))).map(|v: Vec<f64>| reals(&moved(&v))).collect();
+            d.set(b"InkList".to_vec(), Object::Array(paths));
+        }
+        if let Some(rd) = nums(doc, d.get(b"RD")).filter(|v| v.len() == 4) {
+            d.set(b"RD".to_vec(), reals(&rd.iter().map(|v| v * scale).collect::<Vec<_>>()));
+        }
+        if let Some(ap) = normal
+            && let Some(form) = doc.get(ap).as_dict().cloned()
+            && let Some(fit) = appearance_matrix(doc, &form, rect)
+        {
+            // A form the size of the new rectangle, drawing the original appearance as the page
+            // drew it, then placed as the page is on the sheet.
+            let ap = form_xobject(doc, ap, promoted);
+            let [a0, b0, c0, d0, e0, f0] = fit.then(m).0;
+            let body = format!("q {} {} {} {} {} {} cm /A Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0));
+            let mut xobjects = Dict::new();
+            xobjects.set(b"A".to_vec(), Object::Ref(ap));
+            let mut res = Dict::new();
+            res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            let mut f = Dict::new();
+            f.set(b"Type".to_vec(), Object::name("XObject"));
+            f.set(b"Subtype".to_vec(), Object::name("Form"));
+            f.set(b"BBox".to_vec(), reals(&placed));
+            f.set(b"Resources".to_vec(), Object::Dict(res));
+            let wrapper = doc.add(Object::Stream(Stream::flate(f, body.as_bytes())));
+            let mut apd = Dict::new();
+            apd.set(b"N".to_vec(), Object::Ref(wrapper));
+            d.set(b"AP".to_vec(), Object::Dict(apd));
+        }
+        doc.set(new, Object::Dict(d));
+        out.push(Object::Ref(new));
+    }
+    out
 }
 
 /// Page `index` fitted into `area` (`[x0 y0 x1 y1]` on the sheet), centred: the matrix from its

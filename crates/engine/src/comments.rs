@@ -171,6 +171,45 @@ pub fn summary_paper(first: Option<(f64, f64)>) -> (&'static str, (f64, f64)) {
         .unwrap_or(("US Letter", (612.0, 792.0)))
 }
 
+/// Each comment's date (`/M`) by `(page, index)`, read in full, for sorting a summary by date:
+/// the dates comment lists show are cut to the minute and leave out the time zone.
+pub type SummaryDates = std::collections::HashMap<(usize, usize), chrono::DateTime<chrono::Utc>>;
+
+/// The dates of document `doc`'s comments, for [`summary_items`].
+pub fn summary_dates(doc: &pdfcraft_cos::Document) -> SummaryDates {
+    pdfcraft_annot::summaries(doc).into_iter().filter_map(|s| Some(((s.page, s.index), pdf_date(s.modified.as_deref()?)?))).collect()
+}
+
+/// A PDF date (`D:YYYYMMDDHHmmSSOHH'mm'`, ISO 32000-2 §7.9.4) as a moment, the fields after the
+/// year optional; `None` when it can't be read. Without a time zone it is taken as UTC.
+pub(crate) fn pdf_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone as _;
+    let s = s.trim();
+    let s = s.strip_prefix("D:").unwrap_or(s);
+    let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+    // ASCII digits, so every slice below is on a character boundary.
+    let field = |from: usize, len: usize, default: u32| -> Option<u32> {
+        if digits >= from + len { s.get(from..from + len)?.parse().ok() } else { Some(default) }
+    };
+    if digits < 4 {
+        return None;
+    }
+    let year: i32 = s.get(0..4)?.parse().ok()?;
+    let date = chrono::NaiveDate::from_ymd_opt(year, field(4, 2, 1)?, field(6, 2, 1)?)?;
+    let time = date.and_hms_opt(field(8, 2, 0)?, field(10, 2, 0)?, field(12, 2, 0)?.min(59))?;
+    let rest = s.get(digits.min(14)..).unwrap_or("");
+    let offset = match rest.as_bytes().first() {
+        Some(sign @ (b'+' | b'-')) => {
+            let nums: Vec<i32> =
+                rest.get(1..).unwrap_or("").split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
+            let secs = nums.first().copied().unwrap_or(0).clamp(0, 23) * 3600 + nums.get(1).copied().unwrap_or(0).clamp(0, 59) * 60;
+            chrono::FixedOffset::east_opt(if *sign == b'-' { -secs } else { secs })?
+        }
+        _ => chrono::FixedOffset::east_opt(0)?,
+    };
+    Some(offset.from_local_datetime(&time).single()?.with_timezone(&chrono::Utc))
+}
+
 /// One comment of a summary: its number on its page, and its replies (each with its depth,
 /// 1 for a direct reply) in the order they are written.
 pub struct SummaryItem<'a> {
@@ -180,8 +219,9 @@ pub struct SummaryItem<'a> {
 }
 
 /// The comments a summary lists, in `sort` order. Checkmarks and status replies are left out,
-/// as are pop-ups; the number is the comment's position on its page.
-pub fn summary_items(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> Vec<SummaryItem<'_>> {
+/// as are pop-ups; the number is the comment's position on its page. By date, oldest first, by
+/// the full date in `dates` where it has one, else the date as listed; undated comments last.
+pub fn summary_items<'a>(all: &'a [pdfcraft_render::Annotation], sort: SummarySort, dates: &SummaryDates) -> Vec<SummaryItem<'a>> {
     // Each reply under the annotation its `/IRT` points at, in document order, gathered once.
     type Children<'a> = std::collections::HashMap<(usize, usize), Vec<&'a pdfcraft_render::Annotation>>;
     let mut children = Children::new();
@@ -230,7 +270,16 @@ pub fn summary_items(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> 
     match sort {
         SummarySort::Page => {}
         SummarySort::Author => items.sort_by(|x, y| x.comment.author.cmp(&y.comment.author)),
-        SummarySort::Date => items.sort_by(|x, y| x.comment.modified.cmp(&y.comment.modified)),
+        SummarySort::Date => {
+            let undated = |a: &pdfcraft_render::Annotation| !dates.contains_key(&(a.page, a.index)) && a.modified.is_none();
+            items.sort_by(|x, y| {
+                let (a, b) = (x.comment, y.comment);
+                undated(a)
+                    .cmp(&undated(b))
+                    .then_with(|| dates.get(&(a.page, a.index)).cmp(&dates.get(&(b.page, b.index))))
+                    .then_with(|| a.modified.cmp(&b.modified))
+            });
+        }
         SummarySort::Type => items.sort_by(|x, y| comment_kind(x.comment).cmp(comment_kind(y.comment))),
     }
     items
@@ -240,8 +289,13 @@ pub fn summary_items(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> 
 /// "Page N" heading when sorted by page. Checkmarks and status replies are left out, as are
 /// pop-ups; the number is the comment's position on its page.
 pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
+    comment_summary_with(name, all, sort, &SummaryDates::new())
+}
+
+/// [`comment_summary`], sorting by the full dates in `dates` ([`summary_items`]).
+pub fn comment_summary_with(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort, dates: &SummaryDates) -> String {
     use std::fmt::Write;
-    let items = summary_items(all, sort);
+    let items = summary_items(all, sort, dates);
     let mut out = format!("Summary of Comments on {name}\n\n");
     if items.is_empty() {
         out.push_str("This document has no comments.\n");
@@ -275,15 +329,30 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     out
 }
 
-/// The comments of a summary that shows the pages, for `pdfcraft_print::summary_with_pages`:
-/// grouped by page, in `sort` order within each page.
-pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort) -> Vec<pdfcraft_print::SummaryComment> {
-    let mut items = summary_items(all, sort);
-    // Stable: the sort order holds within each page.
-    items.sort_by_key(|i| i.comment.page);
+/// The comments of a summary that shows the pages, for `pdfcraft_print::summary_with_pages`, in
+/// `sort` order and grouped by page: the pages come in the order of their first comment (by
+/// date, the page commented on first leads), each page's comments in `sort` order, numbered
+/// 1, 2, 3 on each page in that order.
+pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort, dates: &SummaryDates) -> Vec<pdfcraft_print::SummaryComment> {
+    let items = summary_items(all, sort, dates);
+    // Each page's place: where its first comment comes. A stable sort by it keeps the sort
+    // order within each page.
+    let mut place = std::collections::HashMap::new();
+    for item in &items {
+        let next = place.len();
+        place.entry(item.comment.page).or_insert(next);
+    }
+    let mut items: Vec<_> = items.into_iter().map(|item| (place.get(&item.comment.page).copied().unwrap_or(usize::MAX), item)).collect();
+    items.sort_by_key(|(at, _)| *at);
+    let mut last = usize::MAX;
+    let mut number = 0;
     items
         .into_iter()
-        .map(|item| {
+        .map(|(_, item)| {
+            if item.comment.page != last {
+                (last, number) = (item.comment.page, 0);
+            }
+            number += 1;
             let a = item.comment;
             let mut lines = vec![(
                 0,
@@ -305,7 +374,7 @@ pub fn summary_comments(all: &[pdfcraft_render::Annotation], sort: SummarySort) 
             }
             pdfcraft_print::SummaryComment {
                 page: a.page,
-                number: item.number,
+                number,
                 index: Some(a.index),
                 rect: a.rect.map(f64::from),
                 color: a.color.map(|c| c.map(f64::from)),

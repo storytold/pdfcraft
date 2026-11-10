@@ -147,8 +147,8 @@ use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
 use comments::comment_list;
 pub use comments::{
-    SUMMARY_PAPERS, SummarizeOptions, SummaryItem, SummaryLayout, SummarySort, comment_kind, comment_summary, comment_type_name, summary_comments,
-    summary_items, summary_paper,
+    SUMMARY_PAPERS, SummarizeOptions, SummaryDates, SummaryItem, SummaryLayout, SummarySort, comment_kind, comment_summary, comment_summary_with,
+    comment_type_name, summary_comments, summary_dates, summary_items, summary_paper,
 };
 #[cfg(test)]
 use document::page_runs;

@@ -75,9 +75,14 @@ fn the_paper_and_pages_without_comments_are_chosen() {
     assert!(shown[0].contains("(Page 1)") && shown[2].contains("(Page 3)"));
     let doc = summary_with_pages(&src, &comments, &with(PageLayout::LinesOnSinglePages, false)).unwrap();
     assert_eq!(size(&doc), [(841.89, 595.28)]);
-    // Separate pages: a page without comments has no comment sheet.
+    // Separate pages: a page without comments is followed by a sheet saying so, so page and
+    // comment sheets keep taking turns.
     let doc = summary_with_pages(&src, &comments, &with(PageLayout::NumbersOnSeparatePages, true)).unwrap();
-    assert_eq!(sheets(&doc).len(), 4, "page 1, page 2, its comments, page 3");
+    let shown = sheets(&doc);
+    assert_eq!(shown.len(), 6, "each page, then its comments or a sheet saying it has none");
+    assert!(shown[1].contains("(Comments on page 1)") && shown[1].contains("(No comments on this page.)"), "{}", shown[1]);
+    assert!(shown[3].contains("(Comments on page 2)") && shown[3].contains("(h) Tj"), "{}", shown[3]);
+    assert!(shown[5].contains("(No comments on this page.)"), "{}", shown[5]);
     let doc = summary_with_pages(&src, &comments, &with(PageLayout::NumbersOnSeparatePages, false)).unwrap();
     assert_eq!(size(&doc), [a4, a4]);
     // A paper of no usable size is US Letter.
@@ -175,4 +180,111 @@ fn nothing_points_at_a_comment_the_page_does_not_show() {
     hidden.index = Some(0);
     let first = sheets(&summary_with_pages(&src, &[hidden], &opts("S", PageLayout::LinesOnSinglePages)).unwrap()).remove(0);
     assert_eq!(first.matches(" l S").count(), 2, "the printing square is pointed at: {first}");
+}
+
+/// The sheets' page labels, in order.
+fn labels(shown: &[String]) -> Vec<String> {
+    shown.iter().map(|s| s.split("(Page ").nth(1).and_then(|r| r.split(')').next()).unwrap_or("").to_string()).collect()
+}
+
+#[test]
+fn the_pages_follow_their_first_comment() {
+    let src = fixture(3);
+    let all = |empty| SummaryOptions { pages_without_comments: empty, ..opts("S", PageLayout::LinesOnSinglePages) };
+    // Listed by date, say: page 3's comment first, then page 1's.
+    let by_date = [comment(2, 1, &["newer page first"]), comment(0, 1, &["h"])];
+    let shown = sheets(&summary_with_pages(&src, &by_date, &all(false)).unwrap());
+    assert_eq!(labels(&shown), ["3", "1"]);
+    // Pages without comments come after them, in document order.
+    let shown = sheets(&summary_with_pages(&src, &by_date, &all(true)).unwrap());
+    assert_eq!(labels(&shown), ["3", "1", "2"]);
+    // In document order, they come among them.
+    let by_page = [comment(0, 1, &["h"]), comment(2, 1, &["h"])];
+    assert_eq!(labels(&sheets(&summary_with_pages(&src, &by_page, &all(true)).unwrap())), ["1", "2", "3"]);
+}
+
+#[test]
+fn page_and_comment_sheets_take_turns() {
+    let src = fixture(1);
+    let long = "word ".repeat(400);
+    let comments: Vec<SummaryComment> = (1..=6).map(|n| comment(0, n, &["heading", long.as_str()])).collect();
+    let doc = summary_with_pages(&src, &comments, &opts("S", PageLayout::NumbersOnSeparatePages)).unwrap();
+    let shown = sheets(&doc);
+    assert!(shown.len() >= 4 && shown.len().is_multiple_of(2), "{}", shown.len());
+    for (i, sheet) in shown.iter().enumerate() {
+        assert_eq!(sheet.contains("/P0 Do"), i % 2 == 0, "sheet {i}: the page on the left, its comments on the right");
+    }
+    assert!(shown[2].contains("(Page 1 \\(continued\\))") && shown[3].contains("(Comments on page 1 \\(continued\\))"), "{}", shown[2]);
+    // Each sheet showing the page has the numbers on it.
+    assert!(shown[2].contains("(6) Tj"), "{}", shown[2]);
+    // It opens in a two-page view, the first spread fitted; beside the comments, one column.
+    let catalog = |doc: &Document| doc.resolve(doc.trailer().get(b"Root").unwrap()).as_dict().cloned().unwrap();
+    let first = pdfcraft_model::pages(&doc)[0].obj;
+    assert_eq!(catalog(&doc).name(b"PageLayout"), Some(&b"TwoPageLeft"[..]));
+    assert_eq!(catalog(&doc).get(b"OpenAction"), Some(&Object::Array(vec![Object::Ref(first), Object::name("Fit")])));
+    let doc = summary_with_pages(&src, &comments, &opts("S", PageLayout::LinesOnSinglePages)).unwrap();
+    assert_eq!(catalog(&doc).name(b"PageLayout"), Some(&b"OneColumn"[..]));
+    // The sheet saying there are no comments asks for nothing.
+    let doc = summary_with_pages(&src, &[], &opts("S", PageLayout::NumbersOnSeparatePages)).unwrap();
+    assert_eq!((catalog(&doc).get(b"PageLayout"), catalog(&doc).get(b"OpenAction")), (None, None));
+}
+
+#[test]
+fn the_comments_are_annotations_on_the_first_sheet() {
+    // Page 1's square, now an indirect object with a reply and a pop-up.
+    let mut src = fixture(1);
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let annots = src.resolve(pdfcraft_model::pages(&src)[0].dict.get(b"Annots").unwrap()).as_array().cloned().unwrap();
+    let square = src.add(annots[0].clone());
+    let popup = src.add(Object::Dict(Dict::new()));
+    src.update_dict(square, |d| {
+        d.set(b"Popup".to_vec(), Object::Ref(popup));
+        d.set(b"NM".to_vec(), pdfcraft_cos::PdfString::text("square"));
+    })
+    .unwrap();
+    let mut reply = Dict::new();
+    reply.set(b"Type".to_vec(), Object::name("Annot"));
+    reply.set(b"Subtype".to_vec(), Object::name("Text"));
+    reply.set(b"IRT".to_vec(), Object::Ref(square));
+    reply.set(b"Rect".to_vec(), Object::Array([10, 10, 30, 30].map(Object::Int).to_vec()));
+    let reply = src.add(Object::Dict(reply));
+    let list = vec![Object::Ref(square), annots[1].clone(), annots[2].clone(), Object::Ref(reply)];
+    src.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(list))).unwrap();
+
+    let mut c = comment(0, 1, &["1. Rectangle", "word ".repeat(1500).as_str()]);
+    c.index = Some(0);
+    let doc = summary_with_pages(&src, &[c], &opts("S", PageLayout::LinesOnSinglePages)).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let sheets = pdfcraft_model::pages(&doc);
+    assert!(sheets.len() > 1, "the comment runs onto a second sheet");
+    let annots_of = |p: &pdfcraft_model::Page| p.dict.get(b"Annots").map(|a| doc.resolve(a).as_array().cloned().unwrap()).unwrap_or_default();
+    let copies = annots_of(&sheets[0]);
+    assert_eq!(copies.len(), 2, "the square and its reply");
+    let copy = doc.resolve(&copies[0]).as_dict().cloned().unwrap();
+    let rect: Vec<f64> = copy.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    // The page (200 × 300) fills the left half's height, 516 pt: 1.72 ×, centred in 348 pt from
+    // x = 36. The square at 10..50 is at 1.72 × that from the page's corner.
+    let (s, x0) = (516.0 / 300.0, 36.0 + (348.0 - 200.0 * 516.0 / 300.0) / 2.0);
+    let want = [x0 + 10.0 * s, 36.0 + 10.0 * s, x0 + 50.0 * s, 36.0 + 50.0 * s];
+    assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{rect:?} {want:?}");
+    assert_eq!(copy.get(b"P"), Some(&Object::Ref(sheets[0].obj)));
+    assert_eq!(copy.get(b"Popup"), None, "the pop-up belongs to the original");
+    assert_eq!(copy.get(b"NM"), Some(&Object::from(pdfcraft_cos::PdfString::text("square"))));
+    // Its appearance is a form the size of its new rectangle, drawing the original's.
+    let ap = doc.resolve(copy.get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(form) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("an appearance stream") };
+    assert_eq!(form.dict.get(b"BBox"), copy.get(b"Rect"));
+    assert!(String::from_utf8(form.decoded().unwrap()).unwrap().ends_with("cm /A Do Q\n"));
+    let reply = doc.resolve(&copies[1]).as_dict().cloned().unwrap();
+    assert_eq!(reply.get(b"IRT").and_then(Object::as_ref), copies[0].as_ref(), "the reply answers the copy");
+    // The first sheet's drawing of the page leaves the square to its annotation (only the stamp
+    // is drawn); the next sheet, without annotations, draws both.
+    let drawn = |p: &pdfcraft_model::Page| {
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(form) = &*doc.resolve(xo.get(b"P0").unwrap()) else { panic!("the page form") };
+        String::from_utf8_lossy(&form.decoded().unwrap()).matches(" Do Q").count()
+    };
+    assert_eq!((drawn(&sheets[0]), annots_of(&sheets[1]).len(), drawn(&sheets[1])), (1, 0, 2));
 }

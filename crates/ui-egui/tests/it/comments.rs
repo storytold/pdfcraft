@@ -6,7 +6,8 @@ use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, RightPanel};
 
 use crate::support;
 
@@ -2240,6 +2241,12 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     let a4 = |w: f32, h: f32| (w.min(h) - 595.28).abs() < 0.01 && (w.max(h) - 841.89).abs() < 0.01;
     assert!(info.pages.iter().all(|p| a4(p.width, p.height)), "{:?}", info.pages);
     assert_eq!(info.pages.len(), 2, "the commented page and its comments; the other pages left out");
+    // It opens as it asks: in a two-page view, the page beside its comments, the spread fitted;
+    // its comments are comments again, listed in the Comments panel.
+    let view = &s.views[3];
+    assert_eq!((view.layout, view.continuous, view.cover, view.fit), (PageLayout::TwoUp, false, false, Fit::Page));
+    assert!(!info.annotations.is_empty() && info.annotations.iter().all(|a| a.page == 0), "{:?}", info.annotations);
+    assert_eq!(s.right, Some(RightPanel::Comments));
 
     // The choices survive a restart.
     let mut restored = PdfCraftApp::new();

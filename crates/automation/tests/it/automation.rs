@@ -7732,10 +7732,11 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
         assert!(text.contains("Page 1") && text.contains("Sticky Note  Ada") && text.contains("Sticky"), "{layout}: {text}");
         ok(&mut a, "doc_close", json!({ "doc": pages }));
     }
-    // Asked for explicitly, the defaults keep every page: each page's sheet, plus page 1's comments.
+    // Asked for explicitly, the defaults keep every page: beside the comments, a sheet each; on
+    // separate pages, each page and then its comments or a sheet saying it has none.
     let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len();
     assert!(n > 1, "a.pdf has pages without comments");
-    for (layout, sheets) in [("document_and_comments_with_lines", n), ("document_and_comments_with_numbers", n + 1)] {
+    for (layout, sheets) in [("document_and_comments_with_lines", n), ("document_and_comments_with_numbers", 2 * n)] {
         ok(
             &mut a,
             "comments_summarize",

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use pdfcraft_engine::{DocId, Edit, SplitBy};
 
 use crate::PdfCraftApp;
+use crate::state::{Mode, RightPanel};
 
 /// Why files were picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -919,12 +920,22 @@ impl PdfCraftApp {
                 // The reading-colours preference is app-wide: the newly created document starts with it.
                 self.session.set_reading_colors(id, self.reading_colors);
                 let Some(doc) = self.session.get(id) else { return };
-                let mut view = crate::DocView::new(id, &doc.info, self.view_defaults);
-                if self.full_screen {
-                    view.enter_presentation();
-                }
+                let view = crate::DocView::new(id, &doc.info, self.view_defaults);
+                let (initial, has_comments) = (doc.initial_view(), !doc.info.annotations.is_empty());
                 self.views.push(view);
-                self.active = Some(self.views.len() - 1);
+                let index = self.views.len() - 1;
+                self.active = Some(index);
+                // Shown as it asks to be, as an opened file is: a comment summary opens with each
+                // sheet whole in view, in a two-page view for sequence numbers on separate pages.
+                self.apply_initial_view(index, &initial);
+                // A document with comments opens with them listed, as an opened one does (a right
+                // panel the user closed stays closed; Read mode opens with the panes closed).
+                if has_comments && self.right.is_none() && !self.right_panel_closed && self.mode_override.unwrap_or(self.default_mode) != Mode::Read {
+                    self.right = Some(RightPanel::Comments);
+                }
+                if self.full_screen {
+                    self.views[index].enter_presentation();
+                }
                 self.notify_tr(message);
             }
             Err(e) => self.notify_fmt("Couldn't open the result: {e}", &[("e", &e.to_string())]),

@@ -1,7 +1,7 @@
 use super::{
     Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session,
-    SummarizeOptions, SummaryLayout, apply_layer_state, comment_summary, display_config, guard, local_utc_offset, outline_rows, parse_ymd,
-    render_threads, summary_comments, summary_paper, use_layer_choices,
+    SummarizeOptions, SummaryLayout, apply_layer_state, comment_summary_with, display_config, guard, local_utc_offset, outline_rows, parse_ymd,
+    render_threads, summary_comments, summary_dates, summary_paper, use_layer_choices,
 };
 
 impl Session {
@@ -355,9 +355,14 @@ impl Session {
         // the document, as "Match the document" does.
         let usable = |v: f64| v.is_finite() && (144.0..=14_400.0).contains(&v);
         let paper = opts.paper.filter(|p| usable(p.0) && usable(p.1)).unwrap_or_else(|| self.summary_paper(id).1);
+        // Sorting by date reads each comment's full date, not the minute the list shows.
+        let dates = match (opts.sort, doc.editor.as_ref()) {
+            (crate::SummarySort::Date, Some(e)) => guard(|| summary_dates(&e.cos)).unwrap_or_default(),
+            _ => Default::default(),
+        };
         let layout = match opts.layout {
             SummaryLayout::CommentsOnly => {
-                let text = comment_summary(&doc.name, &doc.info.annotations, opts.sort);
+                let text = comment_summary_with(&doc.name, &doc.info.annotations, opts.sort, &dates);
                 return self.create_report_on(&title, &text, paper);
             }
             SummaryLayout::DocumentAndCommentsWithLines => pdfcraft_print::PageLayout::LinesOnSinglePages,
@@ -373,7 +378,7 @@ impl Session {
         if let Some(displayed) = guard(|| crate::document::as_displayed(&cos)).ok().flatten() {
             cos = displayed;
         }
-        let comments = summary_comments(&doc.info.annotations, opts.sort);
+        let comments = summary_comments(&doc.info.annotations, opts.sort, &dates);
         let print_opts = pdfcraft_print::SummaryOptions { title: &title, layout, paper, pages_without_comments: opts.pages_without_comments };
         // The pages are drawn from the document's own content: a panic in that code must not take
         // the app down.
