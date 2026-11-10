@@ -14,9 +14,12 @@
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exited 0 at
   `0c57e2271`; it was not re-run at this pass's head, and no rebase was done in
   this pass, so the base stays `ba28458ad`.
-- Local head before this STATUS commit: `21aaf357a` (feat: publish an
-  unpublished base after a restart and on resolve) on `5bad54c40` (feat: share
-  several selections, per-line quads and the caret) on `38d0bf56d` (docs(collab):
+- Local head before this STATUS commit: `d1229deb9` (feat: share the outline
+  and its named destinations as operations) on `0ab350c6b` (docs(collab): record
+  the restored publication and the resolve that publishes) on `21aaf357a` (feat:
+  publish an unpublished base after a restart and on resolve) on `5bad54c40`
+  (feat: share several selections, per-line quads and the caret) on `38d0bf56d`
+  (docs(collab):
   record the pop-up window operation and reconcile the STATUS head) on
   `0c57e2271` (feat: open, close and move
   a comment's pop-up window as one operation) on `199076765` (docs(collab):
@@ -34,10 +37,16 @@
   on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
   `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
   `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
-  clippy complexity limit) — **92 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD` at this docs head; 91 at
-  `21aaf357a`), **48 behind** and **12 ahead** of the PR head (11 at
-  `21aaf357a`, this STATUS record being the twelfth). The numbers the
+  clippy complexity limit) — **94 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD` at this docs head; 93 at
+  `d1229deb9`, 92 at `0ab350c6b`, 91 at `21aaf357a`), **48 behind** and **14
+  ahead** of the PR head (13 at `d1229deb9`, 12 at `21aaf357a`, this STATUS
+  record being the second of the two this pass adds). `origin/main` was
+  `274b7a042` when this pass started and when it ended
+  (`git ls-remote origin refs/heads/main`), so the branch is still 48 behind;
+  `git merge-tree --write-tree origin/main HEAD` exits 0 at the code head
+  `d1229deb9` (the docs commits after it change no code), and no rebase was done in this pass, so the base stays
+  `ba28458ad`. The numbers the
   earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
   86/11/6 at `0c57e2271` — were right when they were measured; `origin/main`
   kept moving (`ba28458ad` → `a71b5124b` → `274b7a042`) and each slice added
@@ -79,17 +88,17 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   plus one Combine confirmation as ordered parts (`843a8f533`, §4), and the
   cabinet's HS256 session tickets next to RS256 (`157f4d239`, §4), and a
   comment's parts, a move, a resize and a reshape as addressable operations
-  (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4). The
-  whole
+  (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4), and
+  the outline with its named destinations as eight structural operations
+  (`d1229deb9`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
-  closes both open ends of limitation 6 — the in-process publication queue and
-  the resolve that did not republish (§5 p.6, §4) — and leaves `https` without a
-  reverse proxy, the in-process `conflict` flag and the journal tail (published
-  by the next commit) as they were. A kill between the base write and the
+  closes the outline and named destinations of limitation 3 (§5 p.3, §4) and
+  leaves `https` without a reverse proxy, the in-process `conflict` flag and
+  the journal tail (published by the next commit) as they were. A kill between the base write and the
   `CURRENT` rename is covered at the `Store` level only (§5 p.1, §6.1); the
   real-process SIGKILL test covers the journal→base window.
 - Audience: the next session (human or agent). Everything here was verified in
@@ -105,21 +114,22 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`), the operator's resolution of a `conflict` room (`resolve_conflict`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert, restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations (add, edit, restyle with `/LE`, font size, author/subject/icon, parts, move, geometry, pop-up, reply with or without `/State`, delete, restore), form values, page rotate/move/delete/insert/duplicate/replace/blank insert/split/combine, the outline (item add, update, delete with its whole subtree, restore, move — addressed by the item's object key) and named destinations (add, update, delete — addressed by name), restores from server-side copies of deleted comments/pages and the copy a replacement keeps for its undo; durable `Store` (versioned bases, journal, `CABINET` marker carrying the room's version and the cabinet's) |
+| `crates/collab-outline` | Typed wire form of an outline item's destination (a page and a point, a Table 149 view, a named destination, or nowhere) and of the subtree copy a delete carries, with their bounds: title and name length, depth, node count, copy size, view types and their values |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`), its parts (`PartsUpdate`), its move (`MoveUpdate`) and its geometry (`GeometryUpdate`) and their before/expect CAS; the review-state names of a status reply |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256/HS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter (which publishes the refused base), the publication queue and its recovery of restored publications |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
-| `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
+| `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit is addressed by the item key this replica's list gives it), inverse operations for undo, including the outline and named destination operations, whose inverses are built from the accepted operation |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
-| `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
+| `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo); `Edit::AddBookmarkWith`/`UpdateBookmark`/`SetNamedDestination`/`DeleteNamedDestination` with `BookmarkDest`, `Document::bookmarks()` (paths with the item's object) and `Document::named_destinations()` |
 
 Both platforms run the same protocol: `collab-session` compiles on wasm32 with a
 `web-sys` `WebSocket` transport, and `ui-egui --features collab` compiles for
 wasm32 (§4, §6.3). `collab-ws` stays native-only (it is the server's transport);
-`collab-client`, `collab-client-pdf` and `collab-annot` are wasm-safe. The web
+`collab-client`, `collab-client-pdf`, `collab-annot` and `collab-outline` are wasm-safe. The web
 build enables the feature with `trunk build --release --features collab`.
 
 ## 2. Decisions that are easy to undo wrongly
@@ -400,6 +410,131 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The outline and its named destinations — §5 p.3 (2026-11-10, local; not pushed)
+
+`d1229deb9` on `0ab350c6b`. The room had no operation for a bookmark or a named
+destination: the panel's edits were refused as `unsupported` in a session, and a
+commit could not carry them. They are now eight structural operations (RFC
+§3.1.7), and the address is the file's own identity rather than a position.
+
+- **A bookmark is addressed by its object reference** (`OutlineKey { num,
+  generation }`, `Target::OutlineItem { key }`, `None` = the outline itself as a
+  parent). A path (`[0, 2]`) is a position and moves as soon as an item above it
+  is added or removed; the object is what the file keeps, and what a destination
+  array names. The adapter re-derives key→path from its document on every
+  operation (`Session::bookmark_page`, every item with its object), so an
+  operation built before a page operation still finds its item afterwards. A key
+  that names nothing is `invalid` — never a guess by position.
+- **A named destination is addressed by its name** (`Target::NamedDest { name }`),
+  the key the PDF uses in `/Names /Dests`. `pdfcraft-organize` gained the read
+  (`named_destinations`, `named_destination`) and the write: `set_named_destination`
+  and `delete_named_destination` rewrite `/Names /Dests` as one leaf with its
+  keys in ascending byte order, take the name out of the legacy `/Dests`
+  dictionary so one name means one place, and leave every other tree in `/Names`
+  alone. `MAX_NAMED_DESTINATIONS` (10 000) bounds the list.
+- **The destination of a bookmark or a name** is `{"kind":"page", page, left,
+  top}` (`/XYZ`), `{"kind":"view", page, view:{kind, values}}` for any other
+  Table 149 type, `{"kind":"named", name}` for a bookmark, or
+  `{"kind":"nowhere"}` for a container with no `/Dest`. The `view` form is what
+  makes an undo exact: a `Fit`/`FitR` destination comes back as it was instead of
+  being flattened to `XYZ`. Engine: `BookmarkDest` with those four forms,
+  `Edit::AddBookmarkWith`, `Edit::UpdateBookmark` (title and/or destination in
+  one step), `Edit::SetNamedDestination`, `Edit::DeleteNamedDestination`;
+  `pdfcraft-organize` gained `add_bookmark_with`, `set_bookmark_dest`,
+  `dest_object` and `view_at`. `BookmarkRow` now carries the item's object
+  (`object: Option<(u32, u16)>`) and `Document` gained `bookmarks()`, so a
+  replica can map a path to the key it must send.
+- **`outline.item.delete` carries the whole subtree** — `OutlineNode`s with
+  titles, pages, views, colours, styles, open state and nesting — plus the key of
+  the item, its parent's key and its index. The copy travels in the accepted
+  operation (like `page.split`'s `bytes`), so no server-side copy store was
+  added, replay rebuilds nothing, and the undo is an ordinary
+  `outline.item.restore` through `Edit::ImportBookmarks`. `limit` before the
+  first write when the subtree is over 2 000 nodes, over 128 KiB of JSON, or
+  deeper than the listing can read (`truncated`); the byte bound is checked
+  again on a restore, because the accepted operation is broadcast and journaled
+  and has to fit the frame on the way out as well. A restored item gets a new
+  object reference (PDF has no way to choose one), and the result names it, so a
+  redo addresses the new key — the same shape `page.restore` has.
+- **`outline.item.move`** takes the new parent's key (`null` = top level) and an
+  index, refuses a move into itself or its own subtree (`invalid`) and one that
+  would nest deeper than 32 levels (`limit`), and the accepted operation carries
+  `from`, `to_parent`, `index` and `before {parent, index, path}`.
+- **Refusals happen before the first write**: an unknown parent or item, a blank
+  or over-long title (512 bytes), a page past the last, a name this document does
+  not define, a blank name, a cycle, depth, count (10 000 items), copy bounds,
+  `dest.add` of a taken name and `dest.update`/`dest.delete` of a missing one
+  (`conflict`), `dest.update`/`dest.delete` of a name that opens no page (a name
+  of a name — `unsupported`, since the room keeps a page per name), and `dest.*`
+  carrying a passed `epoch` (`stale`, retryable). None
+  of them moves `version`, `epoch`, the document, the epoch counter or the
+  journal. `outline.item.update` with neither title nor destination is `invalid`.
+- **Roles.** All eight are `structural`, so the room refuses a `viewer` and a
+  `commenter` before the adapter runs (`forbidden`, no version hint) and the
+  client shows ReadOnly: `collab_apply_edit` lists every bookmark and named
+  destination edit as structural, so a commenter never even builds the
+  operation.
+- **Page operations keep the targets.** Insert, split, combine and replace hold
+  page objects, so a bookmark or a name keeps its page and only the number moves;
+  a bookmark whose page is deleted loses `/Dest` and keeps its place, and a name
+  on a deleted page is pruned — the engine's existing behaviour — and the undo
+  of the delete puts both back. A key taken before the page operation still
+  addresses its item afterwards (the server recomputed the path).
+- **The client projects both ways.** `ops_for_edit` turns
+  `AddBookmark`/`AddBookmarkWith`, `RenameBookmark`, `SetBookmarkPage`,
+  `UpdateBookmark`, `DeleteBookmark`, `MoveBookmark`, `SetNamedDestination` and
+  `DeleteNamedDestination` into operations (a name the replica already has is
+  `dest.update`, one it does not is `dest.add`; `ImportBookmarks` with `replace`
+  is `unsupported`); `edit_for` turns every accepted operation back into the
+  edit; `inverse_for` returns `None` for all of them and `inverse_after` builds
+  the inverse from the accepted operation (`add`→`delete`, `update`→`update`
+  with `before`, `delete`→`restore`, `restore`→`delete` of the new key,
+  `move`→`move` back, and the three `dest.*`).
+- **A new leaf crate** `crates/collab-outline` (package
+  `pdfcraft-collab-outline`) holds the wire form of a destination and of a
+  subtree copy, with every bound: titles, names, depth, node count, copy size,
+  views against Table 149, a `/FitR` that lost a value. It compiles for the
+  browser (`collab-annot`'s sibling; no socket, no clock).
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-outline` | `every_destination_round_trips`, `a_destination_that_is_not_a_place_is_refused` (no page, negative, `1e400`-class, blank name, unknown kind, unknown view, `FitR` with three values or a hole), `titles_and_names_are_bounded`, `a_subtree_round_trips_whole` (nesting, views, colours, styles, open state; node count and depth), `a_copy_that_breaks_a_bound_is_refused` (title, depth, node count, a colour past 1, children that are not a list, a `Fit` with a value), `an_empty_copy_is_an_empty_list` |
+| `organize` | `named_destinations_are_set_listed_moved_and_deleted` (set, read back through the same lookup a reader uses, update in place, order, blank name / missing page / non-finite coordinate refused, delete, a missing name refused, the empty slot removed), `legacy_dests_and_the_other_name_trees_survive_an_edit` (a `/Dests` entry listed, taken over by the tree, the `JavaScript` tree untouched, a legacy-only name deleted), `a_bookmark_goes_to_a_named_destination_and_back` (named / nowhere / view destinations, refusals, `set_bookmark_dest` both ways, a bad `FitR` refused) |
+| `engine` | `named_destinations_and_the_shared_outline_edits` (a name, a bookmark to it, an undefined name refused, title+destination in one step and its undo, a container, deleting the name leaves the bookmark going nowhere and its undo brings the place back, `bookmarks()` carries the object, both survive a save) |
+| `collab-pdf` | `the_outline_is_added_updated_moved_and_deleted` (add under an addressed parent, `before` of the update, move with `from`/`before`, delete with the whole subtree, restore at its index, adding to the restored parent by its new key), `a_bad_outline_operation_changes_nothing` (13 refusals: unknown parent/item, missing page and name, blank and over-long title, update with nothing to change, delete of nothing, cycle into a child and into itself, a 40-deep copy, an over-long title in a copy, a 300-item copy over the byte budget — each leaves version, epoch and document as they were), `page_operations_keep_the_outline_targets_and_the_keys` (blank insert, a key from before it, a split that drops two pages, a combine that brings its own bookmark, a replacement; the name keeps its page), `named_destinations_are_operations` (add, duplicate `conflict`, update with `before`, delete with `before`, and five refusals), `a_viewer_cannot_change_the_outline` (viewer and commenter, `forbidden`, nothing moves) |
+| `collab-client-pdf` | `bookmark_edits_become_addressed_operations` (each UI edit → one structural op addressed by the parent's or the item's key, a path the replica does not have, `dest.add` vs `dest.update`, `replace` unsupported), `accepted_outline_operations_become_edits` (add/update/move/restore/dest through `edit_for`, a named destination that is a name refused) |
+| `collab-ws` e2e (socket) | `two_clients_share_the_outline` (two editors and a viewer; add, update with a named destination, move; all three replicas equal), `a_deleted_subtree_comes_back_whole_over_a_socket` (delete, `inverse_after` → restore, `inverse_after` → redo, a stale key `invalid` with no version move, a viewer `forbidden`), `named_destinations_are_operations_over_a_socket` (add, update, delete, a viewer refused, a bookmark that named it going nowhere) |
+
+Gates at `d1229deb9` (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates and the crates this pass touched | `cargo clippy -p pdfcraft-organize -p pdfcraft-engine -p pdfcraft-collab-{proto,outline,pdf,client-pdf,server,ws} --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, the gate list | `cargo test -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-collab-pdf` | pass — server 33, ws 16 unit + 31 e2e, pdf 56; 0 failed, 0 ignored |
+| Tests, the rest of the collab set | `cargo test -p pdfcraft-collab-{proto,outline,hub,client,client-pdf,session,annot}` | pass — proto 15, outline 6, hub 5, client 14, client-pdf 40, session 5, annot 23; 0 failed |
+| Tests, the engine the edits live in | `cargo test -p pdfcraft-organize -p pdfcraft-engine` | pass — organize 225 + 2 integration, engine 636 + 9 + 46; 2 ignored (pre-existing) |
+| Daemon | `cargo test -p pdfcraft-collab-daemon` | pass — 34 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1 + `restore_publication` 2 |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Workspace | `cargo check --workspace --all-targets` | pass (two pre-existing warnings outside this pass's files) |
+| UI, the collab module | `cargo test -p pdfcraft-ui-egui --features collab --lib collab::` | pass — 16 |
+
+What this does **not** cover: links (`/Annots` link annotations and remote
+go-tos) and page labels are still not shared — this pass is the outline and
+named destinations, as briefed. The app has no named-destination editor of its
+own, so the three `dest.*` operations have no interface command and no
+`crates/automation` tool: they are protocol plumbing so a document's names
+survive a session and a commit, and the `Edit`s they use are engine-level. A
+bookmark inside a delete's copy that went to a *named* destination comes back
+going to that name's page (the copy is a tree of pages), and a restored item
+gets a new object key. `SetBookmarkColor`, `SetBookmarkStyle`,
+`SetBookmarkOpen`, `BookmarksFromStructure` and `BookmarksFromTextStyles` are
+still `unsupported` in a room. Nothing was pushed: PR #6622 keeps the fork's
+head `b27fa89c8`, and this pass's two commits are local.
 
 ### Publications that outlive the process — §5 p.6 / limitation 6 (2026-11-10, local; not pushed)
 
@@ -855,8 +990,9 @@ session owns the document, and the part a split takes out is not written to a
 file from the session (§4 above); and a split's undo depends on
 the part the accepted operation carried, so a client that lost its history
 before the part was applied cannot rebuild it (the room never kept a copy — the
-operation is the copy). Bookmarks, layers, attachments, form structure and
-content edits are still not shared.
+operation is the copy). Layers, attachments, form structure, links, page labels
+and content edits are still not shared; bookmarks and named destinations are
+shared since `d1229deb9` (§4, RFC §3.1.7).
 
 ### Conflict resolution — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
 
@@ -2418,8 +2554,14 @@ Ordered by the risk they pose to production.
    `stale` (retryable). What a room's Split cannot yet do: write the part it
    takes out to a file, or produce more than one part from one confirmation
    (one `page.split` carries one contiguous tail; the dialog names the cut).
-   Bookmarks, layers, attachments, form structure and
-   content edits are still not shared.
+   ~~Bookmarks~~ and named destinations are shared since `d1229deb9` (§4, RFC
+   §3.1.7): an item is addressed by its object key and a name by its name, a
+   delete carries its whole subtree for the undo, and every page operation keeps
+   the target page because the destination names the page object. Layers,
+   attachments, form structure, links, page labels and content edits are still
+   not shared; the app has no named-destination editor of its own, and the
+   bookmark *colour*, *style*, *open* and "from structure/text styles" edits are
+   still refused with `unsupported` in a room.
 4. ~~**Presence has cursors, not selections.**~~ Closed on the client in
    `b4e9179d8` (§4): presence now carries the selected comment's `/NM` or a
    rectangle in user space (a text range's bounding box, a column select), under
@@ -2782,6 +2924,19 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
+- **The outline and named destinations are done locally in §4**
+  (`d1229deb9`, 2026-11-10, not pushed): `outline.item.add`/`update`/`delete`/
+  `restore`/`move` and `dest.add`/`update`/`delete`, addressed by the item's
+  object key and by the name, with a whole-subtree copy in the delete and its
+  restore; the server recomputes key→path before each operation, and every
+  refusal (unknown item, cycle, missing page or name, title/depth/count/copy
+  bounds) happens before the first write. Tests: `collab-outline` (6),
+  `organize` (3), `engine` (1), `collab-pdf` (5), `collab-client-pdf` (2) and
+  `collab-ws` e2e (3, two editors and a viewer: converge, undo/redo of a
+  subtree, a viewer refused, a stale key refused without a version move). What
+  is left: links and page labels (the rest of TASK §3's list), the bookmark
+  colour/style/open edits, and an interface and an automation tool for named
+  destinations — the app has no named-destination editor of its own.
 - **Split and combine are done locally in §4** (`362f9c72b`, 2026-11-09, not
   pushed): `page.split` takes a range out and carries the part in the accepted
   operation, `page.combine` joins a whole part in one operation, both are

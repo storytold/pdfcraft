@@ -4,7 +4,7 @@
 - Автор: `pdfcraft/envoy` (по ADR-0001…0010 и `ARCHITECTURE.md`)
 - ADR: `.craft/bus/decisions/0001-op-unit.md` … `0010-undo-offline.md`
 - Upstream issue/PR: ветка `collab/impl`; PR открывается отдельно
-- Реализация: `crates/collab-{proto,server,pdf,hub,client,client-pdf,session,ws}`,
+- Реализация: `crates/collab-{proto,server,pdf,outline,hub,client,client-pdf,session,ws}`,
   `apps/pdfcraft-collab-server`, UI за фичей `collab`
 - Основание: `TASK.md`, `INTEGRATION.md`, `docs/collab/study.md`, `docs/collab/options.md`
 
@@ -78,7 +78,8 @@ Op {
 `annotation.restore`, `field.set_value`, `page.rotate`, `page.move`,
 `page.delete`, `page.restore`, `page.insert`, `page.duplicate`
 (`§3.1.4`) `page.replace`, `page.insert_blank`, `page.split`, `page.combine`
-(`§3.1.5`). Остальные
+(`§3.1.5`), `outline.item.add`/`update`/`delete`/`restore`/`move` и
+`dest.add`/`update`/`delete` (`§3.1.7`). Остальные
 правки в общей сессии отклоняются как `unsupported`, а не применяются только
 локально.
 
@@ -433,6 +434,140 @@ Undo — `page.combine` из принятой операции; диалог в 
 сливаются независимо от правок страниц. Как и у `annotation.update`, undo —
 обычная операция (ADR-0010): конфликт с чужой правкой того же свойства
 сообщается, а не затирается.
+
+#### 3.1.7 Закладки (outline) и named destinations
+
+TASK.md §3 требует синхронизировать «нумерацию страниц, закладки, ссылки,
+named destinations, page labels». Закладки и named destinations — срез этого
+раздела; ссылки и page labels остаются вне его (§16).
+
+**Адресация.** У закладки нет имени, которое переживало бы правку: путь
+`[0, 2]` — это позиция, и она съезжает, как только выше добавляют или удаляют
+закладку. Поэтому адрес закладки — **объектная ссылка**, которую файл ей дал
+(`OutlineKey { num, generation }`, то есть `12 0 R`): у PDF это и есть
+идентичность, и ровно поэтому destination-массив ссылается на объект
+страницы, а не на её номер. Пересчёт пути по ключу делает сервер **до**
+операции — по своему документу; клиент присылает ключи, а пути в принятой
+операции уже серверные. Named destination адресуется **именем** (`/Names
+/Dests` и старый словарь `/Dests`), единственным ключом, который у него есть.
+
+```rust
+Target::OutlineItem { key: Option<OutlineKey> }  // None — сам outline (родитель верхнего уровня)
+Target::NamedDest { name: String }
+```
+
+Все восемь операций — `structural`: требуют head-версию и lease, поднимают
+`epoch` на единицу (как всякая структурная операция, ADR-0004), и роли
+`owner`/`editor`: `viewer` и `commenter` получают `forbidden` от комнаты до
+адаптера — `version` и документ не двигаются, а клиент показывает ReadOnly.
+
+| action | target | payload (принятая операция добавляет) |
+|---|---|---|
+| `outline.item.add` | родитель (ключ или `null`) | `title`, `dest`, `index?` → `parent`, `path`, `index`, `key` |
+| `outline.item.update` | ключ закладки | `title?`, `dest?` → `path`, `before {title, dest}` |
+| `outline.item.delete` | ключ закладки | — → `path`, `subtree`, `parent`, `parent_key`, `index` |
+| `outline.item.restore` | родитель (ключ или `null`) | `subtree`, `index?` → `path`, `index`, `key` |
+| `outline.item.move` | ключ закладки | `parent` (ключ или `null`), `index?` → `from`, `to_parent`, `index`, `before {parent, index, path}` |
+| `dest.add` | имя | `dest`, `epoch?` |
+| `dest.update` | имя | `dest`, `epoch?` → `before` |
+| `dest.delete` | имя | — → `before` |
+
+**Destination.** Одна и та же форма у закладки и у named destination:
+
+```json
+{"kind": "page", "page": 3, "left": 40.0, "top": 720.0}   // /XYZ, координаты могут быть null
+{"kind": "view", "page": 3, "view": {"kind": "FitR", "values": [0, 0, 200, 300]}}
+{"kind": "named", "name": "chapter-1"}                     // только у закладки
+{"kind": "nowhere"}                                        // только у закладки: контейнер без /Dest
+```
+
+`page` — индекс страницы в текущем `epoch` (0-based). `view` — тип из
+Table 149 с ровно своим числом значений: он нужен, чтобы undo возвращал
+destination **таким, каким он был в файле**, а не переписывал `Fit`/`FitR` в
+`XYZ`. `named` закладки проверяется по документу: имя, которого нет, —
+`invalid` (иначе цель «никуда», и пересчёт не смог бы её сохранить).
+`nowhere` — закладка-контейнер, у которой нет ни `/Dest`, ни `/A`; её
+разрешает и движок (`BookmarkDest::Nowhere`). Named destination может
+указывать только на страницу с координатами или на view: имя имени и
+«никуда» — `invalid` (комната держит одну запись на имя).
+
+**Что проверяется до первой записи** (ни один отказ не двигает `version`,
+`epoch`, документ и журнал):
+
+- неизвестный ключ родителя или закладки, ключ объекта `0`, путь, которого нет
+  в листинге, — `invalid`;
+- пустой или длиннее `MAX_OUTLINE_TITLE` (512 байт) заголовок — `invalid` /
+  `limit`; `update` без `title` и без `dest` — `invalid`;
+- страница за последней, имя, которого нет, координата не число —
+  `invalid`; `NaN`/бесконечность отсекает уже разбор (`serde_json`);
+- цикл (`move` в себя или в собственное поддерево) — `invalid`;
+- глубина: после `add`/`move`/`restore` узел не глубже `MAX_OUTLINE_DEPTH`
+  (32 — глубина, до которой дотягивается листинг движка), иначе `limit`;
+- количество: больше `MAX_OUTLINE_ITEMS` (10 000) закладок или
+  `MAX_NAMED_DESTINATIONS` (10 000) имён — `limit`;
+- копия поддерева: больше `MAX_OUTLINE_COPY_NODES` (2 000) узлов или
+  `MAX_OUTLINE_COPY_BYTES` (128 КиБ) JSON — `limit`; поддерево глубже
+  листинга (`truncated`) — тоже `limit`, потому что копия без нижних узлов не
+  вернула бы закладку целиком; тот же предел по байтам проверяется и на
+  `restore`, потому что принятая операция рассылается и пишется в журнал и
+  должна уложиться в кадр не только на входе;
+- `dest.add` занятого имени и `dest.update`/`dest.delete` отсутствующего —
+  `conflict` (не перезапись и не «ничего не произошло»); имя, которое открывает
+  не страницу (имя имени), на `update`/`delete` — `unsupported`: комната хранит
+  страницу на каждое имя и не смогла бы вернуть такое;
+- `dest.*` с `epoch` не текущим (если он назван) — `stale`, retryable.
+
+**Undo-образ.** Принятая операция описывает то, что заменила, поэтому undo —
+обычная операция, а не догадка (ADR-0010):
+
+- `add` → `outline.item.delete` по ключу из принятой операции;
+- `update` → `outline.item.update` с `before {title, dest}`;
+- `delete` → `outline.item.restore` с `subtree`, `parent_key` и `index`;
+  поддерево едет **в самой операции** (как `bytes` у `page.split`), поэтому
+  реплики и журнал кладут его обратно без второго канала и без серверного
+  хранилища копий;
+- `move` → `outline.item.move` в `before {parent, index}`;
+- `dest.add` → `dest.delete`; `dest.update` → `dest.update` с `before`;
+  `dest.delete` → `dest.add` с `before`.
+
+Копия поддерева — это `OutlineNode` движка: `title`, `page`, `view`, `color`,
+`italic`, `bold`, `open`, `children`. Восстановление пишет её через
+`Edit::ImportBookmarks`, поэтому возвращаются вложенность, тип view, цвет,
+начертание и раскрытость. Две честные границы: закладка внутри копии, которая
+шла на **named destination**, возвращается на страницу этого имени (копия —
+дерево страниц, а имя живёт своей операцией и могло с тех пор уехать), и
+восстановленные закладки получают **новые** объектные ссылки (PDF не даёт
+создать объект с заданным номером), поэтому redo адресует ключ из принятой
+операции восстановления, а не старый.
+
+**Пересчёт после операций со страницами.** Insert, split, combine и replace
+не двигают закладки: destination-массив ссылается на объект страницы, а объект
+сохраняется (insert/combine вставляют новые страницы, split/delete удаляют
+свои, replace подменяет содержимое той же страницы). Поэтому закладка и named
+destination продолжают указывать на ту же страницу, меняется только её номер;
+сервер заново выводит путь по ключу из своего документа перед каждой
+операцией, так что ключ, взятый до операции, продолжает работать и после неё.
+Единственное, что меняется, — то, что и в одиночном режиме: закладка,
+указывавшая на удалённую страницу, теряет `/Dest` и остаётся на месте, а named
+destination на удалённую страницу удаляется (`delete_pages` движка); undo
+разбиения/удаления возвращает и то и другое, потому что возвращает страницу с
+её объектом.
+
+**Named destinations и закладки, которые на них ссылаются.** `dest.delete`
+удаляет имя; закладка, которая на него ссылалась, остаётся на месте и теперь
+идёт «никуда» — ровно так её разрешает любой читатель. Undo (`dest.add` с
+`before`) возвращает имя, и закладка снова открывает свою страницу. Это
+проверено и в движке, и на сокете.
+
+**Клиент.** `Edit::AddBookmark`/`AddBookmarkWith`, `RenameBookmark`,
+`SetBookmarkPage`, `UpdateBookmark`, `DeleteBookmark`, `MoveBookmark`,
+`SetNamedDestination`, `DeleteNamedDestination` проецируются в операции
+(`collab-client-pdf::ops_for_edit`) по ключу, который реплика находит в своём
+списке (`Document::bookmarks`), а `ImportBookmarks` с `replace` — не
+разделяется (он затёр бы чужой список) и отклоняется на клиенте. Панель
+закладок и её команды — существующие: новых команд интерфейса срез не
+добавляет, named destinations в приложении пока не редактируются, они лишь
+переживают сессию и commit.
 
 ### 3.2 Идентификаторы (ADR-0002)
 
@@ -986,6 +1121,15 @@ Headless, без GUI, 2–3 клиента:
 12. commit: `.pdf` открывается в Chrome/Adobe; ссылки, закладки, формы,
     вложения целы; исходная версия сохранена.
 13. большой PDF (500+ страниц) и 100k страниц — бюджет применения.
+14. закладки и named destinations (§3.1.7): две реплики сходятся на
+    add/update/move/delete; undo возвращает поддерево целиком (вложенность,
+    view, цвет, раскрытость) и redo снимает его снова; ключ, взятый до
+    `page.insert`/`page.split`/`page.combine`/`page.replace`, продолжает
+    адресовать ту же закладку, а destination — ту же страницу; неизвестный
+    ключ, цикл, страница или имя, которых нет, пустой и слишком длинный
+    заголовок, глубина, количество и размер копии — `invalid`/`limit` без
+    записи; viewer и commenter — `forbidden` без движения `version`; тот же
+    путь по сокету (`collab-ws` e2e).
 
 ## 12. Безопасность
 
@@ -1107,6 +1251,10 @@ cargo run -p pdfcraft-collab-daemon --release -- \
    несёт её `bytes`, и приложение открывает её отдельным документом (STATUS
    §4); копии
    старше 64 удалений вытесняются; undo текста/поля/поворота — CAS (RFC §6).
+   Копия удалённой закладки едет в самой операции и хранится не дольше, чем
+   она (2000 узлов, 128 КиБ); закладка внутри копии, шедшая на named
+   destination, возвращается на страницу этого имени, а сами восстановленные
+   закладки получают новые объектные ссылки (§3.1.7).
 5. ~~Не разделяются произвольные аннотации~~ — типизированный payload
    (`collab-annot`) разделяет `TextMarkup`, `Rectangle`, `Oval`, `Line`, `Ink`,
    `FreehandHighlight`, `TextBox`, `Typewriter`, `Stamp`, `Mark` и `Note`
@@ -1116,8 +1264,9 @@ cargo run -p pdfcraft-collab-daemon --release -- \
    (§3.1.6);
    не разделяются подписи, custom stamp, redaction и вложения. Из
    структурных операций разделяются insert/duplicate/delete/move/rotate/
-   replace/blank insert (§3.1.4) и split/combine (§3.1.5); не разделяется
-   правка содержимого страницы. Combine в комнате шлёт по одной `page.combine`
+   replace/blank insert (§3.1.4), split/combine (§3.1.5) и закладки с named
+   destinations (§3.1.7); не разделяется правка содержимого страницы, слои,
+   вложения, структура форм, ссылки и page labels. Combine в комнате шлёт по одной `page.combine`
    на часть списка, по порядку и одну за другой, и всё подтверждение — одна
    группа истории; часть, отклонённая `stale`, откатывает уже вошедшие части
    (STATUS §4, «The split part and several parts per Combine»).
