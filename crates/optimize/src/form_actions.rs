@@ -28,7 +28,7 @@ const MAX_REF_HOPS: usize = 32;
 /// Follow an indirect reference chain to its non-reference target and the [`ObjRef`] that holds it.
 fn resolve_ref(doc: &Document, mut r: ObjRef) -> Option<(ObjRef, std::sync::Arc<Object>)> {
     let mut current = doc.get(r);
-    for _ in 1..MAX_REF_HOPS {
+    for _ in 0..MAX_REF_HOPS {
         let Object::Ref(next) = *current else {
             return Some((r, current));
         };
@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn chained_indirect_refs_count_and_clean_actions() {
+    fn chained_indirect_refs_count_and_clean_actions() -> Result<(), Box<dyn std::error::Error>> {
         let mut doc = Document::new_empty();
         // 1 0 obj: widget whose /A points through 4 0 R -> 5 0 R to a /SubmitForm action,
         // and whose /AA points through 6 0 R -> 7 0 R to a trigger dictionary with 8 0 R -> 9 0 R (/ResetForm).
@@ -543,20 +543,32 @@ mod tests {
         doc.set(obj_ref(10), Object::Ref(obj_ref(11)));
         doc.set(obj_ref(11), Object::Array(vec![dict(&[(b"S", Object::Name(b"ImportData".to_vec()))])]));
 
-        let removed = discard(&mut doc).expect("discard should succeed");
+        let removed = discard(&mut doc)?;
         assert_eq!(removed, 3);
 
         // 1 0 R's /A (via 4 0 R -> 5 0 R) now resolves to the surviving /URI action.
         let w1 = doc.get(obj_ref(1));
-        let w1_dict = w1.as_dict().expect("widget 1 dict");
-        let a_ref = w1_dict.get(b"A").expect("widget 1 /A should remain");
+        let w1_dict = w1.as_dict().ok_or("widget 1 dict")?;
+        let a_ref = w1_dict.get(b"A").ok_or("widget 1 /A should remain")?;
         let resolved_a = doc.resolve(a_ref);
         assert_eq!(resolved_a.as_dict().and_then(|d| d.name(b"S")), Some(b"URI".as_slice()));
         assert!(w1_dict.get(b"AA").is_none());
+
+        // A 32-alias-hop chain (33 doc.get calls, matching Document::resolve) resolves and is counted.
+        let mut hop_doc = Document::new_empty();
+        let target = hop_doc.add(dict(&[(b"S", Object::Name(b"SubmitForm".to_vec()))]));
+        let mut head = target;
+        for _ in 0..MAX_REF_HOPS {
+            head = hop_doc.add(Object::Ref(head));
+        }
+        assert_eq!(target_ref(&hop_doc, &Object::Ref(head)), Some(target));
+        hop_doc.set(obj_ref(1), dict(&[(b"A", Object::Ref(head))]));
+        assert_eq!(discard(&mut hop_doc)?, 1);
+        Ok(())
     }
 
     #[test]
-    fn chained_indirect_refs_enforce_depth_and_loop_limits() {
+    fn chained_indirect_refs_enforce_depth_and_loop_limits() -> Result<(), Box<dyn std::error::Error>> {
         // 1. 2-hop reference to a form action past MAX_DEPTH must fail with ActionLimit.
         let mut deep_doc = Document::new_empty();
         let mut nested = dict(&[(b"A", Object::Ref(obj_ref(2)))]);
@@ -580,6 +592,7 @@ mod tests {
         cycle_doc.set(obj_ref(1), dict(&[(b"A", Object::Ref(obj_ref(2))), (b"AA", Object::Ref(obj_ref(2)))]));
         cycle_doc.set(obj_ref(2), Object::Ref(obj_ref(3)));
         cycle_doc.set(obj_ref(3), Object::Ref(obj_ref(2)));
-        assert_eq!(discard(&mut cycle_doc).expect("cycle should not fail"), 0);
+        assert_eq!(discard(&mut cycle_doc)?, 0);
+        Ok(())
     }
 }
