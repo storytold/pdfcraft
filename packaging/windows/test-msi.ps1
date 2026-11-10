@@ -325,7 +325,8 @@ Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 # "Combine files in PdfCraft" (#585) on PDFs and on the image menu's pictures. Each verb sits in
 # its menu's own component, so it follows INSTALLPDFCONTEXTMENU / INSTALLIMAGECONTEXTMENU, is kept or
 # left out with that menu on update and is removed on uninstall. One process per selected file
-# (Document), each handing its file to the first: --combine "%1".
+# (Document), each handing its file to the first: --combine "%1". The order in which those processes
+# reach the first instance is not defined, so Explorer's selection order is not guaranteed in the list.
 $combineVerbs = @(,@('pdf', 'PdfcraftPdfContextMenu'))
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) { $combineVerbs += ,@($ext, 'PdfcraftImageContextMenu') }
 foreach ($pair in $combineVerbs) {
