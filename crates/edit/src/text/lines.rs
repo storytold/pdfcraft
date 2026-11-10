@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::fallback::{adopt_source_font, continues_font, same_font, same_paint};
+use super::fallback::{adopt_source_font, continues_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
