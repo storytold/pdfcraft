@@ -504,3 +504,114 @@ fn a_double_click_on_a_grouped_paragraph_opens_it() {
     h.run_steps(2);
     assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open for typing");
 }
+
+fn texts(h: &Harness<'static, PdfCraftApp>, view: usize) -> Vec<String> {
+    let app = h.state();
+    app.session.get(app.views[view].id).unwrap().editable_objects(0).unwrap().into_iter().filter_map(|o| o.text).collect()
+}
+
+fn can_undo(h: &Harness<'static, PdfCraftApp>, view: usize) -> Option<String> {
+    let app = h.state();
+    app.session.get(app.views[view].id).unwrap().can_undo().map(str::to_string)
+}
+
+fn keys(h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers, key: Key) {
+    h.key_press_modifiers(modifiers, key);
+    h.run_steps(4);
+}
+
+/// âŒ˜A in Edit a PDF selects every object on the page, as Acrobat does: paragraphs, artwork and
+/// added content. The arrow keys then move them all and Delete removes them all, each as one step.
+#[test]
+fn command_a_selects_every_object_on_the_page_to_move_and_delete_together() {
+    let mut h = harness();
+    let before = objects(&h);
+    assert_eq!(before.len(), 4);
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    h.get_by_label("4 objects selected");
+    assert!(h.state().views[0].selected_text().is_none_or(|t| t.is_empty()), "objects, not the page's text");
+    keys(&mut h, Modifiers::SHIFT, Key::ArrowRight);
+    assert_eq!(can_undo(&h, 0).as_deref(), Some("Move objects"));
+    for (old, new) in before.iter().zip(objects(&h)) {
+        assert!((new.rect[0] - old.rect[0] - 10.0).abs() < 0.01, "{old:?} -> {new:?}");
+    }
+    h.get_by_label("4 objects selected");
+    keys(&mut h, Modifiers::NONE, Key::Delete);
+    assert!(objects(&h).is_empty(), "{:?}", objects(&h));
+    assert_eq!(can_undo(&h, 0).as_deref(), Some("Delete content"));
+    keys(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(objects(&h).len(), 4, "one undo brings every object back");
+}
+
+/// In a paragraph open for typing, âŒ˜A selects its text, as before.
+#[test]
+fn command_a_in_an_open_paragraph_selects_its_text_not_the_objects() {
+    let mut h = harness();
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    assert!(h.query_all_by_label_contains("objects selected").next().is_none());
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph stays open");
+}
+
+/// âŒ˜C, âŒ˜X and âŒ˜V take the objects selected together: a paste onto their own page lands 18 pt down
+/// and right, selected; a paste into another document draws them there; a cut is one step.
+#[test]
+fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_document() {
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    let unchanged = can_undo(&h, 0);
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    keys(&mut h, Modifiers::COMMAND, Key::C);
+    assert_eq!(can_undo(&h, 0), unchanged, "a copy changes nothing");
+    assert!(h.state().object_clipboard.is_some());
+    keys(&mut h, Modifiers::COMMAND, Key::V);
+    assert_eq!(can_undo(&h, 0).as_deref(), Some("Paste"));
+    let pasted = texts(&h, 0);
+    for text in ["Group headline", "Keep here", "Added note"] {
+        assert_eq!(pasted.iter().filter(|t| t.contains(text)).count(), 2, "{text}: {pasted:?}");
+    }
+    assert!(h.query_all_by_label_contains("objects selected").next().is_some(), "the pasted objects are selected");
+    let moved = objects(&h).into_iter().filter(|o| o.text.as_deref() == Some("Keep here")).map(|o| o.rect).collect::<Vec<_>>();
+    assert!((moved[1][0] - moved[0][0] - 18.0).abs() < 0.01 && (moved[0][1] - moved[1][1] - 18.0).abs() < 0.01, "{moved:?}");
+
+    // Into another open document, where it was: exactly over its own copy of the same page.
+    h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
+    h.run_steps(4);
+    let other = h.state().active.unwrap();
+    assert_eq!(other, 1);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::EditText;
+    h.run_steps(2);
+    keys(&mut h, Modifiers::COMMAND, Key::V);
+    assert_eq!(can_undo(&h, other).as_deref(), Some("Paste"));
+    let there = texts(&h, other);
+    assert!(["Group headline", "Keep here", "Added note"].iter().all(|t| there.iter().any(|x| x.contains(t))), "{there:?}");
+
+    // Cut: copied, then deleted in one step; a paste brings it back.
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    keys(&mut h, Modifiers::COMMAND, Key::X);
+    assert!(texts(&h, other).is_empty(), "{:?}", texts(&h, other));
+    assert_eq!(can_undo(&h, other).as_deref(), Some("Delete content"));
+    keys(&mut h, Modifiers::COMMAND, Key::V);
+    assert!(texts(&h, other).iter().any(|t| t.contains("Added note")));
+}
+
+/// What another application (or another copy) put on the clipboard since wins ⌘V: the objects
+/// paste only while it still holds the text their copy put there.
+#[test]
+fn a_newer_copy_elsewhere_wins_over_the_copied_objects() {
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    keys(&mut h, Modifiers::COMMAND, Key::C);
+    let copied = h.state().object_clipboard.as_ref().unwrap().clip().text();
+    assert!(copied.contains("Group headline") && copied.contains("Added note"), "{copied}");
+    let before = can_undo(&h, 0);
+    h.event(egui::Event::Paste("a word copied in another application".into()));
+    h.run_steps(4);
+    assert_eq!(can_undo(&h, 0), before, "the newer text is not the objects");
+    h.event(egui::Event::Paste(copied.replace('\n', "\r\n")));
+    h.run_steps(4);
+    assert_eq!(can_undo(&h, 0).as_deref(), Some("Paste"));
+}

@@ -1,3 +1,4 @@
+use super::setups::{self, PrinterSetup};
 use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,12 @@ pub enum Handling {
     /// Shipping label: cut to the printed area, turned upright, one per sheet.
     Label,
 }
+
+/// The percent a custom scale can be (the dialog's field and a saved setting).
+pub const CUSTOM_SCALE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
+
+/// The resolutions the Print dialog offers for Print as image, in dots per inch.
+pub const IMAGE_DPI: [f64; 3] = [150.0, 300.0, 600.0];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
@@ -45,11 +52,17 @@ pub struct PrintDraft {
     pub size: SizeMode,
     pub custom_scale: f64,
     pub per_sheet: usize,
+    /// Pages per sheet: Custom, `cols` across by `rows` down instead of `per_sheet`.
+    pub custom_grid: bool,
+    pub cols: usize,
+    pub rows: usize,
     pub order: PageOrder,
     pub border: bool,
     pub auto_rotate: bool,
     pub booklet_subset: BookletSubset,
     pub binding: Binding,
+    /// Booklet creep compensation, points per sheet.
+    pub creep: f64,
     pub poster_scale: f64,
     pub overlap: f64,
     pub cut_marks: bool,
@@ -83,6 +96,12 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// Whether each printer's driver takes two-sided settings, as read in the background for
+    /// the printer picked (see [`TwoSidedSource`](super::TwoSidedSource)); `None` when it couldn't be read.
+    pub two_sided: std::collections::BTreeMap<String, Option<bool>>,
+    /// The paper, sizing and two-sided choice each printer was last printed with, the printer
+    /// printed to last first; kept across restarts (#2001).
+    pub setups: Vec<(String, PrinterSetup)>,
 }
 
 impl Default for PrintDraft {
@@ -106,11 +125,15 @@ impl Default for PrintDraft {
             size: SizeMode::Fit,
             custom_scale: 100.0,
             per_sheet: 2,
+            custom_grid: false,
+            cols: 2,
+            rows: 1,
             order: PageOrder::Horizontal,
             border: false,
             auto_rotate: true,
             booklet_subset: BookletSubset::BothSides,
             binding: Binding::Left,
+            creep: 0.0,
             poster_scale: 200.0,
             overlap: 18.0,
             cut_marks: true,
@@ -131,6 +154,8 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            two_sided: Default::default(),
+            setups: Vec::new(),
         }
     }
 }
@@ -154,6 +179,40 @@ impl PrintDraft {
         {
             self.paper = paper;
         }
+    }
+
+    /// Remember this draft's paper, sizing and two-sided choice for its printer, after printing
+    /// to it (#2001). Save as PDF has none to remember.
+    pub fn remember_setup(&mut self) {
+        let Some(printer) = self.printer.clone() else { return };
+        // Label's stock is that job's; the printer keeps the paper Label replaced.
+        let paper = if self.handling == Handling::Label { self.paper_before_label.unwrap_or(self.paper) } else { self.paper };
+        let setup = PrinterSetup { paper, size: self.size, custom_scale: self.custom_scale, duplex: self.duplex };
+        setups::record(&mut self.setups, &printer, setup);
+    }
+
+    /// Bring back what the chosen printer was last printed with, when it has been printed to
+    /// (#2001); a printer never printed to keeps the dialog's choices. While Label holds the
+    /// label stock, the printer's paper is what leaving Label gives back.
+    pub fn apply_setup(&mut self) {
+        let Some(printer) = self.printer.as_deref() else { return };
+        let Some(setup) = self.setups.iter().find(|(name, _)| name == printer).map(|(_, s)| *s) else { return };
+        self.size = setup.size;
+        self.custom_scale = setup.custom_scale;
+        self.duplex = setup.duplex;
+        let paper = setup.paper.min(PAPERS.len() - 1);
+        if self.handling == Handling::Label {
+            self.paper_before_label = Some(paper);
+        } else {
+            self.paper = paper;
+        }
+        self.sheet = 0;
+    }
+
+    /// The printer printed to last, while `printers` still lists it (#2001).
+    pub fn last_printer<'a>(&self, printers: &'a [spool::Printer]) -> Option<&'a spool::Printer> {
+        let (last, _) = self.setups.first()?;
+        printers.iter().find(|p| p.name == *last)
     }
 
     /// The engine settings for this draft (page count and labels from the document).
@@ -180,13 +239,20 @@ impl PrintDraft {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
                 m => m,
             }),
-            Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, per_sheet, .. } => {
-                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+            Handling::Multiple => {
+                let grid = if self.custom_grid {
+                    Layout::grid(self.cols, self.rows).ok_or_else(|| tl!("Columns and rows must each be 1 to 99.").to_string())?
+                } else {
+                    Layout::multiple(self.per_sheet)
+                };
+                match grid {
+                    Layout::Multiple { cols, rows, per_sheet, custom, .. } => {
+                        Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate, custom }
+                    }
+                    other => other,
                 }
-                other => other,
-            },
-            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
+            }
+            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding, creep: self.creep },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
@@ -196,9 +262,14 @@ impl PrintDraft {
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            raster: self.raster(),
             crops: self.crops.clone(),
         })
+    }
+
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    fn raster(&self) -> Option<print::Raster> {
+        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale })
     }
 
     fn cut_and_stack(&self) -> bool {
@@ -222,7 +293,7 @@ impl PrintDraft {
                 self.duplex
             },
             scaling: spool::Scaling::Exact,
-            grayscale: self.grayscale,
+            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {

@@ -11,6 +11,52 @@ thread_local! {
     pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, (Option<i64>, bool)>> = std::cell::RefCell::new(HashMap::new());
     /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
     static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// How deep `Document::scan_for` is nested on this thread, and how many indirect `/Length`
+    /// values the outermost scan and those inside it have resolved ([`ScanLengths`]).
+    static SCAN_LENGTHS: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The indirect `/Length` values a scan of the file for an object may resolve, shared with the
+/// scans it leads to. Each header in the file that starts with the object's number is parsed, and
+/// a `/Length` that names an object the cross-reference table cannot place scans the file for that
+/// one: a damaged file with many such headers, each naming another missing object, would read the
+/// whole file once per header. Past the budget a `/Length` is left unresolved, and the stream is
+/// read as before resolution, by its `endstream`.
+pub(super) struct ScanLengths;
+
+impl ScanLengths {
+    /// A real object is defined once per revision, and its `/Length` once per definition.
+    pub(super) const MAX: u32 = 32;
+
+    /// Marks a scan as running; the outermost one starts the budget afresh.
+    pub(super) fn enter() -> Self {
+        SCAN_LENGTHS.with(|c| {
+            let (depth, used) = c.get();
+            c.set((depth.saturating_add(1), if depth == 0 { 0 } else { used }));
+        });
+        ScanLengths
+    }
+
+    /// Whether one more `/Length` may be resolved, counting it if so.
+    pub(super) fn take(&self) -> bool {
+        SCAN_LENGTHS.with(|c| {
+            let (depth, used) = c.get();
+            if used >= Self::MAX {
+                return false;
+            }
+            c.set((depth, used.saturating_add(1)));
+            true
+        })
+    }
+}
+
+impl Drop for ScanLengths {
+    fn drop(&mut self) {
+        SCAN_LENGTHS.with(|c| {
+            let (depth, used) = c.get();
+            c.set((depth.saturating_sub(1), used));
+        });
+    }
 }
 
 /// Unsaved edits read so far on this thread: a load during which this changes depended on one.
@@ -40,6 +86,12 @@ impl LoadGuard {
             Some(LoadGuard)
         })
     }
+}
+
+/// Whether an object is being loaded on this thread: [`LENGTHS`] holds only while one is, since
+/// it is cleared when the outermost load ends.
+pub(super) fn loading() -> bool {
+    LOADING.with(|l| !l.borrow().is_empty())
 }
 
 /// What loading a file object gave, kept in the document's cache either way.

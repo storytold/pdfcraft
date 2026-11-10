@@ -58,10 +58,15 @@ mod editing;
 mod home;
 mod hotbar;
 mod panels;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
+pub mod panes;
+pub use print_ui::{
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
+    system_two_sided,
+};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+pub mod viewer_prefs;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
@@ -80,6 +85,7 @@ use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
@@ -108,10 +114,13 @@ use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
+use dialogs::convert_colours_ui;
 use dialogs::credits;
+use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
+use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
@@ -187,8 +196,12 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_route;
 use workflows::ocr_ui;
 use workflows::ocr_verify;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_web;
 use workflows::optimize_ui;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
@@ -258,6 +271,17 @@ struct PendingOpen {
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
+    /// A reply taken from `receiver` and kept back for later (a password prompt waiting for an
+    /// earlier file's password retry).
+    ready: Option<open_worker::ResultKind>,
+}
+
+/// A file named while the worker's queue was full: submitted once it has room.
+#[cfg(not(target_arch = "wasm32"))]
+struct DeferredOpen {
+    path: String,
+    then: Option<&'static str>,
+    display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
@@ -265,6 +289,8 @@ struct PendingOpen {
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
 
 pub struct PdfCraftApp {
+    /// Split view (`panes`); which pane shows each tab is its view's.
+    pub panes: panes::Panes,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
     pub session: Session,
@@ -305,6 +331,19 @@ pub struct PdfCraftApp {
     /// The user closed the right panel, so opening a document leaves it closed instead of
     /// showing its comments or bookmarks (#1590). Remembered across restarts.
     pub right_panel_closed: bool,
+    /// A portfolio that just opened and the name-tree key of the attachment it presents first
+    /// (`/Collection /D`), opened by [`Self::present_portfolios`] on the next frame while the
+    /// portfolio is still the active tab.
+    portfolio_initial: Option<(DocId, String)>,
+    /// The document whose tab [`Self::present_portfolios`] last saw active.
+    portfolio_seen: Option<DocId>,
+    /// Browser file reads still under way (drops, the web file picker): each file opens in front
+    /// when it arrives.
+    #[cfg(target_arch = "wasm32")]
+    web_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// A portfolio's file list is showing in place of this panel (`None`: the panel was
+    /// closed), given back when its tab is left.
+    portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -346,6 +385,19 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
+    /// them into the page (#2149). Off once the user says not to ask again.
+    pub ask_to_lock_signatures: bool,
+    /// Documents with a Fill & Sign signature placed since their last save, asked about on
+    /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
+    pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    pub(crate) pending_lock: Option<editing::PendingLock>,
+    /// The document whose lock question was just answered: the save that follows the answer
+    /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
+    /// save that fails or is cancelled asks again next time.
+    pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
+    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub fill_tool: fill_sign::FillTool,
@@ -369,6 +421,11 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
+    pub spooler: Option<Spooler>,
+    /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
+    /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
+    pub two_sided_source: Option<TwoSidedSource>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
@@ -404,6 +461,9 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: web and email addresses written as plain page text open on a click, like
+    /// links (#4207).
+    pub text_links: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
@@ -415,6 +475,13 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Files waiting for room in the worker's bounded queue, in the order they were named.
+    #[cfg(not(target_arch = "wasm32"))]
+    deferred_opens: std::collections::VecDeque<DeferredOpen>,
+    /// The open retrying a closed password prompt's file with its password: replies behind it
+    /// wait for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    password_retry: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -467,13 +534,13 @@ pub struct PdfCraftApp {
     startup_superseded: bool,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
-    /// Mirrors "some document has unsaved work" each frame, so the web page's `beforeunload` handler can read it (#812).
+    /// Mirrors "some document has unsaved work, or an OCR review is open" each frame, so the web page's `beforeunload` handler can read it (#812).
     pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
-    /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
+    /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
@@ -492,6 +559,8 @@ pub struct PdfCraftApp {
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
+    /// Attachment description being edited: (document, name-tree key, description).
+    pub attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
@@ -514,6 +583,9 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// A dynamic form's preSign step, run when signing a field began: the document and its undo
+    /// depth after the step. Taken back if signing ends without a signature.
+    pub(crate) presign: Option<(DocId, usize)>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).
@@ -524,10 +596,27 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// The web build's files being read in Web Workers (progress in `ocr_batch`).
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_batch: Option<ocr_web::Batch>,
+    /// The web build's files chosen before the text recognition models were downloaded, with
+    /// the settings they were chosen with: read once the models are ready.
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Frames in a row whose logic or drawing panicked, and whether this frame's did
+    /// (`frame_guard`, #3914).
+    panicking_frames: u32,
+    frame_panicked: bool,
+    /// The last `logic` ran without a `ui` after it yet (eframe skips `ui` while the window is
+    /// hidden).
+    logic_without_ui: bool,
+    /// Tests: the part of the next frame that panics on purpose.
+    #[cfg(test)]
+    panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
@@ -592,6 +681,10 @@ pub struct PdfCraftApp {
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
     pub comment_clipboard: Option<CommentClip>,
+    /// Objects copied together in Edit a PDF, to paste into this or another document (#5989).
+    pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
+    pub(crate) object_clip_mark: app::ObjectClipMark,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -628,6 +721,9 @@ pub struct PdfCraftApp {
     /// Entries left by a previous session, offered in the Recovery dialog.
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
+    /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
+    /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
+    recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
@@ -664,6 +760,9 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
+    pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
+    pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).
@@ -719,6 +818,9 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
+    /// A document just opened asks for its window to fit its first page or to be centred
+    /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
+    pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }

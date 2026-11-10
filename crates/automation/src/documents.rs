@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
@@ -135,18 +135,18 @@ impl Automation {
     pub(crate) fn doc_save_with(&mut self, a: &Args, write: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        let target = match a.opt_str("path")? {
+        let explicit = a.opt_str("path")?;
+        let target = match explicit {
             Some(p) => self.resolve(p, true)?,
             None => {
                 // Saving in place writes where the file was opened from, which the read root
-                // allows and the write root may not.
+                // allows and the write root may not. It also goes through --root again: a
+                // folder on the remembered path may have become a link out since (#1791).
                 let own = doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?;
-                let own_path = PathBuf::from(&own);
-                self.check_roots(&own, &own_path, file_access::Access::Write)?;
-                own_path
+                self.resolve(&own, true)?
             }
         };
-        let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        let same_file = explicit.is_none() || doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
@@ -360,12 +360,15 @@ impl Automation {
             ("discard_thumbnails", &mut settings.discard_thumbnails),
             ("discard_alternate_images", &mut settings.discard_alternate_images),
             ("discard_tags", &mut settings.discard_tags),
+            ("discard_search_index", &mut settings.discard_search_index),
             ("discard_print_settings", &mut settings.discard_print_settings),
+            ("discard_form_actions", &mut settings.discard_form_actions),
             ("flate_unencoded", &mut settings.flate_unencoded),
             ("object_streams", &mut settings.object_streams),
             ("lzw_to_flate", &mut settings.lzw_to_flate),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
+            ("discard_external_refs", &mut settings.discard_external_refs),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
@@ -470,12 +473,17 @@ impl Automation {
             "image_bytes_after": o.image_bytes_after,
             "thumbnails": o.thumbnails,
             "alternate_images": o.alternate_images,
+            "search_indexes": o.search_indexes,
             "tags_removed": o.tags_removed,
+            "print_settings": o.print_settings,
+            "form_actions": o.form_actions,
             "streams_compressed": o.streams_compressed,
             "lzw_streams": o.lzw_streams,
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "external_links": o.external_links,
+            "external_bookmarks": o.external_bookmarks,
             "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
@@ -502,6 +510,23 @@ impl Automation {
     pub(crate) fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
+        self.applied(a)
+    }
+
+    /// `text_prepare`: make a page's grouped text editable, with what that edit itself prepared,
+    /// repaired and left grouped.
+    pub(crate) fn prepare_text(&mut self, a: &Args, page: usize) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let prepared = self.session.prepare_text(id, page).map_err(failed)?;
+        let mut out = self.applied(a)?;
+        out["prepared_groups"] = json!(prepared.expanded);
+        out["repaired_fonts"] = json!(prepared.repaired_fonts);
+        out["refused_groups"] = json!(prepared.refused);
+        Ok(out)
+    }
+
+    /// The document's summary after an edit, with what it stored as typed but drew with `?`.
+    fn applied(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut out = summary(doc);
         // Text the edit stored as typed but drew with `?` (its font can't draw it): said, not silent.
@@ -606,11 +631,33 @@ impl Automation {
                 replace,
                 file: self.mark_file(a)?,
             },
+            "doc_printer_marks" => {
+                use pdfcraft_engine::PrinterMarks;
+                let flag = |k: &str, default: bool| -> Result<bool> { Ok(a.opt_bool(k)?.unwrap_or(default)) };
+                let (y, m, d) = self.session.today();
+                let settings = PrinterMarks {
+                    trim: flag("trim", true)?,
+                    bleed: flag("bleed", true)?,
+                    registration: flag("registration", true)?,
+                    color_bars: flag("color_bars", true)?,
+                    page_info: flag("page_info", true)?,
+                    line_weight: a.opt_num("line_weight")?.unwrap_or(0.25),
+                    make_room: match a.opt_num("make_room")? {
+                        Some(r) if r < 0.0 => None,
+                        Some(r) => Some(r),
+                        None => Some(36.0),
+                    },
+                    label: a.opt_str("label")?.map(str::to_string).unwrap_or_else(|| self.doc(a).map(|d| d.name.clone()).unwrap_or_default()),
+                    date: a.opt_str("date")?.map(str::to_string).unwrap_or_else(|| format!("{y:04}-{m:02}-{d:02}")),
+                };
+                Edit::AddPrinterMarks { pages, settings, replace: a.opt_bool("replace")?.unwrap_or(true) }
+            }
             _ => {
                 let kind = match a.str("kind")? {
                     "header_footer" => MarkKind::HeaderFooter,
                     "watermark" => MarkKind::Watermark,
                     "background" => MarkKind::Background,
+                    "printer_marks" => MarkKind::PrinterMarks,
                     other => return Err(ToolError::InvalidArgs(format!("unknown kind {other:?}"))),
                 };
                 Edit::RemoveMarks { kind }
