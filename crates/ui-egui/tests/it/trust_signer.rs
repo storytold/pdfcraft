@@ -43,6 +43,8 @@ fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// One click trusts the signer the row shows, and as a signer only: never the root the document embeds, and never as a
+/// root.
 #[test]
 fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
     let dir = dir();

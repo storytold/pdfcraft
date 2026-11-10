@@ -8276,6 +8276,8 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     doc
 }
 
+/// The signed document's revisions, then its verdict as trust changes: cleared, a signer-only certificate, an unknown
+/// scope refused, and the same certificate from a PKCS #7 bundle.
 fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Path) {
     // A full rewrite is refused for a signed document.
     assert!(matches!(a.call("doc_save", &json!({ "doc": doc, "path": "copy.pdf", "full": true })), Err(ToolError::Failed(_))));

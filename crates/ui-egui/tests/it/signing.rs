@@ -167,6 +167,8 @@ fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::
     h.get_by_label("At least one signature has problems.");
 }
 
+/// The Signatures panel's one-click trust makes the signature valid without an edit, and the Certificate Viewer shows
+/// the signer as trusted for its signatures.
 fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     // Signatures panel: expand, trust the signer → valid.
     h.get_by_label_contains("Signed by Grace Hopper").click();
@@ -277,6 +279,7 @@ fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
     assert_eq!(h.state().views.len(), 1);
 }
 
+/// Trusted signers and the digital ID list survive saving and restoring the settings.
 fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     // Trusted certificates and the ID list persist.
     let saved = h.state().persist();
