@@ -433,14 +433,20 @@ fn the_border_is_one_button_in_the_bar_and_its_controls_a_popup() {
     h.get_by_label("Other colour…").click();
     h.run_steps(4);
     assert!(h.query_by_label("1 pt").is_some(), "opening the colour picker leaves the popup open");
+    // Pick another colour in it (Blue 200), so Apply has to store it.
+    h.get_by_label("B").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("200".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.query_by_label("1 pt").is_some(), "using the picker leaves the popup open");
     h.get_by_label("Apply").click();
     h.run_steps(4);
-    // The picker holds 8-bit colour, so the colour it applies is the nearest one.
+    // The picker starts from the current colour (Red, held as 8-bit 227, 33, 33) and applies
+    // what was picked in it.
     let applied = h.state().fill_text_border_color.expect("a colour of its own");
-    assert!(
-        applied.iter().zip([0.89, 0.13, 0.13]).all(|(a, b)| (a - b).abs() < 1.0 / 255.0),
-        "the picker starts from the current colour: {applied:?}"
-    );
+    assert!(applied.iter().zip([227.0, 33.0, 200.0]).all(|(a, b)| (a * 255.0 - b).abs() < 0.5), "the picked colour is applied: {applied:?}");
     assert!(h.query_by_label("1 pt").is_some(), "applying a picked colour leaves the popup open");
     assert!(h.query_by_label("Apply").is_none(), "and closes the picker");
 
