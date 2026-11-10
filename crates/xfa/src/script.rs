@@ -3,11 +3,12 @@
 //! survive undo and reopening), and laying the form out again after scripts changed it.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::data::{DataNode, data_path, parse_datasets};
-use crate::model::{Access, Field, Node, Presence, Script, SomIndices, Template};
+use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template};
 use crate::{Report, XfaError};
 
 /// Private key on the AcroForm: presence scripts set, by SOM path.
@@ -15,6 +16,9 @@ pub const OVERRIDES_KEY: &[u8] = b"PCXfaOverrides";
 
 const MAX_DEPTH: usize = 64;
 const MAX_EVENTS: usize = 20_000;
+/// Most `/Fields` and `/Kids` entries [`fields_by_som`] looks at in all: fields already read, and
+/// entries that are not references, included.
+const MAX_FIELD_STEPS: usize = 1 << 20;
 /// Most bytes of script the events hold together: each instance of a repeated subform holds its
 /// own copy, so a long script repeated many times stops here (as much as the XFA packets hold).
 pub(crate) const MAX_EVENT_SCRIPT_BYTES: usize = 64 << 20;
@@ -49,6 +53,9 @@ pub struct FormNode {
     pub children: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
     pub display_picture: Option<String>,
+    /// The object's attributes and property elements as the template gives them, for scripts to
+    /// read: shared with the template and every other instance of the object, never copied.
+    pub props: Arc<Props>,
 }
 
 /// A script the template runs for an event of one node instance.
@@ -269,6 +276,7 @@ impl Walker<'_> {
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
+            props: Arc::clone(&f.common.props),
         }
     }
 
@@ -333,6 +341,7 @@ impl Walker<'_> {
                             index,
                             children,
                             display_picture: None,
+                            props: Arc::clone(&sf.common.props),
                         });
                     }
                 }
@@ -349,6 +358,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
+                        props: Arc::clone(&a.common.props),
                         ..Default::default()
                     });
                 }
@@ -360,6 +370,7 @@ impl Walker<'_> {
                         som: som.clone(),
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
+                        props: Arc::clone(&d.common.props),
                         presence: self.presence(d.common.name.as_deref(), &som, d.common.presence),
                         access: "open".into(),
                         occur_min: 1,
@@ -393,6 +404,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
+                        props: Arc::clone(&g.common.props),
                         ..Default::default()
                     });
                 }
@@ -406,32 +418,48 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
+    form_tree_paged(tpl, data, ov, &HashMap::new())
+}
+
+/// [`form_tree`] for a laid-out form whose page areas made `uses` pages each, by name
+/// ([`page_area_uses`]): the master content of each of those pages is a node of its own
+/// (`master[0]`, `master[1]`, …), as the layout names its fields, so a button repeated on every
+/// page runs its click script as itself. A page area not in `uses` gets one node.
+pub fn form_tree_paged(tpl: &Template, data: Option<&DataNode>, ov: &Overrides, uses: &HashMap<String, usize>) -> LiveForm {
     let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
     // Page masters' fields (Print and Save buttons, page numbers) belong to the layout model
-    // in XFA; they hang off the root here, under their page area's name, as the layouter
-    // names them, so their click scripts can run.
+    // in XFA; they hang off the root here, under their page area's name, one node per page made
+    // from it, as the layouter names them, so their click scripts can run.
     if let Some(ps) = &tpl.root.page_set {
         for (i, area) in ps.areas.iter().enumerate() {
-            let som = area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
-            let children = w.children(&area.items, &som, 1);
-            if children.is_empty() {
-                continue;
+            // A name two areas share stays one node: its pages can't be told apart by it.
+            let unique = area.name.as_ref().is_some_and(|n| ps.areas.iter().filter(|a| a.name.as_ref() == Some(n)).count() == 1);
+            let pages = match &area.name {
+                Some(n) if unique => uses.get(n).copied().unwrap_or(1).clamp(1, crate::layout::MAX_PAGES),
+                _ => 1,
+            };
+            for page in 0..pages {
+                let som = area.name.clone().map(|n| format!("{n}[{page}]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
+                let children = w.children(&area.items, &som, 1);
+                if children.is_empty() {
+                    break;
+                }
+                root_node.children.push(FormNode {
+                    name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
+                    som,
+                    kind: Some(NodeKind::Area),
+                    presence: "visible".into(),
+                    access: "open".into(),
+                    occur_min: 1,
+                    occur_max: Some(1),
+                    index: page,
+                    children,
+                    ..Default::default()
+                });
             }
-            root_node.children.push(FormNode {
-                name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
-                som,
-                kind: Some(NodeKind::Area),
-                presence: "visible".into(),
-                access: "open".into(),
-                occur_min: 1,
-                occur_max: Some(1),
-                index: 0,
-                children,
-                ..Default::default()
-            });
         }
     }
     LiveForm { root: root_node, events: w.events, truncated: w.truncated }
@@ -440,12 +468,15 @@ pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> Liv
 /// Does the template declare any script (an event, calculation or validation)? Forms without
 /// one need no live form and run nothing.
 pub fn has_scripts(tpl: &Template) -> bool {
+    /// Is any of `s` a non-blank script?
     fn any(s: &[Script]) -> bool {
         s.iter().any(|s| !s.text.trim().is_empty())
     }
+    /// Has field `f` an event, calculate or validate script?
     fn field(f: &Field) -> bool {
         any(&f.scripts) || [&f.calculate, &f.validate].into_iter().flatten().any(|s| !s.text.trim().is_empty())
     }
+    /// Has any object among `nodes` (and their containers, `depth` levels down) a script?
     fn walk(nodes: &[Node], depth: usize) -> bool {
         depth <= MAX_DEPTH
             && nodes.iter().any(|n| match n {
@@ -459,81 +490,105 @@ pub fn has_scripts(tpl: &Template) -> bool {
     any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
-/// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
-/// instance of a repeating subform hide them all).
-pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
-    /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
-    /// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
-    /// draw, area or subform shares its parent's SOM path, so it takes no override of its own.
-    fn walk(nodes: &mut [Node], parent_som: &str, ov: &Overrides, depth: usize) {
-        if depth > MAX_DEPTH {
-            return;
-        }
-        let sibs = SomIndices::of(nodes);
-        for (i, n) in nodes.iter_mut().enumerate() {
-            let sib = sibs.at(i);
-            let name_default = match n {
-                Node::Field(_) => Some("field"),
-                Node::ExclGroup(_) => Some("group"),
-                _ => None,
-            };
-            let name = n.common().name.as_deref().or(name_default);
-            let som = child_som(parent_som, name, sib);
-            // An unnamed draw, area or subform has no SOM name: `som` is its parent's, and so are
-            // the overrides under it.
-            let presence = name.and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
-            let access = name.and_then(|_| ov.access.get(&som)).cloned();
-            match n {
-                Node::Subform(s) => {
-                    if let Some(p) = presence {
-                        s.common.presence = p;
-                    }
-                    walk(&mut s.children, &som, ov, depth + 1);
+/// Does any field of the template (in the body, an exclusion group or a master page) have an
+/// `enter` or `exit` script? Forms without one have nothing to run when the focus moves.
+pub fn has_focus_scripts(tpl: &Template) -> bool {
+    /// Has field `f` a non-blank enter or exit script?
+    fn field(f: &Field) -> bool {
+        f.scripts.iter().any(|s| matches!(s.activity.as_str(), "enter" | "exit") && !s.text.trim().is_empty())
+    }
+    /// Has any field among `nodes` (and their containers, `depth` levels down) one?
+    fn walk(nodes: &[Node], depth: usize) -> bool {
+        depth <= MAX_DEPTH
+            && nodes.iter().any(|n| match n {
+                Node::Subform(sf) => walk(&sf.children, depth + 1),
+                Node::Area(a) => walk(&a.children, depth + 1),
+                Node::Field(f) => field(f),
+                Node::ExclGroup(g) => g.fields.iter().any(field),
+                Node::Draw(_) => false,
+            })
+    }
+    walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
+}
+
+/// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
+/// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
+/// draw, area or subform shares its parent's SOM path, so it takes no override of its own.
+pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Overrides, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let sibs = SomIndices::of(nodes);
+    for (i, n) in nodes.iter_mut().enumerate() {
+        let sib = sibs.at(i);
+        let name_default = match n {
+            Node::Field(_) => Some("field"),
+            Node::ExclGroup(_) => Some("group"),
+            _ => None,
+        };
+        let name = n.common().name.as_deref().or(name_default);
+        let som = child_som(parent_som, name, sib);
+        // An unnamed draw, area or subform has no SOM name: `som` is its parent's, and so are
+        // the overrides under it.
+        let presence = name.and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
+        let access = name.and_then(|_| ov.access.get(&som)).cloned();
+        match n {
+            Node::Subform(s) => {
+                if let Some(p) = presence {
+                    s.common.presence = p;
                 }
-                Node::Area(a) => {
-                    if let Some(p) = presence {
-                        a.common.presence = p;
-                    }
-                    walk(&mut a.children, &som, ov, depth + 1);
+                apply_overrides_to(&mut s.children, &som, ov, depth + 1);
+            }
+            Node::Area(a) => {
+                if let Some(p) = presence {
+                    a.common.presence = p;
                 }
-                Node::Field(f) => {
-                    if let Some(p) = presence {
-                        f.common.presence = p;
-                    }
-                    if let Some(a) = access {
-                        f.access = match a.as_str() {
-                            "readOnly" => Access::ReadOnly,
-                            "protected" => Access::Protected,
-                            "nonInteractive" => Access::NonInteractive,
-                            _ => Access::Open,
-                        };
-                    }
+                apply_overrides_to(&mut a.children, &som, ov, depth + 1);
+            }
+            Node::Field(f) => {
+                if let Some(p) = presence {
+                    f.common.presence = p;
                 }
-                Node::Draw(d) => {
-                    if let Some(p) = presence {
-                        d.common.presence = p;
-                    }
+                if let Some(a) = access {
+                    f.access = match a.as_str() {
+                        "readOnly" => Access::ReadOnly,
+                        "protected" => Access::Protected,
+                        "nonInteractive" => Access::NonInteractive,
+                        _ => Access::Open,
+                    };
                 }
-                Node::ExclGroup(g) => {
-                    if let Some(p) = presence {
-                        g.common.presence = p;
-                    }
-                    let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                    let fsibs = SomIndices::of(&fields);
-                    for (fi, f) in g.fields.iter_mut().enumerate() {
-                        let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
-                        if let Some(p) = ov.presence.get(&fsom) {
-                            f.common.presence = Presence::parse(Some(p));
-                        }
+            }
+            Node::Draw(d) => {
+                if let Some(p) = presence {
+                    d.common.presence = p;
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(p) = presence {
+                    g.common.presence = p;
+                }
+                let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                let fsibs = SomIndices::of(&fields);
+                for (fi, f) in g.fields.iter_mut().enumerate() {
+                    let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
+                    if let Some(p) = ov.presence.get(&fsom) {
+                        f.common.presence = Presence::parse(Some(p));
                     }
                 }
             }
         }
     }
+}
+
+/// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
+/// instance of a repeating subform hide them all). Page-master content is left as it is: a page
+/// area makes many pages, each with its own SOM path, so `ov` is applied to it page by page as
+/// the pages are laid out ([`crate::layout::layout_with_overrides`]).
+pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
     let mut t = tpl.clone();
     if !ov.is_empty() {
         let mut root = vec![Node::Subform(Box::new(t.root.clone()))];
-        walk(&mut root, "", ov, 0);
+        apply_overrides_to(&mut root, "", ov, 0);
         if let Some(Node::Subform(r)) = root.pop() {
             t.root = *r;
         }
@@ -543,12 +598,35 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
 
 /// The generated fields of the AcroForm by SOM path: `som → (field name, is a radio group)`.
 pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
-    fn walk(doc: &Document, r: pdfcraft_cos::ObjRef, prefix: &str, out: &mut HashMap<String, String>, depth: usize) {
-        if depth > MAX_DEPTH || out.len() > 100_000 {
-            return;
+    // Each field is read once: a field listed twice in `/Kids` (or among its own kids) would
+    // otherwise be walked again for every path to it, doubling the work at each level. Fields
+    // are told apart by object number, as `Document::get` finds them, so `5 0 R` and `5 1 R`
+    // are one. A field is read again only when it is reached shallower than before: first reached
+    // at `MAX_DEPTH`, its kids would otherwise never be read. `steps` counts every entry looked at, references or not, so fields sharing one
+    // long `/Kids` array stay bounded too; `walk_all` returns false once it is spent, and every
+    // loop then stops.
+    struct Walk {
+        out: HashMap<String, String>,
+        /// The shallowest depth each object number was read at.
+        seen: HashMap<u32, usize>,
+        steps: usize,
+    }
+    fn walk_all(doc: &Document, kids: &[Object], prefix: &str, w: &mut Walk, depth: usize) -> bool {
+        kids.iter().all(|k| {
+            w.steps += 1;
+            if w.steps > MAX_FIELD_STEPS || w.out.len() > 100_000 {
+                return false;
+            }
+            k.as_ref().is_none_or(|r| walk(doc, r, prefix, w, depth))
+        })
+    }
+    fn walk(doc: &Document, r: pdfcraft_cos::ObjRef, prefix: &str, w: &mut Walk, depth: usize) -> bool {
+        if depth > MAX_DEPTH || w.seen.get(&r.num).is_some_and(|&read| read <= depth) {
+            return true;
         }
+        w.seen.insert(r.num, depth);
         let o = doc.get(r);
-        let Some(d) = o.as_dict() else { return };
+        let Some(d) = o.as_dict() else { return true };
         let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|s| s.to_text()));
         let name = match (&t, prefix.is_empty()) {
             (Some(t), true) => t.clone(),
@@ -558,19 +636,75 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
         if let Some(som) = d.get(crate::pdf::SOM_KEY).map(|s| doc.resolve(s)).and_then(|s| s.as_string().map(|s| s.to_text()))
             && t.is_some()
         {
-            out.insert(som, name.clone());
+            w.out.insert(som, name.clone());
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            for k in kids.iter().filter_map(Object::as_ref) {
-                walk(doc, k, &name, out, depth + 1);
+        // Read in place: a copy of the array at every level would cost its length each time.
+        let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+        walk_all(doc, kids.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default(), &name, w, depth + 1)
+    }
+    let Some((_, acro)) = acroform(doc) else { return HashMap::new() };
+    let fields = acro.get(b"Fields").map(|f| doc.resolve(f));
+    let mut w = Walk { out: HashMap::new(), seen: HashMap::new(), steps: 0 };
+    walk_all(doc, fields.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default(), "", &mut w, 0);
+    w.out
+}
+
+/// What a reset gives the field or exclusion group at `som` in the data: its template default
+/// as saved (a choice list's item value, not its shown text, as [`Field::saved_value`] gives
+/// it), or nothing when it has none. A group's default is the on value of the first of its
+/// buttons whose own default is that on value. `None` for an object a reset restores no value
+/// of: not a field or group of the template, or a button, signature or picture field.
+pub fn reset_default(tpl: &Template, som: &str) -> Option<String> {
+    match crate::data::template_object(tpl, som)? {
+        Node::Field(f) => {
+            if matches!(f.ui, crate::model::Ui::Button | crate::model::Ui::Signature | crate::model::Ui::ImageEdit) {
+                return None;
             }
+            Some(f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default())
+        }
+        Node::ExclGroup(g) => Some(
+            g.fields
+                .iter()
+                .find_map(|f| {
+                    let on = f.items.first().map(|s| s.trim()).filter(|s| !s.is_empty())?;
+                    (f.value.plain()?.trim() == on).then(|| on.to_string())
+                })
+                .unwrap_or_default(),
+        ),
+        _ => None,
+    }
+}
+
+/// How many pages the layout made from each named page area of `tpl`: the master content of the
+/// n-th page from area `master` is `master[n-1]`. Each page the layout wrote names its area
+/// ([`crate::AREA_KEY`]), so a page whose master fields are all hidden still counts; a file laid
+/// out before pages were named shows it by its generated fields. Areas neither shows are left out
+/// (one page's worth, to [`form_tree_paged`]).
+pub fn page_area_uses(doc: &Document, tpl: &Template) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let Some(ps) = &tpl.root.page_set else { return out };
+    let is_area = |name: &str| tpl.root.common.name.as_deref() != Some(name) && ps.areas.iter().any(|a| a.name.as_deref() == Some(name));
+    // The flat page list laying the form out writes.
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"Pages")).map(|p| doc.resolve(p)));
+    let kids =
+        pages.and_then(|p| p.as_dict().and_then(|d| d.get(b"Kids")).map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    for page in kids.iter().filter_map(Object::as_ref).take(crate::layout::MAX_PAGES) {
+        let page = doc.get(page);
+        let Some(name) = page.as_dict().and_then(|d| d.get(crate::AREA_KEY)).and_then(Object::as_string).map(PdfString::to_text) else { continue };
+        if is_area(&name) {
+            let pages = out.entry(name).or_insert(0);
+            *pages = pages.saturating_add(1).min(crate::layout::MAX_PAGES);
         }
     }
-    let mut out = HashMap::new();
-    let Some((_, acro)) = acroform(doc) else { return out };
-    let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    for f in fields.iter().filter_map(Object::as_ref) {
-        walk(doc, f, "", &mut out, 0);
+    for som in fields_by_som(doc).keys() {
+        let first = som.split('.').next().unwrap_or_default();
+        let Some((name, rest)) = first.split_once('[') else { continue };
+        let Some(index) = rest.strip_suffix(']').and_then(|i| i.parse::<usize>().ok()) else { continue };
+        if !is_area(name) {
+            continue;
+        }
+        let pages = out.entry(name.to_string()).or_insert(1);
+        *pages = (*pages).max(index.saturating_add(1)).min(crate::layout::MAX_PAGES);
     }
     out
 }
@@ -582,7 +716,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(tpl, &ov);
-    let form = crate::layout(&laid, data.as_ref())?;
+    let form = crate::layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
@@ -656,13 +790,39 @@ pub fn template_of(doc: &Document) -> Result<Template, XfaError> {
     if packets.xdp.trim().is_empty() {
         return Err(XfaError::Malformed("the XFA packets hold no template".into()));
     }
-    crate::parse(&packets.xdp).map(|(t, _)| t)
+    let (mut tpl, _) = crate::parse(&packets.xdp)?;
+    crate::linked_images::resolve(&mut tpl, doc);
+    Ok(tpl)
 }
 
 /// Whether the template field at `som` is multiline text without a fixed height.
 /// A change to its value can require a new layout, including new continuation pages.
 pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
     crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
+}
+
+/// Is the field at `som` embedded in rich text (a floating field, XFA 3.3 p. 1222)? Its value
+/// is shown in that text, so a new one needs the form laid out again. A page area's fields count
+/// too, and so does any field bound to the same data as an embedded one.
+pub fn field_is_embedded(tpl: &Template, som: &str) -> bool {
+    !tpl.embedded_paths.is_empty() && path_is_embedded(tpl, &data_path(tpl, som))
+}
+
+/// The fields rich text embeds, by the SOM path the layout gives them (a repeating subform's
+/// first instance), with their template defaults: what a reset gives a floating field that has
+/// no widget of its own.
+pub fn embedded_fields(tpl: &Template) -> Vec<(String, String)> {
+    crate::data::fields_with_ids(tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, f)| (som, f.value.plain().unwrap_or_default()))
+        .collect()
+}
+
+/// Does `path` hold the data of a field embedded in rich text, in any instance of a repeating
+/// subform? See [`field_is_embedded`].
+pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {
+    !tpl.embedded_paths.is_empty() && tpl.embedded_paths.contains(&path.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
 }
 
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a

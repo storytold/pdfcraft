@@ -209,6 +209,11 @@ impl ImageBudget {
         self.refused
     }
 
+    /// Charges `work` steps paid for out of another allowance, by a thread working on its own.
+    pub fn charge(&mut self, work: u64) {
+        self.work = self.work.saturating_sub(work);
+    }
+
     /// The steps of decoding still allowed.
     pub fn work_left(&self) -> u64 {
         self.work
@@ -241,12 +246,14 @@ pub struct DecodeBudget {
     bytes: usize,
     forms: usize,
     seen: HashSet<ObjRef>,
+    /// Decodes refused for lack of allowance ([`DecodeBudget::refused`]).
+    refusals: usize,
 }
 
 impl DecodeBudget {
     /// An allowance of `bytes` decoded bytes and `forms` form entries.
     pub fn new(bytes: usize, forms: usize) -> Self {
-        Self { limit: bytes, bytes, forms, seen: HashSet::new() }
+        Self { limit: bytes, bytes, forms, seen: HashSet::new(), refusals: 0 }
     }
 
     /// The allowance for one page: [`MAX_PAGE_DECODED`] bytes and [`MAX_PAGE_FORMS`] forms.
@@ -257,6 +264,22 @@ impl DecodeBudget {
     /// Decoded bytes still allowed.
     pub fn remaining(&self) -> usize {
         self.bytes
+    }
+
+    /// How many decodes were refused for lack of allowance: one that came once it was spent, or
+    /// ran past what was left. A decode that spent exactly what was left wasn't refused, so an
+    /// allowance used up to the byte has none.
+    pub fn refused(&self) -> usize {
+        self.refusals
+    }
+
+    /// Whether the allowance is spent and `stream`, which has data, would be refused, noting the
+    /// refusal ([`DecodeBudget::refused`]): a caller asks this before resolving the stream's
+    /// parameters, work the allowance doesn't count. A stream without data still reads.
+    pub fn refuses(&mut self, stream: &Stream) -> bool {
+        let refuses = self.bytes == 0 && !stream.raw.is_empty();
+        self.refusals += usize::from(refuses);
+        refuses
     }
 
     /// Whether a decode was refused for lack of allowance or a form entry for lack of visits.
@@ -276,6 +299,51 @@ impl DecodeBudget {
     /// past `max` bytes is an error that charges `max`, the work it took to find out.
     pub fn decode_within(&mut self, stream: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
         self.charge(stream, max, Stream::decoded_within_counted).map(|(data, _)| data)
+    }
+
+    /// Like [`DecodeBudget::decode_within`], with every filter stage held to `max`, as
+    /// [`Stream::decoded_within`] holds it, and the stages together to `max` for each of them, the
+    /// stream's `/DecodeParms` given by reference read in `doc` through a view of it that shares
+    /// its data and copies no more of its dictionary than its filters and parameters
+    /// ([`DecodeBudget::decode_with_damage`] reads it so). A
+    /// stream so reads here when it reads without an allowance and the allowance can pay for
+    /// what its stages decode, the output of one stage on top of another's. A stage past `max`
+    /// is an error that charges what the stages before it decoded and `max`, the work it took to
+    /// find out; past the stages' total it charges that total, and past what is left it spends
+    /// all of it, as [`DecodeBudget::decode_within`] does.
+    pub fn decode_stages_within(&mut self, doc: &Document, stream: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        // Before the parameters are resolved, work the allowance doesn't count.
+        if self.refuses(stream) {
+            return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
+        }
+        let stream = doc.decoding_view(stream);
+        let total = max.saturating_mul(stream.filters().len().max(1));
+        let room = total.min(self.bytes);
+        match stream.decoded_within_each_counted(max, room) {
+            Ok((data, _, spent)) => {
+                self.bytes = self.bytes.saturating_sub(spent);
+                Ok(data)
+            }
+            // A stage stopped at `max`, below what was left of the room.
+            Err((FilterError::LimitExceeded(_), spent)) if room.saturating_sub(spent) > max => {
+                self.bytes = self.bytes.saturating_sub(spent.saturating_add(max));
+                Err(CosError::Filter(FilterError::LimitExceeded(max).to_string()))
+            }
+            // At the stages' total, with more left.
+            Err((FilterError::LimitExceeded(_), _)) if total < self.bytes => {
+                self.bytes = self.bytes.saturating_sub(total);
+                Err(CosError::Filter(FilterError::LimitExceeded(total).to_string()))
+            }
+            Err((FilterError::LimitExceeded(_), _)) => {
+                self.bytes = 0;
+                self.refusals += 1;
+                Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()))
+            }
+            Err((e, spent)) => {
+                self.bytes = self.bytes.saturating_sub(spent);
+                Err(CosError::Filter(e.to_string()))
+            }
+        }
     }
 
     /// [`DecodeBudget::decode_within`] (`usize::MAX` for no bound of its own), with the stream's
@@ -299,7 +367,7 @@ impl DecodeBudget {
     /// pays for the bytes decoded before the error, so referencing a stream again and again
     /// spends the allowance by the work each decode does.
     fn charge(&mut self, stream: &Stream, max: usize, decode: Decoder) -> Result<(Vec<u8>, bool), CosError> {
-        if self.bytes == 0 && !stream.raw.is_empty() {
+        if self.refuses(stream) {
             return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
         }
         if max < self.bytes {
@@ -319,6 +387,7 @@ impl DecodeBudget {
             }
             Err((FilterError::LimitExceeded(_), _)) => {
                 self.bytes = 0;
+                self.refusals += 1;
                 Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()))
             }
             Err((e, spent)) => {
@@ -748,6 +817,38 @@ mod image_tests {
         assert_eq!(budget.work_left(), u64::MAX);
     }
 
+    /// PDFBOX-3932: an image and soft mask declared `/Predictor 15` that their writer never
+    /// applied, so their rows carry no PNG filter-type byte. Exported, they were "shorter than
+    /// their size says"; they are read as the samples they are, and tagged rows as before.
+    #[test]
+    fn an_image_whose_rows_carry_no_png_tags_decodes_to_its_samples() {
+        let doc = Document::new_empty();
+        let samples: Vec<u8> = (0..36u8).map(|i| 200 - i).collect();
+        let image = |height: Option<i64>, raw: Vec<u8>| {
+            let mut parms = Dict::new();
+            parms.set(b"Predictor".to_vec(), Object::Int(15));
+            parms.set(b"Colors".to_vec(), Object::Int(3));
+            parms.set(b"Columns".to_vec(), Object::Int(3));
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(3));
+            if let Some(h) = height {
+                dict.set(b"Height".to_vec(), Object::Int(h));
+            }
+            dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(dict, raw)
+        };
+        let untagged = pdfcraft_filters::encode_flate(&samples);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert_eq!(budget.decode(&doc, &image(Some(4), untagged.clone()), 1 << 20).unwrap(), samples);
+        // Without a height to tell, the predictor is undone, as before.
+        assert_ne!(budget.decode(&doc, &image(None, untagged.clone()), 1 << 20).ok(), Some(samples.clone()));
+        assert_ne!(budget.decode(&doc, &image(Some(5), untagged), 1 << 20).ok(), Some(samples.clone()));
+        let p = pdfcraft_filters::Params { predictor: 15, colors: 3, columns: 3, ..pdfcraft_filters::Params::default() };
+        let tagged = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &p, &samples).unwrap();
+        assert_eq!(budget.decode(&doc, &image(Some(4), tagged), 1 << 20).unwrap(), samples);
+    }
+
     /// The images of a file share its globals, so an image refused doesn't read them: this one's
     /// can't be read, which is how to tell.
     #[test]
@@ -987,5 +1088,100 @@ mod tests {
         assert_eq!(budget.remaining(), (10 << 20) - 2 * charged);
         assert!(budget.decode_strict(&Document::new_empty(), &chained).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - 3 * charged);
+    }
+
+    /// `decode_stages_within` holds every stage to the limit, as a decode without an allowance
+    /// does, and the stages together to the limit for each of them. A stream behind ASCIIHex and
+    /// Flate whose stages each stay within it reads, the hex stage's output charged on top; one
+    /// whose Flate stage would make more stops there, charged what the hex stage made and the
+    /// limit, the rest of the allowance left; a Flate stage making hex text past the limit leaves
+    /// the stream unread though the total has room, as `Stream::decoded_within` leaves it; and a
+    /// stream past what is left spends all of it.
+    #[test]
+    fn each_stage_is_held_to_the_limit() {
+        let chained = |data: &[u8], filters: [&str; 2]| {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(filters.into_iter().map(Object::name).collect()));
+            Stream::from_raw(dict, data.to_vec())
+        };
+        let hexed = |data: &[u8]| {
+            let flate = Stream::flate(Dict::new(), data);
+            let hex: Vec<u8> = flate.raw.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+            (chained(&hex, ["ASCIIHexDecode", "FlateDecode"]), flate.raw.len())
+        };
+        let max = 1 << 16;
+        let (fits, inner) = hexed(&vec![0u8; max]);
+        let mut budget = DecodeBudget::new(1 << 20, 0);
+        assert_eq!(budget.decode_stages_within(&Document::new_empty(), &fits, max).map(|d| d.len()).ok(), Some(max));
+        assert_eq!(budget.remaining(), (1 << 20) - inner - max);
+        let (bomb, inner) = hexed(&vec![0u8; 8 * max]);
+        let mut budget = DecodeBudget::new(1 << 20, 0);
+        assert!(budget.decode_stages_within(&Document::new_empty(), &bomb, max).is_err());
+        assert_eq!(budget.remaining(), (1 << 20) - inner - max, "the Flate stage stopped at the limit");
+        // Flate making 1.2 times the limit of hex text, which ASCIIHex halves: the stages together
+        // make 1.8 times the limit, within twice it, but the Flate stage alone is past it.
+        let text = "00".repeat(max * 6 / 10).into_bytes();
+        let wide = chained(&Stream::flate(Dict::new(), &text).raw, ["FlateDecode", "ASCIIHexDecode"]);
+        assert!(wide.decoded_within(max).is_err());
+        assert!(DecodeBudget::new(1 << 20, 0).decode_stages_within(&Document::new_empty(), &wide, max).is_err());
+        let mut budget = DecodeBudget::new(max, 0);
+        assert!(budget.decode_stages_within(&Document::new_empty(), &fits, max).is_err());
+        assert_eq!(budget.remaining(), 0);
+    }
+
+    /// What `decode_stages_within` charges, and which limit it reports, on each way a read stops:
+    /// a stage at the stream's limit with more of the room left charges what came before and the
+    /// limit; at the stages' total, with more of the allowance left, it charges that total; at
+    /// what is left of the allowance it spends all of it and reports the allowance's limit, as
+    /// `decode_within` does. Each boundary between them is read on both sides.
+    #[test]
+    fn a_stage_past_its_limit_charges_what_came_before_and_the_limit() {
+        let max = 1 << 12;
+        let hex = |data: &[u8]| data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect::<Vec<u8>>();
+        let two = |raw: &[u8]| {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+            Stream::from_raw(dict, hex(raw))
+        };
+        let says = |read: Result<Vec<u8>, CosError>, limit: usize| {
+            read.err().map(|e| e.to_string()) == Some(CosError::Filter(FilterError::LimitExceeded(limit).to_string()).to_string())
+        };
+        // Flate data making eight times the limit: the hex stage makes `inner` bytes of it, and
+        // the Flate stage stops at the limit.
+        let bomb = Stream::flate(Dict::new(), &vec![0u8; 8 * max]).raw.to_vec();
+        let inner = bomb.len();
+        // A byte more of the room than the hex stage and the limit: the Flate stage stops at the
+        // limit, so that is what it charges.
+        let mut budget = DecodeBudget::new(inner + max + 1, 0);
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &two(&bomb), max), max));
+        assert_eq!(budget.remaining(), 1);
+        // Exactly the hex stage and the limit: what was left stopped it as much as the limit did,
+        // so it is past the allowance, spends it and reports the allowance's limit.
+        let mut budget = DecodeBudget::new(inner + max, 0);
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &two(&bomb), max), inner + max));
+        assert_eq!(budget.remaining(), 0);
+        // The same data padded to exactly the limit: the hex stage makes all of it, and the Flate
+        // stage, at the limit, reaches the stages' total. With more of the allowance left, that
+        // total is what it charges and reports.
+        let mut padded = bomb.clone();
+        padded.resize(max, 0);
+        let mut budget = DecodeBudget::new(10 * max, 0);
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &two(&padded), max), 2 * max));
+        assert_eq!(budget.remaining(), 8 * max);
+        // With exactly the total left (of an allowance of three times the limit), it is past the
+        // allowance: all of it is spent, and the allowance's limit reported.
+        let mut budget = DecodeBudget::new(3 * max, 0);
+        budget.decode(&Stream::from_raw(Dict::new(), vec![0; max])).unwrap();
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &two(&padded), max), 3 * max));
+        assert_eq!(budget.remaining(), 0);
+        // With less than the total left, the same.
+        let mut budget = DecodeBudget::new(max, 0);
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &two(&padded), max), max));
+        assert_eq!(budget.remaining(), 0);
+        // With nothing left, a stream with data is refused before it is decoded, even one that
+        // decodes to nothing; an empty one reads.
+        let mut budget = DecodeBudget::new(0, 0);
+        assert!(says(budget.decode_stages_within(&Document::new_empty(), &Stream::flate(Dict::new(), b""), max), 0));
+        assert_eq!(budget.decode_stages_within(&Document::new_empty(), &Stream::from_raw(Dict::new(), Vec::new()), max).ok(), Some(Vec::new()));
     }
 }

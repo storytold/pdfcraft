@@ -9,6 +9,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, ObjectsPart, Owner, PagePress};
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -48,6 +49,39 @@ impl ObjectSelection {
         self.selected.len()
     }
 
+    /// The page and references of the objects selected together, if any: what Copy and Cut take.
+    pub(crate) fn selection(&self) -> Option<(usize, Vec<ObjectTarget>)> {
+        self.page.filter(|_| !self.selected.is_empty()).map(|page| (page, self.selected.iter().map(|o| o.target).collect()))
+    }
+
+    /// Select what a paste added to `page`, as Acrobat selects pasted objects: the objects of
+    /// `after` (the page's inventory with the paste) that `before` (without it) didn't have. They
+    /// are taken at the next `prepare`, which sees the new document generation.
+    pub(crate) fn select_pasted(&mut self, page: usize, before: &[EditableObject], after: Vec<EditableObject>) {
+        let same = |a: &EditableObject, b: &EditableObject| {
+            a.target.kind == b.target.kind
+                && a.content_type == b.content_type
+                && a.text == b.text
+                && a.rect.iter().zip(b.rect).all(|(x, y)| (x - y).abs() < 0.01)
+        };
+        let mut old: Vec<&EditableObject> = before.iter().collect();
+        let added: Vec<_> = after
+            .into_iter()
+            .filter(|o| match old.iter().position(|b| same(b, o)) {
+                Some(i) => {
+                    old.swap_remove(i);
+                    false
+                }
+                None => true,
+            })
+            .collect();
+        self.clear();
+        if !added.is_empty() && added.len() <= MAX_MOVE_OBJECTS {
+            self.page = Some(page);
+            self.pending = Some(added);
+        }
+    }
+
     /// Edit text's input is blocked: a dialog, the palette, another window or another tab has it.
     pub(crate) fn input_blocked(&self) -> bool {
         self.input_blocked
@@ -83,7 +117,7 @@ impl ObjectSelection {
         self.select_paragraph = Some((page, block));
     }
 
-    pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context) {
+    pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context, keys: PageKeys) {
         self.hold_editor = false;
         if !enabled {
             self.clear();
@@ -122,7 +156,7 @@ impl ObjectSelection {
             // A refused edit keeps the generation and the original selection.
             self.pending = None;
         }
-        if self.page.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if self.page.is_some() && keys.take(ctx, egui::Key::Escape) {
             self.clear();
         }
         // After the Escape check: the Esc that closed the editor must not clear what it selected.
@@ -186,6 +220,25 @@ fn leave_single(view: &mut DocView) {
     view.image_selection = None;
     view.line_editor = None;
     view.block_drag = None;
+}
+
+/// ⌘A in Edit a PDF: every object on the current page selected together, as Acrobat selects
+/// them (paragraphs, pictures and added content), instead of the page's text. A page whose
+/// objects can't be selected together, or has too many, says so and keeps what was selected.
+pub(crate) fn select_all(view: &mut DocView, doc: &Document) {
+    let page = view.current;
+    match view.objects.inventory(doc, page) {
+        Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => view.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
+        Ok(objects) => {
+            view.objects.clear();
+            if !objects.is_empty() {
+                leave_single(view);
+                view.objects.page = Some(page);
+                view.objects.selected = objects;
+            }
+        }
+        Err(_) => view.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into()),
+    }
 }
 
 /// What of the objects lies under `p` on `page`: the objects selected together (a drag moves
@@ -285,10 +338,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, press: PagePress, view: &mut D
         && view.pending_edit.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
     {
-        let deleted =
-            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+        let deleted = cx.keys.take(ui.ctx(), egui::Key::Delete) || cx.keys.take(ui.ctx(), egui::Key::Backspace);
         if deleted {
-            view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
+            view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
             return true;
         }
     }
@@ -435,7 +487,7 @@ fn on_frame(r: Rect, p: Pos2) -> bool {
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.
-pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
         return;
     }
@@ -445,26 +497,23 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     let Some(xf) = view.page_xform(page) else { return };
     use egui::Key;
     let mut step = egui::Vec2::ZERO;
-    ctx.input_mut(|i| {
-        // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
-        // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
-        // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
-        // `canvas::shortcuts`.
-        i.events.retain(|e| {
-            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
-            if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
-                return true;
-            }
-            let direction = match key {
-                Key::ArrowLeft => egui::vec2(-1.0, 0.0),
-                Key::ArrowRight => egui::vec2(1.0, 0.0),
-                Key::ArrowUp => egui::vec2(0.0, -1.0),
-                Key::ArrowDown => egui::vec2(0.0, 1.0),
-                _ => return true,
-            };
-            step += direction * if modifiers.shift { 10.0 } else { 1.0 };
-            false
-        });
+    // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+    // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+    // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
+    // `canvas::shortcuts`.
+    keys.take_presses(ctx, |key, modifiers| {
+        if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+            return false;
+        }
+        let direction = match key {
+            Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+            Key::ArrowRight => egui::vec2(1.0, 0.0),
+            Key::ArrowUp => egui::vec2(0.0, -1.0),
+            Key::ArrowDown => egui::vec2(0.0, 1.0),
+            _ => return false,
+        };
+        step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+        true
     });
     if step == egui::Vec2::ZERO {
         return;
@@ -492,41 +541,18 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
 /// Delete (or Backspace) removes the selected objects, as in Acrobat: a paragraph selected by its
 /// frame, or everything an area selection took, goes at once instead of one typed character at a
 /// time.
-pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
+pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
         return;
     }
     let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
-    use egui::{Key, Modifiers};
-    if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
+    use egui::Key;
+    if !(keys.take(ctx, Key::Delete) || keys.take(ctx, Key::Backspace)) {
         return;
     }
     // The selection stays until the edit applies: `prepare` clears it when the document changes,
     // and a refused delete (text used as a clipping path) leaves it selected.
-    view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
-}
-
-/// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step.
-/// Each deletion renumbers only what follows it in its own inventory, so paragraphs and images
-/// go from the last to the first, and added content, which the source inventories leave out,
-/// after them.
-fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
-    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
-    targets.dedup();
-    let mut edits: Vec<Edit> = targets
-        .into_iter()
-        .map(|t| match t.kind {
-            ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
-            ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
-            ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
-        })
-        .collect();
-    if edits.len() > 1 {
-        // "Delete content" is an edit label already, so the history reads the same in every language.
-        Some(Edit::Batch { label: "Delete content".into(), edits })
-    } else {
-        edits.pop()
-    }
+    view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
 }
 
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
@@ -569,32 +595,20 @@ mod tests {
         ObjectTarget { kind, index }
     }
 
-    /// Deleting renumbers what follows in the same inventory, so the batch takes each inventory
-    /// from its last item to its first, and added content (outside the source inventories) last.
+    /// Several objects are one step, each object once (the engine orders the deletions).
     #[test]
-    fn several_objects_delete_last_first_in_one_step() {
-        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
-        let Some(Edit::Batch { label, edits }) = delete_edit(0, targets) else { panic!("several objects make one batch") };
-        assert_eq!(label, "Delete content");
-        let order: Vec<(char, usize)> = edits
-            .iter()
-            .map(|e| match e {
-                Edit::EditTextBlock { block, text, .. } => {
-                    assert!(text.is_empty());
-                    ('t', *block)
-                }
-                Edit::EditPageImage { index, change: pdfcraft_engine::ImageEdit::Delete, .. } => ('i', *index),
-                Edit::DeleteContent { index, .. } => ('a', *index),
-                other => panic!("unexpected {}", other.label().wording),
-            })
-            .collect();
-        assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
+    fn several_objects_delete_in_one_step() {
+        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 1)];
+        let edit = Edit::delete_objects(0, targets).unwrap();
+        let once = [t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0)];
+        assert!(matches!(&edit, Edit::DeleteObjects { page: 0, objects } if *objects == once), "{edit:?}");
+        assert_eq!(edit.label().wording, "Delete content");
     }
 
     #[test]
     fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
-        assert!(matches!(delete_edit(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
-        assert!(delete_edit(0, Vec::new()).is_none());
+        assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
+        assert!(Edit::delete_objects(0, Vec::new()).is_none());
     }
 
     /// Selecting content objects on a page and pressing Delete must queue one edit that removes
@@ -642,7 +656,11 @@ mod tests {
             },
             |ui| {
                 let resp = ui.interact(ui.available_rect_before_wrap(), egui::Id::unique("page"), egui::Sense::click());
-                page_input(PageToolContext { ui, resp: &resp, xf: &xf, ptr: &ptr, page: 0, doc, info: &info }, PagePress::Free, &mut view);
+                page_input(
+                    PageToolContext { ui, resp: &resp, xf: &xf, ptr: &ptr, page: 0, doc, info: &info, keys: Default::default() },
+                    PagePress::Free,
+                    &mut view,
+                );
             },
         );
         output.textures_delta.clear();

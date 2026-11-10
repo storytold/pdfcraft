@@ -57,19 +57,90 @@ impl PdfString {
     /// non-ASCII bytes (written by some producers) is read as UTF-8 rather than as
     /// PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are removed.
     pub fn to_text(&self) -> String {
-        let s = match self.bytes.as_slice() {
+        self.text_chars().collect()
+    }
+
+    /// The characters [`PdfString::to_text`] decodes, one at a time, without building a string.
+    pub fn text_chars(&self) -> TextChars<'_> {
+        let decode = match self.bytes.as_slice() {
             [0xFE, 0xFF, rest @ ..] => {
-                let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
-                String::from_utf16_lossy(&units)
+                let units: fn(&[u8; 2]) -> u16 = |c| u16::from_be_bytes(*c);
+                Decode::Utf16(char::decode_utf16(rest.as_chunks::<2>().0.iter().map(units)))
             }
-            [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+            [0xEF, 0xBB, 0xBF, rest @ ..] => Decode::Utf8Lossy { chunks: rest.utf8_chunks(), valid: "".chars(), replace: false },
             b => match std::str::from_utf8(b) {
                 // Pure ASCII is identical either way; only non-ASCII UTF-8 needs the switch.
-                Ok(utf8) if !b.is_ascii() => utf8.to_owned(),
-                _ => b.iter().map(|&c| pdfcraft_crypt::pdfdoc_char(c)).collect(),
+                Ok(utf8) if !b.is_ascii() => Decode::Utf8(utf8.chars()),
+                _ => Decode::PdfDoc(b.iter()),
             },
         };
-        if s.starts_with('\u{FEFF}') { s.trim_start_matches('\u{FEFF}').to_owned() } else { s }
+        TextChars { decode, leading: true }
+    }
+
+    /// Whether the string decodes to `s` ([`PdfString::to_text`]), compared without allocating.
+    pub fn text_eq(&self, s: &str) -> bool {
+        self.text_chars().eq(s.chars())
+    }
+}
+
+/// The characters of a text string: [`PdfString::text_chars`].
+pub struct TextChars<'a> {
+    decode: Decode<'a>,
+    /// Still at the start, where stray U+FEFF (doubled BOMs) are dropped.
+    leading: bool,
+}
+
+/// The UTF-16BE code units after a BOM (an odd last byte is left out).
+type Utf16Units<'a> = std::iter::Map<std::slice::Iter<'a, [u8; 2]>, fn(&[u8; 2]) -> u16>;
+
+enum Decode<'a> {
+    Utf16(std::char::DecodeUtf16<Utf16Units<'a>>),
+    /// After a UTF-8 BOM: each invalid sequence is one U+FFFD, as `String::from_utf8_lossy` has it.
+    Utf8Lossy {
+        chunks: std::str::Utf8Chunks<'a>,
+        valid: std::str::Chars<'a>,
+        replace: bool,
+    },
+    Utf8(std::str::Chars<'a>),
+    PdfDoc(std::slice::Iter<'a, u8>),
+}
+
+impl Iterator for Decode<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        match self {
+            Decode::Utf16(units) => units.next().map(|u| u.unwrap_or(char::REPLACEMENT_CHARACTER)),
+            Decode::Utf8Lossy { chunks, valid, replace } => loop {
+                if let Some(c) = valid.next() {
+                    return Some(c);
+                }
+                if *replace {
+                    *replace = false;
+                    return Some(char::REPLACEMENT_CHARACTER);
+                }
+                let chunk = chunks.next()?;
+                *valid = chunk.valid().chars();
+                *replace = !chunk.invalid().is_empty();
+            },
+            Decode::Utf8(chars) => chars.next(),
+            Decode::PdfDoc(bytes) => bytes.next().map(|&c| pdfcraft_crypt::pdfdoc_char(c)),
+        }
+    }
+}
+
+impl Iterator for TextChars<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        loop {
+            let c = self.decode.next()?;
+            if self.leading && c == '\u{FEFF}' {
+                continue;
+            }
+            self.leading = false;
+            return Some(c);
+        }
     }
 }
 
@@ -280,10 +351,12 @@ impl Stream {
     }
 
     /// Decoded data, tolerating truncated or corrupt encodings the way viewers do (the data
-    /// decoded before the damage is returned). Streams with image codecs fail with
+    /// decoded before the damage is returned). Decoding past
+    /// [`crate::budget::MAX_PAGE_DECODED`] (256 MiB), the most the renderer reads from one
+    /// stream, is an error. Streams with image codecs fail with
     /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
     pub fn decoded(&self) -> Result<Vec<u8>, CosError> {
-        self.decoded_within(MAX_DECODED)
+        self.decoded_within(crate::budget::MAX_PAGE_DECODED)
     }
 
     /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
@@ -311,12 +384,40 @@ impl Stream {
         self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
     }
 
+    /// [`Stream::decoded_within_counted`] with every filter stage also held to `each`, as
+    /// [`Stream::decoded_within`] holds it, while `max` bounds the stages together
+    /// ([`pdfcraft_filters::decode_tolerant_counted_each`]). Without filters the data is held to
+    /// both.
+    pub(crate) fn decoded_within_each_counted(
+        &self,
+        each: usize,
+        max: usize,
+    ) -> Result<(Vec<u8>, bool, usize), (pdfcraft_filters::FilterError, usize)> {
+        let mut damaged = false;
+        let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
+            pdfcraft_filters::decode_tolerant_counted_each(chain, data, each.min(MAX_DECODED), max).map(|(v, partial, spent)| {
+                damaged = partial;
+                (v, spent)
+            })
+        };
+        let max = if self.readable_filters().is_ok_and(|chain| chain.is_empty()) { max.min(each) } else { max };
+        self.decode_chain(max, decode).map(|(v, spent)| (v, damaged, spent))
+    }
+
     /// [`Stream::decoded_within`] spending from `work`, what an operation may still do across a
     /// document's images ([`pdfcraft_filters::decode_tolerant_within`]).
     pub(crate) fn decoded_spending(&self, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
         let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
         let chain = self.readable_filters().map_err(filter)?;
         pdfcraft_filters::decode_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), work).map_err(filter)
+    }
+
+    /// [`Stream::decoded_spending`] for the samples of an image `rows` high (its `/Height`):
+    /// [`pdfcraft_filters::decode_image_tolerant_within`].
+    pub(crate) fn decoded_image_rows_spending(&self, max: usize, rows: u32, work: &mut u64) -> Result<Vec<u8>, CosError> {
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = self.readable_filters().map_err(filter)?;
+        pdfcraft_filters::decode_image_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), rows, work).map_err(filter)
     }
 
     /// The stream decoded through its filters by `decode`, or copied when it has none, within
@@ -595,6 +696,33 @@ mod tests {
     }
 
     #[test]
+    fn text_eq_compares_what_to_text_decodes() {
+        let utf16 = |s: &str| [0xFE, 0xFF].into_iter().chain(s.encode_utf16().flat_map(u16::to_be_bytes)).collect::<Vec<u8>>();
+        // Each invalid UTF-8 sequence is one U+FFFD, as String::from_utf8_lossy has it.
+        let lossy = [0xEF, 0xBB, 0xBF, 0xC3, 0x28, b'x', 0xF0, 0x9F, 0x92, 0xFF];
+        assert_eq!(PdfString::literal(lossy.to_vec()).to_text(), String::from_utf8_lossy(&lossy[3..]));
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"Plain".to_vec(),
+            vec![b'C', b'a', b'f', 0xE9, 0x18],
+            "目录".as_bytes().to_vec(),
+            utf16("第一章"),
+            vec![0xFE, 0xFF, 0xD8, 0x00, 0x00, b'A'],
+            vec![0xFE, 0xFF, 0xFE, 0xFF, 0x00, b'A', 0xFE, 0xFF],
+            lossy.to_vec(),
+        ];
+        for bytes in cases {
+            let s = PdfString::literal(bytes);
+            let text = s.to_text();
+            assert!(s.text_eq(&text), "{text:?}");
+            assert!(!s.text_eq(&format!("{text}x")), "{text:?}");
+            assert!(text.is_empty() || !s.text_eq(&text[..text.len() - text.chars().last().map_or(0, char::len_utf8)]), "{text:?}");
+        }
+        // A U+FEFF after the first character is text and stays.
+        assert!(PdfString::literal(utf16("A\u{FEFF}")).text_eq("A\u{FEFF}"));
+    }
+
+    #[test]
     fn pdfdoc_encoding_high_range() {
         assert_eq!(PdfString::literal(vec![0x84, 0x92, 0xA0, b'A']).to_text(), "—™€A");
     }
@@ -672,6 +800,13 @@ mod tests {
         assert!(matches!(&result, Err(CosError::Filter(detail)) if detail.contains("exceeds the limit of 0 bytes")), "{result:?}");
         assert_eq!(stream.decoded_within(1).unwrap(), b"A");
         assert_eq!(stream.decoded_strict().unwrap(), b"A");
+    }
+
+    #[test]
+    fn decoded_stops_at_renderer_cap_of_256_mib() {
+        let data = vec![0u8; (256 << 20) + 1];
+        let stream = Stream::flate(Dict::new(), &data);
+        assert!(matches!(stream.decoded(), Err(CosError::Filter(_))));
     }
 
     #[test]

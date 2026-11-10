@@ -40,6 +40,18 @@ fn translations(code: &str) -> String {
 }
 
 #[test]
+fn the_macos_bundle_declares_every_interface_language() {
+    // AppKit translates its own dialogs (open and save panels) only into the languages the app
+    // bundle declares, so `CFBundleLocalizations` must list every entry of `LANGUAGES`.
+    let plist = include_str!("../../../../packaging/macos/Info.plist.in");
+    let block = plist.split("<key>CFBundleLocalizations</key>").nth(1).expect("the template declares CFBundleLocalizations");
+    let block = block.split("</array>").next().expect("the declaration is an array");
+    let declared: Vec<String> = block.split("<string>").skip(1).filter_map(|s| s.split("</string>").next()).map(str::to_lowercase).collect();
+    let registered: Vec<String> = LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
+    assert_eq!(declared, registered, "packaging/macos/Info.plist.in and LANGUAGES list different languages");
+}
+
+#[test]
 fn keyboard_key_names_have_a_separate_context_and_english_fallback() {
     let keys = fixture_lang("x-keys", "key\tDelete\tEntf\n\tDelete\tLöschen\n\tOpen\tÖffnen\n");
     let previous = current();
