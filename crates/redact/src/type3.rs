@@ -539,6 +539,14 @@ fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
     font_entry.into_iter().next()
 }
 
+/// Whether font `f` (a reference, or a font dictionary) is a Type 3 font, the only kind the font
+/// cleanup prunes: its `/Subtype` is read directly, as the cleanup's other readers read it, so one
+/// given by reference isn't recognised by any of them. Which allowance the cleanup's read is charged
+/// to, and what it prunes, both go by this.
+fn is_type3(doc: &Document, f: &Object) -> bool {
+    doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))
+}
+
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
 /// content no longer draws any text using that font name. `page` is the page's dictionary when
 /// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
@@ -556,12 +564,18 @@ pub(crate) fn prune_type3_from_resources(
     }
 
     // The operators of forms that draw through these resources count too: dropping a font a child
-    // form still shows would leave its text without one.
-    let mut ops = crate::interp::resource_ops(doc, budget, res, content)?;
+    // form still shows would leave its text without one. Without a Type 3 font nothing is pruned,
+    // but the read is still made: it refuses bytes the parser can't read in what the content draws,
+    // which for a text redaction is the only check that does (the walk reads past them, so text
+    // they hide would stay under the mark). It is then charged to an allowance of a page of its own,
+    // not to what the walk left of the page's, since it decides nothing about the fonts.
+    let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
+    let mut own = pdfcraft_cos::DecodeBudget::page();
+    let mut ops = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
     // their own. They are read only when there is a Type 3 font to keep, so other files are not
     // refused over them.
-    if fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))) {
+    if type3 {
         if let Some(page) = page {
             // One total for all of them, as for the content: each appearance under the cap could
             // still add up to far more than it. Their decoded bytes, and their forms', are charged to
@@ -605,15 +619,12 @@ pub(crate) fn prune_type3_from_resources(
     let mut changed = false;
     let font_names: Vec<Vec<u8>> = fonts.iter().map(|(n, _)| n.to_vec()).collect();
     for name in font_names {
-        if let Some(font_obj) = fonts.get(&name) {
-            let resolved = doc.resolve(font_obj);
-            if let Some(d) = resolved.as_dict()
-                && d.name(b"Subtype") == Some(b"Type3")
-                && !drawn_font_names.contains(&name)
-            {
-                fonts.remove(&name);
-                changed = true;
-            }
+        if let Some(font_obj) = fonts.get(&name)
+            && is_type3(doc, font_obj)
+            && !drawn_font_names.contains(&name)
+        {
+            fonts.remove(&name);
+            changed = true;
         }
     }
 

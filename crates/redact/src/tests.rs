@@ -3571,14 +3571,43 @@ fn what_content_draws_through_its_resources_is_read_within_its_allowance() {
     }
 }
 
+/// An unused Type 3 font, listed as /T3 beside /F1 in the `/Font` of `holder`'s resources (a page's
+/// or a form's), so that the font cleanup, which prunes only Type 3 fonts, charges its read of what
+/// they draw to the page's allowance (without one it has an allowance of its own).
+fn list_type3(doc: &mut Document, holder: ObjRef) {
+    let font = Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type3")),
+        (b"FontBBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1000.into(), 1000.into()])),
+        (b"FontMatrix".to_vec(), Object::Array(vec![Object::Real(0.001), 0.into(), 0.into(), Object::Real(0.001), 0.into(), 0.into()])),
+        (b"CharProcs".to_vec(), Object::Dict(Dict::new())),
+    ]));
+    let font = Object::Ref(doc.add(font));
+    let list = |d: &mut Dict| {
+        let Some(Object::Dict(res)) = d.get_mut(b"Resources") else { panic!("{holder:?} has resources") };
+        let Some(Object::Dict(fonts)) = res.get_mut(b"Font") else { panic!("{holder:?} lists fonts") };
+        fonts.set(b"T3".to_vec(), font);
+    };
+    match &*doc.get(holder) {
+        Object::Stream(s) => {
+            let mut s = s.clone();
+            list(&mut s.dict);
+            doc.set(holder, Object::Stream(s));
+        }
+        _ => doc.update_dict(holder, list).unwrap(),
+    }
+}
+
 /// The cleanups after the content walk spend what the walk left of the page's allowance, one
 /// allowance between them. A form without resources of its own that crosses the mark is read by
-/// the walk, then again by the check of what the page still draws and by the font cleanup: at
-/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at
-/// 50 MiB it goes on.
+/// the walk, then again by the check of what the page still draws and by the font cleanup, which
+/// charges the page's allowance when the page lists a Type 3 font: at 100 MiB, three reads are more
+/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on. With no Type 3 font
+/// the font cleanup's read has an allowance of its own, so the page's pays for two reads of
+/// 100 MiB, and the redaction goes on.
 #[test]
 fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance() {
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
@@ -3588,16 +3617,61 @@ fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance
                 stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
             ],
         );
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(3, 0));
+        }
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
+}
+
+/// Text under the mark in a content stream that also holds bytes the parser can't read, inside a
+/// `TJ` array, is read past by the walk and would stay. The font cleanup's read of what the content
+/// draws refuses such bytes, and makes that read with any font listed, a Type 3 font or not (with
+/// none, on an allowance of its own): Apply Redactions refuses the page, whether the stream is the
+/// page's or a form's without resources of its own, and so does Remove Hidden Information.
+#[test]
+fn text_beside_bytes_the_parser_cannot_read_refuses_the_redaction() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let page_of = |second: &[u8]| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> >> >>".to_vec(),
+            stream("", b"BT /F1 10 Tf 20 230 Td (SECRET) Tj ET"),
+            stream("", second),
+            FONT.replace("95 0 R", "7 0 R").into_bytes(),
+            widths(),
+        ])
+    };
+    for tail in [
+        &b"BT /F1 10 Tf 20 260 Td [(TAIL) ) (SECRET)] TJ ET"[..],
+        b"BT /F1 10 Tf 20 260 Td [(TAIL) } (SECRET)] TJ ET",
+        b"BT /F1 10 Tf 20 260 Td [(TAILSECRET) )] TJ ET",
+        b"BT /F1 10 Tf 20 260 Td [) (TAILSECRET)] TJ ET",
+    ] {
+        let mut doc = page_of(tail);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert!(apply(&mut doc, None).is_err(), "{}", String::from_utf8_lossy(tail));
+    }
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 20 230 Td (SECRET) Tj ET /FmBare Do",
+        "/XObject << /FmBare 7 0 R >>",
+        vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 20 260 Td [(TAIL) ) (SECRET)] TJ ET")],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert!(apply(&mut doc, None).is_err(), "a form's text");
+    let mut doc = page_of(b"BT /F1 10 Tf 3 Tr 20 260 Td [(TAIL) ) (HIDDEN)] TJ ET");
+    doc.set(ObjRef::new(4, 0), Object::Stream(Stream::from_raw(Dict::new(), b"BT /F1 10 Tf 3 Tr 20 230 Td (HIDDEN) Tj ET".to_vec())));
+    assert!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), "hidden text");
 }
 
 /// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
 /// form has resources of its own, so the page's cleanups don't follow it, and draws through them a
 /// form without any that crosses the mark: the walk reads that form, then the check of what the
-/// rewritten form still draws and its font cleanup read it again. At 100 MiB, three reads are more
-/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on.
+/// rewritten form still draws and its font cleanup (it lists a Type 3 font) read it again. At
+/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at 50 MiB
+/// it goes on.
 #[test]
 fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
     for (mib, refused) in [(100, true), (50, false)] {
@@ -3613,6 +3687,7 @@ fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
+        list_type3(&mut doc, ObjRef::new(7, 0));
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
         assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
     }
@@ -3620,9 +3695,9 @@ fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
 
 /// Removing hidden text spends what its content walk left of the page's allowance too. The page
 /// draws a form holding hidden text, which is rewritten, and a form without resources of its own:
-/// the walk reads the second, then the check of what the page still draws and the font cleanup
-/// read it again. At 100 MiB, three reads are more than the page's 256 MiB, and the removal is
-/// refused; at 50 MiB it goes on.
+/// the walk reads the second, then the check of what the page still draws and the font cleanup (the
+/// page lists a Type 3 font) read it again. At 100 MiB, three reads are more than the page's
+/// 256 MiB, and the removal is refused; at 50 MiB it goes on.
 #[test]
 fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance() {
     use crate::sanitize::{Hidden, remove_hidden};
@@ -3636,6 +3711,7 @@ fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
+        list_type3(&mut doc, ObjRef::new(3, 0));
         assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB");
     }
 }
