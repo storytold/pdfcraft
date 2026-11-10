@@ -34,9 +34,13 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
   stencil `/Mask` has its own resolution, so the picture changes under it and it keeps its size and
   its bits (stored again as a picture's mask, below).
-  An image is replaced only if the result is smaller. Images over 80 million pixels are left
-  alone by the image steps, here and below, whatever their settings (memory); Clean Up may still
-  Flate an unfiltered or LZW one. Left alone by these colour and grey
+  An image is replaced only if the result is smaller. Images over 80 million pixels are left alone
+  by the image steps, here and below, whatever their settings (memory), except that the monochrome
+  step below takes an image already of one bit a pixel, a mask included, while its rows hold no more
+  bytes than 80 million pixels of eight bits (each row starts on a new byte: a byte for each 8
+  samples and one for any left over): up to 640 million pixels when it is wide, and a strip one
+  sample wide no taller than one of eight bits. Clean Up may still Flate an unfiltered or LZW one.
+  Left alone by these colour and grey
   settings: CMYK and other colour spaces, image masks, colour-key masks, decode arrays, more than 8 bits, JPEG 2000,
   JBIG2 and CCITT (black-and-white images, CCITT and JBIG2 among them, are below). A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
@@ -119,8 +123,9 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     more bits stays as it is, to be resampled with its picture, which wants it at eight. The report
     counts masks as images.
   - Not yet: inline images, a picture's mask resampled, or packed to one bit from more, Group 4
-    for rows wider than 32,767 samples, and JBIG2 past 65,535 samples on a side, where the decoder
-    stops (its 2^28 in all is past the 80 million pixels above).
+    for rows wider than 32,767 samples, and JBIG2 past 65,535 samples on a side or 2^28 in all,
+    where the decoder stops: with JBIG2 chosen, a one-bit image larger than that stays unless
+    it is averaged.
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller, a dictionary shared by up to 16 images when that is smaller still. No lossy symbol substitution is used. Export, redaction and this step read JBIG2

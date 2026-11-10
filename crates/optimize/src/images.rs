@@ -13,6 +13,15 @@ use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeE
 /// Images with more pixels than this are left alone (memory).
 pub(crate) const MAX_PIXELS: u64 = 80_000_000;
 
+/// The bytes an image of one bit a pixel holds as stored: each row starts on a new byte, a byte for
+/// each 8 samples and one for any left over. The monochrome step takes such an image while these
+/// are no more than [`MAX_PIXELS`], as many as that many pixels of eight bits hold: a wide one up
+/// to 640 million pixels (an A0 page at 600 ppi is about 560 million), where at eight bits a pixel
+/// it would be left alone, and a strip one sample wide no taller than one of eight bits.
+fn one_bit_bytes(w: u64, h: u64) -> u64 {
+    w.div_ceil(8).saturating_mul(h)
+}
+
 /// The resources of a page, inherited from the page tree if the page has none.
 pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
     held_page_resources(doc, page).map(|(resources, _)| resources)
@@ -829,6 +838,21 @@ fn one_component(doc: &Document, cs: &Object) -> bool {
     }
 }
 
+/// What the filters before a fax image's decoder may produce, its code: at most about a byte a
+/// pixel and each row's end, as redaction allows, but no more than `MAX_PIXELS` bytes for its
+/// pixels (and four a row), so a large page's code can't cost a byte a pixel.
+fn fax_code_allowance(w: usize, h: usize) -> Option<usize> {
+    w.checked_mul(h)?.min(usize::try_from(MAX_PIXELS).ok()?).checked_add(h.checked_mul(4)?)?.checked_add(4096)
+}
+
+/// Whether `d` is an image of one bit a pixel as stored: an image mask, or one bit in one colour
+/// component.
+fn one_bit_as_stored(doc: &Document, d: &Dict) -> bool {
+    let bits = d.int(b"BitsPerComponent");
+    let mask = matches!(d.get(b"ImageMask"), Some(Object::Bool(true)));
+    (mask && bits.is_none_or(|b| b == 1)) || (bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs)))
+}
+
 /// A pixel's samples as a 1 or a 0, or `None` for a colour that is neither.
 type Pixel = fn(&[u8]) -> Option<bool>;
 
@@ -854,19 +878,23 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool, budget: &mut 
     let d = &s.dict;
     // Through u32 first, as everywhere here, so the product can't overflow.
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    // An image already of one bit a pixel is taken while its rows hold no more than `MAX_PIXELS`
+    // bytes (`one_bit_bytes`), one packed from more bits (2, 4 or 8) up to `MAX_PIXELS` pixels, as
+    // before: its samples are decoded as stored first, eight-bit RGB at three bytes a pixel.
+    let as_stored = one_bit_as_stored(doc, d);
+    let held = if as_stored { one_bit_bytes(u64::from(w), u64::from(h)) } else { u64::from(w) * u64::from(h) };
+    if w == 0 || h == 0 || held > MAX_PIXELS {
         return None;
     }
     let (wu, hu) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
     let stride = wu.div_ceil(8);
     let bits = d.int(b"BitsPerComponent");
     let mask = matches!(d.get(b"ImageMask"), Some(Object::Bool(true)));
-    if (mask && bits.is_none_or(|b| b == 1)) || (bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))) {
-        // No further than its rows can need: a fax image's code (the filters before its decoder
-        // produce it) takes at most about a byte a pixel and each row's end, as redaction allows.
+    if as_stored {
+        // No further than its rows can need.
         let len = stride.checked_mul(hu)?;
         let max = match s.filters().last() {
-            Some((pdfcraft_filters::Filter::CcittFax, _)) => wu.checked_mul(hu)?.checked_add(hu.checked_mul(4)?)?.checked_add(4096)?,
+            Some((pdfcraft_filters::Filter::CcittFax, _)) => fax_code_allowance(wu, hu)?,
             // A JBIG2 page, which has to be the image's size, is `len` bytes as rows of a bit.
             _ => allowance(len, h)?,
         };
@@ -937,6 +965,7 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool, budget: &mut 
         _ => return None,
     };
     let row_len = wu.checked_mul(n)?.checked_mul(bpc)?.div_ceil(8);
+    count_decoded(u64::from(w) * u64::from(h));
     // Through its parameters given by reference too: without a PNG predictor's tag bytes taken
     // off, rows of 0 and 255 (or palette entries 0 and 1) would still pass below, each shifted.
     let samples = budget.decode_filters(doc, s, allowance(row_len.checked_mul(hu)?, h)?).ok()?;
@@ -1605,12 +1634,21 @@ const PICTURE_MEMORY: u64 = 1 << 30;
 /// What a picture holds while it is worked out, for each pixel: decoded, and resampled or encoded.
 const PICTURE_BYTES_PER_PIXEL: u64 = 8;
 
-/// A picture's pixels, if it is small enough to be decoded at all.
+/// A picture's pixels, if it is small enough to be decoded at all. One of one bit a pixel as
+/// stored is taken while the bytes its rows hold ([`one_bit_bytes`]) are no more than
+/// `MAX_PIXELS`, and counts as those and one more a row: decoding allows each row's end a few
+/// bytes besides its samples ([`allowance`], [`fax_code_allowance`]), which for an image a few
+/// samples wide is as much again as its samples.
 fn picture_pixels(doc: &Document, r: ObjRef) -> Option<u64> {
     let object = doc.get(r);
     let Object::Stream(s) = &*object else { return None };
     let (w, h) = (u64::try_from(s.dict.int(b"Width")?).ok()?, u64::try_from(s.dict.int(b"Height")?).ok()?);
-    w.checked_mul(h).filter(|pixels| *pixels <= MAX_PIXELS)
+    if one_bit_as_stored(doc, &s.dict) {
+        let bytes = one_bit_bytes(w, h);
+        return (bytes <= MAX_PIXELS).then(|| bytes.saturating_add(h));
+    }
+    let pixels = w.checked_mul(h)?;
+    (pixels <= MAX_PIXELS).then_some(pixels)
 }
 
 /// How many pictures of `largest` pixels to work on at once: `workers`, or as many as
@@ -1859,6 +1897,83 @@ mod dimension_tests {
         assert_eq!(threads_for(8, 40_000_000), 3);
         assert_eq!(threads_for(8, MAX_PIXELS), 1);
         assert_eq!(threads_for(8, 0), 8);
+    }
+
+    /// A one-bit image counts as the bytes its rows hold and one more a row when planning how many
+    /// pictures run at once, while those it holds are up to `MAX_PIXELS`: about an eighth of its
+    /// pixels when wide, two bytes a row when a few samples wide. One of eight bits counts whole,
+    /// up to `MAX_PIXELS`.
+    #[test]
+    fn a_one_bit_picture_counts_as_the_bytes_of_its_rows() {
+        let mut doc = Document::new_empty();
+        let mut add = |w: i64, h: i64, bits: i64| {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(w));
+            dict.set(b"Height".to_vec(), Object::Int(h));
+            dict.set(b"BitsPerComponent".to_vec(), Object::Int(bits));
+            dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+            doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))
+        };
+        let (one_bit, past_one_bit, eight_bit) = (add(20_000, 32_000, 1), add(20_000, 32_001, 1), add(10_000, 8_001, 8));
+        let (strip, past_strip, narrow) = (add(1, 80_000_000, 1), add(1, 80_000_001, 1), add(8, 10_000_000, 1));
+        assert_eq!(picture_pixels(&doc, one_bit), Some(80_000_000 + 32_000));
+        assert_eq!(picture_pixels(&doc, past_one_bit), None);
+        assert_eq!(picture_pixels(&doc, strip), Some(160_000_000), "a byte a row, and one more");
+        assert_eq!(picture_pixels(&doc, past_strip), None);
+        assert_eq!(picture_pixels(&doc, narrow), Some(20_000_000));
+        assert_eq!(threads_for(8, 20_000_000), 6);
+        assert_eq!(threads_for(8, 160_000_000), 1);
+        assert_eq!(picture_pixels(&doc, eight_bit), None);
+        assert_eq!(threads_for(8, 80_000_000), 1);
+    }
+
+    /// A fax image's code may take about a byte a pixel and its rows' ends, but no more than
+    /// `MAX_PIXELS` bytes for its pixels however large the page, and four a row.
+    #[test]
+    fn a_fax_images_code_is_allowed_80_million_bytes_and_four_a_row() {
+        assert_eq!(fax_code_allowance(1_000, 1_000), Some(1_000_000 + 4_000 + 4_096));
+        assert_eq!(fax_code_allowance(20_000, 32_000), Some(80_000_000 + 128_000 + 4_096));
+        assert_eq!(fax_code_allowance(1, 80_000_000), Some(80_000_000 + 320_000_000 + 4_096));
+    }
+
+    /// The monochrome step decodes an image already of one bit a pixel while its rows hold no more
+    /// than `MAX_PIXELS` bytes, and one it would pack from eight bits up to `MAX_PIXELS` pixels.
+    /// Past those, nothing is decoded.
+    #[test]
+    fn one_bit_images_are_decoded_up_to_their_own_limit() {
+        let image = |w: i64, h: i64, bits: i64| {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(w));
+            dict.set(b"Height".to_vec(), Object::Int(h));
+            dict.set(b"BitsPerComponent".to_vec(), Object::Int(bits));
+            dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+            Stream::from_raw(dict, Vec::new())
+        };
+        let decoded = |s: &Stream| {
+            DECODED_PIXELS.with(|c| c.set(0));
+            one_bit(&Document::new_empty(), s, true, false, &mut ImageBudget::with_work(u64::MAX));
+            DECODED_PIXELS.with(|c| c.get())
+        };
+        assert_eq!(decoded(&image(20_000, 32_000, 1)), 640_000_000, "one bit, at the limit");
+        assert_eq!(decoded(&image(20_000, 32_001, 1)), 0, "one bit, past it");
+        assert_eq!(decoded(&image(1, 80_000_000, 1)), 80_000_000, "one bit a sample wide, a byte a row, at the limit");
+        assert_eq!(decoded(&image(1, 80_000_001, 1)), 0, "one bit a sample wide, past it");
+        assert_eq!(decoded(&image(10_000, 8_000, 8)), 80_000_000, "eight bits, at theirs");
+        assert_eq!(decoded(&image(10_000, 8_001, 8)), 0, "eight bits, past theirs");
+    }
+
+    /// A zero-wide image isn't decoded: its rows hold no bytes, but its filters would be allowed
+    /// three a row.
+    #[test]
+    fn a_zero_wide_image_is_not_decoded() {
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(0));
+        dict.set(b"Height".to_vec(), Object::Int(1_000_000));
+        dict.set(b"ImageMask".to_vec(), Object::Bool(true));
+        let s = Stream::flate(dict, &vec![0u8; 1 << 20]);
+        let mut budget = ImageBudget::with_work(1 << 40);
+        assert!(one_bit(&Document::new_empty(), &s, true, false, &mut budget).is_none());
+        assert_eq!(budget.work_left(), 1 << 40);
     }
 
     /// Only what redaction can store again without the dictionary shares one: an image mask, or
