@@ -72,6 +72,30 @@ fn a_form_whose_matrix_is_not_six_numbers_is_refused() {
     }
 }
 
+/// A reference to a reference, for the matrix or one of its entries: Poppler doesn't follow it (it
+/// reads such a matrix as the identity, such an entry as 0), the app's renderer follows it and
+/// reads the move, so where the form draws can't be told, and the page is refused, as for a matrix that isn't six numbers. Read as either,
+/// a mark where the other reader shows the text would leave it in the file.
+#[test]
+fn a_form_whose_matrix_goes_through_a_reference_to_a_reference_is_refused() {
+    for (matrix, target) in [("/Matrix [1 0 0 1 0 8 0 R]", &b"200"[..]), ("/Matrix 8 0 R", b"[1 0 0 1 0 200]")] {
+        for mark_at in [MARK, [0.0, 0.0, 300.0, 100.0]] {
+            let form = stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {matrix} /Resources << /Font << /F1 5 0 R >> >>"),
+                b"BT /F1 10 Tf 20 60 Td (SECRET) Tj ET",
+            );
+            let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", vec![form, b"9 0 R".to_vec(), target.to_vec()]);
+            mark(&mut doc, 0, &[mark_at], "");
+            let result = apply(&mut doc, None);
+            assert!(
+                matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("/Matrix")),
+                "{matrix}, 8 0 obj 9 0 R, 9 0 obj {}, mark at {mark_at:?}: {result:?}",
+                String::from_utf8_lossy(target)
+            );
+        }
+    }
+}
+
 /// The scans count such a form as content that may remain: the verify pass under a mark, and
 /// Remove Hidden Information's scan, whose removal then refuses the page.
 #[test]

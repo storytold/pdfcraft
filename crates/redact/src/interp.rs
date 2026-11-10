@@ -1075,7 +1075,7 @@ fn xobject(
             // form moved onto a mark would be tested against the wrong place and never walked.
             let m = match crate::verify::matrix_of(doc, &s.dict) {
                 Ok(m) => m,
-                // Not six numbers. Removing hidden layers alone never asks where content lands, so
+                // Not six numbers given directly or through one reference. Removing hidden layers alone never asks where content lands, so
                 // the form is walked as it stands.
                 Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
                 // Otherwise where the form draws, and so whether it reaches a mark or leaves the
@@ -1085,7 +1085,9 @@ fn xobject(
                     if scope.mode == Mode::Apply {
                         out.error = Some(CosError::Syntax {
                             offset: 0,
-                            detail: "a form XObject's /Matrix is not six numbers, so where it draws can't be told".into(),
+                            detail:
+                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                    .into(),
                         });
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
