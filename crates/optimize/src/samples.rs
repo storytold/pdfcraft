@@ -172,13 +172,44 @@ fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<S
     Ok(Samples { width, height, components: n, data, jpeg: true, bilevel: false, inverted: false })
 }
 
-/// How many tiles the JPEG 2000 codestream in `raw` (bare, or inside a JP2 file) says it has, from
-/// its SIZ segment: the image's far corner, less the tile grid's origin, over the tile size.
-fn jpx_tiles(raw: &[u8]) -> Option<u64> {
-    let siz = raw.windows(4).position(|w| w == [0xff, 0x4f, 0xff, 0x51])?.checked_add(8)?;
-    let word = |i: usize| Some(u64::from(u32::from_be_bytes(raw.get(siz + 4 * i..siz + 4 * i + 4)?.try_into().ok()?)));
+/// The first two markers of a JPEG 2000 codestream: SOC, then SIZ.
+const JPX_CODESTREAM: [u8; 4] = [0xff, 0x4f, 0xff, 0x51];
+
+/// How many tiles the codestream `cs` says it has, from its SIZ segment: the image's far corner,
+/// less the tile grid's origin, over the tile size.
+fn codestream_tiles(cs: &[u8]) -> Option<u64> {
+    if !cs.starts_with(&JPX_CODESTREAM) {
+        return None;
+    }
+    let word = |i: usize| Some(u64::from(u32::from_be_bytes(cs.get(8 + 4 * i..12 + 4 * i)?.try_into().ok()?)));
     let along = |end: u64, tile: u64, origin: u64| (tile > 0 && end > origin).then(|| (end - origin).div_ceil(tile));
     along(word(0)?, word(4)?, word(6)?)?.checked_mul(along(word(1)?, word(5)?, word(7)?)?)
+}
+
+/// The most tiles a codestream of the JPEG 2000 data `raw` says it has: `raw` itself when it is a
+/// bare codestream, else every `jp2c` box of the JP2 file, found by walking its boxes as the
+/// decoder does (it reads each one), not by looking for the markers, which other boxes may hold.
+fn jpx_tiles(raw: &[u8]) -> Option<u64> {
+    if raw.starts_with(&JPX_CODESTREAM) {
+        return codestream_tiles(raw);
+    }
+    let (mut at, mut most) = (0usize, None);
+    while let Some(head) = raw.get(at..at.checked_add(8)?) {
+        let length = u32::from_be_bytes(head.get(..4)?.try_into().ok()?);
+        // A length of 0 is "to the end of the file" and of 1 "in the next eight bytes".
+        let (start, end) = match length {
+            0 => (at + 8, raw.len()),
+            1 => (at.checked_add(16)?, at.checked_add(usize::try_from(u64::from_be_bytes(raw.get(at + 8..at + 16)?.try_into().ok()?)).ok()?)?),
+            n => (at + 8, at.checked_add(usize::try_from(n).ok()?)?),
+        };
+        // A box that does not fit ends the file, for the decoder too.
+        let Some(data) = raw.get(start..end) else { break };
+        if head.get(4..) == Some(b"jp2c") {
+            most = most.max(Some(codestream_tiles(data)?));
+        }
+        at = end;
+    }
+    most
 }
 
 /// `[1 0]`: a bi-level image whose 1 bits are black.
@@ -451,7 +482,16 @@ mod tests {
         let mut tiled = jpx_codestream(1);
         tiled[8..16].copy_from_slice(&[0, 0, 4, 0, 0, 0, 4, 0]);
         assert_eq!(jpx_tiles(&tiled), Some(1 << 20));
-        assert_eq!(decode_samples(&doc(), &image(&[("Filter", Object::name("JPXDecode"))], tiled), &mut budget()), Err(NotDecoded::TooLarge));
+        assert_eq!(decode_samples(&doc(), &image(&[("Filter", Object::name("JPXDecode"))], tiled.clone()), &mut budget()), Err(NotDecoded::TooLarge));
+        // In a JP2 file the codestream is its `jp2c` box, not the first place the markers show up:
+        // a small one tucked into another box does not hide the tiles of the real one.
+        let boxed = |kind: &[u8; 4], data: &[u8]| [&(data.len() as u32 + 8).to_be_bytes()[..], kind, data].concat();
+        let mut jp2 = boxed(b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]);
+        jp2.extend(boxed(b"free", &jpx_codestream(1)));
+        jp2.extend(boxed(b"jp2c", &tiled));
+        assert_eq!(jpx_tiles(&jp2), Some(1 << 20));
+        assert_eq!(jpx_tiles(&boxed(b"free", &tiled)), None, "no codestream box");
+        assert_eq!(jpx_tiles(&[&[0u8][..], &tiled].concat()), None, "a bare codestream starts with its markers");
         // Out of budget.
         let s = image(&[("Filter", Object::name("JPXDecode"))], jpx_codestream(1));
         assert_eq!(decode_samples(&doc(), &s, &mut ImageBudget::with_work(0)), Err(NotDecoded::TooLarge));
