@@ -88,6 +88,11 @@ impl PdfCraftApp {
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
+            portfolio_initial: None,
+            portfolio_seen: None,
+            #[cfg(target_arch = "wasm32")]
+            web_reads: Default::default(),
+            portfolio_panel: None,
             quick_tool: QuickTool::Select,
             space_hand: None,
             full_screen_tool: None,
@@ -111,6 +116,11 @@ impl PdfCraftApp {
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            ask_to_lock_signatures: true,
+            placed_signatures: Default::default(),
+            pending_lock: None,
+            lock_answered: None,
+            lock_remember: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
@@ -122,6 +132,8 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            spooler: None,
+            two_sided_source: None,
             print_tasks: print_ui::PrintTasks::default(),
             palette_open: false,
             palette_query: String::new(),
@@ -151,6 +163,8 @@ impl PdfCraftApp {
             deferred_opens: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +206,7 @@ impl PdfCraftApp {
             pending_overwrite: None,
             save_override: None,
             props_draft: None,
+            attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
             requests: Default::default(),
@@ -205,6 +220,7 @@ impl PdfCraftApp {
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
             sign_draft: None,
+            presign: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
@@ -262,6 +278,7 @@ impl PdfCraftApp {
             object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
+            last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
@@ -285,6 +302,8 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
+            menu_pastes: 0,
+            page_keys: Default::default(),
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
@@ -300,6 +319,7 @@ impl PdfCraftApp {
             community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
+            pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
             text_style_draft: Default::default(),
@@ -333,6 +353,8 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+            printer_marks_draft: Default::default(),
+            convert_colours_draft: Default::default(),
             hairlines_draft: Default::default(),
         }
     }
@@ -358,6 +380,61 @@ impl PdfCraftApp {
 
     pub fn active_ids(&self) -> Option<(usize, DocId)> {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
+    }
+
+    /// Whether something over the pages has the keyboard: what covers them
+    /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
+    /// bar holding the keyboard (Alt, F10).
+    pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
+        self.covers_pages()
+            || self.hotbar.picker_over_pages(ctx)
+            || egui::Popup::is_any_open(ctx)
+            || craft_menu::bar::is_open(ctx)
+            || craft_menu::bar::is_focused(ctx)
+    }
+
+    /// Edit ▸ Copy, Cut, Select all and Delete stand for keys, and Edit ▸ Paste for the paste the
+    /// platform answers with. They go where the user's would: to a text field that has the
+    /// keyboard, else to the pages. They join the input once the menu bar has let go of the keys,
+    /// which an in-window menu's click does a pass later (craft-menu stores the menu as open on
+    /// the pass its click closes it). A native menu's click leaves egui's popups and the Hotbar
+    /// tools window open, which hold the pages' keys; a click anywhere else closes them, and so
+    /// does this. Edit ▸ Paste asks the platform for the clipboard only then, so its answer, on a
+    /// later pass, is an ordinary paste. With a text field focused, a native click on Copy, Cut,
+    /// Paste or Select all doesn't come here: craft-menu taps the shortcut for the field instead.
+    fn release_menu_input(&mut self, ctx: &egui::Context) {
+        if self.menu_input.is_empty() && self.menu_pastes == 0 {
+            return;
+        }
+        if craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx) {
+            ctx.request_repaint();
+            return;
+        }
+        if !ctx.text_edit_focused() {
+            egui::Popup::close_all(ctx);
+            self.hotbar.close_picker();
+        }
+        let events = std::mem::take(&mut self.menu_input);
+        ctx.input_mut(|i| i.events.extend(events));
+        for _ in 0..std::mem::take(&mut self.menu_pastes) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+    }
+
+    /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
+    pub(crate) fn hotbar_hidden(&self) -> bool {
+        self.mode == crate::Mode::Read || self.full_screen
+    }
+
+    /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or
+    /// prompt that turns the menus off (`modal_open`), by the full-screen and update prompts, which
+    /// leave the menus on, by the palette, which turns them off, or by the OCR Verify screen, which
+    /// takes the pages' place.
+    pub(crate) fn covers_pages(&self) -> bool {
+        // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
+        // entered over. Dialogs and prompts show there too.
+        let shown = !(self.full_screen && self.active.is_some());
+        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
@@ -520,6 +597,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.poll_pending_destinations();
         }
         self.check_restored_recent();
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
@@ -628,6 +706,7 @@ impl PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
+        self.present_portfolios();
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
@@ -656,11 +735,13 @@ impl PdfCraftApp {
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);
-        // The keys a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        if !self.menu_input.is_empty() {
-            let events = std::mem::take(&mut self.menu_input);
-            ctx.input_mut(|i| i.events.extend(events));
-        }
+        // The input a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
+        self.release_menu_input(ctx);
+        // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
+        // bar, so the chord runs in the same press, the pages' as well as the registry's.
+        craft_menu::bar::leave_for_shortcut(ctx);
+        self.hotbar.close_hidden_picker(ctx, self.hotbar_hidden());
+        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
@@ -709,6 +790,7 @@ impl PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
@@ -741,6 +823,9 @@ impl PdfCraftApp {
             }
         }
         panes::frame(self);
+        // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
+        let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.view_defaults.highlight_fields, |v| v.highlight_fields);
+        self.session.set_field_highlight(highlight);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
@@ -772,7 +857,12 @@ impl PdfCraftApp {
             window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
+        // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
+        // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
+        let hidden = self.hidden_interface();
+        if !hidden.mode_bar(self.native_menu.is_some()) {
+            chrome::mode_bar(self, ui);
+        }
         // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
         // recognized text brings it back with its review as it was.
         if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
@@ -799,15 +889,19 @@ impl PdfCraftApp {
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
         }
-        side_panels::show(self, ui);
+        if !hidden.window_ui {
+            side_panels::show(self, ui);
+        }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::AllTools && self.all_tools_full {
+            if self.mode == Mode::AllTools && self.all_tools_full && !hidden.window_ui {
                 all_tools_ui::show(self, ui);
             } else {
                 panes::page_area(self, ui);
             }
         });
+        // FitWindow and CenterWindow, once the document just opened is laid out.
+        self.window_preferences_frame(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

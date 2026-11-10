@@ -59,15 +59,21 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
+pub use print_ui::{
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
+    system_two_sided,
+};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+pub mod viewer_prefs;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
+#[doc(hidden)]
+pub use editing::download_mime_type;
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
@@ -100,6 +106,7 @@ use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
 use canvas::page_cursor;
+use canvas::page_keys;
 use canvas::page_pointer;
 use canvas::page_router;
 pub use canvas::scroll_speed;
@@ -110,11 +117,13 @@ use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
+use dialogs::convert_colours_ui;
 use dialogs::credits;
 use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
+use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
@@ -197,6 +206,7 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
+use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
@@ -274,6 +284,7 @@ struct PendingOpen {
 #[cfg(not(target_arch = "wasm32"))]
 struct DeferredOpen {
     path: String,
+    after_open: Option<pdfcraft_render::RemoteDestination>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
@@ -281,6 +292,15 @@ struct DeferredOpen {
 /// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
 /// used instead.
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
+
+/// A named destination being looked up off the UI thread: reading a large document's name tree
+/// takes a noticeable moment.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
+}
 
 pub struct PdfCraftApp {
     /// Split view (`panes`); which pane shows each tab is its view's.
@@ -325,6 +345,19 @@ pub struct PdfCraftApp {
     /// The user closed the right panel, so opening a document leaves it closed instead of
     /// showing its comments or bookmarks (#1590). Remembered across restarts.
     pub right_panel_closed: bool,
+    /// A portfolio that just opened and the name-tree key of the attachment it presents first
+    /// (`/Collection /D`), opened by [`Self::present_portfolios`] on the next frame while the
+    /// portfolio is still the active tab.
+    portfolio_initial: Option<(DocId, String)>,
+    /// The document whose tab [`Self::present_portfolios`] last saw active.
+    portfolio_seen: Option<DocId>,
+    /// Browser file reads still under way (drops, the web file picker): each file opens in front
+    /// when it arrives.
+    #[cfg(target_arch = "wasm32")]
+    web_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// A portfolio's file list is showing in place of this panel (`None`: the panel was
+    /// closed), given back when its tab is left.
+    portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -366,6 +399,19 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
+    /// them into the page (#2149). Off once the user says not to ask again.
+    pub ask_to_lock_signatures: bool,
+    /// Documents with a Fill & Sign signature placed since their last save, asked about on
+    /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
+    pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    pub(crate) pending_lock: Option<editing::PendingLock>,
+    /// The document whose lock question was just answered: the save that follows the answer
+    /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
+    /// save that fails or is cancelled asks again next time.
+    pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
+    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub fill_tool: fill_sign::FillTool,
@@ -389,6 +435,11 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
+    pub spooler: Option<Spooler>,
+    /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
+    /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
+    pub two_sided_source: Option<TwoSidedSource>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
@@ -445,6 +496,8 @@ pub struct PdfCraftApp {
     /// wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     password_retry: Option<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -522,6 +575,8 @@ pub struct PdfCraftApp {
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
+    /// Attachment description being edited: (document, name-tree key, description).
+    pub attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
@@ -544,6 +599,9 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// A dynamic form's preSign step, run when signing a field began: the document and its undo
+    /// depth after the step. Taken back if signing ends without a signature.
+    pub(crate) presign: Option<(DocId, usize)>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).
@@ -648,6 +706,8 @@ pub struct PdfCraftApp {
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
     /// system clipboard (tests turn that off).
     pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
+    /// What `last_snapshot` was taken of: (document, page, rectangle in page view points).
+    last_snapshot_of: Option<(DocId, usize, [f32; 4])>,
     /// The last image copied with Copy Image (width, height, straight RGBA), also put on the
     /// system clipboard when `system_clipboard` is on.
     pub last_copied_image: Option<(u32, u32, Vec<u8>)>,
@@ -689,8 +749,14 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
+    /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,
+    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
+    /// `release_menu_input`).
+    pub(crate) menu_pastes: usize,
+    /// This frame's keys as the pages see them: none while something is over them.
+    pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,
@@ -718,6 +784,8 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
+    pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
@@ -774,6 +842,9 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
+    /// A document just opened asks for its window to fit its first page or to be centred
+    /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
+    pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }

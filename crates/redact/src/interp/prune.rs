@@ -31,52 +31,81 @@ fn matches_retired(doc: &Document, value: &Object, retired: &[Object]) -> bool {
     retired.contains(value) || target_ref(doc, value).is_some_and(|r| retired.iter().any(|item| target_ref(doc, item) == Some(r)))
 }
 
-/// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
-/// so a full-rewrite save stops reaching the original image or form it named. A name that some
-/// surviving `Do` still draws (the same image shown again outside a mark) is kept.
-pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+/// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
+/// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
+/// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), or
+/// by a form without /Resources of its own, which draws through `xo` too. Such forms are read
+/// within `budget`, what is left of the page's allowance ([`resource_ops`]). Fails, as the cleanup
+/// of the fonts and properties these forms draw with does, when that can't be told: such a form
+/// doesn't decode (an image codec or a /Filter it can't run, say) or runs past `budget`, the walk
+/// passes 2,000,000 operators, or the parser can't read all of such a form or of `content`.
+/// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
+pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
-        return;
+        return Ok(());
     }
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    let still_drawn = |n: &[u8]| ops.iter().any(|op| op.is("Do") && op.last_name() == Some(n));
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
+    let ops = resource_ops(doc, budget, &res, content)?;
+    let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
-        if !still_drawn(n) {
+        if !drawn.contains(n.as_slice()) {
             xo.remove(n);
         }
     }
+    Ok(())
 }
 
 /// The XObject names of the resource dictionary `xo` that `content` draws: directly, or through
 /// a form that has no /Resources of its own (such a form draws through its caller's). Each such
-/// form is read once, however many names are asked about. The flag says whether some of what
-/// `content` draws could not be read (a form that will not decode, or nesting past the limit), so
-/// a name missing from the set may still be drawn.
+/// form is read once, however many names are asked about, with its `/DecodeParms` given by
+/// reference. The flag says whether some of what `content` draws could not be read (a form that
+/// will not decode, or nesting past the limit), so a name missing from the set may still be drawn.
+/// Operators are read one at a time, since only the `Do`s matter: no stream's are held whole, and
+/// each form is decoded only in its turn.
 fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
     let mut drawn = HashSet::new();
     let mut seen = HashSet::new();
-    let mut pending = vec![(Pieces::join(content).parse().ops, 0)];
+    let joined = Pieces::join(content);
+    // What is still to read, each with its depth: `content` itself (`None`), then the forms it draws.
+    let mut pending: Vec<(Option<ObjRef>, usize)> = vec![(None, 0)];
     // A form that will not decode makes the answer uncertain, but it does not stop the forms
     // already queued from being read: a name drawn only inside one of those need not be unknown.
     let mut unknown = false;
-    while let Some((ops, depth)) = pending.pop() {
-        for n in ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name) {
+    while let Some((form, depth)) = pending.pop() {
+        let data = match form {
+            None => std::borrow::Cow::Borrowed(joined.data()),
+            Some(r) => {
+                let obj = doc.get(r);
+                let Object::Stream(s) = &*obj else { continue };
+                match doc.with_direct_parms(s).decoded() {
+                    Ok(data) => std::borrow::Cow::Owned(data),
+                    Err(_) => {
+                        unknown = true;
+                        continue;
+                    }
+                }
+            }
+        };
+        for op in pdfcraft_content::ops(&data).filter(|op| op.is("Do")) {
+            let Some(n) = op.last_name() else { continue };
             if !drawn.insert(n.to_vec()) {
                 continue;
             }
             let Some(r) = xo.get(n).and_then(|v| target_ref(doc, v)) else { continue };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
+            // A /Resources that isn't a dictionary (null, or a missing object) is no resources of
+            // its own, as for `resource_ops` and the interpreter.
             if dict_name(doc, &s.dict, b"Subtype").as_deref() != Some(b"Form")
                 || s.dict.get(b"Resources").is_some_and(|r| resolve(doc, r).as_dict().is_some())
                 || !seen.insert(r)
             {
                 continue;
             }
-            match s.decoded() {
-                Ok(data) if depth < MAX_DEPTH => pending.push((pdfcraft_content::parse(&data).ops, depth + 1)),
-                _ => unknown = true,
+            if depth < MAX_DEPTH {
+                pending.push((Some(r), depth + 1));
+            } else {
+                unknown = true;
             }
         }
     }
@@ -360,7 +389,8 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     }
     let mut used = HashSet::new();
     for content in contents {
-        for op in resource_ops(doc, res, content)? {
+        // Each is one page's content or one form's, with the allowance of a page.
+        for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
                 && let Some(name) = op.name(1)
             {
@@ -424,7 +454,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 pending.push(res);
                 continue;
             }
-            let data = form.decoded()?;
+            let data = doc.with_direct_parms(form).decoded()?;
             let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
@@ -478,12 +508,22 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
     Some(ops)
 }
 
-pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
-    let parsed = Pieces::join(content).parse();
-    if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect property resources".into() });
+/// The operators of `content`, and of every form without /Resources of its own that it draws
+/// through `res`, nested ones too: what draws with these resources. Each such form is read once,
+/// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
+/// cleanups of one page that walk the same forms spend one allowance between them. An error
+/// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
+/// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`. Operators are
+/// read one at a time, so the walk stops at one past the limit rather than holding them all.
+pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
+    const MAX_OPS: usize = 2_000_000;
+    let joined = Pieces::join(content);
+    let mut read = pdfcraft_content::ops(joined.data());
+    let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
+    // Under the limit the reader ran to the end, so `skipped` counts all of it.
+    if read.skipped() > 0 || ops.len() > MAX_OPS {
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
-    let mut ops = parsed.ops;
     let xobjects = res_dict(doc, res, b"XObject");
     let mut seen = HashSet::new();
     let mut cursor = 0;
@@ -495,24 +535,26 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
             && dict_name(doc, &s.dict, b"Subtype").as_deref() == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| resolve(doc, r).as_dict().is_none())
         {
-            let parsed = pdfcraft_content::parse(&s.decoded()?);
-            if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
+            let data = budget.decode(&doc.with_direct_parms(s))?;
+            let mut read = pdfcraft_content::ops(&data);
+            ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
+            // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
+            if ops.len() > MAX_OPS || read.skipped() > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
-            ops.extend(parsed.ops);
         }
         cursor += 1;
     }
     Ok(ops)
 }
 
-pub(crate) fn prune_properties(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
+pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
     let mut properties = res_dict(doc, res, b"Properties");
     if properties.is_empty() {
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
-    let ops = resource_ops(doc, res, content)?;
+    let ops = resource_ops(doc, budget, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
         if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.name(1) == Some(&name))
@@ -529,8 +571,8 @@ pub(crate) fn prune_properties(doc: &Document, res: &mut Dict, content: &[Vec<u8
     Ok(retired)
 }
 
-pub(super) fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
-    let ops = resource_ops(doc, res, content)?;
+pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+    let ops = resource_ops(doc, budget, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
@@ -716,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn unlink_doomed_prunes_chained_xobject_refs_and_indirect_types() {
+    fn unlink_doomed_prunes_chained_xobject_refs_and_indirect_types() -> Result<(), Box<dyn std::error::Error>> {
         let mut doc = test_doc();
         let doomed_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
         let doomed_hop = doc.add(Object::Ref(doomed_img));
@@ -749,7 +791,7 @@ mod tests {
 
         let page_type_ref = doc.add(Object::Name(b"Page".to_vec()));
         let contents_ref = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/FmKeep Do".to_vec())));
-        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages ref");
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).ok_or("missing pages ref")?;
         let mut page_dict = Dict::new();
         page_dict.set(b"Type".to_vec(), Object::Ref(page_type_ref));
         page_dict.set(b"Parent".to_vec(), Object::Ref(pages_ref));
@@ -763,27 +805,27 @@ mod tests {
             d.set(b"Type".to_vec(), Object::Ref(pages_type_ref));
             d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_hop)]));
             d.set(b"Count".to_vec(), Object::Int(1));
-        })
-        .expect("update pages");
+        })?;
 
-        unlink_doomed(&mut doc, &[doomed_img], &[Object::Ref(retired_prop)]).expect("unlink doomed");
+        unlink_doomed(&mut doc, &[doomed_img], &[Object::Ref(retired_prop)])?;
 
         let updated_page = doc.get(page_ref);
-        let updated_page_res = updated_page.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).expect("page res");
-        let updated_page_xo = updated_page_res.get(b"XObject").and_then(Object::as_dict).expect("page xo");
+        let updated_page_res = updated_page.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).ok_or("missing page res")?;
+        let updated_page_xo = updated_page_res.get(b"XObject").and_then(Object::as_dict).ok_or("missing page xo")?;
         assert!(!updated_page_xo.contains(b"ImDoomed"), "chained ref to doomed XObject must be unlinked from page");
         assert!(updated_page_xo.contains(b"FmKeep"));
         assert!(!updated_page_res.contains(b"Properties"), "chained ref to retired property must be unlinked from page");
 
         let updated_form = doc.get(form_ref);
-        let updated_form_res = updated_form.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).expect("form res");
-        let updated_form_xo = updated_form_res.get(b"XObject").and_then(Object::as_dict).expect("form xo");
+        let updated_form_res = updated_form.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).ok_or("missing form res")?;
+        let updated_form_xo = updated_form_res.get(b"XObject").and_then(Object::as_dict).ok_or("missing form xo")?;
         assert!(!updated_form_xo.contains(b"ImDoomed"), "chained ref to doomed XObject must be unlinked from surviving form");
         assert!(!updated_form_res.contains(b"Properties"), "chained ref to retired property must be unlinked from surviving form");
+        Ok(())
     }
 
     #[test]
-    fn resource_ops_follows_inheriting_form_with_indirect_subtype_and_chained_ref() {
+    fn resource_ops_follows_inheriting_form_with_indirect_subtype_and_chained_ref() -> Result<(), Box<dyn std::error::Error>> {
         let mut doc = test_doc();
         let form_subtype_ref = doc.add(Object::Name(b"Form".to_vec()));
         let mut form_dict = Dict::new();
@@ -800,22 +842,23 @@ mod tests {
         res.set(b"XObject".to_vec(), Object::Dict(xo));
         res.set(b"Properties".to_vec(), Object::Dict(props));
 
-        let retired = prune_properties(&doc, &mut res, &[b"/Fm1 Do".to_vec()]).expect("prune properties");
+        let retired = prune_properties(&doc, &mut DecodeBudget::page(), &mut res, &[b"/Fm1 Do".to_vec()])?;
         assert_eq!(retired.len(), 1);
-        let kept_props = res.get(b"Properties").and_then(Object::as_dict).expect("kept properties");
+        let kept_props = res.get(b"Properties").and_then(Object::as_dict).ok_or("missing kept properties")?;
         assert!(kept_props.contains(b"P1"), "property used inside inheriting form must be kept");
         assert!(!kept_props.contains(b"P2"), "unused property must be retired");
+        Ok(())
     }
 
     #[test]
-    fn unlink_doomed_terminates_on_cyclic_page_tree_and_form_resources() {
+    fn unlink_doomed_terminates_on_cyclic_page_tree_and_form_resources() -> Result<(), Box<dyn std::error::Error>> {
         let mut doc = test_doc();
         let doomed_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
-        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages ref");
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).ok_or("missing pages ref")?;
         doc.update_dict(pages_ref, |d| {
             d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(pages_ref)]));
-        })
-        .expect("update cyclic kids");
+        })?;
         assert!(unlink_doomed(&mut doc, &[doomed_img], &[]).is_ok());
+        Ok(())
     }
 }
