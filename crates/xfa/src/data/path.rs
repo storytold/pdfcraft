@@ -88,7 +88,7 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
 /// explicit data reference) binds as instance 0 on each page instead, so it shows the same value
 /// on all of them (XFA 3.3, "Page Background": a page-background field binds only through an
 /// explicit data reference).
-fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize> {
+fn page_area_object<'a>(tpl: &'a Template, segments: &[(String, usize)]) -> Option<(&'a Node, usize)> {
     let ((first, instance), rest) = segments.split_first()?;
     if tpl.root.common.name.as_deref() == Some(first.as_str()) {
         return None;
@@ -107,8 +107,25 @@ fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize
             _ => &[],
         };
     }
-    let shared = matches!(target, Some(Node::Field(f)) if f.data_shared);
-    Some(if shared { 0 } else { *instance })
+    Some((target?, *instance))
+}
+
+/// Whether `c` has `<bind match="global"/>`.
+fn has_global_bind(c: &crate::model::Common) -> bool {
+    c.props.elements.iter().any(|p| p.tag == "bind" && p.attrs.iter().any(|(k, v)| k == "match" && v.trim() == "global"))
+}
+
+fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize> {
+    let (target, instance) = page_area_object(tpl, segments)?;
+    let shared = match target {
+        Node::Field(f) => f.data_shared,
+        Node::ExclGroup(g) => {
+            has_global_bind(&g.common)
+                || g.common.props.elements.iter().any(|p| p.tag == "bind" && p.attrs.iter().any(|(k, v)| k == "ref" && !v.trim().is_empty()))
+        }
+        _ => false,
+    };
+    Some(if shared { 0 } else { instance })
 }
 
 enum Container<'a> {
@@ -242,4 +259,183 @@ pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
 
 pub(super) fn path_som(path: &DataPath) -> String {
     path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".")
+}
+
+/// The first leaf data node named `target` in `n`, in document order, bounded by [`MAX_DEPTH`].
+fn find_named_leaf(n: &DataNode, target: &str, path: &mut DataPath, depth: usize) -> Option<DataPath> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for c in &n.children {
+        let idx = counts.entry(c.name.as_str()).or_insert(0);
+        let cur = *idx;
+        *idx += 1;
+        path.push((c.name.clone(), cur));
+        if c.name == target && !c.group && c.children.is_empty() {
+            return Some(path.clone());
+        }
+        if let Some(found) = find_named_leaf(c, target, path, depth + 1) {
+            return Some(found);
+        }
+        path.pop();
+    }
+    None
+}
+
+/// The data path the object at `som` binds to in `data`: [`data_path`], or for an exclusion
+/// group with `<bind match="global"/>` that has no match in its enclosing data scope, the
+/// matching node in the top-level data scope (`$record.<name>`) or elsewhere in `data` (XFA 3.3
+/// part 1, "Global Binding").
+pub(crate) fn bound_data_path(tpl: &Template, data: Option<&DataNode>, som: &str) -> DataPath {
+    let path = data_path(tpl, som);
+    let Some(d) = data else { return path };
+    if d.get(&path).is_some() {
+        return path;
+    }
+    let obj = template_object(tpl, som).or_else(|| page_area_object(tpl, &som_to_path(som)).map(|(n, _)| n));
+    if !matches!(obj, Some(Node::ExclGroup(g)) if has_global_bind(&g.common)) {
+        return path;
+    }
+    let (Some(first), Some((last_name, _))) = (path.first(), path.last()) else {
+        return path;
+    };
+    let top = vec![first.clone(), (last_name.clone(), 0)];
+    if d.get(&top).is_some() {
+        return top;
+    }
+    if let Some(found) = find_named_leaf(d, last_name, &mut DataPath::new(), 0) {
+        return found;
+    }
+    if path.len() > 2 && d.get(std::slice::from_ref(first)).is_some() { top } else { path }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldData, FieldDatum, read_values_with, write_datasets_with};
+    use crate::layout::WidgetKind;
+    use crate::script::{NodeKind, Overrides, form_tree};
+
+    const GLOBAL_EXCL_XDP: &str = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+  <subform name="form1" layout="tb">
+    <pageSet>
+      <pageArea name="Page1" id="Page1">
+        <contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/>
+        <medium stock="letter" short="8.5in" long="11in"/>
+      </pageArea>
+    </pageSet>
+    <subform name="Section1" layout="tb">
+      <exclGroup name="LikesPizza" layout="tb">
+        <bind match="global"/>
+        <field name="rbYes" w="2in" h="0.25in">
+          <ui><checkButton shape="round"/></ui>
+          <items><text>Yes</text></items>
+        </field>
+        <field name="rbNo" w="2in" h="0.25in">
+          <ui><checkButton shape="round"/></ui>
+          <items><text>No</text></items>
+        </field>
+      </exclGroup>
+    </subform>
+  </subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+  <xfa:data>
+    <form1>
+      <Section1/>
+      <LikesPizza>Yes</LikesPizza>
+    </form1>
+  </xfa:data>
+</xfa:datasets>
+</xdp:xdp>"#;
+
+    #[test]
+    fn global_excl_group_selects_bound_value_from_outer_scope() -> Result<(), Box<dyn std::error::Error>> {
+        let (tpl, _) = crate::parse(GLOBAL_EXCL_XDP)?;
+        let data = parse_datasets(GLOBAL_EXCL_XDP).ok_or("datasets missing")?;
+        let som = "form1[0].Section1[0].LikesPizza[0]";
+
+        assert_eq!(bound_data_path(&tpl, Some(&data), som), vec![("form1".into(), 0), ("LikesPizza".into(), 0)]);
+
+        // Layout selects the "Yes" radio button.
+        let form = crate::layout::layout(&tpl, Some(&data))?;
+        let page = form.pages.first().ok_or("no page")?;
+        let yes_value = page.items.iter().find_map(|it| match it {
+            crate::layout::Item::Widget(w) => match &w.kind {
+                WidgetKind::Radio { group, on, .. } if group == "LikesPizza" && on == "Yes" => Some(w.value.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+        assert_eq!(yes_value, Some(Some("Yes".into())));
+
+        // Live form tree exposes "Yes" on both the exclusion group and its selected child field.
+        let live = form_tree(&tpl, Some(&data), &Overrides::default());
+        let sec = live.root.children.iter().find(|c| c.name == "Section1").ok_or("Section1 missing")?;
+        let grp = sec.children.iter().find(|c| c.kind == Some(NodeKind::ExclGroup)).ok_or("LikesPizza missing")?;
+        assert_eq!(grp.value, "Yes");
+        let rb_yes = grp.children.iter().find(|c| c.name == "rbYes").ok_or("rbYes missing")?;
+        let rb_no = grp.children.iter().find(|c| c.name == "rbNo").ok_or("rbNo missing")?;
+        assert_eq!(rb_yes.value, "Yes");
+        assert_eq!(rb_no.value, "");
+
+        // Reading and writing datasets through AcroForm FieldDatum preserves the global path.
+        let mut doc = pdfcraft_cos::Document::new_empty();
+        let xdp_ref = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), GLOBAL_EXCL_XDP.as_bytes())));
+        let mut acro = pdfcraft_cos::Dict::new();
+        acro.set(b"XFA".to_vec(), pdfcraft_cos::Object::Ref(xdp_ref));
+        let mut cat = pdfcraft_cos::Dict::new();
+        cat.set(b"Type".to_vec(), pdfcraft_cos::Object::Name(b"Catalog".to_vec()));
+        cat.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(acro));
+        let cat_ref = doc.add(pdfcraft_cos::Object::Dict(cat));
+        doc.trailer_mut().set(b"Root".to_vec(), pdfcraft_cos::Object::Ref(cat_ref));
+        let _ = crate::pdf::write_form(&mut doc, &form)?;
+
+        let field_map = crate::script::fields_by_som(&doc);
+        let field_name = field_map.get(som).ok_or("generated radio group missing")?.clone();
+        let acro_fields = doc
+            .get(cat_ref)
+            .as_dict()
+            .and_then(|c| c.get(b"AcroForm"))
+            .map(|a| doc.resolve(a))
+            .and_then(|a| a.as_dict().and_then(|d| d.get(b"Fields")).map(|f| doc.resolve(f)))
+            .and_then(|f| f.as_array().cloned())
+            .ok_or("Fields array missing")?;
+        let group_ref = acro_fields
+            .iter()
+            .filter_map(pdfcraft_cos::Object::as_ref)
+            .find(|r| {
+                doc.get(*r).as_dict().and_then(|d| d.get(crate::pdf::SOM_KEY)).and_then(|s| s.as_string()).map(|s| s.to_text())
+                    == Some(som.to_string())
+            })
+            .ok_or("group object ref missing")?;
+
+        let query = [FieldDatum { obj: group_ref, name: field_name.clone(), data: FieldData::Radio(None) }];
+        let read = read_values_with(&doc, Some(&tpl), &query);
+        assert_eq!(read, vec![(field_name.clone(), FieldData::Radio(Some("Yes".into())))]);
+
+        // Updating the selection to "No" updates `form1.LikesPizza` in place rather than adding `form1.Section1.LikesPizza`.
+        let update = [FieldDatum { obj: group_ref, name: field_name.clone(), data: FieldData::Radio(Some("No".into())) }];
+        let written = write_datasets_with(&mut doc, Some(&tpl), &update, None)?;
+        assert!(written.written);
+        let after = crate::script::data_of(&doc).ok_or("updated data missing")?;
+        assert_eq!(after.text_at(&[("form1".into(), 0), ("LikesPizza".into(), 0)]), Some("No"));
+        assert_eq!(after.text_at(&[("form1".into(), 0), ("Section1".into(), 0), ("LikesPizza".into(), 0)]), None);
+        Ok(())
+    }
+
+    #[test]
+    fn global_excl_group_prefers_local_scope_when_present() -> Result<(), Box<dyn std::error::Error>> {
+        let xdp = GLOBAL_EXCL_XDP.replace(
+            "<Section1/>\n      <LikesPizza>Yes</LikesPizza>",
+            "<Section1><LikesPizza>No</LikesPizza></Section1>\n      <LikesPizza>Yes</LikesPizza>",
+        );
+        let (tpl, _) = crate::parse(&xdp)?;
+        let data = parse_datasets(&xdp).ok_or("datasets missing")?;
+        let som = "form1[0].Section1[0].LikesPizza[0]";
+        assert_eq!(bound_data_path(&tpl, Some(&data), som), vec![("form1".into(), 0), ("Section1".into(), 0), ("LikesPizza".into(), 0)]);
+        Ok(())
+    }
 }
