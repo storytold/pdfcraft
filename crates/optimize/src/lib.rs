@@ -29,6 +29,9 @@
 //! runs alongside. Links that open another document, and bookmark actions that do, are discarded
 //! here (Discard User Data ▸ Discard external cross-references, see
 //! [`Settings::discard_external_refs`]).
+//!
+//! Apart from optimizing, [`tile_large_images`] redraws large pictures as tiles in the copy of a
+//! document printed on Windows, whose PDF renderer shrinks any image over 2²² pixels.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -40,6 +43,7 @@ mod images;
 mod links;
 mod pool;
 mod samples;
+mod tiles;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
@@ -50,6 +54,7 @@ use pdfcraft_filters::{Filter, Params};
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
+pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
