@@ -1,5 +1,5 @@
 use super::draw::draw_appearance;
-use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
 use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
@@ -535,7 +535,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let index = list.len();
     list.push(Object::Ref(r));
     add_popup(doc, r, popup, &mut list)?;
-    set_annots(doc, page, list)?;
+    change_annots(doc, page, list)?;
     Ok(index)
 }
 

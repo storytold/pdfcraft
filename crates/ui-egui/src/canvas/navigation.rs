@@ -379,16 +379,33 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-/// The document view's keyboard shortcuts: find, rotation, zoom (or the page grid's size),
-/// history, Escape, and the paging and scrolling keys. An open form field keeps the paging
-/// and scrolling keys for itself.
-pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
+/// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
+/// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
+/// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
+pub(crate) fn shortcuts(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    chords: bool,
+    speed: crate::scroll_speed::ScrollSpeed,
+) {
+    if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
+        view_keys(view, ctx, keys, speed, arrows, field_open);
+    }
+}
+
+/// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
+/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field
+/// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
+/// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
+/// items) keeps the plain keys.
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<(bool, bool)> {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
+    let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
         view.open_find();
     }
     let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
-    let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
     // ⌘G / ⇧⌘G step through the matches from the find field too, as in Acrobat and Preview
     // (#2669): ahead of the text-input check, but only while there is a search to step.
     if view.find.is_some() {
@@ -402,7 +419,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // radio button for the arrows that move within its group: the other page keys still work.
     let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
     if ctx.egui_wants_keyboard_input() && form_box.is_none() {
-        return;
+        return None;
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
@@ -418,11 +435,26 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
-    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
     // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
     // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
     // page keys still work there.
     let field_open = view.forms.focus.is_some() && form_box.is_none();
+    Some((arrows, field_open))
+}
+
+/// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
+/// Down. Not while something is over the pages or a form field is open (`field_open`), which keeps
+/// them.
+fn view_keys(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    speed: crate::scroll_speed::ScrollSpeed,
+    arrows: bool,
+    field_open: bool,
+) {
+    use egui::Key;
+    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     // So does an open field, whose list closes.
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
@@ -443,9 +475,16 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434; *Adobe Acrobat Help*, 2019,
     // "Keys for navigating a PDF", p. 83). These take the key from the page turning and
     // scrolling below.
-    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
-    let to_start = pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp));
-    let to_end = pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown));
+    let (mut to_start, mut to_end) = (false, false);
+    keys.take_presses(ctx, |k, m| {
+        let shift_cmd = m.matches_logically(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        match k {
+            Key::ArrowUp | Key::PageUp if shift_cmd => to_start = true,
+            Key::ArrowDown | Key::PageDown if shift_cmd => to_end = true,
+            _ => return false,
+        }
+        true
+    });
     if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
