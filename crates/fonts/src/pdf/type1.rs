@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object};
 
-use super::dict;
+use super::{Reads, dict};
 
 // A simple font has at most 256 encoded glyphs, but its subset can list unencoded glyphs too.
 // Bound both the string and its tokens before parsing any input-derived objects.
@@ -60,14 +60,18 @@ thread_local! {
 }
 
 /// Reuse a font stream snapshot's parsed encoding across resource aliases.
-fn builtin_encoding(program: &std::sync::Arc<Object>) -> Option<std::sync::Arc<BuiltinEncoding>> {
+fn builtin_encoding(program: &std::sync::Arc<Object>, reads: &mut Reads<'_>) -> Option<std::sync::Arc<BuiltinEncoding>> {
     let key = std::sync::Arc::downgrade(program);
     if let Some(cached) =
         BUILTIN_CACHE.with(|cache| cache.try_borrow().ok()?.iter().find(|(object, _)| object.ptr_eq(&key)).map(|(_, value)| value.clone()))
     {
         return cached;
     }
-    let parsed = parse_builtin(program);
+    let parsed = parse_builtin(program, reads);
+    // A spent operation allowance says nothing about this immutable font program.
+    if reads.refused {
+        return parsed;
+    }
     BUILTIN_CACHE.with(|cache| {
         if let Ok(mut cache) = cache.try_borrow_mut() {
             cache.retain(|(object, _)| object.strong_count() > 0);
@@ -81,11 +85,11 @@ fn builtin_encoding(program: &std::sync::Arc<Object>) -> Option<std::sync::Arc<B
 }
 
 /// Copies only a bounded encoding table, releasing both decoded bytes and parser state.
-fn parse_builtin(program: &Object) -> Option<std::sync::Arc<BuiltinEncoding>> {
+fn parse_builtin(program: &Object, reads: &mut Reads<'_>) -> Option<std::sync::Arc<BuiltinEncoding>> {
     let Object::Stream(program) = program else { return None };
     #[cfg(test)]
     BUILTIN_READS.with(|n| n.set(n.get().saturating_add(1)));
-    let bytes = program.decoded_within(MAX_TYPE1_BYTES).ok()?;
+    let bytes = reads.decode(program, MAX_TYPE1_BYTES)?;
     let font = skrifa::raw::ps::type1::Type1Font::new(&bytes).ok()?;
     let encoding = font.encoding()?;
     let mut names: BuiltinEncoding = std::array::from_fn(|_| None);
@@ -109,14 +113,14 @@ fn parse_builtin(program: &Object) -> Option<std::sync::Arc<BuiltinEncoding>> {
 
 /// Without an explicit base encoding, glyph names come from the font program, not
 /// StandardEncoding or ToUnicode. Read it through the existing safe font parser.
-fn builtin_presence(doc: &Document, font: &Dict, names: &HashSet<Vec<u8>>) -> Option<[Option<bool>; 256]> {
+fn builtin_presence(doc: &Document, font: &Dict, names: &HashSet<Vec<u8>>, reads: &mut Reads<'_>) -> Option<[Option<bool>; 256]> {
     let descriptor = dict(doc, font.get(b"FontDescriptor"))?;
     let program = doc.resolve(descriptor.get(b"FontFile")?);
-    let encoding = builtin_encoding(&program)?;
+    let encoding = builtin_encoding(&program, reads)?;
     Some(std::array::from_fn(|code| encoding.get(code)?.as_ref().map(|name| name != b".notdef" && names.contains(name))))
 }
 
-pub(super) fn absent_codes(doc: &Document, font: &Dict) -> [u64; 4] {
+pub(super) fn absent_codes(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> [u64; 4] {
     let mut absent = [0_u64; 4];
     if !matches!(font.name(b"Subtype"), Some(b"Type1" | b"MMType1")) {
         return absent;
@@ -137,7 +141,7 @@ pub(super) fn absent_codes(doc: &Document, font: &Dict) -> [u64; 4] {
     // Annex D's tables and NAMES use the same canonical glyph names. This is the base
     // encoding's glyph identity, never the extraction text supplied by ToUnicode.
     let canonical: HashMap<_, _> = crate::encodings::NAMES.iter().map(|(name, unicode)| (*unicode, name.as_bytes())).collect();
-    let mut present = if base.is_none() { builtin_presence(doc, font, &names).unwrap_or([None; 256]) } else { [None; 256] };
+    let mut present = if base.is_none() { builtin_presence(doc, font, &names, reads).unwrap_or([None; 256]) } else { [None; 256] };
     for (code, unicode) in table.into_iter().flatten().enumerate() {
         if let Some(slot) = present.get_mut(code) {
             *slot = canonical.get(unicode).map(|name| names.contains(*name));
@@ -179,7 +183,24 @@ thread_local! {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILTIN_READS, Dict, Document, Object, absent_codes};
+    use super::{BUILTIN_READS, Dict, Document, Object, Reads, absent_codes};
+
+    #[test]
+    fn spent_allowance_is_not_cached_as_a_broken_program() {
+        let mut doc = Document::new_empty();
+        let id = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"not a font")));
+        let program = doc.resolve(&Object::Ref(id));
+        BUILTIN_READS.with(|n| n.set(0));
+        let mut budget = pdfcraft_cos::DecodeBudget::new(0, 0);
+        let mut reads = Reads::new(&doc, &mut budget);
+        assert!(super::builtin_encoding(&program, &mut reads).is_none());
+        assert!(reads.refused);
+        let mut budget = pdfcraft_cos::DecodeBudget::new(1024, 0);
+        let mut reads = Reads::new(&doc, &mut budget);
+        assert!(super::builtin_encoding(&program, &mut reads).is_none());
+        assert!(!reads.refused);
+        assert_eq!(BUILTIN_READS.with(|n| n.get()), 2);
+    }
 
     #[test]
     fn font_aliases_do_not_repeatedly_decode_an_unreadable_program() {
@@ -194,11 +215,11 @@ mod tests {
         for i in 0..100 {
             font.set(b"BaseFont".to_vec(), Object::name(&format!("ABCDEF+Alias{i}")));
             // Unreadable programs keep the lenient result, including on a cache hit.
-            assert_eq!(absent_codes(&doc, &font), [0; 4]);
+            assert_eq!(absent_codes(&doc, &font, &mut Reads::new(&doc, &mut pdfcraft_cos::DecodeBudget::new(16 << 20, 0))), [0; 4]);
         }
         assert_eq!(BUILTIN_READS.with(|n| n.get()), 1, "aliases share one failed decode/parse attempt");
         doc.set(program, Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"another broken program")));
-        assert_eq!(absent_codes(&doc, &font), [0; 4]);
+        assert_eq!(absent_codes(&doc, &font, &mut Reads::new(&doc, &mut pdfcraft_cos::DecodeBudget::new(16 << 20, 0))), [0; 4]);
         assert_eq!(BUILTIN_READS.with(|n| n.get()), 2, "a replaced program must be read again");
     }
 }

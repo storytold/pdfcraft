@@ -123,6 +123,45 @@ fn page_render_reports_a_recovered_malformed_indexed_image() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A picture whose JBIG2 soft mask is past one of the decoder's limits isn't drawn (#6722), and
+/// `page_render` says why the page is incomplete, in the words `pdfcraft-cli render` prints.
+#[test]
+fn page_render_says_a_picture_was_left_out_for_its_jbig2_mask() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-jbig2-mask-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // One JBIG2 segment (ISO 14492 §7.4.8): the information of a page 65,536 columns wide, a
+    // column past the decoder's bound on a side, as the mask's dictionary says too.
+    let mut mask = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+    mask.extend_from_slice(&65536u32.to_be_bytes());
+    mask.extend_from_slice(&2u32.to_be_bytes());
+    mask.extend_from_slice(&[0; 11]); // resolution, flags, striping
+    let content = "q 200 0 0 200 0 0 cm /Im Do Q";
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /SMask 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 65536 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+        content.len(),
+        mask.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&mask);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    std::fs::write(dir.join("mask.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = open(&mut a, "mask.pdf");
+    let out = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
+    assert_eq!(
+        report["warnings"],
+        json!(["content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"])
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Over MCP the warnings are a text block after the image and the call's `structuredContent`.
 #[cfg(feature = "mcp")]
 #[test]
