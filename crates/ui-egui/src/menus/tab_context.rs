@@ -159,7 +159,7 @@ fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static st
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    const PDF: &[u8] = include_bytes!("../tests/data/form.pdf");
+    const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
 
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
@@ -300,7 +300,7 @@ mod ui_tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
             }
             app
         });
