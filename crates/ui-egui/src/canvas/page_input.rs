@@ -598,12 +598,16 @@ impl PageHits<'_> {
         } = *self;
         // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
+            // Outside the pages' visible area it takes nothing.
+            if !clip.contains(p) {
+                return Vec::new();
+            }
             // It toggles the picture a plain press would find, by its visible shape.
             let picture = crate::edit_text_ui::picture_hit(xf, page, info, images, view, p).and_then(|h| match h.owner {
                 Owner::Picture { index, .. } => Some(index),
                 _ => None,
             });
-            return crate::object_ui::modified_hit(view, xf, info, page, objects, picture, clip, p).into_iter().collect();
+            return crate::object_ui::modified_hit(view, xf, info, page, objects, picture, p).into_iter().collect();
         }
         // Crop mode holds every press on its page (`edit_text_ui::crop_hit`). A right-click is the
         // crop's only on the picture being cropped, its box or its grips (#5835), where it keeps crop

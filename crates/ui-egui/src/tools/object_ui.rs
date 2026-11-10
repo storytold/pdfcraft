@@ -446,7 +446,8 @@ fn object_at(
 /// object under it among the page's `objects` ([`ObjectSelection::inventory`]), which it adds to
 /// the objects selected together or takes out of them, or none, where it starts an area selection
 /// that adds to them. Held while text being typed is open, and refused on a page whose objects
-/// can't be selected together. `None` off the page and outside the pages' visible area (`clip`).
+/// can't be selected together. `None` off the page. The caller has already checked `p` is inside
+/// the pages' visible area.
 pub(crate) fn modified_hit(
     view: &DocView,
     xf: &PageXform,
@@ -454,10 +455,9 @@ pub(crate) fn modified_hit(
     page: usize,
     objects: &Result<Vec<EditableObject>, String>,
     picture: Option<usize>,
-    clip: Rect,
     p: Pos2,
 ) -> Option<Hit> {
-    if !xf.rect.contains(p) || !clip.contains(p) {
+    if !xf.rect.contains(p) {
         return None;
     }
     let part = if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
