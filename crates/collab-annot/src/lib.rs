@@ -1037,6 +1037,142 @@ impl GeometryUpdate {
     }
 }
 
+// ── The pop-up window of a comment ───────────────────────────────────────────
+
+/// Where a comment's pop-up window sits and whether it is shown open: what the
+/// accepted `annotation.popup` carries as `before` and `after`, and what an
+/// undo's `expect` names (RFC §3.1.6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PopupState {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f64; 4],
+    /// `/Open` of the `/Popup` annotation.
+    pub open: bool,
+}
+
+impl PopupState {
+    /// The window's state as the accepted operation writes it.
+    pub fn to_value(&self) -> Value {
+        json!({ "rect": self.rect, "open": self.open })
+    }
+
+    /// Read a `before`, `after` or `expect` window state: both fields, no others.
+    pub fn from_value(value: &Value) -> Result<Self, WireError> {
+        let object = value.as_object().ok_or_else(|| WireError::Malformed("the window's state must be an object".into()))?;
+        if let Some(other) = object.keys().find(|key| *key != "rect" && *key != "open") {
+            return Err(WireError::Invalid { field: "pop-up", why: format!("{other:?} is not part of a window's state") });
+        }
+        let rect = object.get("rect").ok_or_else(|| WireError::Malformed("the window's state names no rect".into()))?;
+        let open = object.get("open").and_then(Value::as_bool).ok_or_else(|| WireError::Malformed("the window's state names no open flag".into()))?;
+        Ok(Self { rect: rect_field(rect, "pop-up rect")?, open })
+    }
+
+    /// Whether the comment's window still is where and how this state names it.
+    pub fn still_matches(&self, props: &Props) -> bool {
+        props.popup.is_some_and(|popup| {
+            let rect = [f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])];
+            popup.open == self.open && (0..4).all(|i| (self.rect[i] - rect[i]).abs() <= GEOMETRY_EPSILON)
+        })
+    }
+}
+
+/// The place and the open state of a comment's pop-up window, as
+/// `annotation.popup` sets them (RFC §3.1.6).
+///
+/// `annotation.update` changes what a comment looks like; this changes its
+/// window — the last edit inside a comment the room had no operation for.
+/// `rect` moves or resizes the window, `open` opens or closes it; a field left
+/// out stays as it is. The engine's `Edit::SetAnnotationPopup`
+/// (`pdfcraft_annot::set_popup`) puts a window beside the comment when it has
+/// none, so opening a highlight's note window is one operation too. What the
+/// lock does not stop: the window's place and state are not the comment.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PopupUpdate {
+    /// The window's final `/Rect`, corners ordered, at least 1 pt on a side.
+    pub rect: Option<[f64; 4]>,
+    /// Whether the window ends up open.
+    pub open: Option<bool>,
+}
+
+impl PopupUpdate {
+    /// Whether the update names neither the window's place nor its state.
+    pub fn is_empty(&self) -> bool {
+        self.rect.is_none() && self.open.is_none()
+    }
+
+    /// The body of an `annotation.popup`: `{"action": …, "popup": {…}}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.popup", "popup": self.to_value() })
+    }
+
+    /// The `popup` object on its own, as the accepted operation's `popup` and
+    /// `before` write it.
+    pub fn to_value(&self) -> Value {
+        let mut object = Map::new();
+        if let Some(rect) = self.rect {
+            object.insert("rect".into(), json!(rect));
+        }
+        if let Some(open) = self.open {
+            object.insert("open".into(), json!(open));
+        }
+        Value::Object(object)
+    }
+
+    /// Read the `popup` object of an `annotation.popup`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let popup = payload.get("popup").filter(|value| !value.is_null()).ok_or_else(|| WireError::Malformed("the update names no pop-up".into()))?;
+        Self::from_value(popup)
+    }
+
+    /// Read a `popup` object: the fields present are the ones the update sets.
+    pub fn from_value(popup: &Value) -> Result<Self, WireError> {
+        let object = popup.as_object().ok_or_else(|| WireError::Malformed("the pop-up must be an object".into()))?;
+        let mut update = Self::default();
+        for (key, field) in object {
+            match key.as_str() {
+                "rect" => update.rect = Some(rect_field(field, "pop-up rect")?),
+                "open" => {
+                    update.open = Some(field.as_bool().ok_or_else(|| WireError::Invalid { field: "open", why: "expected true or false".into() })?);
+                }
+                other => return Err(WireError::Invalid { field: "pop-up", why: format!("{other:?} is not part of a window") }),
+            }
+        }
+        if update.is_empty() {
+            return Err(WireError::Malformed("the pop-up names no place and no state".into()));
+        }
+        Ok(update)
+    }
+
+    /// The window's state this update replaces, for exactly the fields it
+    /// names: what the accepted operation carries as `before`. `None` when the
+    /// comment has no window yet — the operation creates one beside it.
+    pub fn before(&self, props: &Props) -> Option<Self> {
+        let popup = props.popup?;
+        let rect = [f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])];
+        Some(Self { rect: self.rect.and(Some(rect)), open: self.open.and(Some(popup.open)) })
+    }
+
+    /// Refuse a comment with no window of its own, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.fill_sign {
+            return Err(WireError::Invalid { field: "pop-up", why: "a Fill & Sign mark has no window of its own".into() });
+        }
+        if props.reply {
+            return Err(WireError::Invalid { field: "pop-up", why: "a reply shows in its parent's window".into() });
+        }
+        if props.subtype == "FreeText" {
+            return Err(WireError::Invalid { field: "pop-up", why: "a text box has no window of its own".into() });
+        }
+        Ok(())
+    }
+
+    /// What the engine's `Edit::SetAnnotationPopup` takes: `None` leaves a field
+    /// as it is (and a missing window is created beside the comment).
+    pub fn apply_to(&self) -> (Option<[f64; 4]>, Option<bool>) {
+        (self.rect, self.open)
+    }
+}
+
 /// A move of an existing comment by `(dx, dy)` points, as `annotation.move`
 /// sets it (RFC §3.1.6).
 ///

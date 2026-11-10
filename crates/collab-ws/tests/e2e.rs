@@ -1702,6 +1702,104 @@ fn two_clients_change_parts_and_move_a_comment_and_undo_them() -> Result<(), Box
     Ok(())
 }
 
+/// A comment's pop-up window is an addressable operation over the socket: both
+/// replicas converge on an open and on a move, the undo built from the accepted
+/// operation puts the window back, and a text box is refused without moving the
+/// version.
+#[test]
+fn two_clients_open_and_move_a_comment_window_and_undo_it() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let note = pdfcraft_engine::Shape::Note { at: [60.0, 240.0], icon: pdfcraft_engine::NoteIcon::Comment };
+    let box_ = pdfcraft_engine::Shape::TextBox { rect: [20.0, 120.0, 180.0, 170.0], font_size: 10.0 };
+    add_shape_on_both(&mut ada, &mut bo, &doc, note, "ada-note", "op-add-note")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, box_, "ada-box", "op-add-box")?;
+    let window = |peer: &Peer, nm: &str| -> (Vec<f64>, bool) {
+        let popup = style_of(peer, nm).expect("the comment has properties").popup.expect("the comment has a window");
+        ([f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])].to_vec(), popup.open)
+    };
+
+    // Opening the note's window: one operation, both replicas.
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-popup")?,
+            base,
+            0,
+            annotation("ada-note", 0),
+            json!({"action": "annotation.popup", "popup": {"open": true}}),
+        ),
+    )?;
+    assert_eq!(applied.op.payload["popup"], json!({"open": true}));
+    assert_eq!(applied.op.payload["before"], json!({"open": false}));
+    for peer in [&ada, &bo] {
+        assert!(window(peer, "ada-note").1, "the window is open on every replica");
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the open has no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.popup");
+    assert_eq!(undo.payload["popup"], json!({"open": false}));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-popup")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        assert!(!window(peer, "ada-note").1, "the undo closed it on every replica");
+    }
+
+    // Moving it: the undo from the accepted operation puts the old place back.
+    let (start, _) = window(&bo, "ada-note");
+    let target = [start[0] + 20.0, start[1] - 10.0, start[2] + 20.0, start[3] - 10.0];
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-popup-move")?,
+            base,
+            0,
+            annotation("ada-note", 0),
+            json!({"action": "annotation.popup", "popup": {"rect": target}}),
+        ),
+    )?;
+    assert_eq!(applied.op.payload["after"], json!({"rect": target, "open": false}));
+    for peer in [&ada, &bo] {
+        let (rect, open) = window(peer, "ada-note");
+        assert!((0..4).all(|i| (rect[i] - target[i]).abs() < 1e-3) && !open, "the move is on every replica: {rect:?}");
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the move has no inverse")?;
+    assert_eq!(undo.payload["popup"], json!({"rect": start}));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-popup-move")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let (rect, _) = window(peer, "ada-note");
+        assert!((0..4).all(|i| (rect[i] - start[i]).abs() < 1e-3), "the undo puts the window back on every replica: {rect:?}");
+    }
+
+    // A text box has no window of its own: refused, not broadcast, the version
+    // stays and so does the document.
+    let version = ada.version;
+    ada.send(merge_op(
+        doc.clone(),
+        OpId::new("op-popup-box")?,
+        version,
+        0,
+        annotation("ada-box", 0),
+        json!({"action": "annotation.popup", "popup": {"open": true}}),
+    ))?;
+    match ada.settle()? {
+        ServerMessage::Rejected(rejected) => assert_eq!(rejected.code, ErrorCode::Invalid, "{}", rejected.message),
+        other => return Err(format!("expected a rejection for a text box's window, got {other:?}").into()),
+    }
+    assert_eq!(ada.version, version, "a refusal does not move the version");
+    for peer in [&ada, &bo] {
+        assert!(style_of(peer, "ada-box")?.popup.is_none(), "no window was made on the text box");
+    }
+    Ok(())
+}
+
 /// A resize and a reshape are addressable operations: both replicas converge on
 /// each, and the undo built from `before`/`after` puts both back.
 #[test]

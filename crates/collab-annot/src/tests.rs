@@ -1,7 +1,7 @@
 use super::{
     AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MAX_STROKE_POINTS, MAX_STROKES, MarkWire,
-    MarkupWire, MoveUpdate, PartsUpdate, ReviewStateWire, ShapeWire, StampWire, StyleFields, StyleUpdate, StyleWire, WireError, rect_from_value,
-    rect_matches,
+    MarkupWire, MoveUpdate, PartsUpdate, PopupState, PopupUpdate, ReviewStateWire, ShapeWire, StampWire, StyleFields, StyleUpdate, StyleWire,
+    WireError, rect_from_value, rect_matches,
 };
 use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NoteIcon, ReviewState, Shape, StampKind, Style};
 use serde_json::json;
@@ -205,6 +205,9 @@ fn square() -> pdfcraft_annot::Props {
         frame: Some([10.0, 10.0, 80.0, 40.0]),
         points: Vec::new(),
         intent: None,
+        popup: None,
+        fill_sign: false,
+        reply: false,
     }
 }
 
@@ -521,6 +524,67 @@ fn a_move_round_trips_and_keeps_text_markup_in_place() -> Result<(), BoxError> {
     let mut locked = square;
     locked.locked = true;
     assert!(matches!(update.check_for(&locked), Err(WireError::NotRestylable(_))));
+    Ok(())
+}
+
+/// A comment's pop-up window is addressable: `annotation.popup` names the final
+/// place and open state, the accepted operation carries the window's state
+/// before and after, and the undo's compare-and-set reads the window back.
+#[test]
+fn a_popup_update_round_trips_and_refuses_a_comment_without_a_window() -> Result<(), BoxError> {
+    let rect = [100.0, 100.0, 300.0, 220.0];
+    let update = PopupUpdate { rect: Some(rect), open: Some(true) };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.popup");
+    assert_eq!(payload["popup"], json!({"rect": rect, "open": true}));
+    assert_eq!(PopupUpdate::from_payload(&payload)?, update);
+    assert_eq!(PopupUpdate::from_value(&json!({"open": false}))?, PopupUpdate { rect: None, open: Some(false) });
+    assert_eq!(PopupUpdate { open: Some(false), ..Default::default() }.to_value(), json!({"open": false}));
+
+    // Corners are ordered, a window is at least 1 pt on a side, and an unknown
+    // key or an update that names neither the place nor the state is refused.
+    assert_eq!(PopupUpdate::from_value(&json!({"rect": [300.0, 220.0, 100.0, 100.0]}))?.rect, Some(rect));
+    for bad in [json!({"rect": [1.0, 2.0, 3.0]}), json!({"open": "yes"}), json!({"close": true}), json!({})] {
+        assert!(PopupUpdate::from_value(&bad).is_err(), "{bad}");
+    }
+    assert!(matches!(PopupUpdate::from_value(&json!({"rect": [10.0, 10.0, 10.5, 40.0]})), Err(WireError::Invalid { .. })), "under 1 pt");
+
+    // A note has a window; a text box, a reply and a Fill & Sign mark have none.
+    let mut note = square();
+    note.subtype = "Text".into();
+    assert!(update.check_for(&note).is_ok(), "a sticky note has its own window");
+    let mut text_box = note.clone();
+    text_box.subtype = "FreeText".into();
+    assert!(matches!(update.check_for(&text_box), Err(WireError::Invalid { field: "pop-up", .. })));
+    let mut reply = note.clone();
+    reply.reply = true;
+    assert!(update.check_for(&reply).is_err(), "a reply shows in its parent's window");
+    let mut mark = note.clone();
+    mark.fill_sign = true;
+    assert!(update.check_for(&mark).is_err(), "a Fill & Sign mark has no window");
+
+    // The state before names only the fields the update sets: an open leaves the
+    // place, a move leaves the state.
+    let window = pdfcraft_annot::PopupInfo { rect: [100.0, 100.0, 300.0, 220.0], open: false };
+    let mut shown = note.clone();
+    shown.popup = Some(window);
+    assert_eq!(PopupUpdate { open: Some(true), ..Default::default() }.before(&shown), Some(PopupUpdate { rect: None, open: Some(false) }));
+    assert_eq!(
+        PopupUpdate { rect: Some([1.0, 1.0, 90.0, 60.0]), ..Default::default() }.before(&shown),
+        Some(PopupUpdate { rect: Some(rect), open: None })
+    );
+    assert_eq!(PopupUpdate { open: Some(true), ..Default::default() }.before(&note), None, "no window to restore");
+
+    // An undo's compare-and-set reads the window back: the state the edit left
+    // matches, another place or the other open flag is a conflict.
+    let after = PopupState { rect, open: true };
+    assert_eq!(PopupState::from_value(&after.to_value())?, after);
+    assert!(PopupState::from_value(&json!({"rect": rect})).is_err(), "an open flag is part of the state");
+    assert!(!after.still_matches(&shown), "the window is closed where the state says open");
+    shown.popup = Some(pdfcraft_annot::PopupInfo { rect: [100.0, 100.0, 300.0, 220.0], open: true });
+    assert!(after.still_matches(&shown));
+    assert!(!PopupState { rect: [100.0, 100.0, 400.0, 220.0], open: true }.still_matches(&shown));
+    assert!(!after.still_matches(&note), "no window at all does not match");
     Ok(())
 }
 

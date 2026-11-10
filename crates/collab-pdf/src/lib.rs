@@ -62,8 +62,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_annot::{
-    AnnotationInput, FontSizeUpdate, GeometryUpdate, InfoUpdate, MoveUpdate, PartsUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
-    rect_matches,
+    AnnotationInput, FontSizeUpdate, GeometryUpdate, InfoUpdate, MoveUpdate, PartsUpdate, PopupState, PopupUpdate, ReviewStateWire, StyleUpdate,
+    WireError, rect_from_value, rect_matches,
 };
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
@@ -583,6 +583,50 @@ impl PdfAdapter {
         }
         payload["geometry"] = update.to_value();
         payload["before"] = before.to_value();
+        payload["after"] = after.to_value();
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Open, close or move a comment's pop-up window (RFC §3.1.6): one
+    /// addressable operation over `Edit::SetAnnotationPopup`.
+    ///
+    /// The accepted operation carries the window's state before (`null` when the
+    /// comment had none, so the engine created one beside it) and after, read
+    /// back from the document: the place a new window gets is the engine's, and
+    /// the undo's compare-and-set must name the state the edit really left.
+    fn update_popup(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = PopupUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        // An undo names the window it left: if someone moved or opened it since,
+        // putting the old place or state back would overwrite their edit.
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = PopupState::from_value(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the window changed since; the undo would overwrite it", false));
+            }
+        }
+        let before = update.before(&props);
+        let (rect, open) = update.apply_to();
+        self.apply_edit(Edit::SetAnnotationPopup { page, index, rect, open })?;
+        let after = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .and_then(|props| props.popup)
+            .map(|popup| PopupState {
+                rect: [f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])],
+                open: popup.open,
+            })
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the comment's pop-up can't be read after the edit", false))?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["popup"] = update.to_value();
+        payload["before"] = before.map_or(Value::Null, |before| before.to_value());
         payload["after"] = after.to_value();
         Ok(json!({ "nm": name }))
     }
@@ -1135,6 +1179,11 @@ impl Adapter for PdfAdapter {
                 let page = self.page_index(page)?;
                 self.update_geometry(page, &name, &mut effective.payload)?
             }
+            ("annotation.popup", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_popup(page, &name, &mut effective.payload)?
+            }
             ("annotation.reply", ConflictClass::Merge) => {
                 let (page, name) = annotation_target(&effective)?;
                 self.reply(self.page_index(page)?, &name, &effective.payload)?
@@ -1398,7 +1447,7 @@ fn fixture_with_padding(n: usize, padded: Option<(usize, usize)>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, base64_encode, fixture, fixture_with_padding};
+    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, PopupState, base64_encode, fixture, fixture_with_padding};
     use pdfcraft_collab_proto::{
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
@@ -2343,6 +2392,15 @@ mod tests {
         document.comment_props(comment.page, comment.index).ok_or_else(|| "the comment has no properties".into())
     }
 
+    /// A comment's window: where it sits and whether it is open, read back from
+    /// the document.
+    fn window_of(adapter: &PdfAdapter, nm: &str) -> Result<Option<PopupState>, Box<dyn std::error::Error>> {
+        Ok(style_of(adapter, nm)?.popup.map(|popup| PopupState {
+            rect: [f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])],
+            open: popup.open,
+        }))
+    }
+
     fn near(got: Option<[f64; 3]>, want: [f64; 3]) -> bool {
         got.is_some_and(|got| (0..3).all(|i| (got[i] - want[i]).abs() < 1e-3))
     }
@@ -2863,6 +2921,151 @@ mod tests {
         let replayed = style_of(&fresh, "t1")?;
         assert_eq!(replayed.fill_opacity, Some(1.0));
         assert_eq!(replayed.text_opacity, Some(1.0));
+        Ok(())
+    }
+
+    /// A comment's pop-up window is an addressable operation: `annotation.popup`
+    /// opens, closes or moves it, a fresh replica replays it, the accepted
+    /// operation carries the window's state before and after, and an undo is
+    /// refused when someone moved the window since — without a change.
+    #[test]
+    fn a_popup_window_is_opened_moved_and_undone_with_a_compare_and_set() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        room.apply(&editor, &note("n1", "Look here", 0)?, 0)?;
+        let window = window_of(room.adapter(), "n1")?.ok_or("a sticky note is created with a window")?;
+        assert!(!window.open, "a new note's window starts closed");
+
+        // Opening names the state alone: the place a window has stays.
+        let open = op(
+            "popup-open",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.popup", "popup": {"open": true}}),
+        )?;
+        let applied = room.apply(&editor, &open, 0)?;
+        assert_eq!(applied.op.payload["popup"], json!({"open": true}));
+        assert_eq!(applied.op.payload["before"], json!({"open": false}), "the state it replaced");
+        assert!(applied.op.payload.get("expect").is_none(), "the accepted operation carries no compare-and-set");
+        let after = PopupState::from_value(&applied.op.payload["after"])?;
+        assert!(after.open && after.rect == window.rect, "the engine kept the window's place");
+        assert_eq!(window_of(room.adapter(), "n1")?, Some(after));
+
+        // A move names the place alone; the accepted operation carries the state
+        // around it, so the undo can put the window back.
+        let moved = [200.0, 100.0, 400.0, 220.0];
+        let drag = op(
+            "popup-move",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.popup", "popup": {"rect": moved}}),
+        )?;
+        let dragged = room.apply(&editor, &drag, 0)?;
+        assert_eq!(dragged.op.payload["before"], json!({"rect": window.rect}), "only the fields the update names");
+        assert_eq!(PopupState::from_value(&dragged.op.payload["after"])?.rect, moved);
+
+        // A comment with no window of its own gets one beside it: the accepted
+        // operation carries `before: null` and the place the engine chose.
+        room.apply(&editor, &rectangle("r1", room.version())?, 0)?;
+        assert_eq!(window_of(room.adapter(), "r1")?, None, "a rectangle starts without a window");
+        let first = op(
+            "popup-first",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.popup", "popup": {"open": true}}),
+        )?;
+        let created = room.apply(&editor, &first, 0)?;
+        assert_eq!(created.op.payload["before"], serde_json::Value::Null);
+        let created_state = PopupState::from_value(&created.op.payload["after"])?;
+        assert!(created_state.open && created_state.rect[2] - created_state.rect[0] > 1.0);
+
+        // A text box has no window: refused before the document changes.
+        room.apply(
+            &editor,
+            &op(
+                "add-box",
+                ConflictClass::Merge,
+                Target::Page(page),
+                room.version(),
+                0,
+                json!({"action": "annotation.add", "nm": "t1",
+                       "shape": {"kind": "text_box", "rect": [10.0, 100.0, 180.0, 160.0], "font_size": 10.0},
+                       "contents": "Some text", "author": DEFAULT_AUTHOR}),
+            )?,
+            0,
+        )?;
+        let version = room.version();
+        let on_a_box = op(
+            "popup-box",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            version,
+            0,
+            json!({"action": "annotation.popup", "popup": {"open": true}}),
+        )?;
+        let refused = room.apply(&editor, &on_a_box, 0).err().ok_or("a text box was given a window")?;
+        assert_eq!(refused.code, ErrorCode::Invalid, "{}", refused.message);
+        assert_eq!(room.version(), version, "a refused operation does not move the version");
+        assert_eq!(window_of(room.adapter(), "t1")?, None, "and changes nothing");
+
+        // Someone drags the window: the undo's compare-and-set fails and their
+        // place stays.
+        let theirs = [300.0, 120.0, 500.0, 240.0];
+        room.apply(
+            &editor,
+            &op(
+                "popup-theirs",
+                ConflictClass::Merge,
+                Target::Annotation { page, nm: "n1".into() },
+                room.version(),
+                0,
+                json!({"action": "annotation.popup", "popup": {"rect": theirs}}),
+            )?,
+            0,
+        )?;
+        let version = room.version();
+        let undo = op(
+            "undo-drag",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            version,
+            0,
+            json!({"action": "annotation.popup", "popup": {"rect": window.rect}, "expect": {"rect": moved, "open": true}}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote someone else's drag")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(room.version(), version);
+        assert_eq!(window_of(room.adapter(), "n1")?.map(|window| window.rect), Some(theirs));
+
+        // With the window where the edit left it, the undo puts the old place
+        // back, and a fresh replica replaying the operations lands on the same.
+        let undo = op(
+            "undo-drag-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.popup", "popup": {"rect": window.rect}, "expect": {"rect": theirs, "open": true}}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        assert_eq!(window_of(room.adapter(), "n1")?, Some(PopupState { rect: window.rect, open: true }));
+
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &note("n1", "Look here", 0)?)?;
+        fresh.apply(&editor, &applied.op)?;
+        fresh.apply(&editor, &dragged.op)?;
+        fresh.apply(&editor, &rectangle("r1", 0)?)?;
+        fresh.apply(&editor, &created.op)?;
+        fresh.apply(&editor, &undone.op)?;
+        assert_eq!(window_of(&fresh, "n1")?, window_of(room.adapter(), "n1")?);
+        assert_eq!(window_of(&fresh, "r1")?, Some(created_state));
         Ok(())
     }
 

@@ -355,6 +355,12 @@ pub struct Props {
     pub points: Vec<[f64; 2]>,
     /// `/IT`, the intent: `FreeTextCallout`, `PolygonCloud`, `FreeTextTypeWriter`…
     pub intent: Option<String>,
+    /// The comment's own pop-up window (`/Popup`), when it has one (see [`Summary::popup`]).
+    pub popup: Option<PopupInfo>,
+    /// A Fill & Sign mark ([`is_fill_sign`]): it has no pop-up window of its own.
+    pub fill_sign: bool,
+    /// A reply (`/IRT`): it shows in its parent's window, not one of its own.
+    pub reply: bool,
 }
 
 /// A comment's `/Rect` with its corners in order: `None` without four finite numbers, or when one
@@ -443,6 +449,9 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         intent: d.name(b"IT").map(|name| String::from_utf8_lossy(name).into_owned()),
         subtype,
         endings: line_endings_of(d),
+        popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), raw),
+        fill_sign: is_fill_sign(doc, d),
+        reply: d.contains(b"IRT"),
     })
 }
 

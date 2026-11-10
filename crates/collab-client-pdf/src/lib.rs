@@ -13,8 +13,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_annot::{
-    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MoveUpdate, PartsUpdate, ReviewStateWire,
-    StyleUpdate, WireError, rect_from_value,
+    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MoveUpdate, PartsUpdate, PopupState,
+    PopupUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
 };
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
 use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
@@ -186,6 +186,18 @@ pub fn geometry_payload(update: &GeometryUpdate) -> Value {
 /// only if the comment's geometry still is the one the edit left.
 pub fn geometry_restore_payload(update: &GeometryUpdate, expect: &GeometryUpdate) -> Value {
     json!({"action": "annotation.geometry", "geometry": update.to_value(), "expect": expect.to_value()})
+}
+
+/// The body of an `annotation.popup`: the final place and open state of a
+/// comment's window, named by the operation's target.
+pub fn popup_payload(update: &PopupUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The update that undoes one: the window's state `update` puts back, applied
+/// only if the window still is the one the edit left (`expect`).
+pub fn popup_restore_payload(update: &PopupUpdate, expect: &PopupState) -> Value {
+    json!({"action": "annotation.popup", "popup": update.to_value(), "expect": expect.to_value()})
 }
 
 /// One style update for a group of interactive style edits on the same comment.
@@ -415,6 +427,17 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
                 GeometryUpdate::Rect(rect) => Ok(Edit::ResizeAnnotation { page, index, rect }),
                 GeometryUpdate::Points(points) => Ok(Edit::ReshapeAnnotation { page, index, points }),
             }
+        }
+        ("annotation.popup", ConflictClass::Merge) => {
+            // The final place and open state of a comment's window.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = PopupUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            let (rect, open) = update.apply_to();
+            Ok(Edit::SetAnnotationPopup { page, index, rect, open })
         }
         ("annotation.reply", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
@@ -848,6 +871,25 @@ pub fn ops_for_edit(
                 geometry_payload(&update),
             )])
         }
+        Edit::SetAnnotationPopup { page, index, rect, open } => {
+            // Opening, closing or moving a comment's window: the last edit
+            // inside a comment that had no operation (RFC §3.1.6).
+            let nm = name_at(document, *page, *index)?;
+            let update = PopupUpdate { rect: *rect, open: *open };
+            if update.is_empty() {
+                return Err(ProjectionError::Unsupported(edit.label().to_string()));
+            }
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                popup_payload(&update),
+            )])
+        }
         Edit::Batch { label, edits } => {
             // One undo step of the interface (Comment Properties ▸ OK) may
             // restyle a comment, resize its text and change its author, subject
@@ -1163,12 +1205,13 @@ fn style_op(
 /// becomes, grouped by the comment each edit addresses: the style
 /// (`annotation.update`), the part opacities (`annotation.parts`), the font size
 /// (`annotation.font_size`), the author/subject/icon (`annotation.info`), the
-/// moves (`annotation.move`) and the geometry (`annotation.geometry`), in that
-/// order within one comment. Each is its own addressable operation; the caller's
-/// history group undoes them as one step. A batch of several comments (Comment
-/// Properties applied to a selection, or a group drag) is one group of
-/// operations per comment, so one refused comment refuses the whole batch before
-/// anything is sent. `None` when the batch carries an edit no operation covers.
+/// moves (`annotation.move`), the geometry (`annotation.geometry`) and the
+/// pop-up window (`annotation.popup`), in that order within one comment. Each is
+/// its own addressable operation; the caller's history group undoes them as one
+/// step. A batch of several comments (Comment Properties applied to a selection,
+/// or a group drag) is one group of operations per comment, so one refused
+/// comment refuses the whole batch before anything is sent. `None` when the
+/// batch carries an edit no operation covers.
 #[allow(clippy::too_many_arguments)]
 fn annotation_property_ops(
     document: &Document,
@@ -1193,7 +1236,8 @@ fn annotation_property_ops(
             | Edit::SetAnnotationInfo { page, index, .. }
             | Edit::MoveAnnotation { page, index, .. }
             | Edit::ResizeAnnotation { page, index, .. }
-            | Edit::ReshapeAnnotation { page, index, .. } => (*page, *index),
+            | Edit::ReshapeAnnotation { page, index, .. }
+            | Edit::SetAnnotationPopup { page, index, .. } => (*page, *index),
             _ => return Ok(None),
         };
         match groups.iter_mut().find(|(key, _)| *key == (page, index)) {
@@ -1216,6 +1260,7 @@ fn annotation_property_ops(
         let mut info = InfoUpdate::default();
         let mut moves = Vec::new();
         let mut geometries = Vec::new();
+        let mut popup = PopupUpdate::default();
         for edit in edits {
             match edit {
                 Edit::FontSizeAnnotation { size: named, .. } => size = Some(named),
@@ -1238,6 +1283,14 @@ fn annotation_property_ops(
                 Edit::MoveAnnotation { dx, dy, .. } => moves.push(MoveUpdate { dx, dy }),
                 Edit::ResizeAnnotation { rect, .. } => geometries.push(GeometryUpdate::Rect(rect)),
                 Edit::ReshapeAnnotation { points, .. } => geometries.push(GeometryUpdate::Points(points)),
+                Edit::SetAnnotationPopup { rect, open, .. } => {
+                    if rect.is_some() {
+                        popup.rect = rect;
+                    }
+                    if open.is_some() {
+                        popup.open = open;
+                    }
+                }
                 other => style.push(other),
             }
         }
@@ -1266,6 +1319,10 @@ fn annotation_property_ops(
         for update in geometries {
             update.check_for(&props)?;
             ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), geometry_payload(&update)));
+        }
+        if !popup.is_empty() {
+            popup.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), popup_payload(&popup)));
         }
     }
     Ok((!ops.is_empty()).then_some(ops))
@@ -1352,6 +1409,10 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         // replica cannot know before the edit is applied: the undo is patched
         // from the accepted operation (`inverse_after`), like a restyle's.
         "annotation.geometry" => return Ok(None),
+        // A window's place and state after the edit are the engine's (a new
+        // window goes beside the comment), so the undo is built from the
+        // accepted operation too.
+        "annotation.popup" => return Ok(None),
         "annotation.delete" => return Ok(None),
         "field.set_value" => {
             let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
@@ -1498,6 +1559,25 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let Target::Annotation { page, nm } = &op.target else { return None };
         let target = Target::Annotation { page: *page, nm: nm.clone() };
         return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, geometry_restore_payload(&update, &after)));
+    }
+    if action == "annotation.popup" {
+        // The undo puts the window back where and how the server says it was.
+        // A window the operation created had no state to restore (`before` is
+        // null): the engine has no edit that removes one, so the undo closes it
+        // where the open put it — the place is view state, not content.
+        let expect = PopupState::from_value(op.payload.get("after")?).ok()?;
+        let before = op
+            .payload
+            .get("before")
+            .filter(|value| !value.is_null())
+            .map(PopupUpdate::from_value)
+            .transpose()
+            .ok()?
+            .filter(|before| !before.is_empty())
+            .unwrap_or(PopupUpdate { rect: None, open: Some(false) });
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, popup_restore_payload(&before, &expect)));
     }
     // A replaced page comes back from the copy the server kept — and when it
     // kept none (the page was over the budget), the undo is still sent, naming
@@ -2541,6 +2621,22 @@ mod tests {
         assert_eq!(ops[4].payload["dx"], serde_json::json!(5.0));
         assert_eq!(ops[5].payload["geometry"]["rect"], serde_json::json!(resized));
 
+        // A window's edit is part of a group too: a style and an open on one
+        // comment are one operation each, and the group undoes as one step.
+        let window_batch = engine::Edit::Batch {
+            label: "Comment window".into(),
+            edits: vec![
+                engine::Edit::StyleAnnotation { page: 0, index: rect_index, color: Some([0.0, 1.0, 0.0]), opacity: None, width: None, endings: None },
+                engine::Edit::SetAnnotationPopup { page: 0, index: rect_index, rect: None, open: Some(true) },
+            ],
+        };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &window_batch, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[1].payload["action"], "annotation.popup");
+        assert_eq!(ops[1].payload["popup"], serde_json::json!({"open": true}));
+        assert_eq!(ops[0].target, ops[1].target);
+
         // A batch over two comments is one group per comment: the interface's
         // multi-selection change is not refused.
         let document = session.get(id).ok_or("gone")?;
@@ -2562,7 +2658,7 @@ mod tests {
             label: "Edit comment".into(),
             edits: vec![
                 engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None },
-                engine::Edit::SetAnnotationPopup { page: 0, index, rect: Some([10.0, 10.0, 90.0, 60.0]), open: None },
+                engine::Edit::LockAnnotation { page: 0, index, locked: true },
             ],
         };
         let document = session.get(id).ok_or("gone")?;
@@ -2696,6 +2792,153 @@ mod tests {
         assert_eq!(ada.get(ada_id).ok_or("gone")?.info.annotations.len(), annotations);
         let rect = props_of(&ada, ada_id, note_index)?.rect.ok_or("no rect")?;
         assert!((rect[0] - 1.0).abs() > 1e-6, "the note did not move: {rect:?}");
+        Ok(())
+    }
+
+    /// A comment's pop-up window is an addressable operation: two replicas apply
+    /// the accepted operation, the inverse from the accepted operation puts both
+    /// back (including a window the open created), and a comment with no window
+    /// of its own is refused before anything changes.
+    #[test]
+    fn a_popup_window_round_trips_two_replicas() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_collab_proto::{ActorId, Applied, Op};
+        use pdfcraft_engine as engine;
+
+        let (mut ada, ada_id) = open()?;
+        let (mut bo, bo_id) = open()?;
+        let box_shape = engine::Shape::TextBox { rect: [10.0, 100.0, 180.0, 160.0], font_size: 10.0 };
+        let box_new = engine::NewAnnotation {
+            page: 0,
+            shape: box_shape.clone(),
+            style: engine::Style::default_for(&box_shape),
+            contents: "Box".into(),
+            author: "Ada".into(),
+        };
+        let add_box =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&box_new, "box-1")?);
+        let note = merge_op(
+            doc()?,
+            OpId::new("a1")?,
+            0,
+            0,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            add_note_payload("note-1", [40.0, 250.0], "hello", "Ada"),
+        );
+        for op in [&add_box, &note] {
+            apply(&mut ada, ada_id, op)?;
+            apply(&mut bo, bo_id, op)?;
+        }
+        let both = |ada: &mut Session, bo: &mut Session, op: &Op| -> Result<(), ProjectionError> {
+            apply(ada, ada_id, op)?;
+            apply(bo, bo_id, op)?;
+            Ok(())
+        };
+        let accepted = |op: &Op, before: serde_json::Value, after: serde_json::Value| -> Result<Applied, Box<dyn std::error::Error>> {
+            let mut op = op.clone();
+            op.payload["before"] = before;
+            op.payload["after"] = after;
+            Ok(Applied { op_id: op.op_id.clone(), actor_id: ActorId::new("ada")?, version: 1, epoch: 0, op, result: serde_json::json!({}) })
+        };
+        let window = |session: &Session, id, nm: &str| -> ([f64; 4], bool) {
+            let index = index_of(session, id, nm).expect("the comment is on this replica");
+            let popup = props_of(session, id, index).expect("the comment has properties").popup.expect("the comment has a window");
+            ([f64::from(popup.rect[0]), f64::from(popup.rect[1]), f64::from(popup.rect[2]), f64::from(popup.rect[3])], popup.open)
+        };
+
+        // A sticky note is created with a window beside it, closed.
+        let (closed_rect, closed_open) = window(&ada, ada_id, "note-1");
+        assert!(!closed_open, "a new note's window starts closed");
+
+        // Opening names the state alone.
+        let index = index_of(&ada, ada_id, "note-1")?;
+        let mut counter = 0;
+        let edit = engine::Edit::SetAnnotationPopup { page: 0, index, rect: None, open: Some(true) };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 0, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["action"], "annotation.popup");
+        assert_eq!(ops[0].payload["popup"], serde_json::json!({"open": true}));
+        let applied = accepted(&ops[0], serde_json::json!({"open": false}), serde_json::json!({"rect": closed_rect, "open": true}))?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for (session, id) in [(&ada, ada_id), (&bo, bo_id)] {
+            let (rect, open) = window(session, id, "note-1");
+            assert!(open && (0..4).all(|i| (rect[i] - closed_rect[i]).abs() < 1e-6), "both replicas opened it: {rect:?}");
+        }
+        let undo = super::inverse_after(&applied).ok_or("the open has an inverse")?;
+        assert_eq!(undo.payload["action"], "annotation.popup");
+        assert_eq!(undo.payload["popup"], serde_json::json!({"open": false}), "the undo names the state it replaced");
+        assert_eq!(undo.payload["expect"], serde_json::json!({"rect": closed_rect, "open": true}), "and the state the edit left");
+        both(&mut ada, &mut bo, &undo)?;
+        for (session, id) in [(&ada, ada_id), (&bo, bo_id)] {
+            assert!(!window(session, id, "note-1").1, "the undo closed it");
+        }
+
+        // A move names the place alone; the undo puts the window back.
+        let moved = [200.0, 100.0, 400.0, 220.0];
+        let mut counter = 0;
+        let edit = engine::Edit::SetAnnotationPopup { page: 0, index, rect: Some(moved), open: None };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["popup"], serde_json::json!({"rect": moved}));
+        let applied = accepted(&ops[0], serde_json::json!({"rect": closed_rect}), serde_json::json!({"rect": moved, "open": false}))?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for (session, id) in [(&ada, ada_id), (&bo, bo_id)] {
+            let (rect, open) = window(session, id, "note-1");
+            assert!((0..4).all(|i| (rect[i] - moved[i]).abs() < 1e-6) && !open, "both replicas moved it: {rect:?}");
+        }
+        let undo = super::inverse_after(&applied).ok_or("the move has an inverse")?;
+        assert_eq!(undo.payload["popup"], serde_json::json!({"rect": closed_rect}));
+        both(&mut ada, &mut bo, &undo)?;
+        for (session, id) in [(&ada, ada_id), (&bo, bo_id)] {
+            let (rect, open) = window(session, id, "note-1");
+            assert!((0..4).all(|i| (rect[i] - closed_rect[i]).abs() < 1e-6) && !open, "the undo moved it back: {rect:?}");
+        }
+
+        // A rectangle has no window until one is opened on it: the accepted
+        // operation carries `before: null`, and the undo closes what it created.
+        let rect_shape = engine::Shape::Rectangle { rect: [200.0, 300.0, 300.0, 360.0] };
+        let rect_new = engine::NewAnnotation {
+            page: 0,
+            shape: rect_shape.clone(),
+            style: engine::Style::default_for(&rect_shape),
+            contents: String::new(),
+            author: "Ada".into(),
+        };
+        let add_rect = merge_op(
+            doc()?,
+            OpId::new("a2")?,
+            1,
+            0,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            super::add_annotation_payload(&rect_new, "rect-1")?,
+        );
+        both(&mut ada, &mut bo, &add_rect)?;
+        let rect_index = index_of(&ada, ada_id, "rect-1")?;
+        assert!(props_of(&ada, ada_id, rect_index)?.popup.is_none(), "a rectangle starts without a window");
+        let mut counter = 0;
+        let edit = engine::Edit::SetAnnotationPopup { page: 0, index: rect_index, rect: Some(moved), open: Some(true) };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 2, 0, &mut counter)?;
+        let created = accepted(&ops[0], serde_json::Value::Null, serde_json::json!({"rect": moved, "open": true}))?;
+        both(&mut ada, &mut bo, &created.op)?;
+        let undo = super::inverse_after(&created).ok_or("an open has an inverse")?;
+        assert_eq!(undo.payload["popup"], serde_json::json!({"open": false}), "a created window is closed, not removed");
+        assert_eq!(undo.payload["expect"], serde_json::json!({"rect": moved, "open": true}));
+        both(&mut ada, &mut bo, &undo)?;
+
+        // A text box has no window of its own: no operation is built, and
+        // neither replica changes.
+        let box_index = index_of(&ada, ada_id, "box-1")?;
+        let before = props_of(&ada, ada_id, box_index)?;
+        assert!(before.popup.is_none(), "a text box starts without a window");
+        let mut counter = 0;
+        let refused = super::ops_for_edit(
+            ada.get(ada_id).ok_or("gone")?,
+            &engine::Edit::SetAnnotationPopup { page: 0, index: box_index, rect: None, open: Some(true) },
+            doc()?,
+            "ada",
+            3,
+            0,
+            &mut counter,
+        );
+        assert!(matches!(refused, Err(ProjectionError::Invalid(_))), "a text box has no window");
+        assert!(props_of(&bo, bo_id, box_index)?.popup.is_none(), "the other replica is untouched");
         Ok(())
     }
 
