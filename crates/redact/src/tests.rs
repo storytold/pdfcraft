@@ -4208,153 +4208,203 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
 
-/// #6477, the gate for both number parsers: pdfcraft-cos (the model, and so the page geometry
-/// redaction works in) and hayro-syntax (the renderer) read a number token with no finite value
-/// the same way, as absent or invalid at its slot, never clamped: word forms, integer overflow and
-/// real overflow, in `/UserUnit`, in a box and among content operands.
+// #6477, the gate for both number parsers: pdfcraft-cos (the model, and so the page geometry
+// redaction works in) and hayro-syntax (the renderer) read a number token with no finite value
+// the same way, as absent or invalid at its slot, never clamped: word forms, integer overflow and
+// real overflow, in `/UserUnit`, in a box, among content operands and in `/QuadPoints`. One test
+// per slot (`number_gate_*`), so a failure names the rule that broke (#6601 review); the tokens
+// are the shared list every test of the rule uses (`pdfcraft_testkit::non_finite_tokens`).
+
+/// A one-page document with `entries` in the page dictionary and `content` as its content.
+fn number_gate_page(entries: &str, content: &str) -> Vec<u8> {
+    Pdf::new()
+        .objs([
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R {entries} /Contents 4 0 R /Resources << >> >>").into_bytes(),
+            stream("", content.as_bytes()),
+        ])
+        .build()
+}
+
+/// A crop box and a displayed size, in points.
+type Geometry = ([f32; 4], (f32, f32));
+
+/// The model's crop box and displayed size for the first page.
+fn number_gate_model(bytes: &[u8]) -> Geometry {
+    let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+    let pages = pdfcraft_model::pages(&doc);
+    let p = pages.first().expect("the model sees the page");
+    let (w, h) = p.display_size(&doc);
+    (p.crop(&doc).map(|v| v as f32), (w as f32, h as f32))
+}
+
+/// The renderer's crop box and displayed size for the first page.
+fn number_gate_render(bytes: &[u8]) -> Geometry {
+    let info = pdfcraft_render::inspect(Arc::new(bytes.to_vec()), None).unwrap();
+    let p = info.pages.first().expect("the renderer sees the page");
+    (p.crop, (p.width, p.height))
+}
+
+/// The first page, rendered at scale 1.
+fn number_gate_pixels(bytes: &[u8]) -> Vec<u8> {
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes.to_vec()), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Whether the renderer paints anything but white on the first page.
+fn number_gate_paints(bytes: &[u8]) -> bool {
+    number_gate_pixels(bytes).as_chunks::<4>().0.iter().any(|p| p[..3] != [255, 255, 255])
+}
+
+/// Rectangles the model's content reader finds (redaction reads content through it).
+fn number_gate_rects(bytes: &[u8]) -> usize {
+    let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+    pdfcraft_content::parse(content(&doc, 0).as_bytes()).ops.iter().filter(|op| op.is("re")).filter_map(|op| op.nums::<4>()).count()
+}
+
+const NUMBER_GATE_BOX: &str = "/MediaBox [0 0 300 200]";
+const NUMBER_GATE_PLAIN: Geometry = ([0.0, 0.0, 300.0, 200.0], (300.0, 200.0));
+
+/// The harness itself: a plain page reads the same on both sides, and a rectangle is seen by the
+/// renderer and by the model's content reader. Every other `number_gate_*` test leans on this.
 #[test]
-fn model_and_renderer_agree_on_numbers_with_no_finite_value() {
-    let page = |entries: &str, content: &str| -> Vec<u8> {
-        Pdf::new()
-            .objs([
-                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-                format!("<< /Type /Page /Parent 2 0 R {entries} /Contents 4 0 R /Resources << >> >>").into_bytes(),
-                stream("", content.as_bytes()),
-            ])
-            .build()
-    };
-    // Each side's crop box and displayed size, in points.
-    let model = |bytes: &[u8]| {
-        let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
-        let pages = pdfcraft_model::pages(&doc);
-        let p = pages.first().expect("the model sees the page");
-        let (w, h) = p.display_size(&doc);
-        (p.crop(&doc).map(|v| v as f32), (w as f32, h as f32))
-    };
-    let render = |bytes: &[u8]| {
-        let info = pdfcraft_render::inspect(Arc::new(bytes.to_vec()), None).unwrap();
-        let p = info.pages.first().expect("the renderer sees the page");
-        (p.crop, (p.width, p.height))
-    };
-    let paints = |bytes: &[u8]| {
-        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes.to_vec()), pdfcraft_render::RenderConfig::default());
-        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
-        assert!(out.error.is_none(), "{:?}", out.error);
-        out.rgba.chunks_exact(4).any(|p| p[..3] != [255, 255, 255])
-    };
-    // Rectangles the model's content reader finds (redaction reads content through it).
-    let rects = |bytes: &[u8]| {
-        let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
-        pdfcraft_content::parse(content(&doc, 0).as_bytes()).ops.iter().filter(|op| op.is("re")).filter_map(|op| op.nums::<4>()).count()
-    };
+fn number_gate_control_a_plain_page_reads_the_same_on_both_sides() {
+    assert_eq!(number_gate_model(&number_gate_page(NUMBER_GATE_BOX, "")), NUMBER_GATE_PLAIN);
+    assert_eq!(number_gate_render(&number_gate_page(NUMBER_GATE_BOX, "")), NUMBER_GATE_PLAIN);
+    let drawn = number_gate_page(NUMBER_GATE_BOX, "0 g 10 10 80 50 re f");
+    assert!(number_gate_paints(&drawn), "the harness sees a painted rectangle");
+    assert_eq!(number_gate_rects(&drawn), 1);
+}
 
-    let box_300 = "/MediaBox [0 0 300 200]";
-    let plain = ([0.0, 0.0, 300.0, 200.0], (300.0, 200.0));
-    assert_eq!(model(&page(box_300, "")), plain);
-    assert_eq!(render(&page(box_300, "")), plain);
-    assert!(paints(&page(box_300, "0 g 10 10 80 50 re f")), "the harness sees a painted rectangle");
-    assert_eq!(rects(&page(box_300, "0 g 10 10 80 50 re f")), 1);
-
-    let huge = format!("1{}", "0".repeat(400));
-    for t in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "1e400", "1.0e400", huge.as_str()] {
-        // `/UserUnit` reads as 1. It was clamped to 75,000 from infinity in the model, and from
-        // `f64::MAX` (or lost with an unreadable page dictionary) in the renderer.
-        let unit = page(&format!("{box_300} /UserUnit {t}"), "");
-        assert_eq!(model(&unit), plain, "model, /UserUnit {t}");
-        assert_eq!(render(&unit), plain, "renderer, /UserUnit {t}");
-
-        // A crop box holding it is not a box: both fall back to the media box.
-        let crop = page(&format!("{box_300} /CropBox [0 0 {t} 150]"), "");
-        assert_eq!(model(&crop), plain, "model, /CropBox [0 0 {t} 150]");
-        assert_eq!(render(&crop), plain, "renderer, /CropBox [0 0 {t} 150]");
-
-        // A media box holding it is invalid on each side, exactly as one that isn't an array is.
-        // The two readers' fallbacks for a page's own invalid media box differ (the model takes
-        // 612 × 792 and ignores an inherited box; the renderer takes an inherited box, then A4).
-        // That is reader policy, not parsing, and this change leaves it alone.
-        let media = page(&format!("/MediaBox [0 0 {t} 792]"), "");
-        let not_a_box = page("/MediaBox /NotABox", "");
-        assert_eq!(model(&media), model(&not_a_box), "model, /MediaBox [0 0 {t} 792]");
-        assert_eq!(render(&media), render(&not_a_box), "renderer, /MediaBox [0 0 {t} 792]");
-
-        // A content operand: neither side has a rectangle, to draw or to redact.
-        let quad = page(box_300, &format!("0 g 10 10 {t} 50 re f"));
-        assert!(!paints(&quad), "the renderer paints `10 10 {t} 50 re`");
-        assert_eq!(rects(&quad), 0, "the model reads `10 10 {t} 50 re` as a rectangle");
+/// `/UserUnit` holding a token with no finite value reads as 1 on both sides. It was clamped to
+/// 75,000 from infinity in the model, and from `f64::MAX` (or lost with an unreadable page
+/// dictionary) in the renderer.
+#[test]
+fn number_gate_user_unit_with_no_finite_value_reads_as_one() {
+    for t in pdfcraft_testkit::non_finite_tokens() {
+        let unit = number_gate_page(&format!("{NUMBER_GATE_BOX} /UserUnit {t}"), "");
+        assert_eq!(number_gate_model(&unit), NUMBER_GATE_PLAIN, "model, /UserUnit {t}");
+        assert_eq!(number_gate_render(&unit), NUMBER_GATE_PLAIN, "renderer, /UserUnit {t}");
     }
+}
 
-    // A QuadPoints entry with no finite value: the quad is unusable and the mark falls
-    // back to its /Rect. The model side is read through redact's own mark reader. The
-    // renderer exposes no quad API, so its side is pinned as equivalence: a page whose
-    // quad holds `+nan` renders exactly like the same page with the quad absent — the
-    // fallback state — and never reads the token as a coordinate.
-    let annot_page = |quad: Option<&str>| -> Vec<u8> {
-        let quad_entry = quad.map(|q| format!(" /QuadPoints [{q}]")).unwrap_or_default();
-        Pdf::new()
-            .objs([
-                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] /Contents 4 0 R /Resources << >> >>".to_vec(),
-                stream("", b""),
-                format!("<< /Type /Annot /Subtype /Redact /Rect [0 90 50 115]{quad_entry} >>").into_bytes(),
-            ])
-            .build()
-    };
+/// A crop box holding a token with no finite value is not a box: both fall back to the media box.
+#[test]
+fn number_gate_crop_box_with_no_finite_value_falls_back_to_the_media_box() {
+    for t in pdfcraft_testkit::non_finite_tokens() {
+        let crop = number_gate_page(&format!("{NUMBER_GATE_BOX} /CropBox [0 0 {t} 150]"), "");
+        assert_eq!(number_gate_model(&crop), NUMBER_GATE_PLAIN, "model, /CropBox [0 0 {t} 150]");
+        assert_eq!(number_gate_render(&crop), NUMBER_GATE_PLAIN, "renderer, /CropBox [0 0 {t} 150]");
+    }
+}
+
+/// A media box holding a token with no finite value is invalid on each side, exactly as one that
+/// isn't an array is, and each side's fallback is pinned to its value. The two readers' fallbacks
+/// for a page's own invalid media box differ: the model takes 612 × 792 (US Letter) and ignores
+/// an inherited box; the renderer takes an inherited box, then A4 (210 × 297 mm, about
+/// 595.28 × 841.89 pt). That is reader policy, not parsing, and this change leaves it alone.
+#[test]
+fn number_gate_media_box_with_no_finite_value_is_invalid_on_each_side() {
+    let letter: Geometry = ([0.0, 0.0, 612.0, 792.0], (612.0, 792.0));
+    // hayro-syntax's `A4`, computed as it computes it.
+    let per_mm = 1.0_f64 / (10.0 * 2.54) * 72.0;
+    let (a4_w, a4_h) = ((210.0 * per_mm) as f32, (297.0 * per_mm) as f32);
+    let a4: Geometry = ([0.0, 0.0, a4_w, a4_h], (a4_w, a4_h));
+    assert!((a4_w - 595.28).abs() < 0.01 && (a4_h - 841.89).abs() < 0.01, "{a4:?}");
+
+    let not_a_box = number_gate_page("/MediaBox /NotABox", "");
+    assert_eq!(number_gate_model(&not_a_box), letter, "model, /MediaBox /NotABox");
+    assert_eq!(number_gate_render(&not_a_box), a4, "renderer, /MediaBox /NotABox");
+    for t in pdfcraft_testkit::non_finite_tokens() {
+        let media = number_gate_page(&format!("/MediaBox [0 0 {t} 792]"), "");
+        assert_eq!(number_gate_model(&media), letter, "model, /MediaBox [0 0 {t} 792]");
+        assert_eq!(number_gate_render(&media), a4, "renderer, /MediaBox [0 0 {t} 792]");
+        assert_eq!(number_gate_model(&media), number_gate_model(&not_a_box), "model, /MediaBox [0 0 {t} 792]");
+        assert_eq!(number_gate_render(&media), number_gate_render(&not_a_box), "renderer, /MediaBox [0 0 {t} 792]");
+    }
+}
+
+/// A `re` operand with no finite value: neither side has a rectangle, to draw or to redact. The
+/// page is rendered for every token.
+#[test]
+fn number_gate_re_operand_with_no_finite_value_draws_and_redacts_nothing() {
+    for t in pdfcraft_testkit::non_finite_tokens() {
+        let quad = number_gate_page(NUMBER_GATE_BOX, &format!("0 g 10 10 {t} 50 re f"));
+        assert!(!number_gate_paints(&quad), "the renderer paints `10 10 {t} 50 re`");
+        assert_eq!(number_gate_rects(&quad), 0, "the model reads `10 10 {t} 50 re` as a rectangle");
+    }
+}
+
+/// A page with one annotation of `subtype`, `extra` entries and an optional `/QuadPoints`.
+fn number_gate_annot_page(subtype: &str, extra: &str, quad: Option<&str>) -> Vec<u8> {
+    let quad_entry = quad.map(|q| format!(" /QuadPoints [{q}]")).unwrap_or_default();
+    Pdf::new()
+        .objs([
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] /Contents 4 0 R /Resources << >> >>".to_vec(),
+            stream("", b""),
+            format!("<< /Type /Annot /Subtype /{subtype} /Rect [0 90 50 115]{extra}{quad_entry} >>").into_bytes(),
+        ])
+        .build()
+}
+
+/// A Redact mark's `/QuadPoints` entry with no finite value: the quad is unusable and the mark
+/// falls back to its /Rect. The model side is read through redact's own mark reader. The renderer
+/// exposes no quad API, so its side is pinned as equivalence: a page whose quad holds `+nan`
+/// renders exactly like the same page with the quad absent, the fallback state, and never reads
+/// the token as a coordinate. (The renderer does not draw Redact annotations at all; the
+/// Highlight test below shows the renderer reading a quad.)
+#[test]
+fn number_gate_redact_quad_with_no_finite_value_falls_back_to_the_rect() {
+    let redact = |quad: Option<&str>| number_gate_annot_page("Redact", "", quad);
     let mark_rects = |bytes: &[u8]| {
         let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
         marks(&doc).iter().map(|m| m.rects.clone()).collect::<Vec<_>>()
     };
-    let pixels = |bytes: &[u8]| {
-        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes.to_vec()), pdfcraft_render::RenderConfig::default());
-        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
-        assert!(out.error.is_none(), "{:?}", out.error);
-        out.rgba
-    };
-    let finite_quad = annot_page(Some("20 110 40 110 20 95 40 95"));
+    let finite_quad = redact(Some("20 110 40 110 20 95 40 95"));
     assert_eq!(mark_rects(&finite_quad), vec![vec![[20.0, 95.0, 40.0, 110.0]]], "control: a finite quad is the mark's area");
-    let nan_quad = annot_page(Some("20 110 +nan 110 20 95 40 95"));
+    let nan_quad = redact(Some("20 110 +nan 110 20 95 40 95"));
     assert_eq!(mark_rects(&nan_quad), vec![vec![[0.0, 90.0, 50.0, 115.0]]], "a +nan quad entry leaves the mark on its /Rect");
-    assert_eq!(pixels(&nan_quad), pixels(&annot_page(None)), "the renderer treats a +nan quad like an absent one");
+    assert_eq!(number_gate_pixels(&nan_quad), number_gate_pixels(&redact(None)), "the renderer treats a +nan quad like an absent one");
+}
 
-    // Sign runs follow the model parser's rule in both readers. A doubled sign is
-    // tolerated: `+-280` is -280, and a box holding it is the same box on both sides.
-    let doubled = page("/MediaBox [+-280 0 100 100]", "");
-    let doubled_box = ([-280.0, 0.0, 100.0, 100.0], (380.0, 100.0));
-    assert_eq!(model(&doubled), doubled_box, "model, /MediaBox [+-280 0 100 100]");
-    assert_eq!(render(&doubled), doubled_box, "renderer, /MediaBox [+-280 0 100 100]");
-
-    // In a media box, the renderer falls back as it does for a box that is not a box;
-    // it used to absorb every sign, read -280, and use the box (#6601 review). The
-    // model drops a page whose dictionary holds a bad number at all -- its standing
-    // behaviour for any unparseable token, pinned here as policy, not agreement.
-    let no_box = page("/MediaBox /NotABox", "");
-    let refused = page("/MediaBox [---280 0 100 100]", "");
-    assert_eq!(render(&refused), render(&no_box), "renderer, /MediaBox [---280 0 100 100]");
-    let refused_doc = Document::open(Arc::new(refused)).unwrap();
-    assert!(pdfcraft_model::pages(&refused_doc).is_empty(), "the model drops a page whose box holds a bad number");
-
-    // The renderer's side of the quad, pinned through a Highlight: with no usable
-    // appearance it is drawn from its /QuadPoints and /C (hayro-interpret patch 13), so
-    // a finite quad paints its own area, and one holding `+nan` renders exactly like
-    // the same page with the quad absent. The Redact page above cannot show this: the
-    // renderer does not draw Redact annotations at all.
-    let highlight = |quad: Option<&str>| -> Vec<u8> {
-        let quad_entry = quad.map(|q| format!(" /QuadPoints [{q}]")).unwrap_or_default();
-        Pdf::new()
-            .objs([
-                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] /Contents 4 0 R /Resources << >> >>".to_vec(),
-                stream("", b""),
-                format!("<< /Type /Annot /Subtype /Highlight /Rect [0 90 50 115] /C [1 0 0]{quad_entry} >>").into_bytes(),
-            ])
-            .build()
-    };
+/// The renderer's side of the quad, pinned through a Highlight: with no usable appearance it is
+/// drawn from its /QuadPoints and /C (hayro-interpret patch 13), so a finite quad paints its own
+/// area, and one holding `+nan` renders exactly like the same page with the quad absent.
+#[test]
+fn number_gate_highlight_quad_with_no_finite_value_draws_like_an_absent_one() {
+    let highlight = |quad: Option<&str>| number_gate_annot_page("Highlight", " /C [1 0 0]", quad);
     // The quad covers the left half of the /Rect, so the fallback draws a different area.
     let hl_finite = highlight(Some("0 115 25 115 0 90 25 90"));
-    assert!(paints(&hl_finite), "a Highlight with a finite quad paints");
+    assert!(number_gate_paints(&hl_finite), "a Highlight with a finite quad paints");
     let hl_nan = highlight(Some("0 115 +nan 115 0 90 25 90"));
-    assert_eq!(pixels(&hl_nan), pixels(&highlight(None)), "the renderer treats a +nan Highlight quad like an absent one");
-    assert_ne!(pixels(&hl_finite), pixels(&highlight(None)), "the finite quad paints its own area, not the /Rect fallback");
+    assert_eq!(number_gate_pixels(&hl_nan), number_gate_pixels(&highlight(None)), "the renderer treats a +nan Highlight quad like an absent one");
+    assert_ne!(number_gate_pixels(&hl_finite), number_gate_pixels(&highlight(None)), "the finite quad paints its own area, not the /Rect fallback");
+}
+
+/// Sign runs follow the model parser's rule in both readers. A doubled sign is tolerated:
+/// `+-280` is -280, and a box holding it is the same box on both sides.
+#[test]
+fn number_gate_doubled_sign_is_the_same_box_on_both_sides() {
+    let doubled = number_gate_page("/MediaBox [+-280 0 100 100]", "");
+    let doubled_box: Geometry = ([-280.0, 0.0, 100.0, 100.0], (380.0, 100.0));
+    assert_eq!(number_gate_model(&doubled), doubled_box, "model, /MediaBox [+-280 0 100 100]");
+    assert_eq!(number_gate_render(&doubled), doubled_box, "renderer, /MediaBox [+-280 0 100 100]");
+}
+
+/// A refused sign run in a media box: the renderer falls back as it does for a box that is not a
+/// box; it used to absorb every sign, read -280, and use the box (#6601 review). The model drops
+/// a page whose dictionary holds a bad number at all -- its standing behaviour for any
+/// unparseable token, pinned here as policy, not agreement.
+#[test]
+fn number_gate_refused_sign_run_in_a_media_box() {
+    let no_box = number_gate_page("/MediaBox /NotABox", "");
+    let refused = number_gate_page("/MediaBox [---280 0 100 100]", "");
+    assert_eq!(number_gate_render(&refused), number_gate_render(&no_box), "renderer, /MediaBox [---280 0 100 100]");
+    let refused_doc = Document::open(Arc::new(refused)).unwrap();
+    assert!(pdfcraft_model::pages(&refused_doc).is_empty(), "the model drops a page whose box holds a bad number");
 }

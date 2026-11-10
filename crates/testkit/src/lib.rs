@@ -133,9 +133,38 @@ pub fn stream_obj(dict: &str, data: impl AsRef<[u8]>) -> Vec<u8> {
     out
 }
 
+/// Number tokens with no finite value, one of each class: word forms after any sign run, integer
+/// overflow and real overflow (#6477).
+///
+/// pdfcraft-cos and hayro-syntax each keep a copy of `has_no_finite_value`, and the two must stay
+/// identical, so every test of that rule takes its tokens from this one list: the model-vs-renderer
+/// gate in pdfcraft-redact, the content operand test in pdfcraft-content, and the parser tests in
+/// pdfcraft-cos and pdfcraft-render. A token added here is checked against both parsers at once.
+pub fn non_finite_tokens() -> Vec<String> {
+    let mut t: Vec<String> = ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-INF", "--nan", "-+inf", "1e400", "-1e400", "1.0e400", ".5E+400"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    t.push(format!("1{}", "0".repeat(400)));
+    t.push(format!("-{}", "9".repeat(400)));
+    t.push(format!("{}.5", "9".repeat(400)));
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared list keeps all fifteen tokens: a test that took a subset is what #6601's review
+    /// found, and a shorter list here would shrink every caller's coverage at once.
+    #[test]
+    fn the_non_finite_token_list_has_every_class() {
+        let t = non_finite_tokens();
+        assert_eq!(t.len(), 15);
+        for word in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-INF", "--nan", "-+inf"] {
+            assert!(t.iter().any(|s| s == word), "{word}");
+        }
+    }
 
     /// The serialiser the workspace had 111 copies of, kept here verbatim as the thing [`Pdf`] has
     /// to agree with. Migrating a crate to the builder must not change a single byte of its

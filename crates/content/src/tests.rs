@@ -571,10 +571,16 @@ fn invert_accepts_small_scale_and_rejects_singular() {
 /// it (hayro-syntax patch 36), and stays null when the stream is written back. It was a NaN or
 /// infinite real, which `write_real` wrote as `0`: `1 +nan 3 4 re`, which draws nothing, came back
 /// from a save as `1 0 3 4 re`, a rectangle the renderer reads.
+///
+/// The tokens are the shared list (`pdfcraft_testkit::non_finite_tokens`), plus `-Infinity`, which
+/// this test always had, and for each one the renderer's tokenizer is asked too: both parsers
+/// must read the same four operands with null in the same place (#6601 review).
 #[test]
 fn an_operand_with_no_finite_value_is_null_and_written_back_as_null() {
-    let huge = format!("1{}", "0".repeat(400));
-    for t in ["+nan", "-nan", "+inf", "-Infinity", "1e400", "1.0e400", huge.as_str()] {
+    use hayro_syntax::object::Object as HObject;
+    let mut tokens = pdfcraft_testkit::non_finite_tokens();
+    tokens.push("-Infinity".to_owned());
+    for t in &tokens {
         let src = format!("1 {t} 3 4 re");
         let parsed = parse(src.as_bytes());
         assert_eq!(parsed.ops.len(), 1, "{t}: {:?}", parsed.ops);
@@ -584,5 +590,15 @@ fn an_operand_with_no_finite_value_is_null_and_written_back_as_null() {
         assert_eq!(parsed.skipped, 0, "{t}: nothing was skipped");
         let written = String::from_utf8(serialize_ops(&parsed.ops)).unwrap_or_default();
         assert_eq!(written.trim_end(), "1 null 3 4 re", "{t}");
+
+        // The renderer's side of the same token.
+        let mut iter = hayro_syntax::content::UntypedIter::new(src.as_bytes());
+        let instruction = iter.next().unwrap_or_else(|| panic!("{t}: the renderer reads an instruction"));
+        assert_eq!(instruction.operator.as_ref(), b"re", "{t}");
+        let operands: Vec<_> = instruction.operands().collect();
+        assert_eq!(operands.len(), 4, "{t}: the renderer reads four operands: {operands:?}");
+        assert!(matches!(operands[1], HObject::Null(_)), "{t}: the renderer reads null there: {operands:?}");
+        assert!(matches!(operands[0], HObject::Number(_)) && matches!(operands[2], HObject::Number(_)), "{t}: {operands:?}");
+        assert!(iter.next().is_none(), "{t}: nothing follows the instruction");
     }
 }

@@ -4345,6 +4345,7 @@ version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
+ "pdfcraft-testkit",
 ]
 
 [[package]]
@@ -4660,6 +4661,7 @@ dependencies = [
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-testkit",
  "serde",
  "skrifa 0.44.0",
  "thiserror 2.0.21",

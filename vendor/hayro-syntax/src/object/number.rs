@@ -518,6 +518,13 @@ pub(crate) fn skip_non_finite(r: &mut Reader<'_>) -> Option<()> {
 /// after any leading '+'s, something other than nothing, one '-' or two -- while the rest
 /// of the token is a number's body (digits, '.', '-'). `---280` is such a token; `--280`
 /// (a tolerated doubled sign) and `---nan` (no finite value, patch 36) are not.
+///
+/// PdfCraft patch (40): the body is the one `Number::skip` accepts after a refused run:
+/// digits, '.' and '-', then an exponent marker with an optional sign and digits
+/// (`---1e5`, `---280E-2`), or nothing at all (`---` before white space). Skip took
+/// those as one token while this refused them, so `Object::skip` passed a token
+/// `Object::read` could not read, and the array and dictionary iterators, which unwrap
+/// what skip accepted, panicked (#6601 review).
 fn has_refused_sign_run(token: &[u8]) -> bool {
     let run_len = token.iter().take_while(|b| matches!(b, b'+' | b'-')).count();
     if run_len == 0 {
@@ -529,7 +536,20 @@ fn has_refused_sign_run(token: &[u8]) -> bool {
         sign_body = &sign_body[1..];
     }
     let refused = !(sign_body.len() <= 2 && sign_body.iter().all(|b| *b == b'-'));
-    refused && !body.is_empty() && body.iter().all(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.')
+    if !refused {
+        return false;
+    }
+    let mantissa = body.iter().take_while(|b| b.is_ascii_digit() || **b == b'-' || **b == b'.').count();
+    let mut rest = body.get(mantissa..).unwrap_or(&[]);
+    if mantissa > 0 && matches!(rest.first(), Some(b'e' | b'E')) {
+        rest = rest.get(1..).unwrap_or(&[]);
+        if matches!(rest.first(), Some(b'+' | b'-')) {
+            rest = rest.get(1..).unwrap_or(&[]);
+        }
+        let tail = rest.iter().take_while(|b| b.is_ascii_digit() || **b == b'.').count();
+        rest = rest.get(tail..).unwrap_or(&[]);
+    }
+    rest.is_empty()
 }
 
 #[cfg(test)]

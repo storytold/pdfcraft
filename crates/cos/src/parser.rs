@@ -640,24 +640,13 @@ mod tests {
         assert_eq!(obj("12 0 obj").as_int(), Some(12), "12 followed by 0 obj is not a reference");
     }
 
-    /// One of each class with no finite value: word forms, integer overflow, real overflow.
-    fn non_finite_tokens() -> Vec<String> {
-        let mut t: Vec<String> = ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-INF", "--nan", "-+inf", "1e400", "-1e400", "1.0e400", ".5E+400"]
-            .iter()
-            .map(|s| (*s).into())
-            .collect();
-        t.push(format!("1{}", "0".repeat(400)));
-        t.push(format!("-{}", "9".repeat(400)));
-        t.push(format!("{}.5", "9".repeat(400)));
-        t
-    }
-
     /// #6477: a number token with no finite value is null in its slot, never an infinite or NaN
     /// real and never clamped, as the renderer's parser reads it (hayro-syntax patch 36). The
-    /// dictionary or array holding it keeps its other entries.
+    /// dictionary or array holding it keeps its other entries. The tokens are the shared list
+    /// every test of the rule uses (`pdfcraft_testkit::non_finite_tokens`).
     #[test]
     fn a_number_with_no_finite_value_is_null_in_its_slot() {
-        for t in non_finite_tokens() {
+        for t in pdfcraft_testkit::non_finite_tokens() {
             assert!(has_no_finite_value(t.as_bytes()), "{t}");
             assert_eq!(obj(&t), Object::Null, "{t}");
             let mut lx = Lexer::new(t.as_bytes(), 0);
@@ -679,6 +668,45 @@ mod tests {
         }
         for t in ["+", "-", ".", "", "infx", "nan5", "1e400x", "1.2.3", "-inf-"] {
             assert!(!has_no_finite_value(t.as_bytes()), "{t}");
+        }
+    }
+
+    /// #6601 review: tokens the rule above does not take are not null either; what the object
+    /// parser makes of each is pinned here, not only that the rule refuses it. A damaged real
+    /// keeps its longest numeric prefix; a damaged integer or word is a bad number, and an
+    /// array holding one is refused with it (the parser's standing policy, unchanged here).
+    #[test]
+    fn malformed_number_tokens_keep_their_object_parser_outcome() {
+        assert_eq!(obj("1.2.3"), Object::Real(1.2));
+        assert_eq!(obj("[0 1.2.3 7]"), Object::Array(vec![Object::Int(0), Object::Real(1.2), Object::Int(7)]));
+        for t in ["1e400x", "-inf-", "infx"] {
+            assert!(Lexer::new(t.as_bytes(), 0).object().is_err(), "{t}: a bad number, not null");
+            let arr = format!("[0 {t} 7]");
+            assert!(Lexer::new(arr.as_bytes(), 0).object().is_err(), "{arr}");
+        }
+        // `infx` is not a number token at all: it starts with no sign, digit or dot, so it is
+        // an unknown keyword; between dictionary entries that is tolerated garbage, and as a
+        // value it refuses the dictionary.
+        assert!(Lexer::new(b"<< /A infx >>", 0).object().is_err());
+    }
+
+    /// #6601 review, hayro-syntax patch (38): a refused sign run over a dotted body is the real
+    /// branch's case. It collapses the first `--`, finds no real prefix in what is left and reads
+    /// 0.0, consuming the whole token, trailing garbage included, so the container survives. The
+    /// renderer reads these as zero too (`raster::tests::dotted_token_with_a_refused_sign_run_reads_as_zero`).
+    /// Without a dot the same run is a bad number (`---280`, `---1e5`), which the renderer reads
+    /// as null in its slot (patches (37) and (40)).
+    #[test]
+    fn a_dotted_token_with_a_refused_sign_run_reads_as_zero() {
+        for t in ["---1.5abc", "---280.0", "-+5.5", "---1e400.5"] {
+            assert_eq!(obj(t), Object::Real(0.0), "{t}");
+            let mut lx = Lexer::new(t.as_bytes(), 0);
+            lx.object().unwrap_or_else(|e| panic!("{t}: {e}"));
+            assert_eq!(lx.pos, t.len(), "{t}: the whole token was read");
+            assert_eq!(obj(&format!("[{t} 7]")), Object::Array(vec![Object::Real(0.0), Object::Int(7)]), "{t}");
+        }
+        for t in ["---280", "---1e5"] {
+            assert!(Lexer::new(t.as_bytes(), 0).object().is_err(), "{t}: a bad number");
         }
     }
 
