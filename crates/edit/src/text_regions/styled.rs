@@ -1593,31 +1593,95 @@ fn rewrite_anchor<'a>(
     RewriteAnchor { lead, drop, start, split }
 }
 
-/// Which source character each draft character is, where the edit left it alone: the
-/// characters of the common prefix and suffix of the source text and the draft.
+/// Which source character each draft character is, where the edit left it alone. The text is
+/// aligned a line at a time first: the lines the source and the draft share at their start and
+/// at their end are the same lines, so a whole line inserted exactly at a line boundary is
+/// attributed to the lines between them, whatever the characters around it are (a character
+/// prefix and suffix cannot tell `Two\nNew\nThree` from `Two\nThree` where the break is). Between
+/// them, what is left of each is aligned by its common character prefix and suffix.
 struct Origins {
-    prefix: usize,
-    suffix: usize,
-    old: usize,
-    new: usize,
+    of: Vec<Option<usize>>,
+}
+
+/// The lines of `text` as character ranges, each with its line break (the last has none).
+fn line_ranges(text: &[char]) -> Vec<std::ops::Range<usize>> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, ch) in text.iter().enumerate() {
+        if *ch == '\n' {
+            lines.push(start..i + 1);
+            start = i + 1;
+        }
+    }
+    lines.push(start..text.len());
+    lines
 }
 
 impl Origins {
     fn new(old: &[char], new: &[char]) -> Self {
-        let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
-        let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
-        Self { prefix, suffix, old: old.len(), new: new.len() }
+        let (old_lines, new_lines) = (line_ranges(old), line_ranges(new));
+        // A line's text without its break, and whether it has one: lines are the same when the
+        // text is, and a break is shared only when both have it.
+        let text = |chars: &'_ [char], r: &std::ops::Range<usize>| -> (usize, usize) {
+            let end = if r.end > r.start && chars[r.end - 1] == '\n' { r.end - 1 } else { r.end };
+            (r.start, end)
+        };
+        let same = |o: &std::ops::Range<usize>, n: &std::ops::Range<usize>| {
+            let ((os, oe), (ns, ne)) = (text(old, o), text(new, n));
+            old[os..oe] == new[ns..ne]
+        };
+        let mut of = vec![None; new.len()];
+        let mut pair = |o: &std::ops::Range<usize>, n: &std::ops::Range<usize>, with_break: bool| {
+            let ((os, oe), (ns, ne)) = (text(old, o), text(new, n));
+            for k in 0..oe - os {
+                of[ns + k] = Some(os + k);
+            }
+            if with_break && o.end > oe && n.end > ne {
+                of[ne] = Some(oe);
+            }
+        };
+        let (ol, nl) = (old_lines.len(), new_lines.len());
+        let limit = ol.min(nl);
+        let head = (0..limit).take_while(|&k| same(&old_lines[k], &new_lines[k])).count();
+        let tail = (0..limit - head).take_while(|&k| same(&old_lines[ol - 1 - k], &new_lines[nl - 1 - k])).count();
+        let (old_gap, new_gap) = (ol - head - tail, nl - head - tail);
+        for k in 0..head {
+            // The break after the last of them is the source's only when nothing lies between.
+            let last = k + 1 == head;
+            pair(&old_lines[k], &new_lines[k], !last || (old_gap == 0 && new_gap == 0));
+        }
+        for k in 1..=tail {
+            pair(&old_lines[ol - k], &new_lines[nl - k], true);
+        }
+        let from_here = |lines: &[std::ops::Range<usize>], at: usize, len: usize| lines.get(at).map_or(len, |r| r.start);
+        if old_gap > 0 && new_gap > 0 {
+            // Lines the edit changed: aligned by the characters they share at their start and
+            // at their end, from the break before them to the break after.
+            let before = |lines: &[std::ops::Range<usize>]| if head > 0 { lines[head - 1].end - 1 } else { 0 };
+            let old_mid = before(&old_lines)..from_here(&old_lines, ol - tail, old.len());
+            let new_mid = before(&new_lines)..from_here(&new_lines, nl - tail, new.len());
+            let (om, nm) = (&old[old_mid.clone()], &new[new_mid.clone()]);
+            let prefix = om.iter().zip(nm).take_while(|(a, b)| a == b).count();
+            let suffix = om.iter().rev().zip(nm.iter().rev()).take(om.len().min(nm.len()) - prefix).take_while(|(a, b)| a == b).count();
+            for k in 0..prefix {
+                of[new_mid.start + k] = Some(old_mid.start + k);
+            }
+            for k in 1..=suffix {
+                of[new_mid.end - k] = Some(old_mid.end - k);
+            }
+        } else if tail > 0 {
+            // A whole line (or lines) inserted or removed: the break before the first line that
+            // follows is the same break in both, and no other break in between is the source's.
+            if let (Some(n), Some(o)) = (new_lines[nl - tail].start.checked_sub(1), old_lines[ol - tail].start.checked_sub(1)) {
+                of[n] = Some(o);
+            }
+        }
+        Self { of }
     }
 
     /// The source character the draft character `i` is, if the edit left it alone.
     fn of(&self, i: usize) -> Option<usize> {
-        if i < self.prefix {
-            Some(i)
-        } else if i >= self.new.saturating_sub(self.suffix) {
-            (self.old + i).checked_sub(self.new)
-        } else {
-            None
-        }
+        self.of.get(i).copied().flatten()
     }
 }
 
