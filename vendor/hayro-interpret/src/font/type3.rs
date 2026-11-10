@@ -282,6 +282,13 @@ impl<'a> Type3<'a> {
         self.recovery.cache.recover(facts, glyph)
     }
 
+    /// PdfCraft patch (104): the font's style for text the recovery rules read, from its
+    /// dictionary and descriptor (`/BaseFont` or `/Name`, `/Flags`, `/FontWeight`,
+    /// `/ItalicAngle`); a Type 3 font has no program to add to them.
+    pub(crate) fn recovery_style(&self) -> crate::font::RecoveredFontStyle {
+        self.recovery.style(|| None)
+    }
+
     /// PdfCraft patch: the glyph name `/Encoding` gives a code, as `map_code` reads it.
     fn code_to_name(&self, code: u8) -> Option<&str> {
         self.encodings

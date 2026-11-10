@@ -88,6 +88,38 @@ thread_local! {
     static RULE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// PdfCraft patch (104) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
+/// dev-dependency only): the shared pieces the rules read, for tests outside the crate.
+#[cfg(feature = "test-counters")]
+pub mod test_hooks {
+    /// Whether the width evidence proves a reading that gives each character its glyph width
+    /// ([`super::widths::widths_agree`] and `proves`).
+    pub fn widths_prove(widths: &[(char, f32)]) -> bool {
+        super::widths::widths_agree(&widths.iter().copied().collect()).proves()
+    }
+
+    /// The character the standard Macintosh order gives glyph id `gid`.
+    pub fn mac_glyph_char(gid: u32) -> Option<char> {
+        super::orders::mac_glyph_char(gid)
+    }
+
+    /// The character the CFF standard string `sid` names.
+    pub fn standard_string_char(sid: u32) -> Option<char> {
+        super::orders::standard_string_char(sid)
+    }
+
+    /// The candidate policy's choice among `candidates`.
+    pub fn choose(candidates: &[char]) -> Option<char> {
+        super::candidate::choose(candidates.iter().copied())
+    }
+
+    /// Whether the glyphs `drawn` the Macintosh order reads as accented letters are as wide as
+    /// those it reads as their base letters, with the widths `width` gives.
+    pub fn accents_as_wide_as_bases(drawn: &[u32], width: &dyn Fn(u16) -> Option<f32>) -> bool {
+        super::accents_as_wide_as_bases(drawn, width)
+    }
+}
+
 /// How many times the recovery rules were asked about a glyph on this thread, guards
 /// included: for tests that show a reader runs no recovery code at all. Only with the
 /// `test-counters` feature (a dev-dependency feature; release builds count nothing).
@@ -134,8 +166,10 @@ pub(crate) enum FontKind {
     TrueType,
     /// A Type 0 font whose descendant has a TrueType (or OpenType) program.
     CidTrueType,
-    /// A Type 0 font whose descendant has an embedded CID-keyed CFF program (`CIDFontType0`),
-    /// drawn by CID through an identity `/CIDToGIDMap`.
+    /// A Type 0 font whose descendant is an embedded CID-keyed CFF program (`CIDFontType0`),
+    /// whose glyphs are found by CID through the program's charset (ISO 32000-2 §9.7.4.2:
+    /// `/CIDToGIDMap` applies to `CIDFontType2` only; a stream there is a producer's error, and
+    /// such a font is left as `CidOther`).
     CidCff,
     /// Any other Type 0 font.
     CidOther,
@@ -731,10 +765,10 @@ fn accents_match_bases(program: &FontRef<'_>, drawn: &[u32]) -> bool {
     })
 }
 
-/// [`accents_match_bases`] with the widths `width` gives (by glyph id, or by CID for a CID-keyed
-/// CFF font whose CIDs are glyph ids in the order); widths that aren't finite and positive are
-/// left out.
-fn accents_as_wide_as_bases(drawn: &[u32], width: impl Fn(u16) -> Option<f32>) -> bool {
+/// [`accents_match_bases`] with the widths `width` gives by glyph id (or by any number a rule
+/// reads in the Macintosh order, such as a CID that is a glyph id); widths that aren't finite
+/// and positive are left out. Shared by every rule that reads the order.
+pub(crate) fn accents_as_wide_as_bases(drawn: &[u32], width: impl Fn(u16) -> Option<f32>) -> bool {
     let width = |gid: u16| width(gid).filter(|w| w.is_finite() && *w > 0.0);
     ACCENTED_BASES
         .iter()
@@ -772,7 +806,8 @@ pub(crate) fn plausible(ids: &[u32]) -> bool {
 
 /// Whether a standard order's reading of a font's ids reads as text, as [`plausible`] says it
 /// for the Macintosh order: each id's character (`None` when the order gives none) and whether
-/// the id is in the order's basic Latin range (printable ASCII).
+/// the id is in the order's basic Latin range (printable ASCII). Shared by every rule that reads
+/// a standard order.
 pub(crate) fn plausible_reading(readings: impl Iterator<Item = (Option<char>, bool)>) -> bool {
     let (mut total, mut known, mut basic, mut letters, mut lower) =
         (0_usize, 0_usize, 0_usize, 0_usize, 0_usize);
