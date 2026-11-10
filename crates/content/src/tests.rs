@@ -6,8 +6,190 @@ thread_local! {
 }
 
 thread_local! {
+    /// Bytes the searches for an `EI` or an end-of-data marker, and the count of a decoder's
+    /// characters, read on this thread.
+    pub(crate) static EOD_SEARCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
     /// Pieces [`Pieces::splice`] looked at while copying, on this thread.
     pub(crate) static PIECE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The renderer's tokenizer passes over the first `EI` (too few operators follow it, and none shows
+/// text) and ends the image inside `/GSEI`. A reader that decodes the data ends it after the
+/// ASCIIHex end-of-data marker `>`, at the first `EI`, and draws the form after it, which the
+/// renderer reads as data: where the operators resume is a guess.
+#[test]
+fn an_inline_image_holding_an_earlier_end_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")), "the renderer reads the form's draw as image data");
+    assert_eq!(p.ambiguous_images, 1);
+    // Without a later `EI`, the renderer ends the image at the first, as other readers do.
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EI Q /Fm Do q /GS1 gs Q");
+    assert!(p.ops.iter().any(|op| op.is("Do")));
+    assert_eq!(p.ambiguous_images, 0);
+}
+
+/// A reader that decodes the data reads it until it has the samples: past the renderer's `EI`
+/// here, which ends the first image inside it (`!! EI`), where a second one then reads
+/// `Q /Fm Do q /GS` as data. That reader ends after `~> EI` and draws the form.
+#[test]
+fn an_image_a_decoding_reader_reads_past_the_renderers_end_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 20 /H 1 /CS /G /BPC 8 /F /A85 ID !! EI BI /W 1 /H 1 /CS /G /BPC 8 ID s~> EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")));
+    assert!(p.ambiguous_images > 0);
+}
+
+/// A decoding reader stops once it has the samples the image needs, not at the end-of-data marker,
+/// and ends the image at the first `EI` after: here at the first, where the renderer goes on to
+/// `/GSEI`.
+#[test]
+fn a_decoding_reader_ends_the_image_once_it_has_its_samples() {
+    for data in [
+        &b"q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 /F /A85 ID z EI Q /Fm Do q /GSEI gs Q zz~> EI"[..],
+        b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF EI Q /Fm Do q /GSEI gs Q",
+    ] {
+        let p = parse(data);
+        assert!(!p.ops.iter().any(|op| op.is("Do")), "{}", String::from_utf8_lossy(data));
+        assert_eq!(p.ambiguous_images, 1, "{}", String::from_utf8_lossy(data));
+    }
+}
+
+/// A declared length (`/L`) doesn't hide where the data ends: readers go by the samples and the
+/// end-of-data marker, not by it.
+#[test]
+fn a_declared_length_does_not_hide_where_the_data_ends() {
+    for length in ["/L 23", "/Length 23"] {
+        let data = format!("q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx {length} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(data.as_bytes()).ambiguous_images, 1, "{length}");
+    }
+}
+
+/// A decoding reader ends the image at the first `EI` after the data, whatever the bytes around it:
+/// `EIQ`, or an `EI` right after other bytes.
+#[test]
+fn a_decoding_reader_ends_at_an_ei_whatever_surrounds_it() {
+    for data in [&b"BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EIQ EI Q"[..], b"BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF>xEI EI Q"] {
+        assert_eq!(parse(data).ambiguous_images, 1, "{}", String::from_utf8_lossy(data));
+    }
+}
+
+/// An image that names its filters twice, `/Filter` and `/F` saying different things: a reader
+/// that takes `/F` ends the image after the ASCIIHex marker and draws the form, which the renderer
+/// reads as data; one that takes `/Filter` reads Flate. Where it ends can't be told, and no more
+/// when a key of its layout is given twice, differently. Spelt alike, the image is as with one
+/// spelling.
+#[test]
+fn an_image_whose_spellings_disagree_is_ambiguous() {
+    for (filters, ambiguous) in [("/Filter /Fl /F /AHx", 1), ("/F /Fl /Filter /AHx", 1), ("/Filter /Fl /F /Fl", 0)] {
+        let src = format!("q BI /W 2 /H 1 /CS /G /BPC 8 {filters} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{filters}");
+    }
+    for (layout, ambiguous) in [
+        ("/Width 6 /W 2 /H 1", 1),
+        ("/W 6 /Width 2 /H 1", 1),
+        ("/W 2 /H 1 /Height 3", 1),
+        ("/W 2 /H 1 /ColorSpace /RGB", 1),
+        ("/W 2 /H 1 /BitsPerComponent 4", 1),
+        ("/W 2 /H 1 /ImageMask false /IM 1", 1),
+        ("/Width 2 /W 2 /H 1", 0),
+    ] {
+        let src = format!("q BI {layout} /CS /G /BPC 8 ID ab EI Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{layout}");
+    }
+}
+
+/// An image behind a filter no reader decodes (an unknown name, `/Crypt`, a number, or such a name
+/// after a known one): a reader that decodes ends it at the first `EI` after `ID`, here before the
+/// renderer's, and draws the form the renderer reads as data. Without an `EI` before the renderer's,
+/// the end is the renderer's.
+#[test]
+fn an_image_behind_a_filter_no_reader_decodes_ends_at_its_first_ei() {
+    for filters in ["/F /Foo", "/Filter /FooDecode", "/F /Crypt", "/F 5", "/F [/Fl /Foo]"] {
+        let src = format!("q BI /W 2 /H 1 /CS /G /BPC 8 {filters} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, 1, "{filters}");
+    }
+    assert_eq!(parse(b"q BI /W 2 /H 1 /CS /G /BPC 8 /F /Foo ID 00FF> EI Q").ambiguous_images, 0);
+}
+
+/// An unfiltered image whose colour space is named as a resource has a layout only the page's
+/// resources tell: an `EI` in its data before the renderer's may be where a reader ends it.
+/// Without one, a reader that can't look the name up ends it at the renderer's `EI`.
+#[test]
+fn an_image_of_a_named_colour_space_with_an_earlier_ei_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /Cs1 /BPC 8 ID \x00\xff EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")));
+    assert_eq!(p.ambiguous_images, 1);
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /Cs1 /BPC 8 ID \x00\xff EI Q");
+    assert_eq!(p.ambiguous_images, 0);
+}
+
+/// Where a decoding reader stops, in each way it can be told, against images it ends where the
+/// renderer does (0) and ones it ends elsewhere (1).
+#[test]
+fn where_a_decoding_reader_stops_is_told_from_the_filter_and_the_layout() {
+    let at = |params: &str, data: &[u8]| {
+        let src = [format!("BI /W {params} ID ").as_bytes(), data].concat();
+        parse(&src).ambiguous_images
+    };
+    let cases: [(&str, &[u8], usize); 18] = [
+        // No filter: two samples `EI`, then the image's own `EI`.
+        ("2 /H 1 /CS /G /BPC 8", b"EI EI Q", 0),
+        // The samples `xE` start after the one byte of white space after `ID`: the `EI` their last
+        // byte starts is not where a reader ends the image.
+        ("2 /H 1 /CS /G /BPC 8", b"xEI EI Q", 0),
+        // ASCIIHex and ASCII85, alone: the marker before the samples are all read stops the reader.
+        ("4 /H 1 /CS /G /BPC 8 /F /AHx", b"00> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!~> EI Q", 0),
+        // A reader that needs more than the data before the renderer's `EI` reads past it.
+        ("20 /H 1 /CS /G /BPC 8 /F /A85", b"!! EI Q", 1),
+        // ASCII85: one group gives the four bytes; an `EI` in the data after it is where the reader ends.
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!EI!~> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!!!!EI~> EI Q", 1),
+        // `z` stands for a group at its start, and for nothing a reader agrees on inside one.
+        ("8 /H 1 /CS /G /BPC 8 /F /A85", b"zz~> EI Q", 0),
+        ("8 /H 1 /CS /G /BPC 8 /F /A85", b"zzEI~> EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!z~> EI Q", 1),
+        // One filter in an array is that filter alone.
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85]", b"!!EI!~> EI Q", 0),
+        // Behind another filter, where the reader stops can't be told: an `EI` before the
+        // renderer's, or a marker after it, counts.
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!EI!~> EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!!~> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!! EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F [/AHx /Fl]", b"0011> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F [/AHx /Fl]", b"0011 EI Q", 1),
+        // An empty filter array is no filter: a named colour space with an `EI` in its data counts.
+        ("2 /H 1 /CS /Cs1 /BPC 8 /F []", b"EI EI Q", 1),
+        ("2 /H 1 /CS /G /BPC 8 /F []", b"EI EI Q", 0),
+    ];
+    for (params, data, expected) in cases {
+        assert_eq!(at(params, data), expected, "/W {params} ID {}", String::from_utf8_lossy(data));
+    }
+}
+
+/// Many inline images: whether each is counted, by its decoder's characters or by the end-of-data
+/// marker and the `EI`s before it, reads the stream about once in all, not once for each image.
+#[test]
+fn inline_images_are_read_about_once_however_many_a_stream_holds() {
+    // The last stream has its only end-of-data marker at the very end: each image's search finds
+    // it far ahead, and the next uses that answer.
+    let far = [b"BI /W 1 /H 1 /CS /G /BPC 8 /F [/AHx /Fl] ID 7F EI ".repeat(2_000), b">".to_vec()].concat();
+    // Images that need far more samples than they hold: each one's count stops at its own `EI`.
+    let short = b"BI /W 1000000 /H 1 /CS /G /BPC 8 /F /AHx ID 7F EI ".repeat(2_000);
+    for data in [
+        b"BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID 7F EI ".repeat(2_000),
+        b"BI /W 1 /H 1 /CS /G /BPC 8 /F [/AHx /Fl] ID 7F EI ".repeat(2_000),
+        far,
+        short,
+    ] {
+        EOD_SEARCHED.with(|c| c.set(0));
+        let p = parse(&data);
+        assert!(p.ops.len() >= 2_000);
+        let searched = EOD_SEARCHED.with(std::cell::Cell::get);
+        assert!(searched <= 2 * data.len(), "searched {searched} bytes of {}", data.len());
+    }
 }
 
 #[test]
@@ -195,7 +377,10 @@ fn filtered_unknown_and_damaged_inline_images_end_where_the_renderer_ends_them()
         let label = String::from_utf8_lossy(parameters);
         assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b"! EI !!~>", "{label}");
         assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"BI", b"Q"], "{label}");
-        assert_eq!(parsed.ambiguous_images, 0, "{label}");
+        // Only the ASCII85 image has a layout a decoding reader takes the same end from; the others,
+        // damaged or of a colour space named as a resource it can't look up, it can't read, and it
+        // ends them at the first `EI` after `ID`, here the one inside the data.
+        assert_eq!(parsed.ambiguous_images, usize::from(!parameters.ends_with(b"/F /A85")), "{label}");
     }
     // A short payload is read whole; without an `EI`, the renderer reads no image and this
     // parser's end is a guess.

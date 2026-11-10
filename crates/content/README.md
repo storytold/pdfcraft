@@ -20,3 +20,18 @@ passes its checks) does the parser locate `EI` by its own rules: unfiltered imag
 or Indexed colour spaces, and image masks, by their sample layout (including per-row byte
 padding), other images by the tolerant delimiter heuristic. Such an image is counted in
 `Parsed::ambiguous_images`, because the operators after it may not be the ones the page draws.
+So is an image that a reader which decodes the data (Poppler) may end at another `EI`. Such a
+reader reads the data until it has the samples, or until the filter's end-of-data marker, and
+ends the image at the first `EI` after that, whatever surrounds it; an image it can't decode it
+ends at the first `EI` after `ID`. Where it stops is worked out without decompressing: exactly
+with no filter or one ASCIIHex or ASCII85 filter and a layout this parser knows (a device colour
+space, an Indexed array written in the image, or an image mask), otherwise from the marker, and
+the image counts unless no `EI` comes before the renderer's. Without a filter, that misses a
+reader that reads past the renderer's `EI` by a layout this parser doesn't know: a colour space
+named as a resource (or a device name the page's resources redefine), which it can't look up,
+or an array other than Indexed (CalRGB, Lab, Separation and the like). A layout taken from
+parameters a reader refuses (a `/BPC` of `8.0`, an Indexed lookup too short) can put the stop
+elsewhere too. Behind another filter (Flate, LZW, RunLength, CCITT, DCT) the renderer's end stands,
+as it can't be told without decoding; behind one no reader decodes, the first `EI` after `ID` is
+the end. An image that gives a key in both spellings (`/Filter` and `/F`, `/Width` and `/W` and the
+rest of its layout), differently, counts: readers may take either.

@@ -41,3 +41,19 @@ fn a_page_whose_inline_image_only_the_renderer_reads_is_refused() {
     mark(&mut doc, 0, &[[45.0, 45.0, 65.0, 65.0]], "");
     assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(1)));
 }
+
+/// The renderer ends an image inside `/GSEI`, passing over an `EI` other readers end it at: they
+/// draw the form after it, under the mark, which the renderer reads as data. Where the page's
+/// operators resume can't be told, so the page is refused rather than the form's text left.
+#[test]
+fn a_page_whose_inline_image_other_readers_end_earlier_is_refused() {
+    let form =
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>", b"BT /F1 10 Tf 20 260 Td (SECRET) Tj ET");
+    let mut doc = one_page(
+        b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EI Q /Fm Do q /GSEI gs Q",
+        "/XObject << /Fm 7 0 R >> /ExtGState << /GSEI << >> >>",
+        vec![form],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(1)));
+}

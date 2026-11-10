@@ -118,6 +118,8 @@ pub struct Ops<'a> {
     ends: &'a [usize],
     boundary: usize,
     comment_edges: Vec<(bool, bool)>,
+    /// What the inline images so far found ahead of them, for the ones after.
+    image_ends: ImageEnds,
 }
 
 impl<'a> Ops<'a> {
@@ -132,6 +134,7 @@ impl<'a> Ops<'a> {
             ends,
             boundary: 0,
             comment_edges: vec![(false, false); ends.len()],
+            image_ends: ImageEnds::default(),
         }
     }
 
@@ -151,7 +154,7 @@ impl Iterator for Ops<'_> {
     type Item = Op;
 
     fn next(&mut self) -> Option<Op> {
-        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges } = self;
+        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges, image_ends } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
         loop {
             let trivia = lx.pos;
@@ -224,7 +227,7 @@ impl Iterator for Ops<'_> {
                     operands.push(Object::Null);
                 }
                 b"BI" => {
-                    let image = inline_image(data, at, lx.pos);
+                    let image = inline_image(data, at, lx.pos, image_ends);
                     *ambiguous_images += usize::from(image.ambiguous);
                     let end = image.end;
                     lx.pos = end;
@@ -305,7 +308,7 @@ struct Inline {
 /// the renderer's tokenizer (hayro-syntax) rather than worked out here by another rule. Only
 /// when that tokenizer reads no image does this parser fall back to its own rules, and the
 /// image is marked ambiguous.
-fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
+fn inline_image(data: &[u8], bi: usize, pos: usize, scan: &mut ImageEnds) -> Inline {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
     let mut readable = true;
@@ -343,7 +346,10 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         }
         // The renderer draws an image whose parameters this parser can't read: it is not
         // represented here, so a redaction can't inspect or remove it and must not trust the page.
-        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: !readable };
+        // Nor when a reader that decodes the data may end the image at another `EI`: it reads as
+        // operators what the renderer reads as data, or the other way round.
+        let ambiguous = !readable || ends_elsewhere(data, (lx.pos + 1).min(data.len()), end.saturating_sub(2), &dict, scan);
+        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous };
     }
     if !readable {
         // Without an `EI` after it, the image runs to the end of the stream.
@@ -359,6 +365,187 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         None => (data.get(begin..).unwrap_or_default().to_vec(), data.len()),
     };
     Inline { image: Some((dict, image)), end, ambiguous: true }
+}
+
+/// The first `needle` at or after a position, remembered. Inline images come in order, so a later
+/// query can often use an earlier answer, and each needle's search reads the stream about once
+/// however many images it holds.
+#[derive(Default)]
+struct NextOf {
+    /// The last query and its answer: where, or none at or after it.
+    last: Option<(usize, Option<usize>)>,
+}
+
+impl NextOf {
+    fn at(&mut self, data: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+        if let Some((queried, found)) = self.last
+            && queried <= from
+        {
+            match found {
+                None => return None,
+                Some(at) if at >= from => return Some(at),
+                Some(_) => {}
+            }
+        }
+        let rest = data.get(from..).unwrap_or_default();
+        let found = rest.windows(needle.len()).position(|w| w == needle).and_then(|i| from.checked_add(i));
+        #[cfg(test)]
+        tests::EOD_SEARCHED.with(|c| c.set(c.get() + found.map_or(rest.len(), |at| at - from + needle.len())));
+        self.last = Some((from, found));
+        found
+    }
+}
+
+/// The searches a stream's inline images share: for `EI`, and for the ASCIIHex and ASCII85
+/// end-of-data markers.
+#[derive(Default)]
+pub(crate) struct ImageEnds {
+    ei: NextOf,
+    hex_end: NextOf,
+    a85_end: NextOf,
+}
+
+/// An inline image's outer filter, as it decides where a decoding reader stops reading the data.
+#[derive(Clone, Copy, PartialEq)]
+enum Outer {
+    None,
+    Hex,
+    A85,
+    Other,
+    /// A filter no reader decodes: not a name, or not one of an inline image's filters.
+    Unknown,
+}
+
+/// The filters an inline image may name, by their names and abbreviations (ISO 32000-2 §8.9.7).
+fn inline_filter(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"ASCIIHexDecode"
+            | b"AHx"
+            | b"ASCII85Decode"
+            | b"A85"
+            | b"LZWDecode"
+            | b"LZW"
+            | b"FlateDecode"
+            | b"Fl"
+            | b"RunLengthDecode"
+            | b"RL"
+            | b"CCITTFaxDecode"
+            | b"CCF"
+            | b"DCTDecode"
+            | b"DCT"
+    )
+}
+
+/// The outer filter of an inline image, and whether it is the only one.
+fn outer_filter(dict: &Dict) -> (Outer, bool) {
+    let filters = match dict.get(b"Filter").or_else(|| dict.get(b"F")) {
+        None | Some(Object::Null) => return (Outer::None, true),
+        Some(Object::Array(filters)) => filters.as_slice(),
+        Some(other) => std::slice::from_ref(other),
+    };
+    let Some(first) = filters.first() else { return (Outer::None, true) };
+    let sole = filters.len() == 1;
+    if !filters.iter().all(|f| f.as_name().is_some_and(inline_filter)) {
+        return (Outer::Unknown, sole);
+    }
+    let kind = match first.as_name() {
+        Some(b"ASCIIHexDecode" | b"AHx") => Outer::Hex,
+        Some(b"ASCII85Decode" | b"A85") => Outer::A85,
+        _ => Outer::Other,
+    };
+    (kind, sole)
+}
+
+/// Whether an inline image gives a key in both its spellings, saying different things: its filters,
+/// or a key of its layout. Readers may take either.
+fn spellings_disagree(dict: &Dict) -> bool {
+    [
+        (b"Filter".as_slice(), b"F".as_slice()),
+        (b"Width", b"W"),
+        (b"Height", b"H"),
+        (b"ColorSpace", b"CS"),
+        (b"BitsPerComponent", b"BPC"),
+        (b"ImageMask", b"IM"),
+    ]
+    .into_iter()
+    .any(|(long, short)| matches!((dict.get(long), dict.get(short)), (Some(long), Some(short)) if long != short))
+}
+
+/// Whether a reader that decodes an inline image (Poppler does) may end it at another `EI` than the
+/// renderer's, at `ei`. Such a reader reads the data through its filters until it has the samples
+/// the image needs, or until the filter's end-of-data marker, and ends the image at the first `EI`
+/// after that, whatever the bytes around it; an image it can't decode it ends at the first `EI`
+/// after `ID`. Where it stops is worked out without decompressing: exactly with no filter and the
+/// layout of a device colour space ([`layout_bytes`]), or with one ASCIIHex or ASCII85 filter and
+/// such a layout, by counting its characters up to `ei` (a reader that needs more ends elsewhere).
+/// Otherwise the image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or
+/// ASCII85, the marker does. A colour space named as a resource has a layout only the page's
+/// resources tell, which this parser can't look up: a reader that can reads by it, possibly past
+/// the renderer's `EI`, and that is missed here, as is a colour space given as an array other
+/// than Indexed, and a device name the page's resources redefine. Behind another filter (Flate, DCT and the rest) the end can't be told
+/// without decoding, and the renderer's stands; behind one no reader decodes, the first `EI` after
+/// `ID` is the end. An image that gives a key in both spellings, differently, counts.
+fn ends_elsewhere(data: &[u8], begin: usize, ei: usize, dict: &Dict, scan: &mut ImageEnds) -> bool {
+    // Readers may take either spelling (the renderer's decoder takes `/F`, `outer_filter`
+    // `/Filter`), so where one ends the image can't be told.
+    if spellings_disagree(dict) {
+        return true;
+    }
+    let (outer, sole) = outer_filter(dict);
+    let stop = match (outer, layout_bytes(dict)) {
+        (Outer::Other, _) => return false,
+        (Outer::Unknown, _) => return scan.ei.at(data, b"EI", begin).is_some_and(|at| at < ei),
+        (Outer::None, Some(bytes)) => begin.checked_add(bytes).filter(|stop| *stop <= ei),
+        (Outer::Hex | Outer::A85, Some(bytes)) if sole => decoder_stop(data, begin, ei, bytes, outer),
+        _ => {
+            let earlier = scan.ei.at(data, b"EI", begin).is_some_and(|at| at < ei);
+            let marker_first = match outer {
+                Outer::Hex => scan.hex_end.at(data, b">", begin).is_some_and(|at| at < ei),
+                Outer::A85 => scan.a85_end.at(data, b"~", begin).is_some_and(|at| at < ei),
+                _ => true,
+            };
+            return earlier || !marker_first;
+        }
+    };
+    stop.is_none_or(|stop| scan.ei.at(data, b"EI", stop) != Some(ei))
+}
+
+/// Where a reader decoding an image's data through one ASCIIHex or ASCII85 filter stops reading it,
+/// when the image needs `bytes` bytes: after the characters that give them, or after the filter's
+/// end-of-data marker if that comes first. ASCIIHex takes two characters a byte, any but white
+/// space (readers take an unknown one as 0); ASCII85 a group of five for four bytes (`z` for a
+/// group), read whole. `None` when that is past `ei`, the renderer's `EI`, or the ASCII85 data
+/// holds a character outside its alphabet, which readers may take otherwise. Counted up to `ei`
+/// only, so the images of a stream are counted once in all.
+fn decoder_stop(data: &[u8], begin: usize, ei: usize, bytes: usize, outer: Outer) -> Option<usize> {
+    let needed = match outer {
+        Outer::Hex => bytes.checked_mul(2)?,
+        _ => bytes.div_ceil(4).checked_mul(5)?,
+    };
+    let mut count = 0usize;
+    let mut at = begin;
+    let stop = loop {
+        if count >= needed {
+            break Some(at);
+        }
+        if at >= ei {
+            break None;
+        }
+        let Some(&b) = data.get(at) else { break None };
+        at += 1;
+        match (outer, b) {
+            (_, b) if is_ws(b) => {}
+            (Outer::Hex, b'>') | (Outer::A85, b'~') => break Some(at),
+            (Outer::Hex, _) => count += 1,
+            (Outer::A85, b'z') if count.is_multiple_of(5) => count += 5,
+            (Outer::A85, b'!'..=b'u') => count += 1,
+            _ => break None,
+        }
+    };
+    #[cfg(test)]
+    tests::EOD_SEARCHED.with(|c| c.set(c.get() + at.saturating_sub(begin)));
+    stop
 }
 
 /// Where the renderer's tokenizer ends the inline image whose `BI` starts at `bi`: the start and
@@ -408,18 +595,11 @@ fn filter_eod(dict: &Dict) -> &'static [u8] {
     b""
 }
 
-/// An unfiltered image's samples determine its length, including byte padding per row.
-/// Binary samples may themselves contain whitespace + `EI` + whitespace, so use the known
-/// length when the actual terminator follows it. Unknown or damaged layouts keep the heuristic.
-fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize, usize)> {
-    for key in [b"Filter".as_slice(), b"F"] {
-        if let Some(filter) = dict.get(key)
-            && !matches!(filter, Object::Null)
-            && !matches!(filter, Object::Array(filters) if filters.is_empty())
-        {
-            return None;
-        }
-    }
+/// The bytes an inline image's samples take as stored, unfiltered: its rows, each padded to a whole
+/// byte. `None` unless its layout is one of a device colour space (or a short name of one), an
+/// Indexed array written in the image, or an image mask, and its keys agree where both spellings
+/// are given: a colour space named as a resource has a layout only the page's resources tell.
+fn layout_bytes(dict: &Dict) -> Option<usize> {
     for (full, short) in
         [(b"Width".as_slice(), b"W".as_slice()), (b"Height", b"H"), (b"ColorSpace", b"CS"), (b"BitsPerComponent", b"BPC"), (b"ImageMask", b"IM")]
     {
@@ -467,7 +647,22 @@ fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize
         (components, bits)
     };
     let row = width.checked_mul(components)?.checked_mul(bits)?.div_ceil(8);
-    let end_data = begin.checked_add(row.checked_mul(height)?)?;
+    row.checked_mul(height)
+}
+
+/// An unfiltered image's samples determine its length, including byte padding per row.
+/// Binary samples may themselves contain whitespace + `EI` + whitespace, so use the known
+/// length when the actual terminator follows it. Unknown or damaged layouts keep the heuristic.
+fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize, usize)> {
+    for key in [b"Filter".as_slice(), b"F"] {
+        if let Some(filter) = dict.get(key)
+            && !matches!(filter, Object::Null)
+            && !matches!(filter, Object::Array(filters) if filters.is_empty())
+        {
+            return None;
+        }
+    }
+    let end_data = begin.checked_add(layout_bytes(dict)?)?;
     let after = data.get(end_data..)?;
     let separator = after.iter().position(|b| !is_ws(*b))?;
     if separator == 0 && data.get(end_data.checked_sub(1)?).is_some_and(|b| is_ws(*b)) {
