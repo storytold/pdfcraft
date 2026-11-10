@@ -126,7 +126,7 @@ pub(super) fn font_files(config_path: &Path) -> Vec<PathBuf> {
                 if depth < MAX_DEPTH {
                     pending.push((path, depth + 1));
                 }
-            } else if path.extension().is_some_and(|ext| ext == "ttf" || ext == "ttc") && path.is_file() {
+            } else if path.extension().is_some_and(|ext| ext == "ttf" || ext == "ttc" || ext == "otf") && path.is_file() {
                 files.push(path);
             }
         }
