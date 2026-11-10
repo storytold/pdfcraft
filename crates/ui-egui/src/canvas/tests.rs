@@ -643,6 +643,25 @@ fn previous_view_comes_back_above_a_current_page_that_starts_below_the_window_to
 }
 
 #[test]
+fn previous_view_discards_a_pending_link_point() {
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..5)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    // Halfway down page 1, a link goes to a point a quarter down page 3; Previous view comes
+    // before a frame has drawn it.
+    let mut v = view(5, PageLayout::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(3, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert!(v.goto_point.is_some(), "the link's point is pending");
+    assert!(v.view_history(false));
+    assert_goto(&v, 1, 0.5, "Previous view goes back halfway down page 1");
+    assert_eq!(v.goto_point, None, "the link's point must not scroll the restored place away");
+}
+
+#[test]
 fn a_page_left_from_its_top_comes_back_at_its_top() {
     // At the page's top, and within a pixel of it either way (rounding).
     for down in [0.0, 0.5, -0.5] {

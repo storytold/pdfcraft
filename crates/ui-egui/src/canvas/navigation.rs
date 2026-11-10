@@ -326,6 +326,9 @@ impl DocView {
         // stacks are public, so never a NaN scroll either.
         let frac = if page <= last && frac.is_finite() { frac.clamp(-1.0, 1.0) } else { 0.0 };
         let page = page.min(last);
+        // A destination's point not drawn yet belongs to the jump this replaces; drawn after
+        // `goto`, it would scroll away from the place restored.
+        self.goto_point = None;
         self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();
