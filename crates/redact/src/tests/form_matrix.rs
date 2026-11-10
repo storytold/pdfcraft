@@ -85,6 +85,17 @@ fn a_form_whose_matrix_is_not_six_numbers_counts_in_the_scans() {
     assert!(matches!(&removed, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("/Matrix")), "{removed:?}");
 }
 
+/// Removing hidden layers alone never asks where content lands, so such a form is walked as it
+/// stands: nothing is counted or refused over it in a document without layers.
+#[test]
+fn a_form_whose_matrix_is_not_six_numbers_leaves_removing_hidden_layers_alone() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = moved_form("/Matrix [1 0 0 1 0 (up)]", b"null");
+    let counts: std::collections::HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::HiddenLayers], 0);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenLayers]), Err(RedactError::NothingToApply));
+}
+
 /// Remove Hidden Information reads it the same way: text a matrix entry by reference moves off the
 /// page is hidden text, and goes.
 #[test]

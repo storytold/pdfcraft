@@ -400,18 +400,24 @@ pub(super) fn push_squashed(into: &mut String, s: &str) {
 /// is the identity, present but malformed is an error (guessing the identity would put its content in the
 /// wrong place). The redaction walk reads a form's with it too.
 pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
-    match dict.get(b"Matrix") {
-        None => Ok(Matrix::IDENTITY),
-        Some(m) => {
-            let m = doc.resolve(m);
-            // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
-            if matches!(*m, Object::Null) {
-                return Ok(Matrix::IDENTITY);
-            }
-            let items: Vec<Object> = m.as_array().ok_or(())?.iter().map(|x| (*doc.resolve(x)).clone()).collect();
-            Matrix::from_operands(&items).filter(|m| m.0.iter().all(|v| v.is_finite())).ok_or(())
+    let Some(m) = dict.get(b"Matrix") else { return Ok(Matrix::IDENTITY) };
+    // Read in place when written directly, and the length checked before any entry is resolved:
+    // the walk reads it at every `Do`, and an array of any length would be copied each time.
+    let held;
+    let m = match m {
+        Object::Ref(_) => {
+            held = doc.resolve(m);
+            &*held
         }
+        direct => direct,
+    };
+    // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
+    if matches!(m, Object::Null) {
+        return Ok(Matrix::IDENTITY);
     }
+    let items = m.as_array().filter(|a| a.len() == 6).ok_or(())?;
+    let items: Vec<Object> = items.iter().map(|x| (*doc.resolve(x)).clone()).collect();
+    Matrix::from_operands(&items).filter(|m| m.0.iter().all(|v| v.is_finite())).ok_or(())
 }
 
 /// A form's `/BBox` as `[x0 y0 x1 y1]`: absent is `None`, present but malformed is an error.
