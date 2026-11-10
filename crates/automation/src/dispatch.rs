@@ -243,27 +243,31 @@ impl Automation {
                     Some(v) => {
                         let rgb: Option<Vec<f64>> = v.as_array().and_then(|c| c.iter().map(Value::as_f64).collect());
                         match rgb.as_deref() {
-                            Some(&[r, g, b]) if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) => Some([r, g, b]),
+                            Some(&[r, g, b]) if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) => Some(Some([r, g, b])),
                             _ => return Err(ToolError::InvalidArgs("color must be [r, g, b], each from 0 to 1".into())),
                         }
                     }
                 };
-                let (bold, italic) = (a.opt_bool("bold")?, a.opt_bool("italic")?);
-                if color.is_none() && bold.is_none() && italic.is_none() {
-                    return Err(ToolError::InvalidArgs("give color, bold or italic".into()));
+                let (bold, italic, open) = (a.opt_bool("bold")?, a.opt_bool("italic")?, a.opt_bool("open")?);
+                if color.is_none() && bold.is_none() && italic.is_none() && open.is_none() {
+                    return Err(ToolError::InvalidArgs("give color, bold, italic or open".into()));
                 }
-                let mut edits = Vec::new();
-                if let Some(color) = color {
-                    edits.push(Edit::SetBookmarkColor { path: path.clone(), color: Some(color) });
+                // Only a bookmark with children has a /Count for an open state to change; the
+                // engine's write is a no-op there, so the tool says so rather than reporting a
+                // change that did not happen.
+                if open.is_some() {
+                    let children = self
+                        .doc(&a)?
+                        .bookmarks()
+                        .into_iter()
+                        .filter(|row| row.path.len() == path.len().saturating_add(1) && row.path.starts_with(&path))
+                        .count();
+                    if children == 0 {
+                        return Err(ToolError::InvalidArgs("this bookmark has no children, so it has no open state to set".into()));
+                    }
                 }
-                if bold.is_some() || italic.is_some() {
-                    edits.push(Edit::SetBookmarkStyle { path, bold, italic });
-                }
-                // A colour and a style given together are one step to undo, applied all or nothing.
-                match edits.len() {
-                    1 => self.apply(&a, edits.remove(0))?,
-                    _ => self.apply(&a, Edit::Batch { label: "Style".into(), edits })?,
-                }
+                // Colour, style and open state are one step to undo, applied all or nothing.
+                self.apply(&a, Edit::UpdateBookmark { path, title: None, dest: None, color, bold, italic, open })?
             }
             "bookmark_from_structure" => {
                 let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;

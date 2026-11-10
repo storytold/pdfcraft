@@ -2012,6 +2012,15 @@ fn bookmarks_through_tools() {
     let re = ok(&mut b, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
     let list = ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"].clone();
     assert_eq!((list[0]["title"].as_str(), list[0]["children"][0]["title"].as_str()), (Some("Body"), Some("Details")));
+    // The open state is written to /Count by the same tool, and one undo takes it back.
+    ok(&mut b, "bookmark_set_style", json!({ "doc": re, "path": [1], "open": false }));
+    let shut = ok(&mut b, "bookmark_export", json!({ "doc": re }))["bookmarks"].clone();
+    assert_eq!((shut[0]["open"].clone(), shut[0]["children"].as_array().map(Vec::len)), (json!(false), Some(1)), "{shut}");
+    ok(&mut b, "edit_undo", json!({ "doc": re }));
+    let open = ok(&mut b, "bookmark_export", json!({ "doc": re }))["bookmarks"].clone();
+    assert_eq!(open[0]["open"], json!(true), "one undo reopens it: {open}");
+    // A leaf has no state to set.
+    assert!(matches!(b.call("bookmark_set_style", &json!({ "doc": re, "path": [1, 1], "open": true })), Err(ToolError::InvalidArgs(_))));
 }
 
 /// Named destinations through the tools: listed, added, moved, deleted, and
@@ -12821,6 +12830,8 @@ fn bookmark_list_reports_colour_and_style() {
         json!({ "doc": doc, "path": [1] }),
         json!({ "doc": doc, "path": [1], "color": [2, 0, 0] }),
         json!({ "doc": doc, "path": [1], "color": [1, 0] }),
+        // A bookmark with no children has no /Count for an open state to change.
+        json!({ "doc": doc, "path": [1], "open": false }),
     ] {
         assert!(matches!(a.call("bookmark_set_style", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
     }

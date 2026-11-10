@@ -457,8 +457,8 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "page": { "type": "integer", "minimum": 1 } }), &["doc", "path", "page"])),
         t(
             "bookmark_set_style",
-            "Set a bookmark's style and colour",
-            "Colour a bookmark's title and make it bold or italic (ISO 32000-2 §12.3.3: /C and /F), as bookmark_list reports them. Give any of color ([r, g, b], each 0-1; [0, 0, 0] is the default black), bold and italic; what is left out stays as it is. Undoable.",
+            "Set a bookmark's style, colour and open state",
+            "Colour a bookmark's title, make it bold or italic (ISO 32000-2 §12.3.3: /C and /F) and say whether it shows expanded in the file (/Count's sign, Table 151), as bookmark_list and bookmark_export report them. Give any of color ([r, g, b], each 0-1; [0, 0, 0] is the default black), bold, italic and open; what is left out stays as it is. open is refused for a bookmark with no children, which has no state to change. One undoable step for everything given.",
         )
         .with(schema(
             json!({
@@ -466,7 +466,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "path": path("The bookmark"),
                 "color": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 3, "maxItems": 3 },
                 "bold": { "type": "boolean" },
-                "italic": { "type": "boolean" }
+                "italic": { "type": "boolean" },
+                "open": { "type": "boolean", "description": "Whether the bookmark shows expanded; only one with children has an open state." }
             }),
             &["doc", "path"],
         )),
