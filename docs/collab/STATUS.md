@@ -14,65 +14,45 @@
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exited 0 at
   `0c57e2271`; it was not re-run at this pass's head, and no rebase was done in
   this pass, so the base stays `ba28458ad`.
-- Local head before this STATUS commit: `d1229deb9` (feat: share the outline
-  and its named destinations as operations) on `0ab350c6b` (docs(collab): record
-  the restored publication and the resolve that publishes) on `21aaf357a` (feat:
-  publish an unpublished base after a restart and on resolve) on `5bad54c40`
-  (feat: share several selections, per-line quads and the caret) on `38d0bf56d`
-  (docs(collab):
-  record the pop-up window operation and reconcile the STATUS head) on
-  `0c57e2271` (feat: open, close and move
-  a comment's pop-up window as one operation) on `199076765` (docs(collab):
-  record the parts, move and geometry operations) on `22d29d070` (feat: share a
-  comment's parts, a move and its geometry) on `be5ac3570` (docs(collab):
-  reconcile STATUS with PR #6622 and the cabinet HS256 image) on `3f3bbedb0`
-  (docs: record the cabinet HS256 auth pass and its gates) on `157f4d239` (feat:
-  accept the cabinet's HS256 session tickets next to RS256) on `b27fa89c8`
-  (docs: record the split part and the ordered Combine confirmation) on
-  `843a8f533` (feat: keep a split's part and join Combine as ordered parts) on
-  `a007c4256` (docs: record the rebase onto `ba28458ad` and the gate run) on
-  `5f3c6f3c2` (style: wrap the engine export list after the rebase merge) on
-  `2020fce3f` (docs: record the Split/Combine dialogs inside a session) on
-  `d975ebb72` (feat: send Split and Combine from a session as page operations)
-  on `8f71c37db` (feat: split/combine pages as server-ordered operations) on
-  `32e94bc78` (docs: the previous rebase record) on `ebce0fb6b` (refactor: the
-  `apply_edit` dispatcher, which the merged `ui-egui` needed to stay under the
-  clippy complexity limit) — **94 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD` at this docs head; 93 at
-  `d1229deb9`, 92 at `0ab350c6b`, 91 at `21aaf357a`), **48 behind** and **14
-  ahead** of the PR head (13 at `d1229deb9`, 12 at `21aaf357a`, this STATUS
-  record being the second of the two this pass adds). `origin/main` was
-  `274b7a042` when this pass started and when it ended
-  (`git ls-remote origin refs/heads/main`), so the branch is still 48 behind;
-  `git merge-tree --write-tree origin/main HEAD` exits 0 at the code head
-  `d1229deb9` (the docs commits after it change no code), and no rebase was done in this pass, so the base stays
-  `ba28458ad`. The numbers the
-  earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
-  86/11/6 at `0c57e2271` — were right when they were measured; `origin/main`
-  kept moving (`ba28458ad` → `a71b5124b` → `274b7a042`) and each slice added
-  its commits. Commits named below and
-  in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
+- Local head before this STATUS commit: `c26867e9c` (feat: share page labels
+  as set and clear operations) on `b3732c152` (docs(collab): record the outline
+  and named destination operations) on `d1229deb9` (feat: share the outline and
+  its named destinations as operations); **95 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD`), **48 behind** the local
+  `origin/main` `274b7a042` (the remote's tip observed now is `2b46f8bf8`, not
+  fetched here), and **15 ahead** of the PR head `b27fa89c8`; this STATUS
+  record is the second commit of the pass, so after it the counts are 96/48/16.
+  The branch
+  was not rebased, so the base stays `ba28458ad`;
+  `git merge-tree --write-tree origin/main HEAD` exits 0 at `9f7138fd9a`.
+  The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
+  `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152` — were
+  right when they were measured; `origin/main` kept moving and each slice added
+  its commits. Commits named below and in §4 by their pre-rebase hashes are
+  mapped in the rebase sections of §4.
 - PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
   `feature/realtime-collaboration`, 80 commits) and reports
   `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
   2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the twelve local commits above it are in it
-  only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
+  through the Split/Combine record; the thirteen local commits above it are in
+  it only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
   and their record (`3f3bbedb0`), the parts/move/geometry operation
   (`22d29d070`) and its record (`199076765`), the pop-up operation
   (`0c57e2271`) and its record (`38d0bf56d`), the selection operation
   (`5bad54c40`) and its two records (`b6244142c`, `dc773c609`), and this pass's
-  publication restore (`21aaf357a`) and its record (this STATUS commit). `UNSTABLE` is
+  publication restore (`21aaf357a`), the page labels (`c26867e9c`) and its record
+  (this STATUS commit). `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `21aaf357a` for the crates this pass touched
-  (collab-server, collab-ws, collab-pdf and the daemon); the whole-suite gates
-  named earlier were run at their own heads (`5bad54c40`, `157f4d239`,
-  `22d29d070`, `0c57e2271`, §4) and were not re-run here.
+  §4 are green at the local head `c26867e9c` for the crates this pass touched
+  (organize, engine, collab-proto, collab-pdf, collab-client-pdf, collab-server,
+  collab-ws, the daemon and `pdfcraft-ui-egui --features collab`); the
+  whole-suite gates named earlier were run at their own heads (`5bad54c40`,
+  `157f4d239`, `22d29d070`, `0c57e2271`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -90,7 +70,8 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   comment's parts, a move, a resize and a reshape as addressable operations
   (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4), and
   the outline with its named destinations as eight structural operations
-  (`d1229deb9`, §4). The whole
+  (`d1229deb9`, §4), and the page labels as two structural operations
+  (`c26867e9c`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
@@ -98,7 +79,8 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
 - Known gaps before production are listed in §5, the plan in §6. This pass
   closes the outline and named destinations of limitation 3 (§5 p.3, §4) and
   leaves `https` without a reverse proxy, the in-process `conflict` flag and
-  the journal tail (published by the next commit) as they were. A kill between the base write and the
+  the journal tail (published by the next commit) as they were. This pass closes
+  page labels of limitation 3 (§5 p.3, §4). A kill between the base write and the
   `CURRENT` rename is covered at the `Store` level only (§5 p.1, §6.1); the
   real-process SIGKILL test covers the journal→base window.
 - Audience: the next session (human or agent). Everything here was verified in
@@ -410,6 +392,103 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Page labels — §5 p.3 (2026-11-10, local; not pushed)
+
+`c26867e9c` on `b3732c152`. A page label is a `/PageLabels` number-tree range
+(ISO 32000-2 §12.4.2): from a page on, every page shows a prefix and a number
+in a style, until the next range starts. The room had no operation for one: the
+"Number pages" dialog was refused as `unsupported` in a session, and a commit
+could not carry labels a page operation had moved.
+
+- **Two structural operations, addressed by the page a range starts on**
+  (RFC §3.1.8): `page.label.set` (target `page_label { start }`, payload
+  `end`, `style`, `prefix`, `first`) writes `start..=end`; `page.label.clear`
+  removes the range that begins at `start`. Styles are the wire's own names:
+  `decimal`, `upper_roman`, `lower_roman`, `upper_alpha`, `lower_alpha`,
+  `none` (prefix only). Both bump the epoch and are refused for a `viewer` and
+  a `commenter` before the adapter runs; the client lists
+  `Edit::NumberPages` and the new `Edit::ClearPageLabels` as structural, so a
+  commenter sees ReadOnly and the room answers `forbidden` without moving
+  `version`.
+- **Every refusal happens before the first write**: a span past the document or
+  empty, an unknown style, a zero first number and a blank label are `invalid`;
+  a label over `MAX_PAGE_LABEL_BYTES` (1 024), a number past 32 bits and a
+  result over `MAX_PAGE_LABEL_RANGES` (1 024) are `limit`; a span that would
+  cross another range's start is `conflict` (the undo image is one range, so
+  swallowing a second one would not be an undo); a `/PageLabels` tree that is
+  cyclic, too deep or over its work bound is `invalid` rather than rewritten
+  blind. A clear of a page that begins no range is `invalid`. None of them
+  moves `version`, `epoch`, the document or the journal.
+- **The accepted operation carries the whole range it replaced** (`before`,
+  `{start, end, style, prefix, first}`), so the undo is an ordinary
+  `page.label.set`. A document without `/PageLabels` shows plain numbers: its
+  undo image is the implicit `0..last` decimal range, marked `implicit` (the
+  pages before a set are then not covered by a range). A set that lands inside
+  a range splits it, so its undo names the ranges the set left over that span
+  (a list in `before`) and writes one range over them: a compare-and-set, so a
+  label someone changed in between is a `conflict`, not an overwrite. A clear
+  does not split, and its undo is a plain set.
+- **Page operations keep each page's label.** `pdfcraft-organize` gained a
+  label snapshot and a plan: insert (from a file, a restore, a blank or a
+  duplicate) and move re-derive `/PageLabels` from the pages' old labels before
+  the page tree is rebuilt, so an explicit range follows its pages (the insert
+  splits it and writes the continuation with the old number), inserted pages
+  carry the labels of their part (or the physical number when the source is
+  unlabelled), and an unlabelled page keeps showing its physical number. The
+  plan is checked before the pages move, so a label that cannot be written
+  refuses the whole edit. `split` and `delete` already move ranges with their
+  pages (`drop_deleted_pages`, which now also merges continuations, so undoing
+  an insert restores the original tree). `replace` keeps the page object and
+  its label. No behaviour changed outside the room apart from the fix itself:
+  an insert or a move now keeps labels on their pages in single-user mode too.
+- **Engine surface**: `Edit::ClearPageLabels { start }` (the engine had only
+  `Edit::NumberPages`), and `Document::page_label_ranges()` reads the working
+  file strictly for the adapter.
+- **The client projects both ways**: `ops_for_edit` turns `Edit::NumberPages`
+  into one `page.label.set` (an empty span and a prefix over the bound are
+  refused before sending) and `Edit::ClearPageLabels` into `page.label.clear`;
+  `edit_for` turns the accepted operations back into those two edits;
+  `inverse_for` returns `None` for both and `inverse_after` builds the undo from
+  `before` (a plain set for a clear, the range list for a split set). The
+  existing "Number pages" dialog therefore works in a room; a dialog span that
+  would cross several existing ranges is refused by the room, since its one
+  undo image is one range.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `organize` | `page_operations_keep_each_label_on_its_page` (blank insert splits a range and later pages keep their numbers; delete restores the ranges; duplicate carries the copied page's label; move keeps every label; clearing a range hands its pages back and the set over it is the undo; a page inside a range cannot be cleared), `inserted_pages_bring_their_labels` (a labelled source keeps B-A/B-B around physical numbers, an unlabelled source adds none), `a_label_span_is_checked_before_it_is_written` (blank label, long prefix, empty span, number overflow, valid ranges) |
+| `collab-pdf` | `page_labels_are_set_and_cleared_as_operations` (front matter, an appendix that splits the continuation with 5/6 kept, the undo image of each, the split undo naming both ranges and a stale one refused, clear and its undo, clearing the last ranges), `a_bad_label_operation_changes_nothing` (9 refusals — past the end, empty, unknown style, zero first, blank, long, crossing, clear inside, clear missing — each with version, epoch and labels unchanged; viewer and commenter `forbidden`), `page_operations_keep_the_labels_on_their_pages` (insert a copy inside a range, split the inserted page) |
+| `collab-client-pdf` | `page_label_edits_become_addressed_operations` (Number pages → one set with the target and span, clear → clear, empty span and long prefix refused), `accepted_label_operations_become_edits` (edit_for both ways, replication of a split set, `inverse_after` naming the two left ranges and writing the old range back, clear's undo as a plain set) |
+| `collab-ws` e2e (socket) | `page_labels_are_operations_over_a_socket` (two editors and a viewer; front matter and an appendix converge on all three replicas; a stale undo is `conflict` without a version move; the two undos restore the labels and a redo applies again; clear and its undo; a crossing set is `conflict`; a viewer is `forbidden`) |
+
+Gates at `c26867e9c` (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, the crates this pass touched | `cargo clippy -p pdfcraft-organize -p pdfcraft-engine -p pdfcraft-collab-{proto,pdf,client-pdf,server,ws} --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, the gate list | `cargo test -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-collab-pdf` | pass — pdf 59, server 33, ws 16 unit + 32 e2e; 0 failed, 0 ignored |
+| Tests, the rest of the collab set | `cargo test -p pdfcraft-collab-{proto,outline,hub,client,client-pdf,session,annot}` | pass — proto 15, outline 6, hub 5, client 14, client-pdf 42, session 5, annot 23; 0 failed |
+| Tests, the crates whose labels moved | `cargo test -p pdfcraft-organize -p pdfcraft-engine` | pass — organize 228 + 2 integration, engine 636 + 9 + 46; 2 ignored (pre-existing) |
+| Daemon | `cargo test -p pdfcraft-collab-daemon` | pass — 34 + `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1 + `restore_publication` 2 |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Workspace | `cargo check --workspace --all-targets` | pass (pre-existing warnings outside this pass's files) |
+| UI, the collab module | `cargo test -p pdfcraft-ui-egui --features collab --lib collab::` | pass — 16 |
+| Layers | `cargo xtask layers` | OK — 51 crates, no violations |
+| Browser | `cargo xtask wasm` | 43 crates ok |
+
+What this does **not** cover: links (`/Annots` link annotations and remote
+go-tos) are still not shared — the rest of TASK §3's list. A "Number pages"
+span that would cross several existing ranges is refused (`conflict`), not
+split into several operations; the dialog still labels one range at a time. The
+operation writes whole ranges, not "this range plus the numbers after it": a
+set's continuation keeps the old numbering, so the dialog's usual
+"relabel these pages, keep the rest" works, but moving a boundary is two
+operations. Nothing was pushed: PR #6622 keeps the fork's head `b27fa89c8`.
 
 ### The outline and its named destinations — §5 p.3 (2026-11-10, local; not pushed)
 
@@ -2557,8 +2636,12 @@ Ordered by the risk they pose to production.
    ~~Bookmarks~~ and named destinations are shared since `d1229deb9` (§4, RFC
    §3.1.7): an item is addressed by its object key and a name by its name, a
    delete carries its whole subtree for the undo, and every page operation keeps
-   the target page because the destination names the page object. Layers,
-   attachments, form structure, links, page labels and content edits are still
+   the target page because the destination names the page object. Page labels
+   are shared since `c26867e9c` (§4, RFC §3.1.8): a range is addressed by the
+   page it starts on, `page.label.set`/`page.label.clear` carry the whole range
+   they replaced for the undo, and insert/duplicate/blank/combine/move keep
+   every page's label on it. Layers,
+   attachments, form structure, links and content edits are still
    not shared; the app has no named-destination editor of its own, and the
    bookmark *colour*, *style*, *open* and "from structure/text styles" edits are
    still refused with `unsupported` in a room.
@@ -2934,9 +3017,16 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   `organize` (3), `engine` (1), `collab-pdf` (5), `collab-client-pdf` (2) and
   `collab-ws` e2e (3, two editors and a viewer: converge, undo/redo of a
   subtree, a viewer refused, a stale key refused without a version move). What
-  is left: links and page labels (the rest of TASK §3's list), the bookmark
+  is left: links (the rest of TASK §3's list), the bookmark
   colour/style/open edits, and an interface and an automation tool for named
   destinations — the app has no named-destination editor of its own.
+- **Page labels are done locally in §4** (`c26867e9c`, 2026-11-10, not pushed):
+  `page.label.set` and `page.label.clear` addressed by the page a range starts
+  on, the whole replaced range in `before` for the undo (a list when the set
+  split it, a compare-and-set), every refusal before the first write, and
+  insert/split/combine/replace/duplicate keeping each page's label. Tests:
+  `organize` (3), `collab-pdf` (3), `collab-client-pdf` (2) and `collab-ws` e2e
+  (1, two editors and a viewer).
 - **Split and combine are done locally in §4** (`362f9c72b`, 2026-11-09, not
   pushed): `page.split` takes a range out and carries the part in the accepted
   operation, `page.combine` joins a whole part in one operation, both are
