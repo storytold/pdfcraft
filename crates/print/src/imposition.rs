@@ -163,6 +163,20 @@ pub(crate) fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> 
     Some(a)
 }
 
+/// ISO 32000-1 section 12.5.3: counterrotate the fitted appearance about Rect's upper-left
+/// corner in default user space. Crop, UserUnit and sheet transforms remain outside it.
+fn no_rotate_placement(placement: Matrix, rect: [f64; 4], rotation: i64) -> Option<Matrix> {
+    let [x, _, _, y] = rect;
+    let counterrotation = match rotation {
+        90 => Matrix([0.0, 1.0, -1.0, 0.0, x + y, y - x]),
+        180 => Matrix([-1.0, 0.0, 0.0, -1.0, 2.0 * x, 2.0 * y]),
+        270 => Matrix([0.0, -1.0, 1.0, 0.0, x - y, y + x]),
+        _ => Matrix::default(),
+    };
+    let placement = placement.then(&counterrotation);
+    placement.0.iter().all(|value| value.is_finite()).then_some(placement)
+}
+
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
 /// `pages` are the document's pages, listed once by the caller: listing them for each page
 /// printed would make printing quadratic in the page count.
@@ -209,6 +223,15 @@ pub(crate) fn page_form(
         let Some(ap) = appearance(doc, &d) else { continue };
         let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
         let Some(m) = appearance_matrix(doc, &form, rect) else { continue };
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        // Text annotations have implicit NoRotate even when the flag is clear (ISO 32000-1 section 12.5.6.4).
+        let no_rotate = flags & 16 != 0 || d.get(b"Subtype").is_some_and(|subtype| doc.resolve(subtype).as_name() == Some(b"Text"));
+        let m = if no_rotate {
+            no_rotate_placement(m, rect, page.rotation(doc))
+                .ok_or_else(|| PrintError::Invalid(format!("page {} has a non-finite NoRotate annotation placement", index.saturating_add(1))))?
+        } else {
+            m
+        };
         let ap = if !form.contains(b"Subtype")
             && let Object::Stream(stream) = &*doc.get(ap)
         {
