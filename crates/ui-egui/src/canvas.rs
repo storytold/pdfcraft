@@ -3247,7 +3247,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, navigable, invert_middle);
+    // Middle-button auto-scroll is a gesture begun on the page, which a dialog over it stops each
+    // frame (`logic`): it stays off beside the result window too, so it cannot start and at once
+    // be cut short. The wheel and pinch are the ways to move the page there.
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
