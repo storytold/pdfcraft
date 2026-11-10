@@ -16,8 +16,8 @@
 //! brings back. The accepted operation carries both lists (`links` and `before`), so
 //! every replica and the journal write the same page and the undo is a plain set.
 
-use pdfcraft_collab_link::{LinkWireError, bodies_from_value, bodies_to_value};
-use pdfcraft_collab_proto::{ErrorCode, MAX_LINKS, PageRef, Target};
+use pdfcraft_collab_link::{LinkWireError, PagedLinks, bodies_from_value, bodies_to_value, pages_from_value, pages_to_value};
+use pdfcraft_collab_proto::{ErrorCode, MAX_LINKS, MAX_LINKS_PER_PAGE, PageRef, Target};
 use pdfcraft_engine::{Edit, LinkAction, LinkContent};
 use serde_json::{Value, json};
 
@@ -118,5 +118,115 @@ impl PdfAdapter {
         self.apply_edit(Edit::SetPageLinks { page, links })?;
         self.epoch = self.epoch.saturating_add(1);
         Ok(json!({ "page": page, "index": index }))
+    }
+
+    /// The clickable pages of a whole-document operation: every entry's page must
+    /// exist, and the anchor the operation is addressed to (the first page) checks
+    /// the epoch, so a document that moved is `stale` before anything is read.
+    fn paged_pages<'a>(&self, entries: &'a [PagedLinks]) -> Result<Vec<(usize, &'a PagedLinks)>, AdapterError> {
+        let count = self.document_or_error()?.info.pages.len();
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let page = usize::try_from(entry.page).map_err(|_| invalid("the page index is too large"))?;
+            if page >= count {
+                return Err(invalid(format!("page {} does not exist: the document has {count}", entry.page.saturating_add(1))));
+            }
+            out.push((page, entry));
+        }
+        Ok(out)
+    }
+
+    /// `links.add_many` (RFC §3.1.9): append every link of every named page to
+    /// that page's list, in one structural operation. Nothing is written until
+    /// every page is read back and every list fits the room's bounds; the
+    /// accepted operation carries each page's list before and after, so the undo
+    /// is one `links.remove_many` over the lists the pages had.
+    pub(crate) fn add_many_links(&mut self, target: &Target, payload: &mut Value) -> Result<Value, AdapterError> {
+        self.page_index(page_of(target)?)?;
+        let entries = pages_from_value(payload.get("pages").ok_or_else(|| invalid("the operation names no pages"))?).map_err(wire)?;
+        if entries.is_empty() {
+            return Err(invalid("the operation names no links"));
+        }
+        let paged = self.paged_pages(&entries)?;
+        let mut before = Vec::with_capacity(paged.len());
+        let mut after = Vec::with_capacity(paged.len());
+        let mut added = 0usize;
+        for (page, entry) in &paged {
+            if entry.links.is_empty() {
+                return Err(invalid(format!("page {} names no link to add", page + 1)));
+            }
+            let old = self.page_links(*page)?;
+            let total = old.len().saturating_add(entry.links.len());
+            if total > MAX_LINKS_PER_PAGE {
+                return Err(limit(format!("page {} would hold {total} links; one page carries at most {MAX_LINKS_PER_PAGE}", page + 1)));
+            }
+            let mut links = old.clone();
+            links.extend(entry.links.iter().cloned());
+            before.push(PagedLinks { page: entry.page, links: old });
+            after.push(PagedLinks { page: entry.page, links });
+            added = added.saturating_add(entry.links.len());
+        }
+        let all = self.document_or_error()?.links().len();
+        let kept: usize = before.iter().map(|page| page.links.len()).sum();
+        let total = all.saturating_sub(kept).saturating_add(added);
+        if total > MAX_LINKS {
+            return Err(limit(format!("a room holds at most {MAX_LINKS} links: this operation would make {total}")));
+        }
+        payload["action"] = json!("links.add_many");
+        payload["pages"] = pages_to_value(&after);
+        payload["before"] = pages_to_value(&before);
+        payload["added"] = json!(added);
+        self.apply_edit(Edit::SetPagesLinks { pages: after.into_iter().map(|page| (page.page as usize, page.links)).collect() })?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(json!({ "pages": payload["pages"], "added": added }))
+    }
+
+    /// `links.remove_many`: each named page's links become exactly the list the
+    /// operation carries (empty when it carries none), in one structural
+    /// operation. The accepted operation carries the lists before and after; its
+    /// undo is the same operation with `before`, so an add and a removal undo
+    /// through one shape. A `before` that no longer matches the page is
+    /// `conflict`: a link someone changed in between is not overwritten.
+    pub(crate) fn remove_many_links(&mut self, target: &Target, payload: &mut Value) -> Result<Value, AdapterError> {
+        self.page_index(page_of(target)?)?;
+        let entries = pages_from_value(payload.get("pages").ok_or_else(|| invalid("the operation names no pages"))?).map_err(wire)?;
+        if entries.is_empty() {
+            return Err(invalid("the operation names no pages"));
+        }
+        let paged = self.paged_pages(&entries)?;
+        let mut before = Vec::with_capacity(paged.len());
+        let mut after = Vec::with_capacity(paged.len());
+        let mut changed = 0usize;
+        for (page, entry) in &paged {
+            let old = self.page_links(*page)?;
+            if old != entry.links {
+                changed = changed.saturating_add(1);
+            }
+            before.push(PagedLinks { page: entry.page, links: old });
+            after.push(PagedLinks { page: entry.page, links: entry.links.clone() });
+        }
+        if let Some(expected) = payload.get("before") {
+            let expected = pages_from_value(expected).map_err(wire)?;
+            let matches = expected.len() == before.len()
+                && expected.iter().zip(&before).all(|(left, right)| left.page == right.page && left.links == right.links);
+            if !matches {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the pages' links changed since the operation was built", false));
+            }
+        }
+        if changed == 0 {
+            return Err(invalid("the pages' links are already what the operation leaves"));
+        }
+        let total: usize = after.iter().map(|page| page.links.len()).sum();
+        if total > MAX_LINKS {
+            return Err(limit(format!("a room holds at most {MAX_LINKS} links: this operation would leave {total}")));
+        }
+        let removed: usize = before.iter().zip(&after).map(|(was, now)| was.links.len().saturating_sub(now.links.len())).sum();
+        payload["action"] = json!("links.remove_many");
+        payload["pages"] = pages_to_value(&after);
+        payload["before"] = pages_to_value(&before);
+        payload["removed"] = json!(removed);
+        self.apply_edit(Edit::SetPagesLinks { pages: after.into_iter().map(|page| (page.page as usize, page.links)).collect() })?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(json!({ "pages": payload["pages"], "removed": removed }))
     }
 }

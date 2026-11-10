@@ -653,6 +653,28 @@ pub fn bodies(doc: &Document, page: usize) -> Result<Vec<LinkBody>, AnnotError> 
 /// The whole list is checked before the first write, and [`bodies`] refuses a page
 /// whose links the model cannot carry, so nothing is dropped silently.
 pub fn set_page_links(doc: &mut Document, page: usize, links: &[LinkBody]) -> Result<(), AnnotError> {
+    check_page_links(doc, page, links)?;
+    write_page_links(doc, page, links)
+}
+
+/// Make several pages' link lists exactly the lists given, in one edit. Every
+/// list is checked before the first write, so a bad entry on the last page leaves
+/// the first one untouched; the write is then the same per-page rewrite as
+/// [`set_page_links`], so a link that did not change keeps its object.
+pub fn set_pages_links(doc: &mut Document, pages: &[(usize, Vec<LinkBody>)]) -> Result<(), AnnotError> {
+    for (page, links) in pages {
+        check_page_links(doc, *page, links)?;
+    }
+    for (page, links) in pages {
+        write_page_links(doc, *page, links)?;
+    }
+    Ok(())
+}
+
+/// Everything a rewrite of `page` to `links` needs before the first write: the
+/// page exists, every body is a link this model can write, and the links the page
+/// holds now are ones it can read back.
+fn check_page_links(doc: &Document, page: usize, links: &[LinkBody]) -> Result<(), AnnotError> {
     page_ref(doc, page)?;
     // Check everything that can be checked without writing.
     for body in links {
@@ -676,6 +698,17 @@ pub fn set_page_links(doc: &mut Document, page: usize, links: &[LinkBody]) -> Re
             page_ref(doc, *page)?;
         }
     }
+    let old = bodies(doc, page)?;
+    let indices = link_indices(doc, page)?;
+    if indices.len() != old.len() {
+        return Err(AnnotError::Invalid("the page's links changed while they were being read".into()));
+    }
+    Ok(())
+}
+
+/// Write the list a checked page should have. Every check it needs has already
+/// run in [`check_page_links`].
+fn write_page_links(doc: &mut Document, page: usize, links: &[LinkBody]) -> Result<(), AnnotError> {
     let old = bodies(doc, page)?;
     let indices = link_indices(doc, page)?;
     if indices.len() != old.len() {

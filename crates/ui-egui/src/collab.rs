@@ -1181,6 +1181,7 @@ impl PdfCraftApp {
                 | Edit::RemoveLinks { .. }
                 | Edit::AddLinks { .. }
                 | Edit::SetPageLinks { .. }
+                | Edit::SetPagesLinks { .. }
         );
         if structural && !collab.role.can_structural() {
             collab.error = Some("This role cannot change pages".into());

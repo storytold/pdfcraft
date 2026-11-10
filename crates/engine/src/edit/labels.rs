@@ -347,6 +347,7 @@ impl Edit {
             Edit::SetLink { .. } => Label::of("Change link properties"),
             Edit::DeleteLink { .. } => Label::of("Delete link"),
             Edit::SetPageLinks { .. } => Label::of("Change links"),
+            Edit::SetPagesLinks { .. } => Label::of("Change links"),
             Edit::RemoveLinks { .. } => Label::of("Remove all links"),
             Edit::AddLinks { links, .. } => plural("Create link", "Create links", links.len()),
             Edit::Sanitize => Label::of("Sanitize document"),

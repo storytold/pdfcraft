@@ -22,7 +22,7 @@
 
 use pdfcraft_annot::links::{Highlight, LinkAction, LinkBody, LinkStyle, LinkZoom};
 use pdfcraft_collab_proto::{
-    MAX_LINK_COORD, MAX_LINK_QUADS, MAX_LINK_REMOTE_FILE_BYTES, MAX_LINK_URI_BYTES, MAX_LINKS_PER_PAGE, MAX_PAGE_INDEX, MIN_LINK_SIDE,
+    MAX_LINK_COORD, MAX_LINK_QUADS, MAX_LINK_REMOTE_FILE_BYTES, MAX_LINK_URI_BYTES, MAX_LINKS, MAX_LINKS_PER_PAGE, MAX_PAGE_INDEX, MIN_LINK_SIDE,
 };
 use serde_json::{Value, json};
 
@@ -318,6 +318,55 @@ pub fn bodies_to_value(bodies: &[LinkBody]) -> Value {
     Value::Array(bodies.iter().map(body_to_value).collect())
 }
 
+/// One page's entry in a whole-document link operation: the page and the links
+/// the operation names for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PagedLinks {
+    pub page: u32,
+    pub links: Vec<LinkBody>,
+}
+
+/// The body of `links.add_many` and `links.remove_many`: pages with their links,
+/// `[{"page": N, "links": [...]}, …]`. An entry without `links` is a page whose
+/// list is empty (what the plain removal leaves). A page appears once, its list is
+/// at most [`MAX_LINKS_PER_PAGE`], and the whole operation at most [`MAX_LINKS`]
+/// links and [`MAX_LINKS`] pages: the room is bounded before it reads anything.
+pub fn pages_from_value(value: &Value) -> Result<Vec<PagedLinks>> {
+    let list = value.as_array().ok_or(LinkWireError::Malformed("page list"))?;
+    if list.len() > MAX_LINKS {
+        return Err(LinkWireError::TooMany { field: "pages in one link operation", count: list.len(), max: MAX_LINKS });
+    }
+    let mut pages = Vec::with_capacity(list.len());
+    let mut total = 0usize;
+    for entry in list {
+        let page = entry.get("page").and_then(Value::as_u64).ok_or(LinkWireError::Missing("page"))?;
+        if page > u64::from(MAX_PAGE_INDEX) {
+            return Err(invalid(format!("page {page} is past the last page the protocol accepts")));
+        }
+        let page = u32::try_from(page).map_err(|_| LinkWireError::Malformed("page"))?;
+        if pages.iter().any(|paged: &PagedLinks| paged.page == page) {
+            return Err(invalid(format!("page {} appears twice in one operation", page + 1)));
+        }
+        let links = match entry.get("links") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(links) => bodies_from_value(links)?,
+        };
+        total = total.saturating_add(links.len());
+        if total > MAX_LINKS {
+            return Err(LinkWireError::TooMany { field: "links in one operation", count: total, max: MAX_LINKS });
+        }
+        pages.push(PagedLinks { page, links });
+    }
+    Ok(pages)
+}
+
+/// Pages with their links as the wire writes them: the same shape
+/// [`pages_from_value`] reads, so an accepted operation and a client's intent are
+/// one form.
+pub fn pages_to_value(pages: &[PagedLinks]) -> Value {
+    Value::Array(pages.iter().map(|paged| json!({"page": paged.page, "links": bodies_to_value(&paged.links)})).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +461,23 @@ mod tests {
         let list = Value::Array(vec![body; MAX_LINKS_PER_PAGE + 1]);
         assert!(matches!(bodies_from_value(&list), Err(LinkWireError::TooMany { .. })));
         assert!(bodies_from_value(&json!({"not": "a list"})).is_err());
+    }
+
+    #[test]
+    fn pages_round_trip_and_are_bounded() {
+        let pages =
+            vec![PagedLinks { page: 0, links: vec![body(LinkAction::Uri("https://example.org".into()))] }, PagedLinks { page: 2, links: Vec::new() }];
+        let value = pages_to_value(&pages);
+        assert_eq!(pages_from_value(&value).unwrap(), pages, "the same pages come back");
+        assert_eq!(value[1], json!({"page": 2, "links": []}), "an empty list is a page with no links");
+
+        // A page twice in one operation, one past the bound, and a list over the
+        // room's total are all refused before a document is read.
+        assert!(pages_from_value(&json!([{"page": 0, "links": []}, {"page": 0, "links": []}])).is_err());
+        assert!(pages_from_value(&json!([{"page": MAX_PAGE_INDEX + 1, "links": []}])).is_err());
+        let many = Value::Array((0..=MAX_LINKS).map(|page| json!({"page": page, "links": []})).collect());
+        assert!(matches!(pages_from_value(&many), Err(LinkWireError::TooMany { .. })));
+        let full = json!([{"page": 0, "links": Value::Array(vec![body_to_value(&body(LinkAction::Uri("https://example.org".into()))); MAX_LINKS_PER_PAGE + 1])}]);
+        assert!(matches!(pages_from_value(&full), Err(LinkWireError::TooMany { .. })));
     }
 }

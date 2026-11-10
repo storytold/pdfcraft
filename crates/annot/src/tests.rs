@@ -5611,6 +5611,41 @@ fn a_page_link_list_is_written_whole_and_keeps_what_did_not_change() {
 }
 
 #[test]
+fn several_pages_are_written_whole_and_a_bad_one_writes_nothing() {
+    let mut doc = fixture();
+    let one = links::LinkBody {
+        rect: [10.0, 10.0, 110.0, 40.0],
+        quads: None,
+        action: links::LinkAction::Uri("https://example.org/one".into()),
+        style: links::LinkStyle::default(),
+    };
+    let two = links::LinkBody {
+        rect: [10.0, 50.0, 110.0, 80.0],
+        quads: None,
+        action: links::LinkAction::Page { page: 0, zoom: links::LinkZoom::FitPage },
+        style: links::LinkStyle::default(),
+    };
+    let bad = links::LinkBody {
+        rect: [10.0, 90.0, 11.0, 91.0],
+        quads: None,
+        action: links::LinkAction::Uri("https://example.org/bad".into()),
+        style: links::LinkStyle::default(),
+    };
+    // The second page's list is refused by the engine's own area check, so the first
+    // page is not written at all: one edit, all or nothing.
+    assert!(links::set_pages_links(&mut doc, &[(0, vec![one.clone()]), (1, vec![two.clone(), bad])]).is_err());
+    assert!(links::bodies(&doc, 0).unwrap().is_empty(), "the first page is untouched");
+    assert!(links::bodies(&doc, 1).unwrap().is_empty(), "the second page gained nothing either");
+    // The same spans without the bad area write both pages in one edit.
+    links::set_pages_links(&mut doc, &[(0, vec![one.clone()]), (1, vec![two.clone()])]).unwrap();
+    assert_eq!(links::bodies(&doc, 0).unwrap(), vec![one]);
+    assert_eq!(links::bodies(&doc, 1).unwrap(), vec![two]);
+    let doc = reopen(&doc);
+    assert_eq!(links::bodies(&doc, 0).unwrap().len(), 1);
+    assert_eq!(links::bodies(&doc, 1).unwrap().len(), 1);
+}
+
+#[test]
 fn a_link_the_model_cannot_carry_refuses_the_whole_page() {
     let mut doc = fixture();
     let one = links::LinkBody {

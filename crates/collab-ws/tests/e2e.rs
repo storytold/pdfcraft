@@ -2751,3 +2751,128 @@ fn page_links_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::E
     }
     Ok(())
 }
+
+/// Two editors and a viewer share a whole-document link operation over a real
+/// socket: `links.add_many` puts a link on each of the two pages in one operation,
+/// `links.remove_many` empties them and one `links.remove_many` over the lists the
+/// add replaced undoes it, so the add and the removal undo through one shape.
+#[test]
+fn whole_document_links_are_operations_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    room.assert_links(&[]);
+    let web = |uri: &str| json!({"rect": [10.0, 10.0, 60.0, 40.0], "target": {"kind": "uri", "uri": uri}});
+    let many = |room: &Room, id: &str, pages: Value| -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(structural_op(
+            room.doc.clone(),
+            OpId::new(id)?,
+            room.ada.version,
+            room.ada.epoch,
+            Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+            json!({"action": "links.add_many", "pages": pages}),
+        ))
+    };
+    // One operation puts a link on each page, and every replica follows it.
+    let add = many(
+        &room,
+        "links-add",
+        json!([
+            {"page": 0, "links": [web("https://a.example")]},
+            {"page": 1, "links": [web("https://b.example"), web("https://c.example")]},
+        ]),
+    )?;
+    let applied = room.write(add)?;
+    assert_eq!(applied.epoch, 1, "one operation, one epoch step");
+    assert_eq!(applied.result["added"], 3);
+    room.assert_links(&["uri:https://a.example", "uri:https://b.example", "uri:https://c.example"]);
+
+    // The undo goes back through the socket: the lists the add replaced, checking
+    // the lists it left.
+    let mut undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the add is undoable")?;
+    undo.base_version = room.ada.version;
+    undo.epoch = room.ada.epoch;
+    room.write(undo)?;
+    room.assert_links(&[]);
+
+    // A redo sends the intent again; a plain removal empties the pages it names and
+    // its undo puts both lists back in one operation.
+    let redo = many(
+        &room,
+        "links-redo",
+        json!([
+            {"page": 0, "links": [web("https://a.example")]},
+            {"page": 1, "links": [web("https://b.example")]},
+        ]),
+    )?;
+    room.write(redo)?;
+    let remove = structural_op(
+        room.doc.clone(),
+        OpId::new("links-remove")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        json!({"action": "links.remove_many", "pages": [{"page": 0}, {"page": 1}]}),
+    );
+    let removed = room.write(remove)?;
+    assert_eq!(removed.result["removed"], 2);
+    room.assert_links(&[]);
+    let mut undo = pdfcraft_collab_client_pdf::inverse_after(&removed).ok_or("the removal is undoable")?;
+    undo.base_version = room.ada.version;
+    undo.epoch = room.ada.epoch;
+    room.write(undo)?;
+    room.assert_links(&["uri:https://a.example", "uri:https://b.example"]);
+
+    // A check that no longer matches is a conflict and nothing moves.
+    let version = room.ada.version;
+    let stale = structural_op(
+        room.doc.clone(),
+        OpId::new("links-stale")?,
+        version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        json!({"action": "links.remove_many", "pages": [{"page": 0, "links": []}], "before": [{"page": 0, "links": []}]}),
+    );
+    room.ada.send(stale)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Conflict));
+    assert_eq!(room.ada.version, version);
+    room.assert_links(&["uri:https://a.example", "uri:https://b.example"]);
+
+    // A viewer is refused before the adapter runs.
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-many")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.cy.epoch }),
+        json!({"action": "links.remove_many", "pages": [{"page": 0}, {"page": 1}]}),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    room.assert_links(&["uri:https://a.example", "uri:https://b.example"]);
+
+    // A page insert keeps each link on its page and renumbers a page-number go-to:
+    // the link added on page 1 now names page 2.
+    let page = json!({"page": 1, "links": [{"rect": [10.0, 50.0, 60.0, 80.0], "target": {"kind": "page", "page": 0, "zoom": {"kind": "fit"}}}]});
+    let second = many(&room, "links-page", json!([page]))?;
+    room.write(second)?;
+    let blank = structural_op(
+        room.doc.clone(),
+        OpId::new("links-blank")?,
+        room.ada.version,
+        room.ada.epoch,
+        Target::Page(PageRef { index: 0, epoch: room.ada.epoch }),
+        blank_page_payload(200.0, 300.0),
+    );
+    room.write(blank)?;
+    for peer in [&room.ada, &room.bo, &room.cy] {
+        let document = peer.session.get(peer.id).ok_or("the peer document is open")?;
+        assert_eq!(document.links().iter().map(|link| link.page).collect::<Vec<_>>(), [1, 2, 2], "the links stay on their pages");
+        let named = document.links().iter().find(|link| link.page == 2 && matches!(link.action, LinkAction::Page { .. })).and_then(|link| match link
+            .action
+        {
+            LinkAction::Page { page, .. } => Some(page),
+            _ => None,
+        });
+        assert_eq!(named, Some(1), "a page-number go-to follows the page it named");
+    }
+    Ok(())
+}

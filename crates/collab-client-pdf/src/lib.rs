@@ -19,7 +19,7 @@ use pdfcraft_collab_annot::{
     AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MoveUpdate, PartsUpdate, PopupState,
     PopupUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
 };
-use pdfcraft_collab_link::{bodies_from_value, bodies_to_value};
+use pdfcraft_collab_link::{PagedLinks, bodies_from_value, bodies_to_value, pages_from_value, pages_to_value};
 use pdfcraft_collab_outline::{ItemLook, dest_from_value, dest_to_value, look_from_value, look_to_value, tree_from_value, tree_to_value};
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, OutlineKey, PageRef, Target};
 use pdfcraft_engine::{
@@ -452,6 +452,20 @@ pub fn page_link_clear_payload(index: usize) -> Value {
     json!({"action": "page.link.clear", "index": index})
 }
 
+/// The body of a `links.add_many`: the links each page gains, in the order the
+/// pages and their links are given. Every page's list in the accepted operation
+/// is the list before plus these, so the undo is one `links.remove_many`.
+pub fn links_add_many_payload(pages: &[PagedLinks]) -> Value {
+    json!({"action": "links.add_many", "pages": pages_to_value(pages)})
+}
+
+/// The body of a `links.remove_many`: each page's list becomes exactly the one
+/// carried here (empty for a plain removal). The same shape is the undo of both
+/// whole-document actions, so one builder undoes an add and a removal.
+pub fn links_remove_many_payload(pages: &[PagedLinks]) -> Value {
+    json!({"action": "links.remove_many", "pages": pages_to_value(pages)})
+}
+
 /// The links on `page` as this replica has them, in order. A link the model does not
 /// carry (a JavaScript or Launch action) cannot be named in a list that would replace
 /// the page's links, so the edit is refused here rather than sent and refused there.
@@ -805,6 +819,13 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let links = op.payload.get("links").ok_or(ProjectionError::Missing("links"))?;
             let links = bodies_from_value(links).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
             Ok(Edit::SetPageLinks { page: page.index as usize, links })
+        }
+        // A whole-document link operation leaves every page's list in the accepted
+        // operation, so an add and a removal are one bulk write on every replica.
+        ("links.add_many", ConflictClass::Structural) | ("links.remove_many", ConflictClass::Structural) => {
+            let pages = pages_from_value(op.payload.get("pages").ok_or(ProjectionError::Missing("pages"))?)
+                .map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+            Ok(Edit::SetPagesLinks { pages: pages.into_iter().map(|page| (page.page as usize, page.links)).collect() })
         }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
@@ -1463,10 +1484,87 @@ pub fn ops_for_edit(
                 page_link_clear_payload(position),
             )])
         }
-        // Removing every link of a document, or making links out of the addresses in
-        // its text, is a whole-document action; the room has no operation for it yet,
-        // so the edit is refused rather than half-sent.
-        Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Err(ProjectionError::Unsupported(edit.label().to_string())),
+        // Removing every link of a document, or making links out of the addresses
+        // in its text, is a whole-document action: one structural operation over
+        // every page it touches (RFC §3.1.9), so the undo is one operation too.
+        Edit::RemoveLinks { pages } => {
+            let count = document.info.pages.len();
+            if count == 0 {
+                return Err(ProjectionError::Invalid("the document has no pages".into()));
+            }
+            let list: Vec<usize> = match pages {
+                Some(pages) => {
+                    let mut seen = Vec::with_capacity(pages.len());
+                    for page in pages {
+                        if *page >= count {
+                            return Err(ProjectionError::Invalid(format!("page {} does not exist", page + 1)));
+                        }
+                        if seen.contains(page) {
+                            return Err(ProjectionError::Invalid(format!("page {} appears twice", page + 1)));
+                        }
+                        seen.push(*page);
+                    }
+                    if seen.is_empty() {
+                        return Err(ProjectionError::Invalid("the edit names no page".into()));
+                    }
+                    seen
+                }
+                None => (0..count).collect(),
+            };
+            let anchor = u32::try_from(list[0]).map_err(|_| ProjectionError::Invalid("the page index is too large".into()))?;
+            let pages = list.iter().map(|page| PagedLinks { page: *page as u32, links: Vec::new() }).collect::<Vec<_>>();
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Page(PageRef { index: anchor, epoch }),
+                links_remove_many_payload(&pages),
+            )])
+        }
+        Edit::AddLinks { links, style } => {
+            if links.is_empty() {
+                return Err(ProjectionError::Invalid("the edit names no link".into()));
+            }
+            let count = document.info.pages.len();
+            let mut pages: Vec<PagedLinks> = Vec::new();
+            for (page, rects, uri) in links {
+                if *page >= count {
+                    return Err(ProjectionError::Invalid(format!("page {} does not exist", page + 1)));
+                }
+                if rects.is_empty() {
+                    continue;
+                }
+                let entry = match pages.iter_mut().find(|entry| entry.page == *page as u32) {
+                    Some(entry) => entry,
+                    None => {
+                        pages.push(PagedLinks { page: *page as u32, links: Vec::new() });
+                        pages.last_mut().ok_or(ProjectionError::Missing("page entry"))?
+                    }
+                };
+                for rect in rects {
+                    entry.links.push(LinkContent { rect: *rect, quads: None, action: LinkAction::Uri(uri.clone()), style: *style });
+                }
+            }
+            if pages.is_empty() {
+                return Err(ProjectionError::Invalid("the edit names no area".into()));
+            }
+            for entry in &pages {
+                let held = page_link_bodies(document, entry.page as usize)?.len();
+                if held.saturating_add(entry.links.len()) > pdfcraft_collab_proto::MAX_LINKS_PER_PAGE {
+                    return Err(ProjectionError::Unsupported(format!("page {} would hold more links than one operation carries", entry.page + 1)));
+                }
+            }
+            let anchor = pages[0].page;
+            Ok(vec![structural_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Page(PageRef { index: anchor, epoch }),
+                links_add_many_payload(&pages),
+            )])
+        }
         other => Err(ProjectionError::Unsupported(other.label().to_string())),
     }
 }
@@ -1933,8 +2031,10 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         "annotation.delete" => return Ok(None),
         // A page's link list is undone from the list the accepted operation says it
         // replaced (`inverse_after`), not from this replica's guess: the server may
-        // have normalised an area or refused a link this replica never saw.
-        "page.link.set" | "page.link.clear" => return Ok(None),
+        // have normalised an area or refused a link this replica never saw. A
+        // whole-document link operation is undone the same way, over every page it
+        // touched.
+        "page.link.set" | "page.link.clear" | "links.add_many" | "links.remove_many" => return Ok(None),
         "field.set_value" => {
             let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
             let field = document.form.iter().find(|f| f.name == *name).ok_or(ProjectionError::Missing("form field"))?;
@@ -2041,6 +2141,20 @@ fn page_link_inverse(applied: &Applied) -> Option<Op> {
     Some(structural_op(doc, op_id, applied.version, applied.epoch, target, json!({"action": "page.link.set", "links": before, "before": links})))
 }
 
+/// The undo of a whole-document link operation: one `links.remove_many` over every
+/// page it touched, carrying the lists the pages had and checking the lists it left.
+/// It undoes an add and a removal alike, so the two actions undo through one shape.
+fn links_many_inverse(applied: &Applied) -> Option<Op> {
+    let op = &applied.op;
+    let Target::Page(page) = &op.target else { return None };
+    let doc = op.doc.clone();
+    let op_id = OpId::new(format!("undo-{}", op.op_id.as_str())).ok()?;
+    let before = op.payload.get("before")?;
+    let after = op.payload.get("pages")?;
+    let target = Target::Page(PageRef { index: page.index, epoch: applied.epoch });
+    Some(structural_op(doc, op_id, applied.version, applied.epoch, target, json!({"action": "links.remove_many", "pages": before, "before": after})))
+}
+
 /// The undo of a page-label operation, from the accepted operation alone. A set
 /// may have split the range it replaced, so its undo names the ranges now
 /// covering that span (a compare-and-set) and writes one range over them; a
@@ -2101,6 +2215,9 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
     }
     if action == "page.link.set" || action == "page.link.clear" {
         return page_link_inverse(applied);
+    }
+    if action == "links.add_many" || action == "links.remove_many" {
+        return links_many_inverse(applied);
     }
     // A restyle is undone from the look the server replaced (`before`), not from
     // this replica's guess: `inverse_for` built one before the operation was
@@ -4514,8 +4631,34 @@ mod tests {
         assert_eq!(ops[0].payload["action"], "page.link.clear");
         assert_eq!(ops[0].payload["index"], 0, "its position among the page's links");
 
-        // A whole-document action and an index that is not a link are refused here.
-        assert!(ops_for_edit(document, &Edit::RemoveLinks { pages: None }, doc()?, "ada", 4, 2, &mut counter).is_err());
+        // The whole-document actions are one operation over every page they touch:
+        // an add groups the new links by page, a removal names the pages. An index
+        // that is not a link is still refused here.
+        let add_ops = ops_for_edit(
+            document,
+            &Edit::AddLinks {
+                links: vec![
+                    (0, vec![[10.0, 10.0, 60.0, 40.0]], "https://a.example".into()),
+                    (1, vec![[10.0, 10.0, 60.0, 40.0]], "https://b.example".into()),
+                ],
+                style: LinkStyle::default(),
+            },
+            doc()?,
+            "ada",
+            4,
+            2,
+            &mut counter,
+        )?;
+        assert_eq!(add_ops.len(), 1, "one operation for the whole batch");
+        assert_eq!(add_ops[0].payload["action"], "links.add_many");
+        assert_eq!(add_ops[0].target, Target::Page(PageRef { index: 0, epoch: 2 }), "addressed at the first page it touches");
+        let pages = add_ops[0].payload["pages"].as_array().ok_or("the pages")?;
+        assert_eq!(pages.len(), 2, "each page once, with its links");
+        assert_eq!(pages[1]["page"], 1);
+        assert_eq!(pages[1]["links"][0]["target"]["uri"], "https://b.example");
+        let remove_ops = ops_for_edit(document, &Edit::RemoveLinks { pages: None }, doc()?, "ada", 4, 2, &mut counter)?;
+        assert_eq!(remove_ops[0].payload["action"], "links.remove_many");
+        assert_eq!(remove_ops[0].payload["pages"].as_array().map(Vec::len), Some(2), "every page of the document");
         assert!(
             ops_for_edit(document, &Edit::AddLinks { links: Vec::new(), style: LinkStyle::default() }, doc()?, "ada", 4, 2, &mut counter).is_err()
         );
@@ -4585,6 +4728,49 @@ mod tests {
         let undo = inverse_after(&applied).ok_or("the clear is undoable")?;
         assert_eq!(undo.payload["links"], before);
         assert_eq!(undo.payload["before"], serde_json::json!([]));
+
+        // A whole-document operation: the accepted operation leaves every page's
+        // list, so one bulk write applies it, and one `links.remove_many` over the
+        // lists it replaced undoes an add and a removal alike.
+        let added = serde_json::json!([{"page": 0, "links": [{"rect": [10.0, 10.0, 60.0, 40.0], "target": {"kind": "uri", "uri": "https://example.org"}}]},
+            {"page": 1, "links": []}]);
+        let add = op(
+            "links-add",
+            serde_json::json!({"action": "links.add_many", "pages": added, "before": [
+            {"page": 0, "links": []}, {"page": 1, "links": []}]}),
+        )?;
+        {
+            let document = session.get(id).ok_or("open")?;
+            let edit = edit_for(document, &add)?;
+            assert!(matches!(edit, Edit::SetPagesLinks { ref pages } if pages.len() == 2 && pages[1].1.is_empty()));
+        }
+        apply(&mut session, id, &add)?;
+        let applied =
+            Applied { op_id: add.op_id.clone(), actor_id: ActorId::new("ada")?, version: 3, epoch: 3, op: add, result: serde_json::json!({}) };
+        let undo = inverse_after(&applied).ok_or("the add is undoable")?;
+        assert_eq!(undo.target, Target::Page(PageRef { index: 0, epoch: 3 }));
+        assert_eq!(undo.payload["action"], "links.remove_many");
+        assert_eq!(undo.payload["pages"].as_array().map(Vec::len), Some(2), "the lists the add replaced");
+        assert_eq!(undo.payload["before"], added, "with the lists it left as the check");
+        apply(&mut session, id, &undo)?;
+        assert!(session.get(id).ok_or("gone")?.links().iter().all(|link| link.page != 0), "the undo took the added link back");
+
+        let removal =
+            op("links-remove", serde_json::json!({"action": "links.remove_many", "pages": [{"page": 1}], "before": [{"page": 1, "links": []}]}))?;
+        assert!(matches!(edit_for(session.get(id).ok_or("open")?, &removal)?, Edit::SetPagesLinks { ref pages } if pages == &[(1, Vec::new())]));
+        assert_eq!(
+            inverse_after(&Applied {
+                op_id: removal.op_id.clone(),
+                actor_id: ActorId::new("ada")?,
+                version: 4,
+                epoch: 4,
+                op: removal,
+                result: serde_json::json!({}),
+            })
+            .ok_or("the removal is undoable")?
+            .payload["pages"],
+            serde_json::json!([{"page": 1, "links": []}])
+        );
         Ok(())
     }
 }

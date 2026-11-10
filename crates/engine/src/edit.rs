@@ -700,6 +700,13 @@ pub enum Edit {
         page: usize,
         links: Vec<LinkContent>,
     },
+    /// The links on several pages, each list whole: the room's form of a
+    /// whole-document link operation (`links.add_many`, `links.remove_many`).
+    /// Every list is checked before the first write, so one bad page refuses the
+    /// edit without touching the others, and one edit is one undo record.
+    SetPagesLinks {
+        pages: Vec<(usize, Vec<LinkContent>)>,
+    },
     /// Remove all links (on `pages`, or everywhere).
     RemoveLinks {
         pages: Option<Vec<usize>>,

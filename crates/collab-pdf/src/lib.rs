@@ -38,6 +38,8 @@
 //! | `page.label.clear` | structural | page-label range (the page it starts on) |
 //! | `page.link.set` | structural | page (its whole link list) |
 //! | `page.link.clear` | structural | page (one link of its list) |
+//! | `links.add_many` | structural | page (the first page it touches) |
+//! | `links.remove_many` | structural | page (the first page it touches) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -91,7 +93,10 @@
 //! removes one of them. Both carry the list before and after, a page that holds
 //! a link the model cannot carry is refused with `unsupported`, and page
 //! operations keep a link's page and renumber the number it names. See
-//! `links.rs`.
+//! `links.rs`. `links.add_many` and `links.remove_many` are the same unit over
+//! several pages at once: the whole-document actions (make links from the
+//! addresses in the text, remove every link) travel as one operation carrying
+//! each page's list before and after, so their undo is one operation too.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -1337,6 +1342,8 @@ impl Adapter for PdfAdapter {
             ("page.label.clear", ConflictClass::Structural) => self.clear_page_label(&effective.target, &mut effective.payload)?,
             ("page.link.set", ConflictClass::Structural) => self.set_page_links(&effective.target, &mut effective.payload)?,
             ("page.link.clear", ConflictClass::Structural) => self.clear_page_link(&effective.target, &mut effective.payload)?,
+            ("links.add_many", ConflictClass::Structural) => self.add_many_links(&effective.target, &mut effective.payload)?,
+            ("links.remove_many", ConflictClass::Structural) => self.remove_many_links(&effective.target, &mut effective.payload)?,
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -4529,6 +4536,189 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         out
+    }
+
+    #[test]
+    fn many_links_are_added_and_removed_as_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let web = |uri: &str| link([10.0, 10.0, 110.0, 40.0], json!({"kind": "uri", "uri": uri}));
+        let add = link_op(
+            "links-add",
+            1,
+            room.version(),
+            room.epoch(),
+            json!({"action": "links.add_many", "pages": [
+                {"page": 0, "links": [web("https://a.example")]},
+                {"page": 1, "links": [web("https://b.example"), web("https://c.example")]},
+            ]}),
+        )?;
+        let applied = room.apply(&editor, &add, 0)?;
+        assert_eq!(applied.epoch, 1, "one structural operation is one epoch step");
+        assert_eq!(applied.result["added"], 3);
+        assert_eq!(applied.op.payload["pages"].as_array().map(Vec::len), Some(2), "each page's list after");
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(2), "and the whole list before");
+        assert_eq!(link_actions(room.adapter(), 0), [pdfcraft_engine::LinkAction::Uri("https://a.example".into())]);
+        assert_eq!(link_actions(room.adapter(), 1).len(), 2);
+        assert!(link_actions(room.adapter(), 2).is_empty(), "a page the operation did not name is untouched");
+
+        // The undo is one remove_many over the lists the add replaced, checking the
+        // lists it left: an add and a removal undo through the same shape.
+        let undo = link_op(
+            "links-undo",
+            0,
+            room.version(),
+            room.epoch(),
+            json!({"action": "links.remove_many",
+                "pages": applied.op.payload["before"].clone(),
+                "before": applied.op.payload["pages"].clone()}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        assert_eq!(undone.epoch, 2);
+        assert_eq!(undone.result["removed"], 3);
+        assert!(link_actions(room.adapter(), 0).is_empty());
+        assert!(link_actions(room.adapter(), 1).is_empty());
+
+        // A redo sends the add again; a plain removal names the pages it empties.
+        let add = link_op(
+            "links-add-2",
+            0,
+            room.version(),
+            room.epoch(),
+            json!({"action": "links.add_many", "pages": [{"page": 0, "links": [web("https://a.example")]}, {"page": 2, "links": [web("https://d.example")]}]}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+        let remove =
+            link_op("links-remove", 0, room.version(), room.epoch(), json!({"action": "links.remove_many", "pages": [{"page": 0}, {"page": 2}]}))?;
+        let removed = room.apply(&editor, &remove, 0)?;
+        assert_eq!(removed.result["removed"], 2);
+        assert_eq!(removed.op.payload["pages"], json!([{"page": 0, "links": []}, {"page": 2, "links": []}]));
+        assert!(link_actions(room.adapter(), 0).is_empty() && link_actions(room.adapter(), 2).is_empty());
+
+        // Its undo puts both lists back in one operation, and a check that no longer
+        // matches is a conflict: a link changed in between is not overwritten.
+        let undo = link_op(
+            "links-remove-undo",
+            0,
+            room.version(),
+            room.epoch(),
+            json!({"action": "links.remove_many",
+                "pages": removed.op.payload["before"].clone(),
+                "before": removed.op.payload["pages"].clone()}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert_eq!(link_actions(room.adapter(), 0).len(), 1, "the removed links are back");
+        assert_eq!(link_actions(room.adapter(), 2).len(), 1);
+        let (version, epoch) = (room.version(), room.epoch());
+        let stale = link_op(
+            "links-stale",
+            0,
+            version,
+            epoch,
+            json!({"action": "links.remove_many", "pages": [{"page": 0, "links": []}], "before": [{"page": 0, "links": []}]}),
+        )?;
+        let rejected = room.apply(&editor, &stale, 0).err().ok_or("a stale check is refused")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert_eq!((room.version(), room.epoch()), (version, epoch), "a conflict moves nothing");
+        assert_eq!(link_actions(room.adapter(), 0).len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn a_bad_many_link_operation_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let web = link([10.0, 10.0, 110.0, 40.0], json!({"kind": "uri", "uri": "https://example.org"}));
+        room.apply(&editor, &link_op("link-first", 0, 0, 0, json!({"action": "page.link.set", "links": [web.clone()]}))?, 0)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let before = link_actions(room.adapter(), 0);
+        let cases: Vec<(Value, ErrorCode)> = vec![
+            (json!({"action": "links.add_many", "pages": []}), ErrorCode::Invalid),
+            (json!({"action": "links.add_many", "pages": [{"page": 9, "links": [web.clone()]}]}), ErrorCode::Invalid),
+            (json!({"action": "links.add_many", "pages": [{"page": 0}]}), ErrorCode::Invalid),
+            (json!({"action": "links.add_many", "pages": [{"page": 0, "links": []}]}), ErrorCode::Invalid),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([0.0, 0.0, 1.0, 1.0], json!({"kind": "uri", "uri": "https://a.example"}))]}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([0.0, 0.0, 1.0e9, 50.0], json!({"kind": "uri", "uri": "https://a.example"}))]}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "page", "page": 9}))]}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "uri", "uri": " "}))]}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "uri", "uri": "x".repeat(2049)}))]}]}),
+                ErrorCode::Limit,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([10.0, 10.0, 60.0, 40.0], json!({"kind": "javascript"}))]}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": vec![web.clone(); pdfcraft_collab_proto::MAX_LINKS_PER_PAGE + 1]}]}),
+                ErrorCode::Limit,
+            ),
+            (
+                json!({"action": "links.add_many", "pages": [{"page": 0, "links": [web.clone()]}, {"page": 0, "links": [web.clone()]}]}),
+                ErrorCode::Invalid,
+            ),
+            (json!({"action": "links.remove_many", "pages": []}), ErrorCode::Invalid),
+            (json!({"action": "links.remove_many", "pages": [{"page": 9}]}), ErrorCode::Invalid),
+            (json!({"action": "links.remove_many", "pages": [{"page": 1}]}), ErrorCode::Invalid),
+            (json!({"action": "links.remove_many", "pages": [{"page": 0, "links": []}], "before": [{"page": 0, "links": []}]}), ErrorCode::Conflict),
+        ];
+        for (index, (payload, code)) in cases.into_iter().enumerate() {
+            let attempt = link_op(&format!("bad-many-{index}"), 0, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a bad whole-document link operation must be refused")?;
+            assert_eq!(rejected.code, code, "{}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch), "{}", rejected.message);
+            assert_eq!(link_actions(room.adapter(), 0), before, "{}", rejected.message);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_page_with_an_unshared_link_refuses_a_whole_document_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("script.pdf", fixture_with_a_script_link().into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt = link_op(
+            "script-many",
+            0,
+            version,
+            epoch,
+            json!({"action": "links.add_many", "pages": [{"page": 0, "links": [link([10.0, 50.0, 60.0, 70.0], json!({"kind": "uri", "uri": "https://example.org"}))]}]}),
+        )?;
+        let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a page it cannot describe is refused")?;
+        assert_eq!(rejected.code, ErrorCode::Unsupported);
+        assert_eq!((room.version(), room.epoch()), (version, epoch));
+        assert_eq!(link_actions(room.adapter(), 0).len(), 1, "the script link is still there");
+        Ok(())
+    }
+
+    #[test]
+    fn a_viewer_and_a_commenter_cannot_remove_many_links() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt = json!({"action": "links.remove_many", "pages": [{"page": 0}, {"page": 1}]});
+        for role in [Role::Viewer, Role::Commenter] {
+            let actor = ActorId::new(format!("{role:?}"))?;
+            room.hello(actor.clone(), role, &hello()?, 0)?;
+            let op = link_op("links-many-role", 0, version, epoch, attempt.clone())?;
+            assert!(matches!(room.apply(&actor, &op, 0), Err(rejected) if rejected.code == ErrorCode::Forbidden), "{role:?} must be refused");
+            assert_eq!((room.version(), room.epoch()), (version, epoch));
+        }
+        Ok(())
     }
 
     #[test]
