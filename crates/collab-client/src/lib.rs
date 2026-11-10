@@ -609,7 +609,7 @@ mod tests {
         Ok(())
     }
 
-    /// Presence carries a selection as geometry or a comment name — never the document's
+    /// Presence carries a selection as geometry or comment names — never the document's
     /// text, a comment's contents or a credential.
     #[test]
     fn a_presence_frame_carries_a_selection_and_no_document_content() -> Result<(), Box<dyn std::error::Error>> {
@@ -619,7 +619,12 @@ mod tests {
             page: PageRef { index: 3, epoch: 1 },
             viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.25 },
             cursor: Some([12, 34]),
-            selection: Some(Selection::Text { page: PageRef { index: 3, epoch: 1 }, rect: [100, 200, 400, 260] }),
+            selection: Some(Selection::Text {
+                page: PageRef { index: 3, epoch: 1 },
+                rect: [100, 200, 400, 260],
+                quads: vec![[100, 240, 400, 260], [100, 200, 320, 220]],
+                caret: Some([320, 200]),
+            }),
             color: "#3366cc".into(),
         };
         let message = ClientMessage::Presence(presence);
@@ -631,9 +636,56 @@ mod tests {
         assert_eq!(keys, ["actor_id", "color", "cursor", "page", "role", "selection", "type", "viewport"]);
         assert_eq!(object["selection"]["kind"], "text");
         assert_eq!(object["selection"]["rect"], json!([100, 200, 400, 260]));
-        for forbidden in ["contents", "text", "jwt", "token", "bytes", "password", "author"] {
-            assert!(!object.contains_key(forbidden), "presence must not carry {forbidden}");
+        assert_eq!(object["selection"]["quads"], json!([[100, 240, 400, 260], [100, 200, 320, 220]]));
+        assert_eq!(object["selection"]["caret"], json!([320, 200]));
+        assert!(forbidden_keys(&value).is_empty(), "presence must not carry {:?}", forbidden_keys(&value));
+        assert!(value.to_string().len() <= pdfcraft_collab_proto::MAX_PRESENCE_BYTES);
+        Ok(())
+    }
+
+    /// Keys that would turn presence into a way to read a document or to replay a
+    /// credential. Checked at every depth, not only at the frame's top level.
+    fn forbidden_keys(value: &serde_json::Value) -> Vec<String> {
+        const FORBIDDEN: [&str; 8] = ["contents", "text", "jwt", "token", "bytes", "password", "author", "selection_text"];
+        let mut found = Vec::new();
+        let mut stack = vec![value];
+        while let Some(value) = stack.pop() {
+            match value {
+                serde_json::Value::Object(object) => {
+                    for (key, value) in object {
+                        if FORBIDDEN.contains(&key.as_str()) {
+                            found.push(key.clone());
+                        }
+                        stack.push(value);
+                    }
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                _ => {}
+            }
         }
+        found
+    }
+
+    /// Several selected comments travel as one list: the primary `/NM` and the
+    /// others, so a peer draws all of them and an older one still draws the first.
+    #[test]
+    fn a_presence_frame_lists_several_selected_comments() -> Result<(), Box<dyn std::error::Error>> {
+        let presence = Presence {
+            actor_id: actor("ada")?,
+            role: Role::Commenter,
+            page: PageRef { index: 0, epoch: 0 },
+            viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
+            cursor: None,
+            selection: Some(Selection::Annotation { nm: "ada-hl-1".into(), also: vec!["ada-hl-2".into(), "bo-note".into()] }),
+            color: "#3366cc".into(),
+        };
+        let message = ClientMessage::Presence(presence);
+        message.validate()?;
+        let value = serde_json::to_value(&message)?;
+        assert_eq!(value["selection"]["kind"], "annotation");
+        assert_eq!(value["selection"]["nm"], "ada-hl-1");
+        assert_eq!(value["selection"]["also"], json!(["ada-hl-2", "bo-note"]));
+        assert!(forbidden_keys(&value).is_empty());
         assert!(value.to_string().len() <= pdfcraft_collab_proto::MAX_PRESENCE_BYTES);
         Ok(())
     }

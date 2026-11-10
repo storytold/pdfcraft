@@ -522,14 +522,18 @@ pub struct RemoteSelection {
     pub color: Color32,
     pub page: usize,
     pub kind: RemoteSelectionKind,
+    /// The caret at the active end of a text selection, in PDF user space.
+    pub caret: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RemoteSelectionKind {
     /// A comment named by its `/NM`; the canvas looks up its geometry on the page.
     Annotation(String),
-    /// Rectangles in PDF user space (`[x0, y0, x1, y1]`): a text range's box, or the
-    /// rectangle of a column selection.
+    /// Several comments selected together, by `/NM`; each one's geometry is drawn.
+    Annotations(Vec<String>),
+    /// Rectangles in PDF user space (`[x0, y0, x1, y1]`): one per selected line piece,
+    /// or the rectangle of a column selection.
     Rects(Vec<[f64; 4]>),
 }
 
@@ -540,6 +544,7 @@ pub(crate) fn paint_remote_selections(painter: &egui::Painter, xf: &PageXform, p
     for selection in selections.iter().filter(|selection| selection.page == page) {
         let rects = match &selection.kind {
             RemoteSelectionKind::Annotation(nm) => annotation_rects(info, page, nm),
+            RemoteSelectionKind::Annotations(names) => names.iter().flat_map(|nm| annotation_rects(info, page, nm)).collect(),
             RemoteSelectionKind::Rects(rects) => rects.iter().map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]).collect(),
         };
         let fill = Color32::from_rgba_unmultiplied(selection.color.r(), selection.color.g(), selection.color.b(), 48);
@@ -558,6 +563,16 @@ pub(crate) fn paint_remote_selections(painter: &egui::Painter, xf: &PageXform, p
             if r.is_positive() {
                 painter.rect_filled(r, 1.0, fill);
                 painter.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Inside);
+            }
+        }
+        // The caret is a thin line at the active end, not a box: it says where typing goes.
+        if let Some(caret) = selection.caret.filter(|caret| caret[0].is_finite() && caret[1].is_finite()) {
+            let [vx, vy] = page_info.user_to_view(caret[0] as f32, caret[1] as f32);
+            let at = xf.norm_to_screen(vx / xf.pw, vy / xf.ph);
+            if xf.rect.expand(8.0).contains(at) {
+                let top = at - egui::vec2(0.0, 10.0);
+                let bottom = at + egui::vec2(0.0, 4.0);
+                painter.line_segment([top, bottom], egui::Stroke::new(2.0, selection.color));
             }
         }
     }

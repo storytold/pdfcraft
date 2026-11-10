@@ -415,7 +415,7 @@ mod tests {
             page: PageRef { index: 0, epoch: 1 },
             viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
             cursor: Some([10, 20]),
-            selection: Some(Selection::Annotation { nm: "ann".into() }),
+            selection: Some(Selection::Annotation { nm: "ann".into(), also: Vec::new() }),
             color: "#112233".into(),
         };
         hub.send(commenter, ClientMessage::Presence(presence), 1_000)?;

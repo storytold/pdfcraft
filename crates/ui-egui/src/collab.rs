@@ -94,6 +94,20 @@ pub struct CollabParticipant {
     pub page: Option<u32>,
     /// Their presence is not older than [`PRESENCE_TTL`].
     pub active: bool,
+    /// What they have selected, when it is current and on this page tree. Geometry and
+    /// comment names only: the host page never receives the document's text.
+    pub selection: Option<ParticipantSelection>,
+}
+
+/// A participant's selection in the host page's terms. The cabinet's markers are drawn
+/// from it; the app already draws the same selection on its own canvas.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParticipantSelection {
+    /// Selected comments by `/NM`, the one the participant acts on first.
+    Annotations(Vec<String>),
+    /// A text range on `page` (1-based): one rectangle per line piece in PDF user space,
+    /// and the caret at the active end.
+    Text { page: u32, rects: Vec<[i64; 4]>, caret: Option<[i64; 2]> },
 }
 
 impl CollabParticipant {
@@ -140,12 +154,21 @@ pub(crate) struct CollabUi {
     committed: Option<String>,
     /// What the host page was last told, so it hears a change and not a frame.
     reported: Option<ReportKey>,
-    reported_presence: Option<Vec<(String, Option<u32>, bool)>>,
+    reported_presence: Option<Vec<PresenceKey>>,
     reported_at: Instant,
 }
 
-/// What a session-state report is compared by. Page positions are excluded:
-/// they change with the pointer and belong to the presence report, which is
+/// What a presence report is compared by: who is where, and what they have selected.
+#[derive(Clone, PartialEq)]
+struct PresenceKey {
+    client_id: String,
+    page: Option<u32>,
+    active: bool,
+    selection: Option<ParticipantSelection>,
+}
+
+/// What a session-state report is compared by. Page positions and selections are
+/// excluded: they change with the pointer and belong to the presence report, which is
 /// coalesced separately.
 #[derive(Clone, PartialEq)]
 struct ReportKey {
@@ -180,46 +203,124 @@ fn visible_selection(seen: &Seen, now: Instant, epoch: u64) -> Option<RemoteSele
     let actor = seen.presence.actor_id.as_str().to_owned();
     let color = color_of_hex(&seen.presence.color);
     match seen.presence.selection.as_ref()? {
-        Selection::Annotation { nm } => Some(RemoteSelection {
+        Selection::Annotation { nm, also } => Some(RemoteSelection {
             actor,
             color,
             page: usize::try_from(seen.presence.page.index).ok()?,
-            kind: RemoteSelectionKind::Annotation(nm.clone()),
+            kind: if also.is_empty() {
+                RemoteSelectionKind::Annotation(nm.clone())
+            } else {
+                RemoteSelectionKind::Annotations(std::iter::once(nm.clone()).chain(also.iter().cloned()).collect())
+            },
+            caret: None,
         }),
-        Selection::Text { page, rect } => {
+        Selection::Text { page, rect, quads, caret } => {
             if page.epoch != epoch {
                 return None;
             }
+            let rects = if quads.is_empty() { vec![*rect] } else { quads.clone() };
             Some(RemoteSelection {
                 actor,
                 color,
                 page: usize::try_from(page.index).ok()?,
-                kind: RemoteSelectionKind::Rects(vec![rect.map(|v| v as f64)]),
+                kind: RemoteSelectionKind::Rects(rects.iter().map(|r| r.map(|v| v as f64)).collect()),
+                caret: caret.map(|c| [c[0] as f64, c[1] as f64]),
             })
         }
     }
 }
 
-/// What this client is selecting, in the form presence carries: the `/NM` of the selected
-/// comment when it is on the page in view, else the selection's bounding rectangle in user
-/// space. `None` when nothing is selected. The payload is geometry and a name only — never
-/// the document's text or the comment's contents.
-fn local_selection(view: &DocView, info: &DocInfo, epoch: u64) -> Option<Selection> {
-    if let Some((page, index)) = view.comments.selected {
-        let annotation = info.annotations.iter().find(|a| a.page == page && a.index == index);
-        if page == view.current
-            && let Some(nm) = annotation.and_then(|a| a.name.clone())
-        {
-            return Some(Selection::Annotation { nm });
+/// A participant's selection as the host page sees it: comment names, or a range's page,
+/// per-line rectangles and caret. `None` when the frame carries no selection.
+fn participant_selection(presence: &Presence) -> Option<ParticipantSelection> {
+    match presence.selection.as_ref()? {
+        Selection::Annotation { nm, also } => {
+            Some(ParticipantSelection::Annotations(std::iter::once(nm.clone()).chain(also.iter().cloned()).collect()))
         }
-        if let Some(annotation) = annotation
-            && let Some(rect) = annotation_selection_rect(annotation)
-        {
-            return Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect });
+        Selection::Text { page, rect, quads, caret } => {
+            let rects = if quads.is_empty() { vec![*rect] } else { quads.clone() };
+            Some(ParticipantSelection::Text { page: page.index.saturating_add(1), rects, caret: *caret })
         }
     }
+}
+
+/// What this client is selecting, in the form presence carries: the `/NM` of every selected
+/// comment on the page in view, else the selection's per-line rectangles in user space and
+/// its caret. `None` when nothing is selected. The payload is geometry and names only — never
+/// the document's text or the comment's contents.
+fn local_selection(view: &DocView, info: &DocInfo, epoch: u64) -> Option<Selection> {
+    // Several comments selected together travel as one list: the primary first, then the
+    // rest. Only comments on the page in view are named, because a presence frame names one
+    // page; a comment on another page falls back to its rectangle, as before.
+    let mut names: Vec<String> = Vec::new();
+    for (page, index) in view.comments.selection() {
+        if page != view.current {
+            continue;
+        }
+        if let Some(nm) = info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.name.clone())
+            && !names.contains(&nm)
+        {
+            names.push(nm);
+        }
+        if names.len() >= pdfcraft_collab_proto::MAX_SELECTION_NAMES {
+            break;
+        }
+    }
+    if let Some(nm) = names.first().cloned() {
+        let also = names.split_off(1);
+        return Some(Selection::Annotation { nm, also });
+    }
+    if let Some((page, index)) = view.comments.selected
+        && let Some(annotation) = info.annotations.iter().find(|a| a.page == page && a.index == index)
+        && let Some(rect) = annotation_selection_rect(annotation)
+    {
+        return Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect, quads: Vec::new(), caret: None });
+    }
     let (page, quads) = view.selection_quads(info)?;
-    Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect: rect_of_quads(&quads)? })
+    let page_ref = PageRef { index: u32::try_from(page).ok()?, epoch };
+    Some(text_selection(quads, page_ref, view.selection_caret(info).filter(|(caret_page, _)| *caret_page == page).map(|(_, point)| point)))
+}
+
+/// A text range as presence carries it: the bounding box (what a peer that predates per-line
+/// geometry draws), the per-line rectangles when they fit, and the caret at the active end.
+fn text_selection(quads: Vec<[f64; 8]>, page: PageRef, caret: Option<[f64; 2]>) -> Selection {
+    let rect = rect_of_quads(&quads).unwrap_or([0, 0, 0, 0]);
+    let mut rects: Vec<[i64; 4]> = Vec::new();
+    for quad in &quads {
+        if rects.len() >= pdfcraft_collab_proto::MAX_SELECTION_QUADS {
+            // Too many lines for one frame: the bounding box still says where the range is.
+            rects.clear();
+            break;
+        }
+        if let Some(rect) = quad_rect_i64(quad) {
+            rects.push(rect);
+        }
+    }
+    let caret = caret.map(|[x, y]| [round_unit_f64(x), round_unit_f64(y)]);
+    Selection::Text { page, rect, quads: rects, caret }
+}
+
+/// One view-space quad as the `[x0, y0, x1, y1]` whole units presence carries. A quad whose
+/// corners are not finite is skipped.
+fn quad_rect_i64(q: &[f64; 8]) -> Option<[i64; 4]> {
+    let mut rect: Option<[f64; 4]> = None;
+    for [x, y] in [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]] {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        rect = Some(match rect {
+            None => [x, y, x, y],
+            Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+        });
+    }
+    let [x0, y0, x1, y1] = rect?;
+    Some([round_unit_f64(x0), round_unit_f64(y0), round_unit_f64(x1), round_unit_f64(y1)])
+}
+
+/// A user-space coordinate as the whole unit presence sends; non-finite input becomes 0
+/// rather than a cast artefact.
+fn round_unit_f64(value: f64) -> i64 {
+    if value.is_finite() { value.round() as i64 } else { 0 }
 }
 
 /// A selected comment's geometry: its markup quads, else its rectangle.
@@ -588,12 +689,14 @@ impl CollabUi {
             .iter()
             .map(|(actor, seen)| {
                 let active = now.duration_since(seen.at) < PRESENCE_TTL;
+                let current = active && seen.presence.page.epoch == self.epoch;
                 CollabParticipant {
                     client_id: actor.clone(),
                     role: seen.presence.role,
                     color: seen.presence.color.clone(),
-                    page: (active && seen.presence.page.epoch == self.epoch).then_some(seen.presence.page.index.saturating_add(1)),
+                    page: current.then_some(seen.presence.page.index.saturating_add(1)),
                     active,
+                    selection: current.then(|| participant_selection(&seen.presence)).flatten(),
                 }
             })
             .collect();
@@ -722,7 +825,11 @@ impl PdfCraftApp {
                 hook(&state);
             }
         }
-        let presence: Vec<(String, Option<u32>, bool)> = state.participants.iter().map(|p| (p.client_id.clone(), p.page, p.active)).collect();
+        let presence: Vec<PresenceKey> = state
+            .participants
+            .iter()
+            .map(|p| PresenceKey { client_id: p.client_id.clone(), page: p.page, active: p.active, selection: p.selection.clone() })
+            .collect();
         if collab.reported_presence.as_ref() != Some(&presence) && now.duration_since(collab.reported_at) >= PRESENCE_INTERVAL {
             collab.reported_presence = Some(presence);
             collab.reported_at = now;
@@ -1405,8 +1512,9 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, PRESENCE_TTL, PageRef, PdfCraftApp, Presence, RemoteSelectionKind,
-        Role, Seen, Sink, doc_key_from_token, rect_of_quads, role_from_name, role_name, visible_selection,
+        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, PRESENCE_TTL, PageRef, ParticipantSelection, PdfCraftApp, Presence,
+        RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, local_selection, rect_of_quads, role_from_name, role_name, text_selection,
+        visible_selection,
     };
     use pdfcraft_collab_proto::{Selection, Target, Viewport};
 
@@ -1427,11 +1535,12 @@ mod tests {
     #[test]
     fn a_remote_selection_expires_with_its_presence() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
-        let selection = Selection::Text { page: PageRef { index: 1, epoch: 2 }, rect: [10, 20, 30, 40] };
+        let selection = Selection::Text { page: PageRef { index: 1, epoch: 2 }, rect: [10, 20, 30, 40], quads: Vec::new(), caret: Some([30, 40]) };
         let fresh = Seen { presence: presence(Some(selection.clone()))?, at: now };
         let drawn = visible_selection(&fresh, now, 2).expect("a fresh selection is drawn");
         assert_eq!(drawn.page, 1);
         assert_eq!(drawn.kind, RemoteSelectionKind::Rects(vec![[10.0, 20.0, 30.0, 40.0]]));
+        assert_eq!(drawn.caret, Some([30.0, 40.0]), "the caret travels with the range");
         assert_eq!(drawn.actor, "ada");
         assert!(visible_selection(&fresh, now, 3).is_none(), "a selection from another page tree is not drawn");
         let stale_at = now.checked_sub(PRESENCE_TTL + Duration::from_millis(1)).expect("an instant before now");
@@ -1440,24 +1549,228 @@ mod tests {
         Ok(())
     }
 
+    /// The page's own epoch is checked too, not only the one in the frame's `page`: a
+    /// range addressed to a page set we have left is not drawn even when the sender's
+    /// frame page was current.
     #[test]
-    fn a_selected_comment_travels_by_its_name() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_text_selection_from_another_epoch_is_not_drawn() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
-        let seen = Seen { presence: presence(Some(Selection::Annotation { nm: "ada-hl-1".into() }))?, at: now };
-        let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
-        assert_eq!(drawn.page, 1);
-        assert_eq!(drawn.kind, RemoteSelectionKind::Annotation("ada-hl-1".into()));
+        let selection = Selection::Text { page: PageRef { index: 1, epoch: 5 }, rect: [0, 0, 1, 1], quads: Vec::new(), caret: None };
+        let seen = Seen { presence: presence(Some(selection))?, at: now };
+        assert!(visible_selection(&seen, now, 2).is_none(), "the range's own epoch is stale");
         Ok(())
     }
 
-    /// A text range becomes one bounding rectangle in user space; one page's column select
-    /// is the same shape.
+    #[test]
+    fn a_selected_comment_travels_by_its_name() -> Result<(), Box<dyn std::error::Error>> {
+        let now = Instant::now();
+        let seen = Seen { presence: presence(Some(Selection::Annotation { nm: "ada-hl-1".into(), also: Vec::new() }))?, at: now };
+        let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
+        assert_eq!(drawn.page, 1);
+        assert_eq!(drawn.kind, RemoteSelectionKind::Annotation("ada-hl-1".into()));
+        assert_eq!(drawn.caret, None);
+        Ok(())
+    }
+
+    /// Several comments selected together are drawn as one selection that names them
+    /// all, so the canvas looks up each `/NM`'s geometry.
+    #[test]
+    fn several_selected_comments_travel_as_a_list() -> Result<(), Box<dyn std::error::Error>> {
+        let now = Instant::now();
+        let selection = Selection::Annotation { nm: "ada-hl-1".into(), also: vec!["ada-hl-2".into(), "bo-note".into()] };
+        let seen = Seen { presence: presence(Some(selection))?, at: now };
+        let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
+        assert_eq!(drawn.kind, RemoteSelectionKind::Annotations(vec!["ada-hl-1".into(), "ada-hl-2".into(), "bo-note".into()]));
+        Ok(())
+    }
+
+    /// A text range is drawn as one rectangle per line piece: the box between lines no
+    /// longer covers text the sender did not select.
+    #[test]
+    fn a_text_range_travels_as_one_rect_per_line() -> Result<(), Box<dyn std::error::Error>> {
+        let now = Instant::now();
+        let selection = Selection::Text {
+            page: PageRef { index: 1, epoch: 2 },
+            rect: [10, 70, 50, 100],
+            quads: vec![[10, 90, 50, 100], [10, 70, 30, 80]],
+            caret: Some([30, 70]),
+        };
+        let seen = Seen { presence: presence(Some(selection))?, at: now };
+        let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
+        assert_eq!(drawn.kind, RemoteSelectionKind::Rects(vec![[10.0, 90.0, 50.0, 100.0], [10.0, 70.0, 30.0, 80.0]]));
+        assert_eq!(drawn.caret, Some([30.0, 70.0]));
+        Ok(())
+    }
+
+    /// A text range becomes one bounding rectangle in user space (what a peer that
+    /// predates per-line geometry draws); one page's column select is the same shape.
     #[test]
     fn a_text_range_travels_as_its_bounding_rect() {
         let quads = [[10.0, 100.0, 50.0, 100.0, 10.0, 90.0, 50.0, 90.0], [10.0, 80.0, 30.0, 80.0, 10.0, 70.0, 30.0, 70.0]];
         assert_eq!(rect_of_quads(&quads), Some([10, 70, 50, 100]));
         assert_eq!(rect_of_quads(&[]), None);
         assert_eq!(rect_of_quads(&[[f64::NAN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]), Some([0, 0, 0, 0]));
+    }
+
+    /// The wire form of a range: the bounding box, one rectangle per line piece, and
+    /// the caret; a range with more pieces than a frame holds keeps the box alone.
+    #[test]
+    fn a_text_selection_is_sent_as_quads_and_a_caret() {
+        let quads = [[10.0, 100.0, 50.0, 100.0, 10.0, 90.0, 50.0, 90.0], [10.0, 80.0, 30.0, 80.0, 10.0, 70.0, 30.0, 70.0]];
+        let sent = text_selection(quads.to_vec(), PageRef { index: 1, epoch: 2 }, Some([30.5, 69.4]));
+        assert_eq!(
+            sent,
+            Selection::Text {
+                page: PageRef { index: 1, epoch: 2 },
+                rect: [10, 70, 50, 100],
+                quads: vec![[10, 90, 50, 100], [10, 70, 30, 80]],
+                caret: Some([31, 69]),
+            }
+        );
+        let many = vec![quads[0]; pdfcraft_collab_proto::MAX_SELECTION_QUADS + 1];
+        let sent = text_selection(many, PageRef { index: 0, epoch: 0 }, None);
+        match sent {
+            Selection::Text { quads, rect, .. } => {
+                assert!(quads.is_empty(), "the box alone instead of a frame over the limit");
+                assert_eq!(rect, [10, 90, 50, 100]);
+            }
+            other => panic!("a text selection, got {other:?}"),
+        }
+    }
+
+    /// The session state the host page receives carries who is on which page and what
+    /// they have selected — names and geometry only. A stale participant claims neither.
+    #[test]
+    fn the_host_report_carries_a_participants_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(2)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        session_on(&mut app, id);
+        let now = Instant::now();
+        {
+            let collab = app.collab.as_mut().expect("a session");
+            collab.epoch = 2;
+            let selection = Selection::Annotation { nm: "bo-1".into(), also: vec!["bo-2".into()] };
+            collab.participants.insert("bo".into(), Seen { presence: presence(Some(selection))?, at: now });
+        }
+        let state = app.collab_state().expect("a session");
+        let bo = state.participants.first().expect("the participant is reported");
+        assert_eq!(bo.client_id, "bo");
+        assert_eq!(bo.page, Some(2), "the frame's 0-based page is reported 1-based");
+        assert!(bo.active);
+        assert_eq!(bo.selection, Some(ParticipantSelection::Annotations(vec!["bo-1".into(), "bo-2".into()])));
+
+        // A text range reports its per-line rectangles and the caret, on the range's page.
+        let selection = Selection::Text {
+            page: PageRef { index: 1, epoch: 2 },
+            rect: [10, 20, 30, 40],
+            quads: vec![[10, 30, 30, 40], [10, 20, 20, 30]],
+            caret: Some([20, 20]),
+        };
+        {
+            let collab = app.collab.as_mut().expect("a session");
+            collab.participants.get_mut("bo").expect("the participant").presence.selection = Some(selection);
+        }
+        let state = app.collab_state().expect("a session");
+        assert_eq!(
+            state.participants[0].selection,
+            Some(ParticipantSelection::Text { page: 2, rects: vec![[10, 30, 30, 40], [10, 20, 20, 30]], caret: Some([20, 20]) })
+        );
+
+        // Past the TTL the participant is inactive and claims no page or selection.
+        {
+            let collab = app.collab.as_mut().expect("a session");
+            let stale = now.checked_sub(PRESENCE_TTL + Duration::from_millis(1)).expect("an instant before now");
+            collab.participants.get_mut("bo").expect("the participant").at = stale;
+        }
+        let state = app.collab_state().expect("a session");
+        let bo = &state.participants[0];
+        assert!(!bo.active);
+        assert_eq!(bo.page, None);
+        assert_eq!(bo.selection, None, "a stale selection is not reported");
+        Ok(())
+    }
+
+    /// What the app puts in a frame: several selected comments become one list with the
+    /// primary first, and a text selection becomes its per-line rectangles and a caret.
+    #[test]
+    fn the_local_selection_lists_comments_and_per_line_quads() {
+        use crate::canvas::{DocView, ViewDefaults};
+        use pdfcraft_render::{DocInfo, PageInfo, PageText, TextGlyph};
+        use std::sync::Arc;
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            annotations: vec![comment(0, 0, "ada-1"), comment(0, 1, "ada-2"), comment(0, 2, "ada-3")],
+            ..Default::default()
+        };
+        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+        view.current = 0;
+        // Two comments on the page in view travel as a list, the one the handles act on first.
+        view.comments.selected = Some((0, 1));
+        view.comments.also = vec![(0, 2)];
+        assert_eq!(
+            local_selection(&view, &info, 0),
+            Some(Selection::Annotation { nm: "ada-2".into(), also: vec!["ada-3".into()] }),
+            "the selected comments, not their text"
+        );
+
+        // A comment on another page falls back to its rectangle; an epoch is this replica's.
+        view.comments.selected = Some((0, 0));
+        view.comments.also.clear();
+        view.current = 1;
+        let selected = local_selection(&view, &info, 7).expect("the off-page comment still says where it is");
+        assert!(matches!(selected, Selection::Text { page: PageRef { index: 0, epoch: 7 }, .. }), "got {selected:?}");
+
+        // A text selection: one rectangle per line piece, and the caret at the active end.
+        view.comments.selected = None;
+        view.current = 0;
+        let glyph = |x: f32, y: f32| TextGlyph { text: "x".into(), rect: [x, y, x + 10.0, y + 10.0], quad: [[x, y]; 4], direction: [1.0, 0.0] };
+        view.texts.insert(
+            0,
+            Arc::new(PageText {
+                glyphs: vec![glyph(10.0, 10.0), glyph(20.0, 10.0), glyph(10.0, 30.0)],
+                line_of: vec![0, 0, 1],
+                space_before: vec![false; 3],
+                truncated: false,
+            }),
+        );
+        view.select_text(0, 0, 2);
+        let sent = local_selection(&view, &info, 0).expect("a text selection is sent");
+        match sent {
+            Selection::Text { quads, caret, .. } => {
+                assert_eq!(quads.len(), 2, "one rectangle per line: {quads:?}");
+                assert!(caret.is_some(), "the caret travels with the range");
+            }
+            other => panic!("a text selection, got {other:?}"),
+        }
+    }
+
+    /// A comment on `page` with `/NM` `name` and an index in `/Annots`, for the local
+    /// selection tests above.
+    fn comment(page: usize, index: usize, name: &str) -> pdfcraft_render::Annotation {
+        pdfcraft_render::Annotation {
+            page,
+            subtype: "Text".into(),
+            author: Some("ada".into()),
+            contents: Some("a private note".into()),
+            modified: None,
+            name: Some(name.into()),
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [10.0, 10.0, 20.0, 20.0],
+            color: None,
+            index,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
     }
 
     /// A token is read for its `fileId` only: the server still verifies it, and

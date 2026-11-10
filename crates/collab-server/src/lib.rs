@@ -1189,7 +1189,7 @@ mod tests {
             page: PageRef { index: 0, epoch: 0 },
             viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
             cursor: None,
-            selection: Some(Selection::Annotation { nm: "ann-1".into() }),
+            selection: Some(Selection::Annotation { nm: "ann-1".into(), also: Vec::new() }),
             color: "#112233".into(),
         };
         assert!(room.presence(&viewer, &presence, 1_000)?);

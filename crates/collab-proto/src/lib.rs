@@ -50,6 +50,14 @@ pub const MAX_ID_BYTES: usize = 128;
 /// Longest annotation name (`/NM`) accepted.
 pub const MAX_ANNOTATION_NAME: usize = 128;
 
+/// Most comment names one presence selection carries: the primary plus the
+/// others selected with it. Well inside [`MAX_PRESENCE_BYTES`].
+pub const MAX_SELECTION_NAMES: usize = 32;
+
+/// Most per-line rectangles one presence selection carries. A larger selection
+/// falls back to its bounding box, so the frame stays under the limit.
+pub const MAX_SELECTION_QUADS: usize = 48;
+
 /// Largest bookmark path accepted.
 pub const MAX_BOOKMARK_DEPTH: usize = 64;
 
@@ -66,6 +74,8 @@ pub enum ProtocolError {
     Empty(&'static str),
     #[error("{field} is {len} bytes; the limit is {max}")]
     TooLong { field: &'static str, len: usize, max: usize },
+    #[error("{field}: {count} is above the limit of {max}")]
+    TooMany { field: &'static str, count: usize, max: usize },
     #[error("page index {0} is above the limit")]
     PageIndex(u32),
     #[error("an operation cannot have a null payload")]
@@ -431,11 +441,69 @@ pub struct Viewport {
     pub zoom: f64,
 }
 
+/// What a participant has selected, as presence carries it: a comment name or
+/// geometry, never the document's text (ADR-0006). Both shapes are additive over
+/// the first wire form: a peer that predates the extra fields ignores them, and
+/// the required ones (`nm`, `rect`) still describe the selection on their own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Selection {
-    Annotation { nm: String },
-    Text { page: PageRef, rect: [i64; 4] },
+    /// A selected comment and any others selected with it, by `/NM`. `nm` is the
+    /// one the sender acts on (it may be the only one); `also` lists the rest, so
+    /// an older peer still sees the primary selection.
+    Annotation {
+        nm: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<String>,
+    },
+    /// A text range: its bounding box, the per-line pieces that make it up, and
+    /// the caret (the active end, where typing would start).
+    Text {
+        page: PageRef,
+        rect: [i64; 4],
+        /// One rectangle per selected line piece, in reading order; empty when the
+        /// sender only knows the bounding box.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        quads: Vec<[i64; 4]>,
+        /// The caret in user space, at the active end of the range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caret: Option<[i64; 2]>,
+    },
+}
+
+impl Selection {
+    /// The `/NM` names of a comment selection, primary first.
+    pub fn names(&self) -> Vec<&str> {
+        match self {
+            Self::Annotation { nm, also } => std::iter::once(nm.as_str()).chain(also.iter().map(String::as_str)).collect(),
+            Self::Text { .. } => Vec::new(),
+        }
+    }
+
+    /// A selection must stay small and must not carry text: see [`MAX_SELECTION_NAMES`],
+    /// [`MAX_SELECTION_QUADS`] and [`MAX_PRESENCE_BYTES`].
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::Annotation { nm, also } => {
+                let names = std::iter::once(nm).chain(also.iter());
+                let mut count = 0;
+                for name in names {
+                    validate_id(name, "annotation name")?;
+                    count += 1;
+                }
+                if count > MAX_SELECTION_NAMES {
+                    return Err(ProtocolError::TooMany { field: "selection names", count, max: MAX_SELECTION_NAMES });
+                }
+            }
+            Self::Text { page, quads, .. } => {
+                page.validate()?;
+                if quads.len() > MAX_SELECTION_QUADS {
+                    return Err(ProtocolError::TooMany { field: "selection quads", count: quads.len(), max: MAX_SELECTION_QUADS });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Ephemeral cursor/selection state. Never journaled, never a version bump.
@@ -460,6 +528,9 @@ impl Presence {
         }
         if self.color.len() > 32 {
             return Err(ProtocolError::TooLong { field: "presence colour", len: self.color.len(), max: 32 });
+        }
+        if let Some(selection) = &self.selection {
+            selection.validate()?;
         }
         let size = serde_json::to_vec(self).map_err(|e| ProtocolError::Encode(e.to_string()))?.len();
         if size > MAX_PRESENCE_BYTES {
@@ -689,7 +760,7 @@ mod tests {
             page: PageRef::new(1, 2)?,
             viewport: Viewport { x: 10.0, y: 20.0, zoom: 1.5 },
             cursor: Some([10, 20]),
-            selection: Some(Selection::Annotation { nm: "ann-1".into() }),
+            selection: Some(Selection::Annotation { nm: "ann-1".into(), also: Vec::new() }),
             color: "#112233".into(),
         };
         ClientMessage::Presence(presence.clone()).validate()?;
@@ -700,15 +771,73 @@ mod tests {
         Ok(())
     }
 
+    /// A selection that only the first wire form describes still parses: `also`,
+    /// `quads` and `caret` are additive, so a peer that predates them keeps
+    /// sending (and reading) the plain form.
+    #[test]
+    fn the_plain_selection_form_still_parses() -> Result<(), Box<dyn std::error::Error>> {
+        let text: Selection = serde_json::from_str(r#"{"kind":"text","page":{"index":3,"epoch":1},"rect":[1,2,3,4]}"#)?;
+        assert_eq!(text, Selection::Text { page: PageRef { index: 3, epoch: 1 }, rect: [1, 2, 3, 4], quads: Vec::new(), caret: None });
+        assert_eq!(serde_json::to_string(&text)?, r#"{"kind":"text","page":{"index":3,"epoch":1},"rect":[1,2,3,4]}"#);
+        let named: Selection = serde_json::from_str(r#"{"kind":"annotation","nm":"ada-hl-1"}"#)?;
+        assert_eq!(named, Selection::Annotation { nm: "ada-hl-1".into(), also: Vec::new() });
+        assert_eq!(named.names(), ["ada-hl-1"]);
+        Ok(())
+    }
+
+    /// Several comments travel as one list, and a text range as its per-line
+    /// pieces plus the caret.
+    #[test]
+    fn a_selection_lists_names_quads_and_a_caret() -> Result<(), Box<dyn std::error::Error>> {
+        let names = Selection::Annotation { nm: "ada-hl-1".into(), also: vec!["ada-hl-2".into(), "bo-note".into()] };
+        assert_eq!(names.names(), ["ada-hl-1", "ada-hl-2", "bo-note"]);
+        names.validate()?;
+        let text = Selection::Text {
+            page: PageRef { index: 1, epoch: 2 },
+            rect: [10, 90, 50, 100],
+            quads: vec![[10, 95, 50, 100], [10, 90, 30, 95]],
+            caret: Some([30, 90]),
+        };
+        text.validate()?;
+        let encoded = serde_json::to_string(&text)?;
+        assert!(encoded.contains(r#""quads":[[10,95,50,100],[10,90,30,95]]"#));
+        assert!(encoded.contains(r#""caret":[30,90]"#));
+        assert_eq!(serde_json::from_str::<Selection>(&encoded)?, text);
+        Ok(())
+    }
+
+    /// The bounds keep a hostile or simply large selection from filling a frame:
+    /// too many names or per-line pieces are refused before anything is drawn.
+    #[test]
+    fn selection_limits_are_enforced() -> Result<(), Box<dyn std::error::Error>> {
+        let many = Selection::Annotation { nm: "nm".into(), also: (0..MAX_SELECTION_NAMES).map(|i| format!("nm-{i}")).collect() };
+        assert!(matches!(many.validate(), Err(ProtocolError::TooMany { field: "selection names", .. })));
+        let empty = Selection::Annotation { nm: String::new(), also: Vec::new() };
+        assert_eq!(empty.validate(), Err(ProtocolError::Empty("annotation name")));
+        let quads = Selection::Text {
+            page: PageRef { index: 0, epoch: 0 },
+            rect: [0, 0, 1, 1],
+            quads: vec![[0, 0, 1, 1]; MAX_SELECTION_QUADS + 1],
+            caret: None,
+        };
+        assert!(matches!(quads.validate(), Err(ProtocolError::TooMany { field: "selection quads", .. })));
+        let off_page = Selection::Text { page: PageRef { index: MAX_PAGE_INDEX + 1, epoch: 0 }, rect: [0, 0, 1, 1], quads: Vec::new(), caret: None };
+        assert_eq!(off_page.validate(), Err(ProtocolError::PageIndex(MAX_PAGE_INDEX + 1)));
+        Ok(())
+    }
+
     #[test]
     fn presence_over_the_limit_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        // Within the per-field limits, the encoded frame is still too big when the
+        // coordinates are large: the size check catches what the counts let through.
+        let quads = vec![[i64::MAX, i64::MAX, i64::MAX, i64::MAX]; MAX_SELECTION_QUADS];
         let presence = Presence {
             actor_id: ActorId::new("actor-1")?,
             role: Role::Viewer,
             page: PageRef::new(1, 0)?,
             viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
             cursor: None,
-            selection: Some(Selection::Annotation { nm: "a".repeat(MAX_PRESENCE_BYTES) }),
+            selection: Some(Selection::Text { page: PageRef { index: 1, epoch: 0 }, rect: [0, 0, 1, 1], quads, caret: None }),
             color: "#112233".into(),
         };
         assert!(matches!(presence.validate(), Err(ProtocolError::PresenceTooLarge { .. })));

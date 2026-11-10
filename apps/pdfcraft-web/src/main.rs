@@ -267,6 +267,12 @@ mod host {
         }
 
         /// `pdfcraft:presence`: the same participants, coalesced, for the cabinet's markers.
+        ///
+        /// The app's own state (`CollabState.participants`) carries each participant's page
+        /// and selection, and the presence report is coalesced on that change. The pinned
+        /// `craft-web-host` `Participant` has `clientId`/`role`/`color` only, so neither
+        /// reaches the page yet: its contract says new optional fields keep version 1, so
+        /// adding `page` and `selection` there is the one change this needs (STATUS §5 p.4).
         #[cfg(feature = "collab")]
         pub fn presence_fn(&self) -> pdfcraft_ui_egui::HostCollabStateFn {
             let host = self.host.clone();

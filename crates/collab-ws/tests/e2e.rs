@@ -2059,7 +2059,12 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
     let mut di = Peer::join(addr, "viewer:di", "di")?;
 
-    let text = Selection::Text { page: PageRef { index: 0, epoch: 0 }, rect: [20, 300, 220, 320] };
+    let text = Selection::Text {
+        page: PageRef { index: 0, epoch: 0 },
+        rect: [20, 280, 220, 320],
+        quads: vec![[20, 300, 220, 320], [20, 280, 120, 300]],
+        caret: Some([120, 280]),
+    };
     ada.send_presence(Some(text.clone()))?;
     for peer in [&mut bo, &mut di] {
         match peer.next()? {
@@ -2071,13 +2076,15 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
         }
     }
 
-    // A viewer's own selection is presence too; it writes no operation.
-    let named = Selection::Annotation { nm: "ada-hl-1".into() };
+    // Several selected comments travel as one list; a viewer's selection is presence
+    // too and writes no operation.
+    let named = Selection::Annotation { nm: "ada-hl-1".into(), also: vec!["ada-hl-2".into(), "ada-note".into()] };
     di.send_presence(Some(named.clone()))?;
     match ada.next()? {
         ServerMessage::Presence(presence) => {
             assert_eq!(presence.actor_id, di.actor);
-            assert_eq!(presence.selection, Some(named), "a viewer's selection is seen by others");
+            assert_eq!(presence.selection, Some(named), "a viewer's whole selection is seen by others");
+            assert_eq!(presence.selection.as_ref().map(Selection::names), Some(vec!["ada-hl-1", "ada-hl-2", "ada-note"]));
         }
         other => return Err(format!("expected presence, got {other:?}").into()),
     }
@@ -2098,6 +2105,47 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     // in the journal it catches up from.
     let mut last = Peer::join(addr, "viewer:frank", "frank")?;
     assert_eq!(last.resync(0)?.len(), 1, "only the rotation is in the journal");
+    Ok(())
+}
+
+/// A selection bounds itself before it reaches the socket: too many per-line
+/// pieces are refused with `limit`, the connection stays, and the room still
+/// takes presence and operations afterwards.
+#[test]
+fn an_oversized_selection_is_refused_and_the_room_keeps_going() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+
+    let quads = vec![[0, 0, 10, 10]; pdfcraft_collab_proto::MAX_SELECTION_QUADS + 1];
+    let too_many = Selection::Text { page: PageRef { index: 0, epoch: 0 }, rect: [0, 0, 10, 10], quads, caret: None };
+    ada.send_presence(Some(too_many))?;
+    match ada.next()? {
+        ServerMessage::Error(error) => {
+            // The frame check runs before the room: the refusal names the field, and the
+            // sender can fix it. Nothing was changed and the connection stays.
+            assert_eq!(error.code, ErrorCode::Invalid, "{}", error.message);
+            assert!(!error.retryable, "sending it again cannot help");
+            assert!(error.message.contains("selection quads"), "the message names what is wrong: {}", error.message);
+        }
+        other => return Err(format!("expected an error, got {other:?}").into()),
+    }
+
+    // The connection is still a session: a valid selection and an operation pass.
+    // Bo's next frame is that selection, so the refused one reached nobody.
+    let ok = Selection::Annotation { nm: "ada-hl-1".into(), also: Vec::new() };
+    ada.send_presence(Some(ok.clone()))?;
+    match bo.next()? {
+        ServerMessage::Presence(presence) => assert_eq!(presence.selection, Some(ok)),
+        other => return Err(format!("expected presence, got {other:?}").into()),
+    }
+    let doc = DocKey::new("file-1")?;
+    let rotate = structural_op(doc, OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
+    ada.send(rotate)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
     Ok(())
 }
 
