@@ -35,6 +35,14 @@ impl Marked {
 /// left are taken as changed (their descriptions go) rather than compared.
 const MAX_COMPARED: usize = 1 << 28;
 
+/// `f` of `o`, or of the object it refers to, without copying a direct one.
+fn with_held<R>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> R) -> R {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        o => f(o),
+    }
+}
+
 fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
     let mut out = Marked::default();
     // Open sequences: the MCID with where its content starts in `ops` and the drawing operators
@@ -49,16 +57,22 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
             e.1 |= drawn > drawn_before;
         }
     };
+    // The named property lists, read once, and each name's MCID, read once: a stream can name one
+    // at every `BDC` of thousands, and reading an object again can parse it again, all of it (the
+    // document keeps an object larger than its cache only until it reads another). A direct one
+    // is read where it is.
+    let held = resources.get(b"Properties").filter(|p| matches!(p, Object::Ref(_))).map(|p| doc.resolve(p));
+    let named = held.as_deref().or_else(|| resources.get(b"Properties")).and_then(Object::as_dict);
+    let mut mcids: HashMap<Vec<u8>, Option<i64>> = HashMap::new();
     for op in pdfcraft_content::parse(data).ops {
         match op.op.as_slice() {
             b"BDC" => {
                 // The property list is the last operand, as the renderer reads it.
                 let id = match op.back(0) {
-                    Some(Object::Name(n)) => resources.get(b"Properties").and_then(|p| {
-                        let props = doc.resolve(p);
-                        let prop = doc.resolve(props.as_dict()?.get(n)?);
+                    Some(Object::Name(n)) => *mcids.entry(n.to_vec()).or_insert_with(|| {
+                        let prop = named?.get(n)?;
                         // A named property list may give its MCID by reference.
-                        prop.as_dict()?.get(b"MCID").and_then(|id| doc.resolve(id).as_int())
+                        with_held(doc, prop, |prop| prop.as_dict()?.get(b"MCID").and_then(|id| with_held(doc, id, Object::as_int)))
                     }),
                     Some(p) => doc.resolve(p).as_dict().and_then(|d| d.int(b"MCID")),
                     _ => None,
