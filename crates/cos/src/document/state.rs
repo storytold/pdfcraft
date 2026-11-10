@@ -71,7 +71,7 @@ pub(super) type Length = (Option<i64>, bool, Reads);
 /// them reads the object again instead (`Document::try_get`); `None` is a load that read more
 /// than [`Reads::MAX`], which such a document always reads again.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Reads(Option<Box<[u32]>>);
+pub(super) struct Reads(Option<Arc<[u32]>>);
 
 impl Reads {
     /// Objects one entry keeps: a member's stream and a length or two, and what they read.
@@ -133,7 +133,7 @@ impl ReadFrame {
             let mut nums = held.get(self.start..).unwrap_or_default().to_vec();
             nums.sort_unstable();
             nums.dedup();
-            Reads((nums.len() <= Reads::MAX).then(|| nums.into_boxed_slice()))
+            Reads((nums.len() <= Reads::MAX).then(|| Arc::from(nums)))
         })
     }
 }

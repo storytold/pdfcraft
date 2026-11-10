@@ -244,6 +244,12 @@ impl Document {
 
     pub(super) fn try_get_reference(&self, r: ObjRef) -> Result<Arc<Object>, CosError> {
         if !self.reference_matches(r) {
+            // An edit of `r.num` can make it match, so a load that read null here read it too;
+            // with `r.num` edited (freed, or set at another generation) the null is the edit's.
+            if self.overlay.contains_key(&r.num) {
+                note_overlay_read();
+            }
+            note_read(r.num, None);
             return Ok(Arc::new(Object::Null));
         }
         self.try_get(r.num)
@@ -792,8 +798,8 @@ impl Document {
             note_overlay_read();
         }
         let cached = loading();
-        // A length resolved through this document's edits counts as an edit read on every reuse.
-        // Each reuse counts as a read of the length, and of what resolving it read.
+        // Each reuse counts as a read of the length and of what resolving it read, and as an edit
+        // read when that went through this document's edits.
         if cached && let Some((known, edits, reads)) = LENGTHS.with(|m| m.borrow().get(&r).cloned()) {
             if edits {
                 note_overlay_read();

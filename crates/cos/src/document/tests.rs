@@ -955,6 +955,86 @@ fn an_edited_stream_length_hides_the_stream_read_before() {
     assert_eq!(data(&doc), b"short\nendstream long", "the edited length reached another clone");
 }
 
+/// An object stream whose `/DecodeParms` names a generation the file doesn't have decodes without
+/// them; a clone that sets that generation decodes with them, not by the stream another clone read.
+#[test]
+fn parameters_an_edit_makes_match_hide_the_object_stream_read_before() {
+    let members = b"3 0 << /Hidden (yes) >>";
+    // PNG Sub, one row.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in members {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = pdfcraft_filters::encode_flate(&rows);
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 7];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms 6 1 R /Length {} >>\nstream\n", coded.len()).into_bytes();
+    stm.extend_from_slice(&coded);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let data = [2u8, 0, 4, 0];
+    let mut xs = format!("<< /Type /XRef /Size 7 /W [1 2 1] /Index [3 1] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xs.extend_from_slice(&data);
+    xs.extend_from_slice(b"\nendstream");
+    obj(&mut out, 5, &xs);
+    obj(&mut out, 6, b"null");
+    let table = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for (n, off) in offs.iter().enumerate().skip(1) {
+        let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
+        out.extend_from_slice(line.as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    let hidden =
+        |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    assert_eq!(hidden(&doc), None, "no object 6 1: no predictor undone");
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(11));
+    parms.set(b"Columns".to_vec(), Object::Int(members.len() as i64));
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 1), Object::Dict(parms));
+    assert_eq!(hidden(&edited), Some(b"yes".to_vec()), "another clone's stream, decoded without them");
+}
+
+/// What a load read is kept only up to a bound; past it the load counts as having read every
+/// object, so a document with any edit reads it again.
+#[test]
+fn a_load_that_read_too_much_counts_as_reading_everything() {
+    use super::state::{ReadFrame, note_read};
+    let mut overlay = BTreeMap::new();
+    overlay.insert(999_999, Slot::Freed(1));
+    let frame = ReadFrame::enter();
+    for n in 0..8 {
+        note_read(n, None);
+    }
+    assert!(!frame.reads().touch(&overlay), "a few reads, none edited");
+    assert!(!frame.reads().touch(&BTreeMap::new()), "nothing is edited");
+    for n in 8..100 {
+        note_read(n, None);
+    }
+    assert!(frame.reads().touch(&overlay), "more objects than an entry keeps");
+    drop(frame);
+    let outer = ReadFrame::enter();
+    let inner = ReadFrame::enter();
+    for n in 0..5_000 {
+        note_read(n % 4, None);
+    }
+    assert!(inner.reads().touch(&overlay), "more reads than the thread keeps");
+    drop(inner);
+    assert!(outer.reads().touch(&overlay), "an outer frame missed them too");
+}
+
 /// A member that failed to load from the file's object stream is kept as a failure, but replacing
 /// or freeing that stream forgets it: the member then reads from the edit.
 #[test]
