@@ -32,6 +32,7 @@ mod error;
 pub mod export;
 pub mod field_table;
 mod fill_sign;
+pub mod find_replace;
 mod history;
 pub mod js;
 mod layers;
@@ -55,6 +56,7 @@ mod session;
 pub mod signature_image;
 pub mod signature_scan;
 mod sources;
+pub mod spooler;
 mod stamp_preview;
 #[cfg(test)]
 mod test_hooks;

@@ -570,6 +570,7 @@ impl PdfCraftApp {
                 self.leave_camera(i);
                 self.execute(command);
             }
+            Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
             None => {}
         }
         // That tab comes forward when its value was refused (its editor is open again with the

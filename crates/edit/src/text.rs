@@ -39,7 +39,7 @@ mod rewrite;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, RunSources, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
 use blocks::{kept_words, paragraph_separator, row_break};

@@ -228,6 +228,7 @@ impl PdfCraftApp {
             selected,
             which,
             area: None,
+            custom_new: None,
             ..keep
         };
         if changed {
@@ -566,6 +567,9 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
+            // Large pictures become tiles on Windows (#5131): work on the whole file, kept off the
+            // UI thread with the rest.
+            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
             // The receiver may be gone (the app quit): nothing to report to then.
             let result = match &spooler {
                 Some(submit) => submit(&bytes, &job),

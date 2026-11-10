@@ -276,6 +276,17 @@ pub fn tools() -> Vec<ToolDef> {
                 "start_page": { "type": "integer", "minimum": 1, "description": "Page to start searching from (default 1)." },
                 "skip": { "type": "integer", "minimum": 0, "description": "Matches to pass over on start_page before returning any (default 0)." },
                 "stop_at_limit": { "type": "boolean", "description": "Stop at the limit-th match without looking for another (default false). The answer then has stopped_at_limit; when true, complete is false and next is only where to resume, so following it may find nothing more." } }), &["doc", "query"])),
+        t("text_replace", "Replace text", "Find and replace (Edit text ▸ Replace): each match of find, with the find bar's rules (whitespace-normalised; case-insensitive unless case_sensitive; whole_words: no letter or digit may adjoin a match), is rewritten inside its own paragraph, which keeps its fonts, sizes and colours and rewraps; the replacement takes the style of the run it lands in. A longer replacement is measured in the paragraph's fonts and is not shrunk or hyphenated: one row grows right to the page's margin, then wraps; several rows keep their width. New rows go below and nothing else moves, so they can overlap what follows, unreported; a word wider than the width overruns it. replace may be empty (deletes the match). all (default true) replaces every match on pages (default all) as one undo step; false only the first match the find bar shows (page text order; when no paragraph holds it nothing is replaced and it is reported as not_editable). Matches are left alone and counted in skipped_by when they span two paragraphs (spans_paragraphs), are invisible text over a scan (scanned_text), would need another font because the paragraph's own can't draw the new text (missing_glyphs), the paragraph can't be rewritten (refused, with refusals), or the page text holds them outside any editable paragraph, such as form fields, comments or text inside a form XObject (not_editable, counted when all). A page whose text can't be read is counted once as refused and named in refusals. Returns replaced, skipped, skipped_by, the 1-based pages changed and whether the document changed.")
+            .cmd("edit.replace")
+            .with(schema(
+                json!({
+                    "doc": doc(), "find": { "type": "string", "minLength": 1 }, "replace": { "type": "string" },
+                    "pages": pages("to search (default: all)"),
+                    "case_sensitive": { "type": "boolean" }, "whole_words": { "type": "boolean" },
+                    "all": { "type": "boolean", "description": "Every match (default) or only the first." },
+                }),
+                &["doc", "find", "replace"],
+            )),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(
@@ -769,7 +780,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
-                "paper": { "type": "string" },
+                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side)." },
                 "path": { "type": "string" },
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
