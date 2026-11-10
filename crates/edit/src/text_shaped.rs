@@ -15,10 +15,13 @@ pub(super) fn eligible(members: &[&TextLine], text: &str, style: &BlockStyle) ->
     let Some(first) = members.first().copied() else { return false };
     let own_fallback = members.iter().all(|line| line.font.starts_with("PCEdArabic"));
     !(pdfcraft_fonts::document_arabic_font().is_none()
+        // Arabic, and Devanagari, which needs shaping too (a glyph per character can't draw its
+        // conjuncts) and has a bundled face. Thai has a path of its own.
         || (!own_fallback
-            && !text
-                .chars()
-                .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc)))
+            && !text.chars().any(|c| {
+                matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc)
+                    || (matches!(u32::from(c), 0x0900..=0x097f) && pdfcraft_fonts::document_devanagari_font().is_some())
+            }))
         || !style.ranges.is_empty()
         || style.aligns.iter().any(Option::is_some)
         || style.resource.is_some()

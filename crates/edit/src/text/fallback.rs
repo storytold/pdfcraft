@@ -323,6 +323,17 @@ pub(crate) fn no_glyph_for(face: &CraftFont, ch: char) -> EditError {
     if needs_japanese(ch) && pdfcraft_fonts::document_japanese_font().is_none() {
         return no_japanese_font();
     }
+    // Thai is drawn with the bundled Thai face only when it is chosen (the font list offers it):
+    // say so, rather than that a Japanese face lacks the letter.
+    if matches!(u32::from(ch), 0x0E00..=0x0E7F)
+        && let Some(thai) = pdfcraft_fonts::document_thai_font()
+    {
+        return EditError::Invalid(format!(
+            "the paragraph's font has no glyph for {ch} (U+{:04X}); choose PdfCraft's {} in the font list, or a font              that has it (Load font… or Installed fonts…)",
+            u32::from(ch),
+            thai.family
+        ));
+    }
     EditError::Invalid(format!(
         "the {} fallback font has no glyph for {ch} (U+{:04X}), and no fallback face covers the text; \
          choose a font that has it (Load font… or Installed fonts…), or use an official release, which includes \
@@ -363,8 +374,11 @@ fn no_hebrew_font() -> EditError {
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
     let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
+    // Hangul and the Simplified Chinese characters the Japanese faces lack (报) have faces of their
+    // own, after the Japanese and Latin ones.
+    let others = [pdfcraft_fonts::ShapedScript::Korean.font(), pdfcraft_fonts::ShapedScript::Chinese.font()].into_iter().flatten();
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        return Ok((japanese.into_iter().chain(latin).chain(others).collect(), false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.

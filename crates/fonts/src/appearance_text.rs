@@ -26,6 +26,7 @@ fn script(c: char) -> Option<ShapedScript> {
         0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc => Some(ShapedScript::Arabic),
         0x0591..=0x05f4 | 0xfb1d..=0xfb4f => Some(ShapedScript::Hebrew),
         0x0e00..=0x0e7f => Some(ShapedScript::Thai),
+        0x0900..=0x097f | 0xa8e0..=0xa8ff => Some(ShapedScript::Devanagari),
         _ => None,
     }
 }

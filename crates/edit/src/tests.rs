@@ -8449,6 +8449,35 @@ fn touching_runs_tagged_as_one_paragraph_are_one_row() {
     assert_eq!(text::text_blocks(&page(false), 0).unwrap().len(), 2);
 }
 
+/// Editing a paragraph into Hindi or Korean that its font can't draw was refused ("the BIZ
+/// UDPGothic fallback font has no glyph for न") though PdfCraft bundles a face for each:
+/// Devanagari now takes the shaped fallback (a glyph per character can't draw its conjuncts), as
+/// Arabic does, and Hangul the Korean face after the Japanese and Latin ones. Thai takes the
+/// bundled Thai face when it is chosen, and the refusal without it now says so.
+#[test]
+fn text_edited_into_thai_hindi_or_korean_is_drawn_with_their_bundled_faces() {
+    if let Some(thai) = pdfcraft_fonts::document_thai_font() {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let error = text::replace_block(&mut doc, 0, 0, "ภาษาไทย").unwrap_err().to_string();
+        assert!(error.contains(thai.family) && !error.contains("BIZ UDPGothic"), "{error}");
+        let style = text::BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("ภาษาไทย ใหม่"), &style).unwrap();
+        assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "ภาษาไทย ใหม่");
+    }
+    let samples = [("त्रैमासिक रिपोर्ट", pdfcraft_fonts::document_devanagari_font()), ("새 텍스트", pdfcraft_fonts::ShapedScript::Korean.font())];
+    for (text, face) in samples {
+        let Some(face) = face else {
+            eprintln!("skipping {text}: built without its craft-fonts face (set CRAFT_FONTS_DIR)");
+            continue;
+        };
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_block(&mut doc, 0, 0, text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.first().map(|b| b.editor_text.as_str()), Some(text), "{} ({})", text, face.family);
+    }
+}
+
 #[test]
 fn multi_glyph_rtl_actual_text_keeps_its_own_reading_order() {
     // Two encoded glyphs are a logical span, even if their replacement looks like a ligature.
