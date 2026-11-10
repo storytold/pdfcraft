@@ -7399,7 +7399,7 @@ fn javascript_field_rect_moves_first_widget_and_undoes() {
     let mut s = Session::new();
     let id = s.open("rect.pdf", None, Arc::new(scripted_form()), None).unwrap();
     let initial = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect;
-    s.run_javascript(id, "getField('price').rect = [30, 60, 130, 40];", Some("go")).unwrap();
+    s.run_javascript(id, "getField('price').rect = [30, 40, 130, 60];", Some("go")).unwrap();
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
     s.undo(id).unwrap();
@@ -7952,6 +7952,25 @@ fn comparing_two_versions_of_a_document() {
 
 /// Built-in and custom actions run their steps on a file (with JavaScript on), report each
 /// step's progress, and fail cleanly on a file that is not a PDF.
+#[test]
+fn marking_a_deletion_on_a_page_the_newer_file_lacks() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = |n: usize| (1..=n).map(|i| format!("Row {i} of the schedule.")).collect::<Vec<_>>().join("
+
+");
+    let v1 = s.create_from_text("t", &text(120)).unwrap();
+    let v2 = s.create_from_text("t", &text(20)).unwrap();
+    let old = s.open("v1.pdf", None, v1, None).unwrap();
+    let new = s.open("v2.pdf", None, v2, None).unwrap();
+    assert!(s.get(old).unwrap().info.pages.len() > 1 && s.get(new).unwrap().info.pages.len() == 1);
+    // Page 2 of the older file has no counterpart in the one-page newer file.
+    let c = s.compare_pages(old, new, &[1]).unwrap();
+    assert!(!c.changes.is_empty() && c.changes.iter().all(|ch| ch.kind == compare::Kind::Deleted), "{:?}", c.changes);
+    assert!(s.mark_differences_of(old, new, &[1]).unwrap() > 0);
+    let marks: Vec<_> = s.get(new).unwrap().info.annotations.iter().filter(|a| a.author.as_deref() == Some("Compare")).map(|a| a.page).collect();
+    assert!(!marks.is_empty() && marks.iter().all(|&p| p == 0), "{marks:?}");
+}
+
 #[test]
 fn actions_run_their_steps_on_files() {
     let s = Session::new();
@@ -12250,6 +12269,8 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
     assert!(s.take_js_output(id).errors.is_empty());
 }
 
+/// Within one edit, a field's `display` reads as the file had it before the edit, even after a
+/// script set it with the value cached; the next edit's runner reads what the script wrote.
 #[test]
 /// Later field callbacks see current COS appearance/flags rather than the runner creation snapshot.
 fn field_scripts_read_current_appearance_during_an_edit() {
@@ -15601,7 +15622,6 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
 }
-
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_objects_survive_incremental_save_but_not_a_full_rewrite() {

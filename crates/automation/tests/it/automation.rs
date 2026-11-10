@@ -14781,6 +14781,8 @@ fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
     assert!(image.iter().any(|c| matches!(c, Content::Png { .. })));
 }
 
+/// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
+/// (with the reason), and a page the document doesn't have.
 #[test]
 fn text_prepare_refuses_pages_without_grouped_text() {
     let temp = tempfile::tempdir().unwrap();
