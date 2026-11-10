@@ -312,22 +312,27 @@ impl DocumentCopyJob {
     }
 }
 
-/// Glyphs of one page expanded at a time, so a page whose text is far past the clipboard limit is
-/// never built whole before it is cut: the temporary stays one chunk's size.
-const PAGE_TEXT_CHUNK: usize = 4096;
-
-/// Append a page's text in chunks, as a new line, cut so `out` stays within `max` bytes. Whether
-/// anything was left out.
+/// Append a page's text glyph by glyph (a word or line break between them as `text_of` puts one),
+/// as a new line, cut so `out` stays within `max` bytes. No copy of the page's text is built first,
+/// so a glyph with a very long `/ActualText` is cut as it is appended. Whether anything was left out.
 fn push_page_bounded(out: &mut String, t: &pdfcraft_render::PageText, max: usize) -> bool {
-    let glyphs = t.glyphs.len();
-    let mut start = 0;
-    while start < glyphs {
-        let end = (start + PAGE_TEXT_CHUNK).min(glyphs);
-        // Only the page's first chunk starts a new line; the rest continue it.
-        if push_bounded_sep(out, &t.text_of(start..end), max, start == 0) {
+    let mut started = false;
+    for (i, g) in t.glyphs.iter().enumerate() {
+        if started {
+            let sep = match (t.line_of.get(i - 1) != t.line_of.get(i), t.space_before.get(i)) {
+                (true, _) => "\n",
+                (false, Some(true)) => " ",
+                _ => "",
+            };
+            if push_bounded_sep(out, sep, max, false) {
+                return true;
+            }
+        }
+        let before = out.len();
+        if push_bounded_sep(out, &g.text, max, !started) {
             return true;
         }
-        start = end;
+        started |= out.len() > before;
     }
     false
 }
@@ -363,7 +368,7 @@ fn push_bounded_sep(out: &mut String, text: &str, max: usize, new_line: bool) ->
 
 #[cfg(test)]
 mod copy_bound_tests {
-    use super::push_bounded;
+    use super::{push_bounded, push_page_bounded};
 
     #[test]
     fn a_page_past_the_limit_is_cut_at_a_character_boundary() {
@@ -376,6 +381,25 @@ mod copy_bound_tests {
         let mut fits = String::new();
         assert!(!push_bounded(&mut fits, "abc", 3));
         assert_eq!(fits, "abc");
+    }
+
+    #[test]
+    fn a_page_keeps_its_word_and_line_breaks_and_stays_within_the_limit() {
+        let g = |t: &str| pdfcraft_render::TextGlyph { text: t.into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] };
+        let page = pdfcraft_render::PageText {
+            glyphs: vec![g("a"), g("b"), g("c"), g("d")],
+            line_of: vec![0, 0, 0, 1],
+            space_before: vec![false, false, true, false],
+        };
+        let mut out = String::from("x");
+        assert!(!push_page_bounded(&mut out, &page, 100));
+        assert_eq!(out, "x\nab c\nd");
+        assert_eq!(out, format!("x\n{}", page.plain_text()));
+        // A single glyph far past the limit is cut as it is appended.
+        let long = pdfcraft_render::PageText { glyphs: vec![g(&"é".repeat(1 << 16))], line_of: vec![0], space_before: vec![false] };
+        let mut out = String::new();
+        assert!(push_page_bounded(&mut out, &long, 11));
+        assert_eq!(out.len(), 10);
     }
 }
 
