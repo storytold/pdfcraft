@@ -1289,7 +1289,11 @@ struct RowSpacing<'a> {
     block: &'a TextBlock,
     lines: &'a [TextLine],
     first: &'a TextLine,
-    gap: Option<f64>,
+    gap: f64,
+    /// Whether the spacing was asked for. Unset, the default gap goes only before a paragraph the
+    /// page did not have: a row it already had, whether set apart or not, keeps where it was, so
+    /// choosing a family or applying the draft again moves no source row.
+    set: bool,
     row_step: f64,
     /// The source row each output row starts, if any.
     sources: Vec<Option<usize>>,
@@ -1310,10 +1314,11 @@ impl<'a> RowSpacing<'a> {
         draft: &str,
         explicit: ExplicitRows,
     ) -> Result<Self, EditError> {
-        let gap = match style.paragraph_spacing {
-            Some(p) if p.is_finite() => Some(p.clamp(0.0, 14_400.0)),
+        let (gap, set) = match style.paragraph_spacing {
+            Some(p) if p.is_finite() => (p.clamp(0.0, 14_400.0), true),
             Some(_) => return Err(EditError::Invalid("the paragraph spacing must be a number".into())),
-            None => None,
+            // Half the size, for a paragraph the page did not have (see `set`).
+            None => (style.size.unwrap_or(first.size) / 2.0, false),
         };
         let baseline_of = |r: usize| block.rows.get(r).and_then(|r| r.first()).and_then(|i| lines.get(*i)).map(|l| l.origin.baseline);
         let row_step = (1..block.rows.len())
@@ -1327,6 +1332,7 @@ impl<'a> RowSpacing<'a> {
             lines,
             first,
             gap,
+            set,
             row_step,
             sources,
             explicit,
@@ -1351,8 +1357,9 @@ impl<'a> RowSpacing<'a> {
             (Some(a), Some(above)) => (above - a.origin.baseline - self.row_step).max(0.0),
             _ => 0.0,
         };
-        let starts_paragraph = row_index > 0 && self.explicit.get(row_index).copied().unwrap_or(false) && (anchor.is_none() || existing > 0.5);
-        let paragraph = self.gap.filter(|_| starts_paragraph);
+        let starts_paragraph =
+            row_index > 0 && self.explicit.get(row_index).copied().unwrap_or(false) && (anchor.is_none() || (self.set && existing > 0.5));
+        let paragraph = starts_paragraph.then_some(self.gap);
         if self.follow_source {
             match (anchor, above, self.previous) {
                 // The source's step down from the row above, kept from where that row was drawn;
@@ -1668,6 +1675,16 @@ impl Origins {
             }
             for k in 1..=suffix {
                 of[new_mid.end - k] = Some(old_mid.end - k);
+            }
+            // The same number of lines on both sides: each is the line at its own position, so
+            // the breaks between them are the source's (an edited row is still that row).
+            if old_gap == new_gap {
+                for k in 0..old_gap {
+                    let (o, n) = (&old_lines[head + k], &new_lines[head + k]);
+                    if old[o.end - 1] == '\n' && new[n.end - 1] == '\n' {
+                        of[n.end - 1] = Some(o.end - 1);
+                    }
+                }
             }
         } else if tail > 0 {
             // A whole line (or lines) inserted or removed: the break before the first line that

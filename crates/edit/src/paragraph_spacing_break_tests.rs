@@ -94,10 +94,30 @@ fn styled_spacing_for_a_row_inserted_among_identical_rows() {
     assert!((total - 58.0).abs() < 0.5, "{s:?}");
 }
 
-/// The default is none, on the styled path as on the other: two paragraphs of 10 pt text, no
-/// spacing set, stay one 12 pt row step apart.
+/// The default is half the size, for a paragraph the page did not have: a 10 pt row broken in two
+/// is a 12 pt row step and 5 pt apart, 17. Rows the page already had stay one 12 pt step apart
+/// whatever the draft does around them (below).
 #[test]
-fn styled_paragraphs_get_no_spacing_unless_it_is_set() {
+fn a_new_styled_paragraph_gets_half_the_size_when_no_spacing_is_set() {
+    let range =
+        text::RangeStyle { range: 0..3, family: None, resource: None, size: None, color: None, underline: None, char_spacing: None, scale: None };
+    let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let mut doc = page(&rows(&["One", "Three"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &style).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[17.0, 12.0]), "{s:?}");
+    // Asking for none takes it away again.
+    let none = text::BlockStyle { paragraph_spacing: Some(0.0), ..style };
+    let mut doc = page(&rows(&["One", "Three"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &none).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[12.0, 12.0]), "{s:?}");
+}
+
+/// Rows the page had keep their steps when no spacing is set: two paragraphs of 10 pt text stay
+/// one 12 pt row step apart.
+#[test]
+fn styled_source_rows_keep_their_steps_when_no_spacing_is_set() {
     let range =
         text::RangeStyle { range: 0..3, family: None, resource: None, size: None, color: None, underline: None, char_spacing: None, scale: None };
     let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
