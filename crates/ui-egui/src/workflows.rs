@@ -5,6 +5,8 @@ pub(super) mod combine_ui;
 pub(super) mod compare_ui;
 pub(super) mod create_multiple_ui;
 pub(super) mod create_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod drag_out;
 pub(super) mod export_ui;
 pub(super) mod files;
 pub(super) mod js_ui;

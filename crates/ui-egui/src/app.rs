@@ -310,6 +310,7 @@ impl PdfCraftApp {
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
+            dragged_out: None,
             #[cfg(not(target_arch = "wasm32"))]
             window_state: Default::default(),
             styled: false,
@@ -572,9 +573,15 @@ impl eframe::App for PdfCraftApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.begin_ui();
         self.guarded_frame(|app| app.ui_unguarded(ui));
+        // A page drag that left the window offers its pages as a file. The system's drag loop
+        // runs inside, until the drop.
+        #[cfg(windows)]
+        self.guarded_frame(|app| app.drag_pages_out(ui.ctx(), frame));
+        #[cfg(not(windows))]
+        let _ = frame;
         self.end_ui();
     }
 }

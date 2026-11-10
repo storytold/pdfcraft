@@ -247,6 +247,14 @@ pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
     ctx.request_repaint();
 }
 
+/// After the system's own drag loop (a drag out of the window), which keeps the button's release
+/// from egui as a window move does: add it to the next input, as after [`desktop_grab`].
+#[cfg(windows)]
+pub(crate) fn release_after_system_drag(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(grab_id(), ()));
+    ctx.request_repaint();
+}
+
 /// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
 /// The release goes before the input's first press (the next resize or move, or a click), which
 /// egui would otherwise end straight away; a release after that press is the press's own. It also
