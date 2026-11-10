@@ -775,7 +775,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "collate": { "type": "boolean" },
                 "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer uses the printer's current default: Windows sends its duplex setting when supported, otherwise preserves the driver default, including manual two-sided preferences; CUPS leaves the setting unspecified." },
                 "grayscale": { "type": "boolean" },
-                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey." },
+                "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey, so the printer isn't asked for grayscale (a driver without that setting still prints them)." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
                 "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
             }),

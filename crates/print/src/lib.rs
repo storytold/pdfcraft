@@ -20,6 +20,7 @@
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
+mod font_names;
 pub mod range;
 pub mod spool;
 #[cfg(test)]
@@ -38,7 +39,7 @@ use imposition::{PAGES_LISTED, appearance, appearance_matrix, decoded_contents, 
 pub use imposition::{impose, keep_printed, sheet_pages};
 pub use settings::{
     Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, MAX_GRID, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
-    cups_media, media_option,
+    cups_media, driver_needs_grayscale, media_option,
 };
 #[cfg(test)]
 use sheets::text_direction;
