@@ -186,6 +186,7 @@ impl Automation {
         let recipe = Recipe::parse(self, args)?;
         let recursive = args.opt_bool("recursive")?.unwrap_or(false);
         let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
+        let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
         let paths = args.strs("paths")?;
         if paths.is_empty() || paths.len() > 1000 {
             return Err(Args::wrong("paths", "1 to 1000 files or folders"));
@@ -212,9 +213,39 @@ impl Automation {
         let mut files = discovery.skipped;
         let (mut completed, mut failed_count) = (0, 0);
         let mut stopped = false;
+        let mut planned_outputs: HashSet<PathBuf> = HashSet::new();
         for (path, relative) in discovery.files {
             if stopped || !recipe.accepts(&path) {
                 files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"unsupported input extension"}}));
+                continue;
+            }
+            if dry_run {
+                let planned: Result<PathBuf> = (|| {
+                    let target = out.join(&relative).with_extension("pdf");
+                    let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                    if !target.starts_with(&out) {
+                        return Err(failed("output path leaves out_dir"));
+                    }
+                    let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
+                    let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy().into_owned();
+                    for n in 1..=10_000 {
+                        let candidate = if n == 1 { target.clone() } else { dir.join(format!("{stem} ({n}).pdf")) };
+                        if candidate.symlink_metadata().is_ok() || planned_outputs.contains(&candidate) {
+                            continue;
+                        }
+                        planned_outputs.insert(candidate.clone());
+                        return Ok(candidate);
+                    }
+                    Err(failed("all 10000 output names are occupied"))
+                })();
+                match planned {
+                    Ok(target) => files.push(json!({"path":path.to_string_lossy(),"status":"planned","output":target.to_string_lossy().replace('\\', "/"),"steps":recipe.steps})),
+                    Err(e) => {
+                        failed_count += 1;
+                        files.push(json!({"path":path.to_string_lossy(),"status":"error","error":e.to_string()}));
+                        stopped = stop;
+                    }
+                }
                 continue;
             }
             // Recheck confinement and links before reading a discovered file.
@@ -245,8 +276,8 @@ impl Automation {
                 }
             }
         }
-        let skipped = files.len().saturating_sub(completed + failed_count);
-        let escape = |text: &str| text.replace('\r', "\\r").replace('\n', "\\n");
+        let skipped = files.iter().filter(|file| file["status"] == "skipped").count();
+        let escape = |text: &str| text.replace('\\', "\\\\").replace('\r', "\\r").replace('\n', "\\n");
         let mut lines = Vec::new();
         for f in &files {
             let (Some(path), Some(status)) = (f.get("path").and_then(|v| v.as_str()), f.get("status").and_then(|v| v.as_str())) else {
@@ -266,12 +297,12 @@ impl Automation {
         }
         lines.push(format!("completed: {completed}, failed: {failed_count}, skipped: {skipped}"));
         let log = lines.join("\n");
-        Ok(json!({"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files,"log":log}))
+        Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files,"log":log}))
     }
 }
 
 /// Publish atomically without replacing any existing name, even if another writer wins a race.
-fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
+pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
     std::fs::create_dir_all(dir).map_err(failed)?;
     let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
@@ -299,6 +330,22 @@ mod tests {
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, 0).unwrap_err().to_string().contains("10000"));
         discovery.visited = 0;
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, MAX_DEPTH + 1).unwrap_err().to_string().contains("64"));
+    }
+
+    #[test]
+    fn doc_batch_dry_run_lists_outputs_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("input")).unwrap();
+        let pdf = Session::new().create_from_text("Doc", "Hello").unwrap();
+        std::fs::write(dir.path().join("input/a.pdf"), &*pdf).unwrap();
+        let auto = Automation::new().with_root(dir.path()).unwrap();
+        let report = auto.doc_batch(&Args(&json!({"paths":["input"],"steps":["optimize"],"out_dir":"out","dry_run":true}))).unwrap();
+        assert_eq!(report["dry_run"], true, "{report}");
+        assert_eq!(report["completed"], 0, "{report}");
+        assert_eq!(report["failed"], 0, "{report}");
+        assert_eq!(report["files"][0]["status"], "planned", "{report}");
+        assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
+        assert!(!dir.path().join("out").exists());
     }
 
     #[test]
@@ -378,13 +425,18 @@ mod tests {
             let escaped = input_dir.path().join("a\nb.pdf");
             std::fs::write(&escaped, b"broken").expect("escaped input");
             let escaped_str = escaped.to_str().expect("input path is UTF-8");
-            let args_value = json!({"steps":["optimize"],"paths":[escaped_str],"out_dir":out_str});
+            // A literal backslash followed by n must not log the same as a newline.
+            let literal = input_dir.path().join(r"a\nb.pdf");
+            std::fs::write(&literal, b"broken").expect("literal backslash input");
+            let literal_str = literal.to_str().expect("input path is UTF-8");
+            let args_value = json!({"steps":["optimize"],"paths":[escaped_str, literal_str],"out_dir":out_str});
             let args = Args(&args_value);
             let result = automation.doc_batch(&args).expect("batch should return a report for a newline path");
             let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
                 panic!("batch result should carry a plain-text per-file log: {result}");
             };
-            assert!(log.contains(r"a\nb.pdf"), "log should escape newlines in paths: {log}");
+            assert!(log.contains(r"a\nb.pdf: error"), "log should escape newlines in paths: {log}");
+            assert!(log.contains(r"a\\nb.pdf: error"), "log should escape a literal backslash: {log}");
             assert!(!log.contains("a\nb.pdf"), "log should not contain a raw newline in a path: {log}");
         }
     }
