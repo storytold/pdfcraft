@@ -517,6 +517,9 @@ pub struct DocView {
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
+    /// Scroll fraction down the page (0..=1) for each entry in `back` and `forward` (#6848).
+    pub(crate) back_scroll: Vec<(usize, f32)>,
+    pub(crate) forward_scroll: Vec<(usize, f32)>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
     /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
@@ -1044,6 +1047,8 @@ impl DocView {
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),
+            back_scroll: Vec::new(),
+            forward_scroll: Vec::new(),
             goto: None,
             goto_side: None,
             goto_point: None,
@@ -1249,6 +1254,8 @@ impl DocView {
         fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
+        fresh.back_scroll = std::mem::take(&mut self.back_scroll);
+        fresh.forward_scroll = std::mem::take(&mut self.forward_scroll);
         fresh.find = self.find.take();
         fresh.pages = std::mem::take(&mut self.pages);
         fresh.thumbs = std::mem::take(&mut self.thumbs);

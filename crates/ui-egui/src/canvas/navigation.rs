@@ -89,18 +89,45 @@ impl DocView {
         Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
     }
 
+    /// How far down `self.current` the viewport top sits (0..=1), as `goto` takes it (#6848).
+    fn current_scroll_fraction(&self) -> f32 {
+        if self.viewport_screen.is_positive()
+            && let Some((_, r)) = self.screen_rects.iter().find(|(p, _)| *p == self.current)
+            && r.height() > 0.0
+            && r.top() < self.viewport_screen.top() + self.page_gap()
+        {
+            return ((self.viewport_screen.top() + self.page_gap() - r.top()) / r.height()).clamp(0.0, 1.0);
+        }
+        if let Some((p, frac)) = self.goto
+            && p == self.current
+            && frac.is_finite()
+        {
+            return frac.clamp(0.0, 1.0);
+        }
+        0.0
+    }
+
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
         self.end_find_following();
         if page != self.current {
+            let frac = self.current_scroll_fraction();
             // The view history (Previous view / Next view).
             if self.back.last() != Some(&self.current) {
                 self.back.push(self.current);
+                self.back_scroll.resize(self.back.len().saturating_sub(1), (0, 0.0));
+                self.back_scroll.push((self.current, frac));
                 if self.back.len() > 200 {
                     self.back.remove(0);
+                    if !self.back_scroll.is_empty() {
+                        self.back_scroll.remove(0);
+                    }
                 }
+            } else if let Some(last) = self.back_scroll.last_mut().filter(|(p, _)| *p == self.current) {
+                last.1 = frac;
             }
             self.forward.clear();
+            self.forward_scroll.clear();
         }
         // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
@@ -271,11 +298,20 @@ impl DocView {
             return false;
         }
         self.end_find_following();
-        let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
+        let current_frac = self.current_scroll_fraction();
+        let (from, to, from_scroll, to_scroll) = if forward {
+            (&mut self.forward, &mut self.back, &mut self.forward_scroll, &mut self.back_scroll)
+        } else {
+            (&mut self.back, &mut self.forward, &mut self.back_scroll, &mut self.forward_scroll)
+        };
         let Some(page) = from.pop() else { return false };
+        let frac = from_scroll.pop().filter(|(p, _)| *p == page && from_scroll.len() == from.len()).map_or(0.0, |(_, f)| f);
         to.push(self.current);
+        to_scroll.resize(to.len().saturating_sub(1), (0, 0.0));
+        to_scroll.push((self.current, current_frac));
         let page = page.min(self.page_count.saturating_sub(1));
-        self.goto = Some((page, 0.0));
+        self.goto_point = None;
+        self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();
         // A find step's match belongs to the place left, as for any other jump.

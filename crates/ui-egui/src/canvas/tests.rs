@@ -3193,3 +3193,35 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
         assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
     }
 }
+
+/// #6848: Previous view and Next view restore the exact vertical scroll fraction on a page
+/// where a hyperlink was clicked, rather than always resetting to the top of the page.
+#[test]
+fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(), Box<dyn std::error::Error>> {
+    let mut v = view(5, PageLayout::Single, true);
+    v.viewport_screen = Rect::from_min_size(pos2(0.0, 40.0), vec2(800.0, 600.0));
+    // Page 0 (height 1000) is scrolled halfway down: its top sits at y = 40 + page_gap - 500.
+    let gap = v.page_gap();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 500.0), vec2(600.0, 1000.0)))];
+
+    // Jump to page 3 via a hyperlink or page navigation.
+    v.go_to_page(3);
+    assert_eq!(v.current, 3);
+    assert_eq!(v.back, vec![0]);
+
+    // Simulate scrolling 25% down page 3 before returning via Previous view.
+    v.screen_rects = vec![(3, Rect::from_min_size(pos2(100.0, 40.0 + gap - 250.0), vec2(600.0, 1000.0)))];
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 0);
+    let (page, frac) = v.goto.ok_or("expected goto on Previous view")?;
+    assert_eq!(page, 0);
+    assert!((frac - 0.5).abs() < 1e-5, "expected 0.5 scroll fraction on page 0, got {frac}");
+
+    // Next view returns to page 3 at its 25% scroll fraction.
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 3);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view")?;
+    assert_eq!(page, 3);
+    assert!((frac - 0.25).abs() < 1e-5, "expected 0.25 scroll fraction on page 3, got {frac}");
+    Ok(())
+}
