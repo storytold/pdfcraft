@@ -104,6 +104,7 @@ use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
 use canvas::page_cursor;
+use canvas::page_keys;
 use canvas::page_pointer;
 use canvas::page_router;
 pub use canvas::scroll_speed;
@@ -731,8 +732,14 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
+    /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,
+    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
+    /// `release_menu_input`).
+    pub(crate) menu_pastes: usize,
+    /// This frame's keys as the pages see them: none while something is over them.
+    pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,
