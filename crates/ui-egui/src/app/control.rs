@@ -391,6 +391,15 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--community-button false`: no Discord button in the title bar or community card on
+            // the home screen.
+            ("community-button", _) => {
+                self.show_community_button = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("community-button must be true or false".into()),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,
