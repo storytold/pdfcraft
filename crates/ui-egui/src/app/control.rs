@@ -60,6 +60,11 @@ impl PdfCraftApp {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }
             ("panel", _) => {
+                // As `choose_right_panel`: a pane chosen in Read mode replaces the one saved on
+                // the way in, so leaving Read mode doesn't bring back one closed here.
+                if self.mode == Mode::Read {
+                    self.right_before_read = None;
+                }
                 self.right = match value {
                     "comments" => Some(RightPanel::Comments),
                     "bookmarks" => Some(RightPanel::Bookmarks),
@@ -87,6 +92,9 @@ impl PdfCraftApp {
             }
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
+            }
+            ("default-tool", _) => {
+                self.default_tool = DefaultTool::parse(value).ok_or("default-tool must be select or hand")?;
             }
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,

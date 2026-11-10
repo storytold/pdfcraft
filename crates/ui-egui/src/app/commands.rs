@@ -119,10 +119,25 @@ impl PdfCraftApp {
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
             self.put_down_edit_text();
         }
-        // Read mode hides the quick toolbar, so no other tool may stay active there. Opening a
-        // document with Read as the default mode comes here without `switch_mode`.
+        // Read mode hides the quick toolbar, so only the reading tool may stay active there.
+        // Opening a document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
+            self.put_tool_down_for_reading();
+        }
+    }
+
+    /// Put the tool in use down to the default tool (Select, or Hand when the user reads by
+    /// dragging the page, #6235), as Read mode does. In full screen a click turns the page, so
+    /// Select is the tool there, whatever was picked since full screen began, and the default
+    /// tool as it is now is the one given back when it ends (a default changed meanwhile applies
+    /// the next time Read mode puts the tools down).
+    fn put_tool_down_for_reading(&mut self) {
+        let tool = self.default_tool.quick_tool();
+        if self.full_screen {
             self.quick_tool = QuickTool::Select;
+            self.full_screen_tool = Some(tool);
+        } else {
+            self.quick_tool = tool;
         }
     }
 
@@ -156,7 +171,8 @@ impl PdfCraftApp {
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
-    /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
+    /// Read mode hides the quick toolbar, so entering it also puts the current tool down, to the
+    /// default tool.
     pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
         let was_read = self.mode == Mode::Read;
         if select_tools {
@@ -169,14 +185,18 @@ impl PdfCraftApp {
             // An editing tool is put down so its open paragraph is applied, as `select_mode` does.
             if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
                 self.put_down_edit_text();
-            } else {
-                self.quick_tool = QuickTool::Select;
             }
+            self.put_tool_down_for_reading();
         } else if mode != Mode::Read && was_read {
-            let before = self.right_before_read.take();
-            if self.right.is_none() {
-                self.right = before;
-            }
+            self.bring_back_right_panel();
+        }
+    }
+
+    /// Leaving Read mode: the right panel it put away comes back, unless one is open now.
+    pub(crate) fn bring_back_right_panel(&mut self) {
+        let before = self.right_before_read.take();
+        if self.right.is_none() {
+            self.right = before;
         }
     }
 

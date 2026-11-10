@@ -25,6 +25,38 @@ impl Mode {
     }
 }
 
+/// The tool PdfCraft starts with and the one Read mode puts the others down to (Preferences ▸
+/// Documents and view, #6235): Select, or Hand for a reader who drags the page. In full screen a
+/// click turns the page, so Select stays there; when it ends, the tool in use before it comes back
+/// (the default tool, if Read mode began during full screen). Changing it leaves the tool in use
+/// (and the one full screen will give back) as it is: it applies at the next start and the next
+/// time Read mode puts the tools down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultTool {
+    #[default]
+    Select,
+    Hand,
+}
+
+impl DefaultTool {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "select" => Some(Self::Select),
+            "hand" => Some(Self::Hand),
+            _ => None,
+        }
+    }
+
+    /// The quick tool this default stands for.
+    pub fn quick_tool(self) -> QuickTool {
+        match self {
+            Self::Select => QuickTool::Select,
+            Self::Hand => QuickTool::Hand,
+        }
+    }
+}
+
 /// What the left panel shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPanel {

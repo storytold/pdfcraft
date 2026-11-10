@@ -1552,6 +1552,60 @@ fn loopback_transport_requires_the_token() {
     assert!(good[2]["error"]["message"].as_str().unwrap().contains("disabled"));
 }
 
+/// `ui.set default-tool` saves select or hand, refuses anything else, and `ui.state` reports it.
+#[test]
+fn control_sets_and_reports_the_default_tool() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "select");
+    ok(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "hand"}));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!((state["default_tool"].as_str(), state["quick_tool"].as_str()), (Some("hand"), Some("select")), "the tool in use stays");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "highlight"})).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "hand");
+}
+
+/// `ui.set mode=read` enters Read mode as the Read mode command does: the tool in use goes down
+/// to the default tool (#6235). A tool picked in Read mode afterwards stays, also for a document
+/// opened then.
+#[test]
+fn control_mode_read_puts_the_tool_down_to_the_default_tool() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "hand"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "edit"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "select"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "select");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "hand");
+    ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "select"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "select", "already in Read mode: nothing to enter");
+    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!((state["mode"].as_str(), state["quick_tool"].as_str()), (Some("Read"), Some("select")));
+}
+
+/// Leaving Read mode through `ui.set mode` brings back the right panel the Read mode command put
+/// away; a panel closed in Read mode stays closed, and `mode=edit` picks no editing tool (#6235).
+/// (`ui.set mode=read` itself leaves the panel as it is: `read_mode_retains_existing_rail_click_to_close_policy`.)
+#[test]
+fn control_mode_leaving_read_brings_back_the_right_panel() {
+    let (mut h, c) = harness();
+    let panel = |h: &mut _| ok(h, &c, "ui.state", json!({}))["right_panel"].clone();
+    ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "bookmarks"}));
+    ok(&mut h, &c, "ui.command", json!({"id": "view.read_mode"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    assert_eq!(panel(&mut h), json!(null), "the Read mode command puts the panel away");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "edit"}));
+    assert_eq!(panel(&mut h), "Bookmarks", "leaving Read from here brings it back");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "select", "mode=edit picks no editing tool");
+    // A panel chosen and then closed in Read mode stays closed.
+    ok(&mut h, &c, "ui.command", json!({"id": "view.read_mode"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "bookmarks"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "none"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "all"}));
+    assert_eq!(panel(&mut h), json!(null), "the panel closed in Read mode isn't brought back");
+}
+
 #[test]
 fn control_default_workspace_and_session_override() {
     let (mut h, c) = harness();

@@ -35,7 +35,14 @@
 //!   explicit selection. This is the same bounded parser as the Organize Pages field; invalid
 //!   input leaves the previous selection unchanged. `ui.state.active.selected_pages` reports it.
 //!   `default-mode=all|read|edit|convert|sign` applies to future PDF opens; `mode` overrides it
-//!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
+//!   for this session without changing the saved preference. `mode=read` puts the tool down to
+//!   the default tool as the Read mode command does (the right panel stays as it is), and leaving
+//!   Read from here brings back a panel the Read mode command put away. `ui.state.default_mode`
+//!   reports it.
+//!   `default-tool=select|hand` is the tool PdfCraft starts with and the one Read mode leaves
+//!   active (in full screen Select stays, and when it ends the tool in use before it comes back:
+//!   the default tool, if Read mode began during full screen). Setting it leaves the current
+//!   tool, and the one full screen will give back, as they are; `ui.state.default_tool` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
