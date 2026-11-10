@@ -447,3 +447,75 @@ fn hostile_action_chains_end_and_are_rewritten_once() {
     assert_eq!(d(5 + 65), Some(string("ch")));
     assert_eq!(list(&doc), owned(&[("new", Some(0))]));
 }
+
+/// One page (3) and a `/Dests` tree whose root is `root`, then the objects `rest`, numbered from 4.
+fn shared_tree(root: &str, rest: Vec<String>) -> Document {
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /Names << /Dests {root} >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    b.extend(rest);
+    open(build(&b, "/Root 1 0 R"))
+}
+
+#[test]
+fn name_tree_nodes_sharing_one_names_array_read_it_once() {
+    // 2,000 nodes (6 on) share one /Names array (5). Read for every node, its two entries would
+    // be read 4,000 times, and an edit would write all of them back.
+    let n = 2_000;
+    let nodes: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 6)).collect();
+    let mut rest = vec![format!("<< /Kids [{}] >>", nodes.join(" ")), "[(a) [3 0 R /Fit] (b) [3 0 R /Fit]]".into()];
+    rest.extend((0..n).map(|_| "<< /Names 5 0 R >>".to_string()));
+    let mut doc = shared_tree("4 0 R", rest);
+    crate::take_work();
+    assert_eq!(list(&doc), owned(&[("a", Some(0)), ("b", Some(0))]));
+    let work = crate::take_work();
+    assert!(work <= n + 4, "{work} kids and entries read for {n} nodes");
+    add_named_destination(&mut doc, "c", 0, None, None).unwrap();
+    let keys: Vec<Vec<u8>> = tree_pairs(&doc).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+}
+
+#[test]
+fn name_tree_nodes_sharing_one_kids_array_queue_it_once() {
+    // The root and 1,000 nodes (6 on) share one /Kids array (4) listing the leaf (5) and every
+    // node. Queued for each of them, it would put a million kids on the walk's stack.
+    let n = 1_000;
+    let kids: Vec<String> = std::iter::once("5 0 R".to_string()).chain((0..n).map(|i| format!("{} 0 R", i + 6))).collect();
+    let mut rest = vec![format!("[{}]", kids.join(" ")), "<< /Names [(a) [3 0 R /Fit]] >>".into()];
+    rest.extend((0..n).map(|_| "<< /Kids 4 0 R >>".to_string()));
+    let mut doc = shared_tree("<< /Kids 4 0 R >>", rest);
+    crate::take_work();
+    assert_eq!(list(&doc), owned(&[("a", Some(0))]));
+    let work = crate::take_work();
+    assert!(work <= n + 3, "{work} kids and entries read for {n} nodes");
+    add_named_destination(&mut doc, "b", 0, None, None).unwrap();
+    let keys: Vec<Vec<u8>> = tree_pairs(&doc).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, [b"a".to_vec(), b"b".to_vec()]);
+}
+
+#[test]
+fn pages_sharing_one_annots_array_list_its_links_once() {
+    // 500 pages share one /Annots array (3) of 500 links (4 on) naming `ch`. Listed for every
+    // page, the links would be gathered 250,000 times for a rename.
+    let n = 500;
+    let first_page = 4 + n;
+    let links: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
+    let pages: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + first_page)).collect();
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(ch) [{first_page} 0 R /Fit]] >> >> >>"),
+        format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 400] >>", pages.join(" ")),
+        format!("[{}]", links.join(" ")),
+    ];
+    b.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest (ch) >>".to_string()));
+    b.extend((0..n).map(|_| "<< /Type /Page /Parent 2 0 R /Annots 3 0 R >>".to_string()));
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    crate::take_work();
+    rename_named_destination(&mut doc, "ch", "new").unwrap();
+    let work = crate::take_work();
+    assert!(work <= n + 2, "{work} links and entries read for {n} pages");
+    let dests: Vec<Option<Object>> =
+        (0..n).map(|i| doc.get(ObjRef::new((i + 4) as u32, 0)).as_dict().and_then(|d| d.get(b"Dest").cloned())).collect();
+    assert!(dests.iter().all(|d| *d == Some(string("new"))), "{:?}", dests.iter().find(|d| **d != Some(string("new"))));
+}

@@ -67,12 +67,17 @@ fn names_dict(doc: &Document) -> Option<Dict> {
 }
 
 /// Every entry of the `/Names /Dests` tree, read iteratively: each indirect node once, at most
-/// [`TREE_NODES`] nodes, none deeper than [`TREE_DEPTH`].
+/// [`TREE_NODES`] nodes, none deeper than [`TREE_DEPTH`]. Each indirect `/Names` and `/Kids`
+/// array is read once too, however many nodes share it: read for each, nodes sharing one would
+/// add its entries, or queue its kids, once per node. So the walk reads each entry and each kid
+/// the file holds at most once.
 fn tree_entries(doc: &Document) -> TreeEntries {
     let mut out = TreeEntries { entries: Vec::new(), complete: true };
     let Some(tree) = names_dict(doc).and_then(|n| n.get(b"Dests").cloned()) else { return out };
     let mut stack = vec![(tree, 0usize)];
     let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut names_read: HashSet<ObjRef> = HashSet::new();
+    let mut kids_read: HashSet<ObjRef> = HashSet::new();
     let mut read = 0usize;
     while let Some((raw, depth)) = stack.pop() {
         if depth > TREE_DEPTH || read >= TREE_NODES {
@@ -88,9 +93,11 @@ fn tree_entries(doc: &Document) -> TreeEntries {
         read += 1;
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n))
+        if let Some(pairs) = d.get(b"Names").filter(|n| first_read(&mut names_read, n)).map(|n| doc.resolve(n))
             && let Some(pairs) = pairs.as_array()
         {
+            #[cfg(test)]
+            crate::work(pairs.len());
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = doc.resolve(k);
@@ -103,14 +110,25 @@ fn tree_entries(doc: &Document) -> TreeEntries {
                 }
             }
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k))
+        if let Some(kids) = d.get(b"Kids").filter(|k| first_read(&mut kids_read, k)).map(|k| doc.resolve(k))
             && let Some(kids) = kids.as_array()
         {
+            #[cfg(test)]
+            crate::work(kids.len());
             // Pushed in reverse, so they are read in order.
             stack.extend(kids.iter().rev().map(|kid| (kid.clone(), depth + 1)));
         }
     }
     out
+}
+
+/// Whether `o` is read now: a direct object always, a reference only the first time (it is
+/// added to `read`).
+fn first_read(read: &mut HashSet<ObjRef>, o: &Object) -> bool {
+    match o {
+        Object::Ref(r) => read.insert(*r),
+        _ => true,
+    }
 }
 
 /// The catalog's PDF 1.1 `/Dests` dictionary, if it has one.
@@ -450,10 +468,16 @@ fn rewrite_references(doc: &mut Document, keys: &HashSet<Vec<u8>>, replace: &dyn
         return Ok(());
     }
     let mut holders = crate::outline::items(doc);
+    // An indirect `/Annots` array is listed once, however many pages share it: listed for each,
+    // pages sharing one would list its annotations once per page.
+    let mut annots_read: HashSet<ObjRef> = HashSet::new();
     for (page, _) in walk(doc)? {
         holders.push(page);
-        let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a));
+        let annots =
+            doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).filter(|a| first_read(&mut annots_read, a)).map(|a| doc.resolve(&a));
         if let Some(annots) = annots.as_deref().and_then(Object::as_array) {
+            #[cfg(test)]
+            crate::work(annots.len());
             holders.extend(annots.iter().filter_map(Object::as_ref));
         }
     }
