@@ -400,7 +400,8 @@ mod tests {
         let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
             panic!("batch result should carry a plain-text per-file log: {result}");
         };
-        assert!(log.contains(out_str), "log should name the published output: {log}");
+        let out_escaped = out_str.replace('\\', "\\\\");
+        assert!(log.contains(&out_escaped), "log should name the published output: {log}");
         assert!(log.contains("optimize"), "log should report the successful step result: {log}");
         assert!(log.contains("ok"), "log should mark the successful file: {log}");
         let lower = log.to_ascii_lowercase();
