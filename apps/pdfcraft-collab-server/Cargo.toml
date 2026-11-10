@@ -20,9 +20,12 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 
 # The crash test drives the daemon over a real socket and signs its own tokens,
-# exactly as the cabinet would.
+# exactly as the cabinet would. `aws_lc_rs` for the same reason as in
+# `pdfcraft-collab-ws`: the RustCrypto backend would bring crypto-bigint 0.5.5
+# (RUSTSEC-2026-0387) through p256/p384, and exactly one provider feature is
+# what jsonwebtoken requires.
 [dev-dependencies]
-jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 rand = "0.8"
 rsa = "0.9"
 tungstenite = "0.30"

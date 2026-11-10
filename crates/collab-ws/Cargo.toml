@@ -20,8 +20,13 @@ thiserror = { workspace = true }
 # The server transport is native-only: the web client reaches the server through
 # the host bridge, so this crate is empty on wasm (and its crypto/socket deps are
 # not built there).
+#
+# `aws_lc_rs`, not `rust_crypto`: jsonwebtoken 11.1's RustCrypto backend pins
+# p256/p384 0.13 -> elliptic-curve 0.13 -> crypto-bigint 0.5.5, and 0.5.5 is
+# RUSTSEC-2026-0387 (timing branches in constant-time arithmetic). This crate is
+# native-only, where aws-lc-rs is already built for `pdfcraft-sign` (ADR-0009).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 tungstenite = "0.30"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
