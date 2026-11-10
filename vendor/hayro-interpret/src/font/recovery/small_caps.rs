@@ -18,7 +18,7 @@
 
 use super::{FontFacts, FontKind, GlyphFacts, RecoveryMode, RecoveryRule, Rule, symbol_font};
 use crate::font::generated::glyph_names;
-use crate::font::glyph_name_to_unicode;
+use crate::font::agl_unicode_from_name;
 use hayro_cmap::BfString;
 
 /// [`RecoveryRule::AdobeSmallCaps`].
@@ -41,7 +41,7 @@ pub(crate) fn small_cap_base(c: char) -> Option<(char, bool)> {
         None => (name.strip_suffix("oldstyle")?, false),
     };
     let base = char::from_u32(u.checked_sub(0xF700)?)?;
-    let named = glyph_name_to_unicode(stem)?;
+    let named = quiet_unicode(stem)?;
     let same = named == base || named.to_lowercase().eq(std::iter::once(base));
     (same && !base.is_control()).then_some((base, small && base.is_alphabetic()))
 }
@@ -50,18 +50,28 @@ pub(crate) fn small_cap_base(c: char) -> Option<(char, bool)> {
 /// of (`a.sc`, `a.smcp`, `A.c2sc`, `zero.onum`, `zero.oldstyle`).
 const FORM_SUFFIXES: [&str; 7] = ["sc", "smcp", "c2sc", "small", "oldstyle", "onum", "osf"];
 
+/// The character `glyph_name_to_unicode` reads `name` as, without its warning for a name it
+/// can't map: the guard asks of every glyph name in a font (up to 256 per font, on every
+/// page), and most names (`g55`, `C83`, `glyph12`) are no small capital and in no glyph list.
+fn quiet_unicode(name: &str) -> Option<char> {
+    match glyph_names::get(name) {
+        Some(text) => text.chars().next(),
+        None => agl_unicode_from_name(name),
+    }
+}
+
 /// The character a glyph name says its glyph is a small capital or an oldstyle figure of: a
 /// name the glyph list itself gives such a code point (`Asmall`, `zerooldstyle`), or a
 /// character's name with a form suffix (`a.sc`, `five.oldstyle`). Nothing for any other name.
 pub(crate) fn name_form_base(name: &str) -> Option<char> {
-    if let Some((base, _)) = glyph_name_to_unicode(name).and_then(small_cap_base) {
+    if let Some((base, _)) = quiet_unicode(name).and_then(small_cap_base) {
         return Some(base);
     }
     let (stem, suffix) = name.split_once('.')?;
     if !FORM_SUFFIXES.contains(&suffix) {
         return None;
     }
-    let mut lower = glyph_name_to_unicode(stem)?.to_lowercase();
+    let mut lower = quiet_unicode(stem)?.to_lowercase();
     let base = lower.next()?;
     lower.next().is_none().then_some(base)
 }
