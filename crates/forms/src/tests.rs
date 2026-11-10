@@ -5785,6 +5785,34 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
 
+/// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
+/// form with a thousand rows holds thousands of fields, and reading them all again for each one
+/// took 15 s a relayout. The fields `keep` turns down keep the appearance they had.
+#[test]
+fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
+    for n in [250u32, 1000] {
+        let mut objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        ];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")));
+        objs.push(format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")));
+        for i in 0..n {
+            objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /V (v{i}) /Rect [50 0 250 10] /P 3 0 R >>"));
+        }
+        let mut doc = document(&objs);
+        let before = form_reads();
+        redraw_fields(&mut doc, |_, f| f.name != "f0").unwrap();
+        assert_eq!(form_reads() - before, 1, "{n} fields");
+        let all = fields(&doc);
+        let has_ap = |name: &str| field(&all, name).widgets.iter().all(|w| doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP")));
+        assert!(!has_ap("f0"), "turned down: left as it was");
+        assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
+        assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
+    }
+}
+
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
 /// the group's buttons in the calculation order; and a text field `name` with two widgets.
 fn radio_group_form() -> Document {
