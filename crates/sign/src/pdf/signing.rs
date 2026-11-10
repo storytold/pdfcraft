@@ -1,5 +1,5 @@
 use super::listing::{mk_rotation, nums, sig_fields, text, walk_sig_fields};
-use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
+use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, ObjRef, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
 
@@ -233,7 +233,7 @@ fn sign_inner(
         .as_deref()
         .map(|n| sig_fields(&doc).into_iter().find(|f| f.name == n).ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}"))));
     // `turn`: how far the appearance is turned to read upright (`/MK /R`, counterclockwise).
-    let (widget, rect, turn) = match existing {
+    let widgets = match existing {
         Some(f) => {
             let f = f?;
             if f.signature(&doc).is_some() {
@@ -244,11 +244,25 @@ fn sign_inner(
             }
             let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
             doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
-            let (wr, wd) = f.widgets.first().cloned().ok_or_else(|| SignError::Pdf("the field has no widget".into()))?;
-            let rect = nums(&doc, &wd, b"Rect").filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
-            // The field's own rotation, as a form author set it: an existing field is not
-            // reoriented, so one without `/MK /R` is drawn as before.
-            (wr.unwrap_or(fr), rect.unwrap_or([0.0; 4]), mk_rotation(&doc, &wd))
+            if f.widgets.is_empty() {
+                return Err(SignError::Pdf("the field has no widget".into()));
+            }
+            let mut seen_widgets = HashSet::new();
+            let mut list = Vec::with_capacity(f.widgets.len());
+            for (wr, wd) in &f.widgets {
+                let target = wr.unwrap_or(fr);
+                if !seen_widgets.insert(target) {
+                    continue;
+                }
+                let rect = nums(&doc, wd, b"Rect")
+                    .filter(|r| r.len() == 4)
+                    .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])])
+                    .unwrap_or([0.0; 4]);
+                // Each widget's own rotation, as a form author set it: an existing field is not
+                // reoriented, so one without `/MK /R` is drawn as before.
+                list.push((target, rect, mk_rotation(&doc, wd)));
+            }
+            list
         }
         None => {
             let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
@@ -323,7 +337,7 @@ fn sign_inner(
                         .into(),
                 ));
             }
-            (wr, rect, turn)
+            vec![(wr, rect, turn)]
         }
     };
     if opts.field.is_some() {
@@ -354,12 +368,24 @@ fn sign_inner(
             }
         })?;
     }
-    // The appearance.
-    let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
-    let ap_ref = doc.add(Object::Stream(ap));
-    let mut apd = Dict::new();
-    apd.set(b"N".to_vec(), Object::Ref(ap_ref));
-    doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(apd)))?;
+    // The appearance. Widgets of a duplicated field that share a box and rotation share one
+    // appearance stream, while a widget with its own size or `/MK /R` gets one drawn to fit.
+    let mut drawn: Vec<([u64; 4], i64, ObjRef)> = Vec::new();
+    for (widget, rect, turn) in widgets {
+        let key = rect.map(f64::to_bits);
+        let ap_ref = match drawn.iter().find(|&&(k, t, _)| k == key && t == turn) {
+            Some(&(_, _, r)) => r,
+            None => {
+                let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
+                let r = doc.add(Object::Stream(ap));
+                drawn.push((key, turn, r));
+                r
+            }
+        };
+        let mut apd = Dict::new();
+        apd.set(b"N".to_vec(), Object::Ref(ap_ref));
+        doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(apd)))?;
+    }
     // Write with the placeholders, then patch them. What the user removed again before signing
     // (a cleared redaction mark) stays out of the file, as in a save; what signing added is
     // reachable (the signature through the field's `/V`), and the placeholders are found in the
@@ -668,4 +694,134 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
 pub(crate) fn fmt(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::pdf::{Status, TrustStore, list};
+
+    fn multi_widget_sig_doc() -> Result<Document, Box<dyn std::error::Error>> {
+        let mut doc = Document::new_empty();
+        let root = doc.root().ok_or("missing catalog")?;
+        let pages_ref = doc.get(root).as_dict().and_then(|c| c.get(b"Pages")).and_then(Object::as_ref).ok_or("missing Pages")?;
+
+        let field_ref = doc.add(Object::Dict(Dict::new()));
+        let mut page_refs = Vec::new();
+        let mut widget_refs = Vec::new();
+        let specs = [([50.0, 50.0, 250.0, 100.0], 0i64), ([50.0, 50.0, 250.0, 100.0], 0i64), ([50.0, 50.0, 150.0, 90.0], 90i64)];
+
+        for (rect, rot) in specs {
+            let mut ap_dict = Dict::new();
+            ap_dict.set(b"Type".to_vec(), Object::name("XObject"));
+            ap_dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            ap_dict.set(
+                b"BBox".to_vec(),
+                Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(rect[2] - rect[0]), Object::Real(rect[3] - rect[1])]),
+            );
+            let empty_ap = doc.add(Object::Stream(Stream::flate(ap_dict, b"q 0.8 G 0.5 w 0 0 100 50 re S Q")));
+
+            let page_ref = doc.add(Object::Dict(Dict::new()));
+            let mut w = Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"Parent".to_vec(), Object::Ref(field_ref));
+            w.set(b"P".to_vec(), Object::Ref(page_ref));
+            w.set(b"F".to_vec(), Object::Int(4));
+            w.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect()));
+            if rot != 0 {
+                let mut mk = Dict::new();
+                mk.set(b"R".to_vec(), Object::Int(rot));
+                w.set(b"MK".to_vec(), Object::Dict(mk));
+            }
+            let mut ap = Dict::new();
+            ap.set(b"N".to_vec(), Object::Ref(empty_ap));
+            w.set(b"AP".to_vec(), Object::Dict(ap));
+            let w_ref = doc.add(Object::Dict(w));
+            widget_refs.push(w_ref);
+
+            let mut page = Dict::new();
+            page.set(b"Type".to_vec(), Object::name("Page"));
+            page.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+            page.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+            page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(w_ref)]));
+            doc.set(page_ref, Object::Dict(page));
+            page_refs.push(page_ref);
+        }
+
+        doc.update_dict(pages_ref, |p| {
+            p.set(b"Kids".to_vec(), Object::Array(page_refs.iter().copied().map(Object::Ref).collect()));
+            p.set(b"Count".to_vec(), Object::Int(page_refs.len() as i64));
+        })?;
+
+        let mut field = Dict::new();
+        field.set(b"FT".to_vec(), Object::name("Sig"));
+        field.set(b"T".to_vec(), PdfString::text("Sig"));
+        field.set(b"Kids".to_vec(), Object::Array(widget_refs.iter().copied().map(Object::Ref).collect()));
+        doc.set(field_ref, Object::Dict(field));
+
+        let mut af = Dict::new();
+        af.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field_ref)]));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
+
+        let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default())?;
+        Ok(Document::open(Arc::new(bytes))?)
+    }
+
+    fn ap_ref_of(doc: &Document, w_ref: ObjRef) -> Result<ObjRef, Box<dyn std::error::Error>> {
+        doc.get(w_ref)
+            .as_dict()
+            .and_then(|w| w.get(b"AP"))
+            .map(|ap| doc.resolve(ap))
+            .and_then(|ap| ap.as_dict().and_then(|d| d.get(b"N")).and_then(Object::as_ref))
+            .ok_or_else(|| format!("widget {w_ref:?} missing /AP /N").into())
+    }
+
+    #[test]
+    fn signing_multi_widget_field_updates_every_widget_appearance() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = multi_widget_sig_doc()?;
+        let fields = sig_fields(&doc);
+        let f = fields.first().ok_or("missing Sig field")?;
+        let widgets: [ObjRef; 3] = f.widgets.iter().filter_map(|(r, _)| *r).collect::<Vec<_>>().try_into().map_err(|_| "expected 3 widgets")?;
+        let placeholders = [ap_ref_of(&doc, widgets[0])?, ap_ref_of(&doc, widgets[1])?, ap_ref_of(&doc, widgets[2])?];
+
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ec-p256.p12"))?;
+        let id = crate::pkcs12::open(&p12, "test")?;
+        let opts = SignOptions { field: Some("Sig".into()), date: "D:20261027120000Z".into(), ..SignOptions::default() };
+
+        let signed_bytes = sign(&doc, &id, &opts)?;
+        let signed_doc = Document::open(Arc::new(signed_bytes.clone()))?;
+
+        let ap0 = ap_ref_of(&signed_doc, widgets[0])?;
+        let ap1 = ap_ref_of(&signed_doc, widgets[1])?;
+        let ap2 = ap_ref_of(&signed_doc, widgets[2])?;
+
+        // None of the widgets may keep its unsigned placeholder box.
+        for (ap, old) in [(ap0, placeholders[0]), (ap1, placeholders[1]), (ap2, placeholders[2])] {
+            assert_ne!(ap, old, "widget kept its unsigned placeholder appearance");
+            let obj = signed_doc.get(ap);
+            let Object::Stream(stream) = &*obj else {
+                return Err("appearance is not a stream".into());
+            };
+            let data = stream.decoded()?;
+            assert!(String::from_utf8_lossy(&data).contains("BT"), "signed widget appearance should draw signature text");
+        }
+
+        // Identical widgets share one appearance stream; a widget with its own size/rotation gets its own.
+        assert_eq!(ap0, ap1, "widgets with the same rect and rotation should share one appearance stream");
+        assert_ne!(ap0, ap2, "widget with a different rect and rotation should get its own appearance stream");
+        let ap2_obj = signed_doc.get(ap2);
+        let Object::Stream(ap2_stream) = &*ap2_obj else {
+            return Err("ap2 is not a stream".into());
+        };
+        assert!(ap2_stream.dict.contains(b"Matrix"), "rotated widget appearance should carry /Matrix");
+
+        let trust = TrustStore { certs: vec![id.certificate] };
+        let sigs = list(&signed_doc, &signed_bytes, &trust);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].status, Status::Valid);
+        Ok(())
+    }
 }
