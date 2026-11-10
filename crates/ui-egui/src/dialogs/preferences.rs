@@ -773,7 +773,10 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             app.views[i].show_page_gaps = show_page_gaps;
         }
         if fit_changed {
-            app.views[i].set_fit(app.view_defaults.fit);
+            match app.view_defaults.fit {
+                Fit::None => app.views[i].set_zoom(app.view_defaults.zoom),
+                fit => app.views[i].set_fit(fit),
+            }
         }
         if zoom_changed {
             app.views[i].set_zoom(app.view_defaults.zoom);
