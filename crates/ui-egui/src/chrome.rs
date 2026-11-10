@@ -4,6 +4,8 @@ use craft_ui::panes::{Rail, RailItem, RailRequest};
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Sense, Stroke, vec2};
 
 use crate::canvas::{DocView, Fit, PageLayout};
+use crate::panes::{Place, TabDrop};
+use crate::tab_context::Action;
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
 
@@ -41,6 +43,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            app.panes.main_strip = Some(full);
             let drag = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click_and_drag());
             if drag.drag_started() {
                 window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
@@ -80,7 +83,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                for i in 0..app.views.len() {
+                // (The main pane's tabs: split view's second pane has a strip of its own.)
+                for i in app.tabs_in(Place::Main) {
                     if let Some(name) = crate::canvas::tab_label(app, i) {
                         natural.push(tab_natural_width(ui, &t, &name));
                     }
@@ -128,7 +132,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             // (with whether it was just released).
                             let mut slots = Vec::with_capacity(app.views.len());
                             let mut dragged = None;
-                            for i in 0..app.views.len() {
+                            for i in app.tabs_in(Place::Main) {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
@@ -143,7 +147,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         name: &name,
                                         file,
                                         dirty,
-                                        active: app.active == Some(i),
+                                        active: app.pane_front(Place::Main) == Some(i),
                                         index: i,
                                         cap,
                                         height: tab_h,
@@ -158,47 +162,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
-                                let id = app.views[i].id;
-                                let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
-                                response.context_menu(|ui| {
-                                    if ui.button(tl!("Close Tab")).clicked() {
-                                        action = Some(crate::tab_context::Action::Close(id));
-                                        ui.close();
-                                    }
-                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
-                                        action = Some(crate::tab_context::Action::Reopen);
-                                        ui.close();
-                                    }
-                                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
-                                    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
-                                        action = Some(crate::tab_context::Action::Reveal(id));
-                                        ui.close();
-                                    }
-                                    // Several windows (M14): the same moves as dragging the tab out of
-                                    // the strip or onto another window (the way where the desktop
-                                    // keeps the windows' places to itself, as Wayland does).
-                                    if PdfCraftApp::windows_supported() {
-                                        ui.separator();
-                                        let room = app.window_count() < crate::windows::MAX_WINDOWS;
-                                        if ui.add_enabled(app.can_detach(i) && room, egui::Button::new(tl!("Move to new window"))).clicked() {
-                                            action = Some(crate::tab_context::Action::Detach(id));
-                                            ui.close();
-                                        }
-                                    }
-                                    let current = app.current_window();
-                                    let others: Vec<(crate::WindowId, String)> =
-                                        app.window_titles().into_iter().filter(|(w, _)| *w != current).collect();
-                                    if !others.is_empty() {
-                                        ui.menu_button(tl!("Move to window"), |ui| {
-                                            for (window, title) in &others {
-                                                if ui.button(title).clicked() {
-                                                    action = Some(crate::tab_context::Action::MoveTo(id, *window));
-                                                    ui.close();
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
+                                response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
                                 if response.clicked() {
                                     app.active = Some(i);
                                 }
@@ -208,100 +172,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     close = Some(i);
                                 }
                             }
-                            // Where the tabs are, for a tab dragged here from another window (M14).
-                            let tab_rects: Vec<(pdfcraft_engine::DocId, Rect)> =
-                                slots.iter().filter_map(|(i, r)| app.views.get(*i).map(|v| (v.id, *r))).collect();
-                            app.note_strip_geometry(full, tab_rects);
-                            let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
-                            let clip = ui.clip_rect();
-                            let gap = ui.spacing().item_spacing.x;
-                            // The line marking the gap a tab lands in. In front of the first tab the gap
-                            // lies outside the scroll area's clip rect (#2225): keep the whole line
-                            // inside it.
-                            let mark = |ui: &egui::Ui, x: f32| {
-                                let x = x.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
-                                ui.painter().vline(x, span.shrink(4.0), Stroke::new(2.0, t.accent));
-                            };
-                            // A tab from another window held over this strip: mark where it lands.
-                            let current = app.current_window();
-                            if let Some(drag) = &app.tab_drag
-                                && drag.from != current
-                                && !drag.cancelled
-                                && let Some((window, index)) = drag.over
-                                && window == current
-                                && let Some(x) = drop_marker(&slots, usize::MAX, index.unwrap_or(slots.len()), gap)
-                            {
-                                mark(ui, x);
-                            }
-                            // Dragging a tab moves it (#1537): a line marks the gap it will land
-                            // in, and releasing the button drops it there. Past the strip's detach
-                            // zone (M14) releasing opens the tab in a window of its own, or adds it
-                            // to the PdfCraft window under the pointer; Escape cancels the drag.
-                            if let Some((from, released)) = dragged
-                                && let Some(doc) = app.views.get(from).map(|v| v.id)
-                                && let Some(p) = ui.ctx().pointer_latest_pos().or_else(|| {
-                                    // Released over another window: the pointer position of that
-                                    // frame is gone with the pointer (see `TabDrag::pointer`), so
-                                    // the release counts where the drag was last seen.
-                                    let last = app.tab_drag.as_ref().filter(|d| d.doc == doc && d.from == current).map(|d| d.pointer);
-                                    ui.ctx().pointer_interact_pos().or(last)
-                                })
-                            {
-                                let cancelled =
-                                    app.tab_drag.as_ref().is_some_and(|d| d.cancelled) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
-                                let outside = !full.expand2(vec2(0.0, TAB_DETACH_DISTANCE)).contains(p);
-                                let screen = app.screen_pos(p);
-                                let over = if outside {
-                                    screen.and_then(|s| app.window_under(s, current)).map(|w| (w, screen.and_then(|s| app.drop_index_in(w, s))))
-                                } else {
-                                    None
-                                };
-                                let to = drop_index(&slots, from, p.x);
-                                if released {
-                                    app.tab_drag = None;
-                                    if !cancelled && close.is_none() && action.is_none() {
-                                        match over {
-                                            _ if !outside => app.move_tab(from, to),
-                                            Some((window, index)) => {
-                                                app.queue_window_op(crate::WindowOp::MoveTab {
-                                                    doc,
-                                                    from: current,
-                                                    to: Some((window, index)),
-                                                    at: None,
-                                                });
-                                            }
-                                            None if app.can_detach(from) => {
-                                                app.queue_window_op(crate::WindowOp::MoveTab { doc, from: current, to: None, at: screen });
-                                            }
-                                            None => {}
-                                        }
-                                    }
-                                } else {
-                                    app.tab_drag = Some(crate::windows::TabDrag { doc, from: current, pointer: p, over, outside, cancelled });
-                                    if cancelled {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                                    } else if !outside {
-                                        drag_x = Some(p.x);
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                        if let Some(x) = drop_marker(&slots, from, to, gap) {
-                                            mark(ui, x);
-                                        }
-                                    } else {
-                                        // Detaching, or joining another window: no marker here, and a
-                                        // badge at the pointer says what releasing does.
-                                        ui.ctx().set_cursor_icon(if over.is_some() { egui::CursorIcon::Copy } else { egui::CursorIcon::Grabbing });
-                                        if over.is_none() && app.can_detach(from) {
-                                            let name = crate::canvas::tab_label(app, from).unwrap_or_default();
-                                            detach_badge(ui, &t, p, &name);
-                                        }
-                                    }
-                                    ui.ctx().request_repaint();
-                                }
-                            }
+                            drag_x = tab_drag(app, ui, full, &slots, dragged, Place::Main, close.is_some() || action.is_some());
                             if let Some(i) = close
                                 && let Some(view) = app.views.get(i)
                             {
-                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                                action.get_or_insert(Action::Close(view.view_key()));
                             }
                             if let Some(action) = action {
                                 app.tab_action(action);
@@ -419,6 +294,235 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// A document tab's right-click menu, in any strip: the choice is left in `action`.
+fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Option<Action>) {
+    let Some(view) = app.views.get(index) else { return };
+    let (tab, id) = (view.view_key(), view.id);
+    if ui.button(tl!("Close Tab")).clicked() {
+        *action = Some(Action::Close(tab));
+        ui.close();
+    }
+    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+        *action = Some(Action::Reopen);
+        ui.close();
+    }
+    ui.separator();
+    // Split view (view.split-window).
+    if ui.button(tl!("Split right")).clicked() {
+        *action = Some(Action::Split { tab, down: false });
+        ui.close();
+    }
+    if ui.button(tl!("Split down")).clicked() {
+        *action = Some(Action::Split { tab, down: true });
+        ui.close();
+    }
+    ui.separator();
+    let reveal = cfg!(not(target_arch = "wasm32")) && app.session.get(id).is_some_and(|d| d.path.is_some());
+    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
+        *action = Some(Action::Reveal(id));
+        ui.close();
+    }
+    // Several windows (M14): the same moves as dragging the tab out of the strip or onto
+    // another window (the way where the desktop keeps the windows' places to itself, as Wayland does).
+    ui.separator();
+    if PdfCraftApp::windows_supported() {
+        let room = app.window_count() < crate::windows::MAX_WINDOWS;
+        if ui.add_enabled(app.can_detach(index) && room, egui::Button::new(tl!("Move to new window"))).clicked() {
+            *action = Some(Action::Detach(id));
+            ui.close();
+        }
+        let current = app.current_window();
+        let others: Vec<(crate::WindowId, String)> = app.window_titles().into_iter().filter(|(w, _)| *w != current).collect();
+        if !others.is_empty() {
+            ui.menu_button(tl!("Move to window"), |ui| {
+                for (window, title) in &others {
+                    if ui.button(title).clicked() {
+                        *action = Some(Action::MoveTo(id, *window));
+                        ui.close();
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// A tab of `place`'s strip (the strip `full`, its tabs `slots`) being dragged (`dragged`: its index, and whether it
+/// was let go this frame). It moves the tab along the strip (#1537): a line marks the gap it will
+/// land in, and letting go drops it there. Over the right half of a page area that isn't split, or
+/// over split view's other pane, a hint shows where it would go instead, and letting go puts it
+/// there (`crate::panes`). Anywhere else past the strip's detach zone, letting go opens the tab
+/// in a window of its own, or adds it to the PdfCraft window under the pointer (M14); a badge at
+/// the pointer says which. Escape cancels. `busy` is a close or menu choice this frame, which
+/// wins. Returns the pointer's x while the tab moves along the strip, for scrolling at the
+/// strip's edges.
+fn tab_drag(
+    app: &mut PdfCraftApp,
+    ui: &mut egui::Ui,
+    full: Rect,
+    slots: &[(usize, Rect)],
+    dragged: Option<(usize, bool)>,
+    place: Place,
+    busy: bool,
+) -> Option<f32> {
+    let current = app.current_window();
+    let span = slots.first().map_or(full.y_range(), |(_, r)| r.y_range());
+    let clip = ui.clip_rect();
+    let gap = ui.spacing().item_spacing.x;
+    // The line marking the gap a tab lands in. In front of the first tab the gap lies outside the
+    // scroll area's clip rect (#2225): keep the whole line inside it.
+    let mark = |ui: &mut egui::Ui, x: f32| {
+        let x = x.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
+        let t = Tokens::get(ui.ctx());
+        ui.painter().vline(x, span.shrink(4.0), Stroke::new(2.0, t.accent));
+    };
+    // A tab dragged in from another window joins the main strip.
+    if place == Place::Main {
+        // Where these tabs are, so a tab dragged in from another window knows where it would land.
+        let tab_rects: Vec<(pdfcraft_engine::DocId, Rect)> = slots.iter().filter_map(|(i, r)| app.views.get(*i).map(|v| (v.id, *r))).collect();
+        app.note_strip_geometry(full, tab_rects);
+        // A tab from another window held over this strip: mark where it lands.
+        if let Some(drag) = &app.tab_drag
+            && drag.from != current
+            && !drag.cancelled
+            && let Some((window, index)) = drag.over
+            && window == current
+            && let Some(x) = drop_marker(slots, usize::MAX, index.unwrap_or(slots.len()), gap)
+        {
+            mark(ui, x);
+        }
+    }
+    let (from, released) = dragged?;
+    let doc = app.views.get(from).map(|v| v.id)?;
+    let p = ui.ctx().pointer_latest_pos().or_else(|| {
+        // Released over another window: the pointer position of that frame is gone with the
+        // pointer (see `TabDrag::pointer`), so the release counts where the drag was last seen.
+        let last = app.tab_drag.as_ref().filter(|d| d.doc == doc && d.from == current).map(|d| d.pointer);
+        ui.ctx().pointer_interact_pos().or(last)
+    })?;
+    let cancelled = app.tab_drag.as_ref().is_some_and(|d| d.cancelled) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+    // A pane of this window comes first; past the detach zone, and over no pane, the tab leaves.
+    let target = app.drop_target(p, place);
+    let outside = target == TabDrop::Strip && !full.expand2(vec2(0.0, TAB_DETACH_DISTANCE)).contains(p);
+    let screen = app.screen_pos(p);
+    let over =
+        if outside { screen.and_then(|s| app.window_under(s, current)).map(|w| (w, screen.and_then(|s| app.drop_index_in(w, s)))) } else { None };
+    if released {
+        app.tab_drag = None;
+        if !cancelled && !busy {
+            match (target, over) {
+                (TabDrop::Strip, _) if !outside => {
+                    let to = drop_index(slots, from, p.x);
+                    app.move_tab_in_strip(from, slots, to);
+                }
+                (TabDrop::Strip, Some((window, index))) => {
+                    app.queue_window_op(crate::WindowOp::MoveTab { doc, from: current, to: Some((window, index)), at: None });
+                }
+                (TabDrop::Strip, None) => {
+                    if app.can_detach(from) {
+                        app.queue_window_op(crate::WindowOp::MoveTab { doc, from: current, to: None, at: screen });
+                    }
+                }
+                (target, _) => app.drop_tab(from, target),
+            }
+        }
+        return None;
+    }
+    app.tab_drag = Some(crate::windows::TabDrag { doc, from: current, pointer: p, over, outside, cancelled });
+    ui.ctx().request_repaint();
+    if cancelled {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        return None;
+    }
+    if target != TabDrop::Strip {
+        // Over the other pane (or the half that would split): the pane shows a hint where the
+        // tab would land instead of a line in this strip.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        app.panes.drop_hint = app.drop_hint_rect(target);
+        return None;
+    }
+    if !outside {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let to = drop_index(slots, from, p.x);
+        if let Some(x) = drop_marker(slots, from, to, gap) {
+            mark(ui, x);
+        }
+        return Some(p.x);
+    }
+    // Detaching, or joining another window: no marker here, and a badge at the pointer says
+    // what releasing does.
+    ui.ctx().set_cursor_icon(if over.is_some() { egui::CursorIcon::Copy } else { egui::CursorIcon::Grabbing });
+    if over.is_none() && app.can_detach(from) {
+        let name = crate::canvas::tab_label(app, from).unwrap_or_default();
+        let t = Tokens::get(ui.ctx());
+        detach_badge(ui, &t, p, &name);
+    }
+    None
+}
+
+/// The tab strip of split view's second pane, in `strip`: its tabs share the width (no scrolling),
+/// and are clicked, closed, moved along and dragged to the other pane as in the main strip.
+pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Rect, place: Place) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(strip, 0.0, t.titlebar);
+    ui.painter().hline(strip.x_range(), strip.bottom() - 0.5, Stroke::new(1.0, t.divider));
+    let tabs = app.tabs_in(place);
+    let front = app.pane_front(place);
+    let inner = Rect::from_min_max(strip.min + vec2(6.0, 2.0), strip.max - vec2(6.0, 0.0));
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Max)).id_salt(("tab-row", place)));
+    row.spacing_mut().item_spacing.x = 4.0;
+    let natural: Vec<f32> = tabs.iter().filter_map(|&i| crate::canvas::tab_label(app, i)).map(|name| tab_natural_width(&row, &t, &name)).collect();
+    let cap = tab_cap(&natural, row.available_width(), 4.0, TAB_MIN_WIDTH);
+    let mut close = None;
+    let mut action = None;
+    let mut slots = Vec::with_capacity(tabs.len());
+    let mut dragged = None;
+    for &i in &tabs {
+        let Some(view) = app.views.get(i) else { continue };
+        let Some(doc) = app.session.get(view.id) else { continue };
+        let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+        let dirty = doc.dirty;
+        let file = (name != doc.name).then(|| doc.name.clone());
+        let id = row.scope_id().with(("pane-tab", view.view_key()));
+        let spec = TabSpec {
+            id,
+            theme: &t,
+            icon: "file-text",
+            name: &name,
+            file: file.as_deref(),
+            dirty,
+            active: front == Some(i),
+            index: i,
+            cap,
+            height: inner.height(),
+            draggable: true,
+        };
+        let response = tab(&mut row, spec, &mut close);
+        slots.push((i, response.rect));
+        if response.dragged() || response.drag_stopped() {
+            dragged = Some((i, response.drag_stopped()));
+        }
+        response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
+        if response.clicked() {
+            app.active = Some(i);
+            app.combine_tab.focused = false;
+        }
+        // A middle click closes the tab, as in the main strip (#1853).
+        if response.middle_clicked() {
+            close = Some(i);
+        }
+    }
+    tab_drag(app, &mut row, strip, &slots, dragged, place, close.is_some() || action.is_some());
+    if let Some(i) = close
+        && let Some(view) = app.views.get(i)
+    {
+        action.get_or_insert(Action::Close(view.view_key()));
+    }
+    if let Some(action) = action {
+        app.tab_action(action);
+    }
+}
+
 /// A tab's chrome around its name: the icon on the left, the close button on the right.
 const TAB_CHROME: f32 = 64.0;
 /// The narrowest a tab shrinks to before the strip scrolls: room for most of a name.
@@ -436,8 +540,8 @@ fn tabs_overflow(natural: &[f32], budget: f32, gap: f32, min: f32) -> bool {
 const TAB_DRAG_EDGE: f32 = 24.0;
 const TAB_DRAG_STEP: f32 = 8.0;
 /// How far above or below the strip a dragged tab is still reordered; past it (or past the
-/// window's sides) releasing detaches the tab into its own window (M14). Wide enough that a
-/// sloppy reorder never detaches.
+/// window's sides), and over no pane of split view, releasing detaches the tab into its own
+/// window (M14). Wide enough that a sloppy reorder never detaches.
 const TAB_DETACH_DISTANCE: f32 = 40.0;
 
 /// A badge at the pointer while a tab is dragged past the strip: the window icon and the tab's
@@ -592,28 +696,64 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
     theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
 }
 
+/// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the
+/// 4 pt `item_spacing` after each of them (three gaps, not two), and the 8 pt spacer.
+const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 3.0 * 4.0 + 8.0;
+/// Narrowest search field the mode bar shows; below it the field becomes an icon button.
+const MODE_BAR_SEARCH_MIN: f32 = 140.0;
+
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // The document in the active tab may hide the menu or the tools (`crate::viewer_prefs`).
+    let hidden = app.hidden_interface();
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // The menus, unless the native macOS menu bar has them.
-                if app.native_menu.is_none() {
+                // The menus, unless the native macOS menu bar has them or the document hides them.
+                if app.native_menu.is_none() && !hidden.menubar {
                     app.menu_bar_ui(ui);
                     ui.add_space(6.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                     ui.add_space(10.0);
                 }
+                if hidden.toolbar {
+                    return;
+                }
                 // Acrobat's mode bar has no Read tab: reading is what the viewer does with no tool
                 // in use. Read mode (the panes hidden) stays a View command and a default workspace.
-                for (mode, label) in [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")] {
-                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.switch_mode(mode, true);
+                let modes = [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+                // What the right side needs (three 32 px buttons, gaps) and the least search box worth showing.
+                let avail = ui.available_width();
+                let tabs_w: f32 = modes.iter().map(|(_, l)| widgets::mode_tab_width(ui, tl!(*l))).sum::<f32>() + 2.0 * (modes.len() as f32 - 1.0);
+                let inline_tabs = avail >= tabs_w + MODE_BAR_RIGHT + MODE_BAR_SEARCH_MIN;
+                if inline_tabs {
+                    for (mode, label) in modes {
+                        if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                            app.switch_mode(mode, true);
+                        }
                     }
+                } else {
+                    // Narrow window: the modes fold into one menu named after the current one.
+                    // Read is not one of the four choices but can be active (View command): name it too.
+                    let current = if app.mode == Mode::Read {
+                        tl!("Read")
+                    } else {
+                        tl!(modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l))
+                    };
+                    let resp = widgets::ghost_button(ui, "chevron-down", current);
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.set_min_width(160.0);
+                        for (mode, label) in modes {
+                            if ui.add(egui::Button::selectable(app.mode == mode, tl!(label))).clicked() {
+                                app.switch_mode(mode, true);
+                            }
+                        }
+                    });
                 }
+                let left = ui.available_width();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
@@ -638,7 +778,14 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     });
                     ui.add_space(8.0);
-                    if widgets::search_box(ui, tl!("Find tools and commands"), 260.0).clicked() {
+                    let search_w = (left - MODE_BAR_RIGHT).clamp(0.0, 260.0);
+                    let opened = if search_w >= MODE_BAR_SEARCH_MIN {
+                        widgets::search_box(ui, tl!("Find tools and commands"), search_w).clicked()
+                    } else {
+                        // Too narrow for the field: a button opens the same command search.
+                        icons::button(ui, "search", 32.0, false, tl!("Find tools and commands")).clicked()
+                    };
+                    if opened {
                         app.palette_open = true;
                     }
                 });

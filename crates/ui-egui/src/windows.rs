@@ -45,8 +45,9 @@ pub const MAX_WINDOWS: usize = 16;
 
 /// A new window's size when its source window's size is unknown, in points.
 const DEFAULT_SIZE: Vec2 = vec2(1440.0, 920.0);
-/// The smallest a new window is made, in points (`apps/pdfcraft` gives the main window the same floor).
-const MIN_SIZE: Vec2 = vec2(820.0, 520.0);
+/// The smallest a new window is made, in points: the main window's own floor
+/// (`MIN_WINDOW_SIZE`), so a window detached from a narrow one keeps its width.
+const MIN_SIZE: Vec2 = vec2(crate::MIN_WINDOW_SIZE[0], crate::MIN_WINDOW_SIZE[1]);
 /// Where a window opened from a menu lands relative to the window it came from.
 const CASCADE: Vec2 = vec2(40.0, 40.0);
 /// Where the pointer holds a tab dropped into empty space: the new window's top-left is this
@@ -137,6 +138,21 @@ pub struct WindowState {
     pub(crate) last_right: RightPanel,
     /// The keys this window's menu bar clicked (Copy, Delete …), for its next frame's input.
     pub(crate) menu_input: Vec<egui::Event>,
+    /// Split view: each window splits its own page area (its tabs carry their pane).
+    pub(crate) panes: crate::panes::Panes,
+    pub(crate) all_tools_full: bool,
+    pub(crate) all_tools_tab: (Option<DocId>, bool),
+    pub(crate) menu_pastes: usize,
+    pub(crate) pending_window: Option<crate::viewer_prefs::PendingWindow>,
+    pub(crate) portfolio_initial: Option<(DocId, String)>,
+    pub(crate) portfolio_seen: Option<DocId>,
+    pub(crate) portfolio_panel: Option<Option<RightPanel>>,
+    pub(crate) attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
+    pub(crate) compare_pages: String,
+    pub(crate) convert_colours_draft: crate::convert_colours_ui::ConvertColoursDraft,
+    pub(crate) hairlines_draft: crate::hairlines_ui::HairlinesDraft,
+    pub(crate) printer_marks_draft: crate::printer_marks_ui::PrinterMarksDraft,
+    pub(crate) scan_clean_draft: crate::scan_clean_ui::ScanCleanDraft,
     /// The widths of this window's Tools pane and side panel: dragging a border in one window
     /// leaves the others as they are. Where the panes dock stays one choice for every window
     /// (Preferences), and Preferences keep the main window's widths.
@@ -221,6 +237,20 @@ impl Default for WindowState {
             pdfa: Default::default(),
             last_right: RightPanel::Comments,
             menu_input: Vec::new(),
+            panes: Default::default(),
+            all_tools_full: false,
+            all_tools_tab: (None, false),
+            menu_pastes: 0,
+            pending_window: None,
+            portfolio_initial: None,
+            portfolio_seen: None,
+            portfolio_panel: None,
+            attachment_description_draft: None,
+            compare_pages: String::new(),
+            convert_colours_draft: Default::default(),
+            hairlines_draft: Default::default(),
+            printer_marks_draft: Default::default(),
+            scan_clean_draft: Default::default(),
             tools_width: crate::side_panels::TOOLS_WIDTH,
             side_width: crate::side_panels::SIDE_WIDTH,
         }
@@ -396,6 +426,20 @@ impl PdfCraftApp {
             pdfa,
             last_right,
             menu_input,
+            panes,
+            all_tools_full,
+            all_tools_tab,
+            menu_pastes,
+            pending_window,
+            portfolio_initial,
+            portfolio_seen,
+            portfolio_panel,
+            attachment_description_draft,
+            compare_pages,
+            convert_colours_draft,
+            hairlines_draft,
+            printer_marks_draft,
+            scan_clean_draft,
             tools_width,
             side_width,
         } = state;
@@ -472,6 +516,20 @@ impl PdfCraftApp {
         std::mem::swap(&mut self.pdfa, pdfa);
         std::mem::swap(&mut self.last_right, last_right);
         std::mem::swap(&mut self.menu_input, menu_input);
+        std::mem::swap(&mut self.panes, panes);
+        std::mem::swap(&mut self.all_tools_full, all_tools_full);
+        std::mem::swap(&mut self.all_tools_tab, all_tools_tab);
+        std::mem::swap(&mut self.menu_pastes, menu_pastes);
+        std::mem::swap(&mut self.pending_window, pending_window);
+        std::mem::swap(&mut self.portfolio_initial, portfolio_initial);
+        std::mem::swap(&mut self.portfolio_seen, portfolio_seen);
+        std::mem::swap(&mut self.portfolio_panel, portfolio_panel);
+        std::mem::swap(&mut self.attachment_description_draft, attachment_description_draft);
+        std::mem::swap(&mut self.compare_pages, compare_pages);
+        std::mem::swap(&mut self.convert_colours_draft, convert_colours_draft);
+        std::mem::swap(&mut self.hairlines_draft, hairlines_draft);
+        std::mem::swap(&mut self.printer_marks_draft, printer_marks_draft);
+        std::mem::swap(&mut self.scan_clean_draft, scan_clean_draft);
         std::mem::swap(&mut self.side_panels.tools_width, tools_width);
         std::mem::swap(&mut self.side_panels.side_width, side_width);
     }
@@ -618,10 +676,12 @@ impl PdfCraftApp {
     }
 
     /// Whether the tab at `index` of the current window may leave it for a new window: any tab
-    /// of the main window, and a tab of another window that has more than one (the only tab of
-    /// a window is the window; drag the window instead).
+    /// of the main window, and a tab of another window that shows another document too (the
+    /// only document of a window is the window, in one tab or in both panes of split view; drag
+    /// the window instead).
     pub(crate) fn can_detach(&self, index: usize) -> bool {
-        Self::windows_supported() && index < self.views.len() && (self.current_window == WindowId::ROOT || self.views.len() > 1)
+        let Some(doc) = self.views.get(index).map(|v| v.id) else { return false };
+        Self::windows_supported() && (self.current_window == WindowId::ROOT || self.views.iter().any(|v| v.id != doc))
     }
 
     /// A window for `view`, laid out like window `from` (same mode, panels and panel widths), at
@@ -650,17 +710,24 @@ impl PdfCraftApp {
         self.focused_window = id;
     }
 
-    /// Take the view of `doc` out of window `from` (the document stays open).
+    /// Take the view of `doc` out of window `from` (the document stays open), the active one
+    /// when split view shows the document in both panes. A document shows in one window, so its
+    /// other view there closes, as when split view ends with the document in both panes. The
+    /// view leaves for another window's tab strip: its pane there is the main one.
     fn take_view(&mut self, doc: DocId, from: WindowId) -> Option<DocView> {
         self.with_window(from, |a| {
-            let at = a.views.iter().position(|v| v.id == doc)?;
-            let view = a.views.remove(at);
-            a.active = match a.active {
-                _ if a.views.is_empty() => None,
-                Some(i) if i > at => Some(i - 1),
-                Some(i) if i >= a.views.len() => Some(a.views.len() - 1),
-                other => other,
+            let at = a.active.filter(|&i| a.views.get(i).is_some_and(|v| v.id == doc)).or_else(|| a.views.iter().position(|v| v.id == doc))?;
+            let stays = a.active.and_then(|i| a.views.get(i)).filter(|v| v.id != doc).map(|v| v.pane.key);
+            let mut view = a.views.remove(at);
+            let place = view.place();
+            let before = a.views.iter().take(at).filter(|v| v.id == doc).count();
+            a.views.retain(|v| v.id != doc);
+            a.active = match stays {
+                Some(key) => a.tab_with_key(key),
+                None => a.after_close(place, at - before),
             };
+            view.pane.place = crate::panes::Place::Main;
+            view.pane.placed = true;
             Some(view)
         })
         .flatten()
@@ -690,9 +757,15 @@ impl PdfCraftApp {
             None => self.open_window_with(view, from, at),
             Some((target, index)) => {
                 self.with_window(target, |a| {
-                    let i = index.map_or(a.views.len(), |i| i.min(a.views.len()));
+                    // `index` counts the tabs of the main strip (split view's second pane has its own).
+                    let strip = a.tabs_in(crate::panes::Place::Main);
+                    let i = match index.and_then(|i| strip.get(i)) {
+                        Some(&at) => at,
+                        None => strip.last().map_or(a.views.len(), |&last| last + 1),
+                    };
                     a.views.insert(i, view);
                     a.active = Some(i);
+                    a.combine_tab.focused = false;
                 });
                 self.focus_window(target);
             }
@@ -729,8 +802,16 @@ impl PdfCraftApp {
         }
         let first_merged = self.views.len();
         for slot in std::mem::take(&mut self.windows) {
-            if let Some(mut state) = slot.state {
-                self.views.append(&mut state.views);
+            if let Some(state) = slot.state {
+                // Into the main strip, each document once (a window's split view may show one
+                // in both panes).
+                for mut view in state.views {
+                    if self.views.iter().all(|v| v.id != view.id) {
+                        view.pane.place = crate::panes::Place::Main;
+                        view.pane.placed = true;
+                        self.views.push(view);
+                    }
+                }
             }
             self.window_geometry.remove(&slot.id);
         }
@@ -758,7 +839,13 @@ impl PdfCraftApp {
             if let Some(ctx) = &self.ctx {
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             }
-        } else if self.first_dirty().is_some() {
+            return;
+        }
+        // A document under OCR review stays open until the review is accepted or rejected.
+        if self.hold_for_any_ocr_review() {
+            return;
+        }
+        if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::Window);
         } else {
             self.queue_window_op(WindowOp::Close(self.current_window));
@@ -771,7 +858,9 @@ impl PdfCraftApp {
         if self.current_window == WindowId::ROOT || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        if self.first_dirty().is_some() {
+        if self.hold_for_any_ocr_review() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else if self.first_dirty().is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Window);
         } else {
@@ -1121,6 +1210,61 @@ mod tests {
         assert_eq!(app.session.docs().len(), 3);
     }
 
+    /// A document shows in one window: a tab whose document split view shows in both panes leaves
+    /// with it, and its other view closes, as when split view ends. In its new window it is the
+    /// only document, in one tab or two, so it stays; merging brings it home once.
+    #[test]
+    fn a_tab_shown_in_both_panes_takes_its_document_to_the_new_window() {
+        use crate::panes::Place;
+        let mut app = app_with(&["a.pdf", "b.pdf"]);
+        let ctx = egui::Context::default();
+        let b = app.views[1].id;
+        app.active = Some(1);
+        app.split_tab(1, false);
+        assert_eq!(app.views.iter().filter(|v| v.id == b).count(), 2, "b.pdf in both panes");
+        let moving = app.active.and_then(|i| app.views.get(i)).map(|v| v.pane.key);
+        app.queue_window_op(WindowOp::MoveTab { doc: b, from: WindowId::ROOT, to: None, at: None });
+        app.apply_window_ops(&ctx);
+        assert_eq!(names(&app), ["a.pdf"]);
+        assert_eq!(app.active, Some(0));
+        app.settle_panes();
+        assert!(app.panes.split.is_none(), "a pane left without tabs ends split view");
+        let second = app.windows[0].id;
+        let there = app.with_window(second, |w| w.views.iter().map(|v| (v.id, v.place(), v.pane.key)).collect::<Vec<_>>());
+        assert_eq!(there, Some(vec![(b, Place::Main, moving.unwrap_or_default())]), "the active view went, into the main strip");
+        assert_eq!(app.session.docs().len(), 2, "the document is still open");
+        let stays = app.with_window(second, |w| {
+            w.split_tab(0, false);
+            w.views.len() == 2 && !w.can_detach(0) && !w.can_detach(1)
+        });
+        assert_eq!(stays, Some(true));
+        app.merge_all_windows();
+        assert_eq!(names(&app), ["a.pdf", "b.pdf"]);
+        assert!(app.views.iter().all(|v| v.place() == Place::Main));
+    }
+
+    /// A tab dropped on a split window's strip lands at that strip's gap: the index counts the main
+    /// strip's tabs, not the window's (the second pane has its own strip).
+    #[test]
+    fn a_tab_moved_into_a_split_window_joins_its_main_strip() {
+        use crate::panes::Place;
+        let mut app = app_with(&["a.pdf", "b.pdf", "c.pdf"]);
+        let ctx = egui::Context::default();
+        let c = app.views[2].id;
+        app.queue_window_op(WindowOp::MoveTab { doc: c, from: WindowId::ROOT, to: None, at: None });
+        app.apply_window_ops(&ctx);
+        let second = app.windows[0].id;
+        // a.pdf into the second pane: the main strip holds b.pdf alone.
+        app.move_tab_to(0, Place::Second);
+        app.queue_window_op(WindowOp::MoveTab { doc: c, from: second, to: Some((WindowId::ROOT, Some(0))), at: None });
+        app.apply_window_ops(&ctx);
+        assert_eq!(names(&app), ["a.pdf", "c.pdf", "b.pdf"]);
+        assert_eq!(app.views.iter().map(|v| v.place()).collect::<Vec<_>>(), [Place::Second, Place::Main, Place::Main]);
+        assert_eq!(app.active, Some(1));
+        assert!(app.panes.split.is_some(), "split view stays");
+        assert_eq!(app.window_count(), 1);
+    }
+
     #[test]
     fn the_only_tab_of_a_second_window_stays_but_the_main_windows_last_tab_may_leave() {
         let mut app = app_with(&["a.pdf"]);
@@ -1245,6 +1389,14 @@ mod tests {
         // Dropped beyond the screen: on a monitor whose place egui doesn't tell. The size still drops.
         let beyond = new_window_place(Some(&source), Some(Pos2::new(2000.0, 300.0)));
         assert_eq!(beyond, (Some(Pos2::new(2000.0, 300.0) - TAB_GRIP), vec2(1152.0, 582.0)));
+    }
+
+    #[test]
+    fn detaching_from_a_narrow_window_keeps_its_width() {
+        // Half a 1512 pt screen: the second window can also fit on the other half.
+        let size = vec2(756.0, 610.0);
+        let source = WindowGeometry { known: true, rect: Rect::from_min_size(Pos2::new(0.0, 50.0), size), ..Default::default() };
+        assert_eq!(new_window_place(Some(&source), None).1, size);
     }
 
     #[test]
