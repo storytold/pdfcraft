@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use pdfcraft_content::{Matrix, Op, Pieces, overlaps, serialize_ops};
+use pdfcraft_content::{Matrix, Op, overlaps, serialize_ops};
 use pdfcraft_cos::{Dict, Document, Object};
 
 use crate::objects::checked_streams;
@@ -488,8 +488,8 @@ fn arranged(doc: &Document, page: usize, target: ObjectTarget, order: ZOrder) ->
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = checked_streams(doc, page)?;
     // PdfCraft's marks, added items and the `q`/`Q` it puts around the page's own content.
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
-    let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let marked: Vec<bool> = streams.iter().map(|s| crate::place::stream_tag(doc, &s.entry).is_some()).collect();
+    let pieces = crate::text::joined(&streams);
     let (ops, data) = (pieces.parse().ops, pieces.data());
     let foreign = |i: usize| {
         ops.get(i).is_some_and(|op| {
@@ -594,7 +594,7 @@ fn arranged(doc: &Document, page: usize, target: ObjectTarget, order: ZOrder) ->
     let insertion = (at..at, payload(&ops, data, &reopened, a, at_x, owned)?);
     let edits = if forward { [removal, insertion] } else { [insertion, removal] };
     let mut work = doc.clone();
-    let contents = crate::text::rewritten_contents(&mut work, &streams, pieces.splice(edits));
+    let contents = crate::text::rewritten_contents(&mut work, &streams, pieces.splice(edits))?;
     work.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
 
     // Paths and images are listed in painting order: count those that stay before it.

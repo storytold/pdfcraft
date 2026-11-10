@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign, TextInk};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;
@@ -21,13 +21,34 @@ fn to_view(r: [f64; 4], ph: f64) -> [f64; 4] {
     [r[0], ph - r[3], r[2], ph - r[1]]
 }
 
-fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
+pub(crate) fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
     a.get(key)
         .map(|v| {
             let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
             <[f64; 4]>::try_from(r).map_err(|_| bad(format!("{key} must be 4 numbers")))
         })
         .transpose()
+}
+
+const INK_ARGS: &str = "give one of color (#RRGGBB or a name), gray (0 black to 1 white) and cmyk ([c, m, y, k], each 0 to 1)";
+
+/// `gray` or `cmyk`: the text painted in DeviceGray or DeviceCMYK rather than RGB. At most one of
+/// them and `color`.
+fn ink_arg(a: &Args) -> Result<Option<TextInk>> {
+    if ["color", "gray", "cmyk"].iter().filter(|k| a.get(k).is_some()).count() > 1 {
+        return Err(bad(INK_ARGS));
+    }
+    let unit = |v: Option<f64>, key: &str| v.filter(|v| (0.0..=1.0).contains(v)).ok_or_else(|| bad(format!("{key} takes numbers from 0 to 1")));
+    if let Some(g) = a.get("gray") {
+        return Ok(Some(TextInk::Gray(unit(g.as_f64(), "gray")?)));
+    }
+    let Some(c) = a.get("cmyk") else { return Ok(None) };
+    let parts = c.as_array().filter(|p| p.len() == 4).ok_or_else(|| bad("cmyk must be [c, m, y, k]"))?;
+    let mut cmyk = [0.0; 4];
+    for (out, v) in cmyk.iter_mut().zip(parts) {
+        *out = unit(v.as_f64(), "cmyk")?;
+    }
+    Ok(Some(TextInk::Cmyk(cmyk)))
 }
 
 /// Apply the style arguments to `t`.
@@ -49,8 +70,12 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(i) = a.opt_bool("italic")? {
         t.italic = i;
     }
-    if let Some(c) = a.opt_str("color")? {
-        t.color = parse_color(c)?;
+    if let Some(ink) = ink_arg(a)? {
+        t.set_ink(Some(ink));
+    } else if let Some(c) = a.opt_str("color")? {
+        // An RGB colour paints in RGB, even one that is the ink's look.
+        t.set_ink(None);
+        t.set_color(parse_color(c)?);
     }
     if let Some(al) = a.opt_str("align")? {
         t.align = parse_align(al)?;
@@ -124,6 +149,12 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
+                        // Text painted in a print colour space says so; RGB text has neither.
+                        match t.painted_ink() {
+                            Some(TextInk::Gray(g)) => v["gray"] = json!(g),
+                            Some(TextInk::Cmyk(c)) => v["cmyk"] = json!(c),
+                            None => {}
+                        }
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -205,8 +236,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "color", "gray", "cmyk", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, gray, cmyk, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {
@@ -333,9 +364,34 @@ impl Automation {
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
     }
 
+    /// The references `objects` names (from object_list), or with `all` every object on `page`,
+    /// as ⌘A selects them in Edit a PDF; refused when `generation` is not the document's.
+    fn object_targets(&self, a: &Args, page: usize) -> Result<Vec<pdfcraft_engine::ObjectTarget>> {
+        use pdfcraft_engine::MAX_MOVE_OBJECTS;
+        let doc = self.doc(a)?;
+        check_generation(a, doc)?;
+        if a.opt_bool("all")?.unwrap_or(false) {
+            if a.get("objects").is_some() {
+                return Err(bad("give objects or all, not both"));
+            }
+            let all: Vec<_> = doc.editable_objects(page).map_err(failed)?.into_iter().map(|o| o.target).collect();
+            if all.is_empty() || all.len() > MAX_MOVE_OBJECTS {
+                return Err(failed(format!("page {} has {} objects; select 1–1000", page + 1, all.len())));
+            }
+            return Ok(all);
+        }
+        a.get("objects")
+            .and_then(Value::as_array)
+            .filter(|r| !r.is_empty() && r.len() <= MAX_MOVE_OBJECTS)
+            .ok_or_else(|| bad("objects must contain 1–1000 references from object_list (or pass all: true)"))?
+            .iter()
+            .map(object_target)
+            .collect()
+    }
+
     pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let targets = object_targets(a)?;
+        let targets = self.object_targets(a, page)?;
         let delta = a
             .get("offset")
             .and_then(Value::as_array)
@@ -343,9 +399,7 @@ impl Automation {
             .and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]))
             .filter(|v| v.iter().all(|n| n.is_finite() && n.abs() <= 1e9))
             .ok_or_else(|| bad("offset must contain two finite numbers [dx, dy] in displayed points"))?;
-        let doc = self.doc(a)?;
-        check_generation(a, doc, "moving")?;
-        let offset = doc.object_move_offset(page, delta).map_err(failed)?;
+        let offset = self.doc(a)?.object_move_offset(page, delta).map_err(failed)?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;
         result["moved"] = json!(count);
@@ -355,7 +409,7 @@ impl Automation {
     pub(crate) fn object_align(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::ObjectAlign;
         let page = self.page(a)?;
-        let targets = object_targets(a)?;
+        let targets = self.object_targets(a, page)?;
         let align = match a.get("action").and_then(Value::as_str) {
             Some("left") => ObjectAlign::Left,
             Some("centre" | "center") => ObjectAlign::CentreHorizontal,
@@ -367,7 +421,6 @@ impl Automation {
             Some("distribute_vertical") => ObjectAlign::DistributeVertical,
             _ => return Err(bad("action must be left, centre, right, top, middle, bottom, distribute_horizontal or distribute_vertical")),
         };
-        check_generation(a, self.doc(a)?, "aligning")?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::AlignObjects { page, objects: targets, align })?;
         result["aligned"] = json!(count);
@@ -385,7 +438,7 @@ impl Automation {
             .filter(|r| r.iter().all(|v| v.abs() <= 1e9) && r[2] > r[0] && r[3] > r[1])
             .ok_or_else(|| bad("rect must be [x0, y0, x1, y1] in displayed points, with x1 > x0 and y1 > y0"))?;
         let doc = self.doc(a)?;
-        check_generation(a, doc, "resizing")?;
+        check_generation(a, doc)?;
         let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
         let rect = crate::comments::rect_to_user(info, r);
         self.apply(a, Edit::TransformPath { page, index: target.index, rect })
@@ -393,13 +446,12 @@ impl Automation {
 
     pub(crate) fn object_recolour(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let targets = object_targets(a)?;
+        let targets = self.object_targets(a, page)?;
         let fill = a.opt_str("fill")?.map(parse_color).transpose()?;
         let stroke = a.opt_str("stroke")?.map(parse_color).transpose()?;
         if fill.is_none() && stroke.is_none() {
             return Err(bad("give fill, stroke or both as #RRGGBB"));
         }
-        check_generation(a, self.doc(a)?, "recolouring")?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::RecolourObjects { page, objects: targets, fill, stroke })?;
         result["recoloured"] = json!(count);
@@ -408,8 +460,7 @@ impl Automation {
 
     pub(crate) fn object_delete(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let targets = object_targets(a)?;
-        check_generation(a, self.doc(a)?, "deleting")?;
+        let targets = self.object_targets(a, page)?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::DeleteObjects { page, objects: targets })?;
         result["deleted"] = json!(count);
@@ -428,24 +479,49 @@ impl Automation {
             _ => return Err(bad("order must be front, forward, backward or back")),
         };
         let doc = self.doc(a)?;
-        check_generation(a, doc, "arranging")?;
+        check_generation(a, doc)?;
         // Paths and images are listed in painting order, so the reference changes with it.
         let moved = doc.arranged_target(page, object, order).map_err(failed)?;
         let mut result = self.apply(a, Edit::ArrangeObjects { page, object, order })?;
         result["object"] = json!({"kind":moved.kind.as_str(),"index":moved.index.saturating_add(1)});
         Ok(result)
     }
-}
 
-/// `objects`: 1–1000 `{kind, index}` references from object_list (1-based indexes).
-pub(crate) fn object_targets(a: &Args) -> Result<Vec<pdfcraft_engine::ObjectTarget>> {
-    a.get("objects")
-        .and_then(Value::as_array)
-        .filter(|r| !r.is_empty() && r.len() <= pdfcraft_engine::MAX_MOVE_OBJECTS)
-        .ok_or_else(|| bad("objects must contain 1–1000 references from object_list"))?
-        .iter()
-        .map(object_target)
-        .collect()
+    /// Edit ▸ Copy (or with `cut`, Cut) of objects selected together, kept for object_paste into
+    /// any open document. A cut then deletes them as one undo step.
+    pub(crate) fn object_copy(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let targets = self.object_targets(a, page)?;
+        let cut = a.opt_bool("cut")?.unwrap_or(false);
+        let doc = self.doc(a)?;
+        if cut && !doc.allows_modification() {
+            return Err(failed(pdfcraft_engine::EditError::NotPermitted("changes")));
+        }
+        let clip = doc.copy_objects(page, &targets).map_err(failed)?;
+        let out = json!({ "copied": clip.objects().len(), "text": clip.text() });
+        self.objects_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
+        if !cut {
+            return Ok(out);
+        }
+        let delete = Edit::delete_objects(page, targets).ok_or_else(|| failed("nothing to cut"))?;
+        let mut result = self.apply(a, delete)?;
+        result["copied"] = out["copied"].clone();
+        result["text"] = out["text"].clone();
+        Ok(result)
+    }
+
+    /// Edit ▸ Paste of the objects object_copy copied: onto `page`, where they were, or on the
+    /// page they came from (and on each further paste onto a page) 18 points down and right.
+    pub(crate) fn object_paste(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let mut clipboard = self.objects_clipboard.take().ok_or_else(|| failed("copy objects first (object_copy)"))?;
+        let count = clipboard.clip().objects().len();
+        let edit = self.doc(a).and_then(|doc| clipboard.paste(doc, page).map_err(failed));
+        self.objects_clipboard = Some(clipboard);
+        let mut result = self.apply(a, edit?)?;
+        result["pasted"] = json!(count);
+        Ok(result)
+    }
 }
 
 /// One `{kind, index}` reference from object_list (1-based index).
@@ -472,11 +548,11 @@ fn object_target(row: &Value) -> Result<pdfcraft_engine::ObjectTarget> {
 }
 
 /// The optional `generation` from object_list: refuse references to an older inventory.
-fn check_generation(a: &Args, doc: &pdfcraft_engine::Document, doing: &str) -> Result<()> {
+fn check_generation(a: &Args, doc: &pdfcraft_engine::Document) -> Result<()> {
     if let Some(g) = a.get("generation") {
         let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
         if g != doc.edit_generation() {
-            return Err(failed(format!("the document changed; call object_list again before {doing}")));
+            return Err(failed("the document changed; call object_list again"));
         }
     }
     Ok(())

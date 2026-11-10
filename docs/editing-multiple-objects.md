@@ -20,6 +20,30 @@ In **Edit a PDF → Edit text & images**, select several items on the same page:
 - Modifier-clicks prefer added items and text over background artwork, so labels remain selectable.
 - Clear the selection or double-click an item to return to ordinary text editing and image resizing.
   Finish or discard a text draft before starting a multi-selection.
+- **⌘A / Ctrl+A** selects every item on the current page (paragraphs, artwork and added items),
+  as Acrobat's Edit PDF does, instead of the page's text. Inside a paragraph or text box open for
+  typing it still selects that text.
+
+## Copy, cut and paste
+
+With items selected together, **⌘C / Ctrl+C** (Edit ▸ Copy) copies them and **⌘X / Ctrl+X**
+(Edit ▸ Cut) copies them, then deletes them as one undo step. **⌘V / Ctrl+V** (Edit ▸ Paste) pastes
+them onto the current page of any open document, also after the original changed or closed, as
+one undo step, and selects what it pasted. Onto the page they came from they land 18 points down
+and to the right, as Acrobat offsets a paste onto the same page; elsewhere where they were; each
+further paste onto a page steps another 18 points; a copy that would land off the page is centred.
+
+A paste draws the same: it copies the items' content operators with the graphics state they were
+drawn in (transformation, clip, colours, transparency, text state) and every resource they use
+(fonts, images and Form artwork, ExtGStates, colour spaces, patterns, shadings), merged into the
+target page's resources under names that don't clash, as Ungroup merges them. Within a document the
+same font and image objects are drawn again. Into another document they are copied with what they
+refer to, each once whatever the cycles, sharing objects it already holds; a paste whose resources
+take more than 20,000 objects or 256 MB is refused with that reason. Pasted items are ordinary page
+content: an added text box comes as page text, untagged and in no layer. The system clipboard gets
+the copied text (or, without text, the first picture) for other applications; a newer copy there,
+here or in another application, wins ⌘V. Text drawn as a clipping path before the selection is
+refused, as is artwork without resources of its own that names one, where a paste would change it.
 
 The supported items are the existing paragraph boxes, raster Image XObjects, whole Form artwork,
 painted vector paths, and text/images added by PdfCraft. A Form remains one item, including its
@@ -68,10 +92,9 @@ its other objects can still be selected.
   grid; Escape closes the grid and keeps the selection. A pick recolours every selected path that
   paints that part, as one undo step, and the selection stays. The new colour is DeviceRGB whatever
   the path used: CMYK, spot and pattern colours are replaced.
-- **Delete.** Delete or Backspace removes the selected paths, images and Form artwork in one step
-  and one rewrite of the page, leaving the graphics state and marked content around them. A
-  selection with paths and text or added items shows a notice and deletes nothing; paragraphs and
-  added items, with any images beside them, go in one undo step. The keys are left
+- **Delete.** Delete or Backspace removes the selection in one undo step. Selected paths, images
+  and Form artwork go in one rewrite of the page, leaving the graphics state and marked content
+  around them; paragraphs and added items selected with them go in the same step. The keys are left
   alone while typing, in Organize Pages, and while the pointer is over a panel rather than the page
   (the Pages panel deletes pages with them); move the pointer back over the page, or use
   right-click ▸ Delete.
@@ -91,8 +114,7 @@ Right-click the page the selection is on:
   edge is Left). Sizes are kept.
 - **Distribute ▸ Horizontally, Vertically**, for three or more: the gaps become equal and the
   outermost two stay put.
-- **Delete**, which deletes what the Delete key would: anything but vector paths with text or
-  added items.
+- **Delete**, which deletes what the Delete key would.
 
 Each is one undo step, and only the content streams that change become new objects. A refusal is
 shown as a notice and changes nothing. Arrange refuses text, items added in PdfCraft and PdfCraft's
@@ -116,7 +138,8 @@ topmost first). Apply these through `Session`:
 - `Edit::AlignObjects { page, objects, align }` aligns or distributes them (`ObjectAlign`).
 - `Edit::TransformPath { page, index, rect }` moves and resizes one path onto a user-space box.
 - `Edit::RecolourObjects { page, objects, fill, stroke }` repaints paths in DeviceRGB.
-- `Edit::DeleteObjects { page, objects }` deletes paths, images and Form artwork.
+- `Edit::DeleteObjects { page, objects }` deletes objects of any kind together (paths and pictures
+  in one splice); `Edit::delete_objects` gives the edit Delete and Cut make for a selection.
 - `Edit::ArrangeObjects { page, object, order }` restacks one path or image (`ZOrder`);
   `Document::arranged_target` says where it will be listed afterwards, without changing anything.
 
@@ -158,13 +181,24 @@ session. For a CLI script, include `doc_open` in that script before the move:
 ]
 ```
 
+`{"all": true}` instead of `objects` takes every item on the page, as ⌘A does. `object_copy` takes
+the same references (with `cut: true` it deletes them afterwards, one undo step) and `object_paste
+{doc, page}` pastes them, into the same or another open document, as the app does:
+
+```json
+[
+  {"tool":"object_copy","args":{"doc":1,"page":1,"all":true}},
+  {"tool":"object_paste","args":{"doc":2,"page":3}}
+]
+```
+
 The other tools take the same references and optional `generation`: `object_align` (`action`:
 `left`, `centre`, `right`, `top`, `middle`, `bottom`, `distribute_horizontal` or
 `distribute_vertical`), `object_resize` (one `path` `object` and a displayed `rect`),
 `object_recolour` (`path` references, `fill` and/or `stroke` as `#RRGGBB` or a colour name),
-`object_delete` (`image` and `path` references) and `object_arrange` (one `path` or `image`
-`object` and an `order` of `front`, `forward`, `backward` or `back`; it returns the object's new
-reference). Each success is one undo step. The [automation guide](../crates/automation/README.md)
+`object_delete` (references of any kind, as Delete takes them) and `object_arrange` (one `path` or
+`image` `object` and an `order` of `front`, `forward`, `backward` or `back`; it returns the object's
+new reference). Each success is one undo step. The [automation guide](../crates/automation/README.md)
 has the details.
 
 Use the actual generation and references from your document, rather than assuming these example
@@ -174,10 +208,12 @@ undo, redo, or save; there is no claim that an index persists across generations
 `pdfcraft-cli run --script steps.json --root DIR` or call these tools through the opt-in MCP server.
 
 Regression coverage: `crates/edit/src/tests.rs` (glyph bytes, neighbours, split streams, shared Forms,
-rotated/cropped/UserUnit pages and refusal), `crates/edit/src/paths_tests.rs` and
-`path_edit_tests.rs` (finding, moving, resizing, recolouring and deleting paths), `align.rs`,
+rotated/cropped/UserUnit pages and refusal), `crates/edit/src/objects/clip_tests.rs` (copies that
+render the same pixels, renamed resources, hostile content, vector paths), `crates/edit/src/paths_tests.rs`
+and `path_edit_tests.rs` (finding, moving, resizing, recolouring and deleting paths), `align.rs`,
 `arrange_tests.rs` and `delete.rs` (alignment, painting order and byte-preserving deletion),
-`crates/engine/src/tests.rs` (permissions, history, rendering and save/reopen),
-`crates/automation/tests/it/automation.rs` (generation guards, hostile references and save/reopen), and
-`crates/ui-egui/tests/it/object_selection.rs` (real-shell selection, gestures, the Delete key, the
-selection's menu and the colour swatches).
+`crates/engine/src/tests.rs` and `crates/engine/src/object_clip_tests.rs` (permissions, history,
+rendering, save/reopen, pastes into another document, cycles and the size limit),
+`crates/automation/tests/it/automation.rs` (generation guards, hostile references, copy/cut/paste
+tools and save/reopen), and `crates/ui-egui/tests/it/object_selection.rs` (real-shell selection,
+gestures, ⌘A, the clipboard keys, the Delete key, the selection's menu and the colour swatches).

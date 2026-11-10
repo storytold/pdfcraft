@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pdfcraft_content::{Matrix, Op, Pieces};
+use pdfcraft_content::{Matrix, Op};
 use pdfcraft_cos::{Document, Object};
 
 use crate::EditError;
@@ -90,8 +90,8 @@ fn rewrite(doc: &mut Document, page: usize, edits: &[(usize, Edit)], images: &[u
     let paths = if edits.is_empty() { Vec::new() } else { page_paths(doc, page)? };
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = checked_streams(doc, page)?;
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
-    let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let marked: Vec<bool> = streams.iter().map(|s| crate::place::stream_tag(doc, &s.entry).is_some()).collect();
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     let in_mark = |i: usize| ops.get(i).is_some_and(|op| marked.get(pieces.piece_of(op.span.start)) == Some(&true));
     // Operators to insert before an operator and to append after it, and the ones to remove.
@@ -179,7 +179,7 @@ fn rewrite(doc: &mut Document, page: usize, edits: &[(usize, Edit)], images: &[u
         }
     });
     let mut work = doc.clone();
-    let contents = crate::text::rewritten_contents(&mut work, &streams, data);
+    let contents = crate::text::rewritten_contents(&mut work, &streams, data)?;
     work.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     // The added operators count towards the page's budgets: keep its paths readable. A path
     // moved out of its clip or off the page would leave the list and shift the indexes after it.

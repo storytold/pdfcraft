@@ -47,7 +47,7 @@ mod tests {
         let targets: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
         assert_eq!(targets, [t(image, 0), t(image, 1), t(path, 0), t(path, 1)]);
         delete_objects(&mut doc, 0, &[t(path, 0), t(image, 1), t(image, 0)]).unwrap();
-        let content = crate::objects::checked_streams(&doc, 0).unwrap().remove(0).1;
+        let content = crate::objects::checked_streams(&doc, 0).unwrap().remove(0).data;
         assert_eq!(
             String::from_utf8(content).unwrap(),
             "% kept\nq 50 0 0 30 100 100 cm  Q 0.50 0 0 rg   q 80 0 0 40 300 200 cm  Q .5 w 100 300 m 150 300 l S"

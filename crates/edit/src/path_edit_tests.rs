@@ -11,12 +11,12 @@ fn rects(doc: &Document) -> Vec<[f64; 4]> {
 
 /// The page's decoded content streams.
 fn contents(doc: &Document, page: usize) -> Vec<String> {
-    checked_streams(doc, page).unwrap().into_iter().map(|(_, data)| String::from_utf8(data).unwrap()).collect()
+    checked_streams(doc, page).unwrap().into_iter().map(|s| String::from_utf8(s.data).unwrap()).collect()
 }
 
 /// The page's content stream objects.
 fn refs(doc: &Document, page: usize) -> Vec<Object> {
-    checked_streams(doc, page).unwrap().into_iter().map(|(o, _)| o).collect()
+    checked_streams(doc, page).unwrap().into_iter().map(|s| s.entry).collect()
 }
 
 fn saved(doc: &Document) -> Vec<u8> {

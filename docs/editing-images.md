@@ -18,10 +18,11 @@ content, resources, clipping box, and transparency settings remain intact. Movin
 deleting one use of a shared figure does not alter its other placements or pages.
 
 **Replace Image** and **Save Image As** apply only to raster Image XObjects; these menu
-items are disabled for grouped Form artwork. The tool does not ungroup Forms, edit their
-individual internal elements, or edit inline images (`BI`/`ID`/`EI`). A Form's bounding box
-may include whitespace. Vector paths drawn on the page itself, outside a Form, are selected as
-objects of their own ([editing-multiple-objects.md](editing-multiple-objects.md)).
+items are disabled for grouped Form artwork. **Ungroup** (right-click) draws one placement's
+content in place so its text and pictures can be edited; while grouped, the tool does not edit
+a Form's individual internal elements. It does not edit inline images (`BI`/`ID`/`EI`). A Form's
+bounding box may include whitespace. Vector paths drawn on the page itself, outside a Form, are
+selected as objects of their own ([editing-multiple-objects.md](editing-multiple-objects.md)).
 
 For automation, `page_images` lists both kinds with `kind: "image"` or `kind: "form"`.
 Forms have `pixels: [0, 0]`, since they have no single bitmap resolution. Use the returned

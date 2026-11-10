@@ -13,6 +13,14 @@ pub struct PendingOverwrite {
     after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
 
+/// A save held back by [`Dialog::LockSignatures`](crate::Dialog::LockSignatures) (#2149).
+pub struct PendingLock {
+    pub id: pdfcraft_engine::DocId,
+    target: SaveTarget,
+    /// What was to run once the document is written (close its tab, quit).
+    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+}
+
 /// Where Save writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveTarget {
@@ -48,8 +56,41 @@ impl PdfCraftApp {
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        // A signature just placed with Fill & Sign is a removable comment unless it is flattened:
+        // ask once whether to lock it into the page (#2149). Only while a Fill & Sign mark is still
+        // there (undo may have taken it away), and never on a digitally signed document: locking
+        // changes page content in an update, which validators report as a change after signing.
+        let still_marked = self.session.get(id).is_some_and(|d| d.info.annotations.iter().any(|a| a.fill_sign));
+        let signed = self.session.get(id).is_some_and(|d| d.is_signed());
+        let answered = self.lock_answered.take() == Some(id);
+        if self.ask_to_lock_signatures
+            && !self.flatten_fill_sign_on_save
+            && self.placed_signatures.contains(&id)
+            && still_marked
+            && !signed
+            && !answered
+        {
+            self.pending_lock = Some(PendingLock { id, target, after: Box::new(after) });
+            self.dialog = Some(crate::Dialog::LockSignatures);
+            return false;
+        }
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
+        // After Apply redactions, Save asks where and proposes the name with `_Redacted`.
+        // In the web build a delivered step stays counted, so only the steps applied since the
+        // last delivery make Save ask where.
+        let redacted = self.views.get(index).is_some_and(|v| v.redactions_applied > 0);
+        let not_delivered = self.views.get(index).is_some_and(|v| v.redactions_applied > v.redactions_downloaded);
+        let name = if redacted { pdfcraft_engine::redacted_file_name(&name) } else { name };
+        // Undo past a saved Apply redactions brings back content that the file on disk has
+        // redacted: ask where instead of writing it over that file. In the web build a delivered
+        // step stays counted in `redactions_applied`, so fewer steps than were delivered means one
+        // was undone.
+        let unredacted = self.views.get(index).is_some_and(restores_saved_redactions);
+        // The restored content is not a redacted copy: propose the name without `_Redacted`, so
+        // the dialog's default is not the redacted file.
+        let name = if unredacted && !redacted { unredacted_file_name(&name) } else { name };
+        let target = if not_delivered || unredacted { SaveTarget::As } else { target };
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -57,13 +98,23 @@ impl PdfCraftApp {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
                 // document (`is_mail_temp_copy`).
-                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
+                // Neither is a path read back from a recovery sidecar until a save confirms it:
+                // anyone who can write the recovery folder can name any file there (#3923).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) && !self.recovered_paths.contains(&id) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(name);
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
+                        // An Apply redactions or an Undo of one while the dialog was open makes the
+                        // name it proposed wrong: ask again with the name for the current content.
+                        let asked = (redacted, unredacted);
+                        let changed = |v: &crate::DocView| v.id == id && (v.redactions_applied > 0, restores_saved_redactions(v)) != asked;
+                        if let Some(index) = app.views.iter().position(changed) {
+                            app.save_then(index, SaveTarget::As, after);
+                            return;
+                        }
                         app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
                     });
                     return false;
@@ -93,11 +144,17 @@ impl PdfCraftApp {
             };
             match delivered {
                 Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
+                    // As the native save does: what was saved isn't asked about again (#2149).
+                    if self.session.mark_saved(id, bytes, None).is_ok() {
+                        self.placed_signatures.remove(&id);
+                    }
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        // `redactions_applied` stays set: the document keeps its name here, so
+                        // later downloads are named after the redacted copy too.
+                        view.redactions_downloaded = view.redactions_applied;
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
@@ -156,6 +213,64 @@ impl PdfCraftApp {
         }
     }
 
+    /// The Lock signatures dialog answered (#2149): lock the document's Fill & Sign marks into
+    /// its pages first when `lock`, then save as was asked. With `remember`, the answer becomes
+    /// the preference (flatten on every save, or never ask again). Nothing changes when locking
+    /// fails: the document still counts as holding a placed signature, so the next save asks
+    /// again, and the answer isn't remembered. The placed-signature mark stays until the save
+    /// succeeds, so a save that fails or is cancelled asks again too.
+    pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
+        let Some(p) = self.pending_lock.take() else { return };
+        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
+            return;
+        }
+        self.lock_answered = Some(p.id);
+        if remember {
+            if lock {
+                self.flatten_fill_sign_on_save = true;
+            } else {
+                self.ask_to_lock_signatures = false;
+            }
+        }
+        if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
+            self.save_then(index, p.target, p.after);
+        }
+    }
+
+    /// Lock now, on the notice shown after a signature is placed (#2149): lock document `id`'s
+    /// Fill & Sign marks into its pages, as the save-time question's Lock does but without
+    /// saving. Undoable. The next save doesn't ask, as no Fill & Sign mark is left to lock; the
+    /// placed-signature mark itself stays, so undoing the lock brings back both the notice and the
+    /// save-time question. Never on a digitally signed document.
+    pub(crate) fn lock_signatures_now(&mut self, id: pdfcraft_engine::DocId) {
+        if self.session.get(id).is_none_or(|d| d.is_signed()) {
+            return;
+        }
+        if self.flatten_fill_sign_in(id) {
+            self.notify_tr("Signature locked into the page.");
+        }
+    }
+
+    /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns false,
+    /// having told the user why, when that fails.
+    fn flatten_fill_sign_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, pdfcraft_engine::Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        if before != self.session.get(id).map(|d| d.edit_generation())
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+            // The marks left the comments: a selected one is gone, and its (page, index) could
+            // now name another comment.
+            view.comments.selected = None;
+        }
+        true
+    }
+
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget) -> bool {
@@ -164,11 +279,12 @@ impl PdfCraftApp {
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
+        let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
-            // Save As to another file is a clean copy, without the earlier revisions that still
-            // hold deleted pages or replaced text (#2165). A signed document stays incremental so
-            // its signatures keep covering the file.
-            let full = target == SaveTarget::As
+            // Save As to another file and a recovered document are clean copies, without earlier
+            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
+            // document stays incremental so its signatures keep covering the file.
+            let full = (target == SaveTarget::As || recovered)
                 && !d.path.as_deref().is_some_and(|p| crate::same_file(p, dest))
                 && d.read_only_reason.is_none()
                 && !d.is_signed();
@@ -194,12 +310,19 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
+                self.placed_signatures.remove(&id);
+                // The tab in use: `sync_views` brings any other tab of the document up to date.
                 if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                    && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
                 {
                     view.document_changed(&doc.info);
-                    // Saving over a version that changed on disk keeps this one: nothing to ask.
+                }
+                // Saving over a version that changed on disk keeps this one: nothing to ask.
+                for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
+                    view.redactions_applied = 0;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
@@ -236,6 +359,27 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
         || in_outlook_cache("/temporary internet files/content.outlook/")
         || p.contains("/packages/microsoft.outlookforwindows_")
         || p.contains("/library/containers/com.apple.mail/data/library/mail downloads/")
+}
+
+/// Whether `view` holds content that a saved or delivered Apply redactions removed: a saved step
+/// is undone, cannot be redone, or (in the web build) fewer steps are in effect than were
+/// delivered.
+fn restores_saved_redactions(view: &crate::DocView) -> bool {
+    view.redactions_undone_after_save > 0 || view.saved_redactions_cut_off || view.redactions_applied < view.redactions_downloaded
+}
+
+/// `name` without the `_Redacted` that [`pdfcraft_engine::redacted_file_name`] adds before the
+/// extension ("contract_Redacted.pdf" gives "contract.pdf"). Any other name is returned as it is.
+pub(crate) fn unredacted_file_name(name: &str) -> String {
+    let cut = name.len().saturating_sub(4);
+    let (stem, ext) = match (name.get(..cut), name.get(cut..)) {
+        (Some(stem), Some(ext)) if ext.eq_ignore_ascii_case(".pdf") => (stem, ext),
+        _ => (name, ""),
+    };
+    match stem.strip_suffix("_Redacted") {
+        Some(base) if !base.is_empty() => format!("{base}{ext}"),
+        _ => name.to_string(),
+    }
 }
 
 /// The folder a Save As style dialog should open in for a document stored at `path`: the
@@ -285,6 +429,31 @@ fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// The MIME type a download of `name` is offered as, from its extension.
+#[doc(hidden)]
+pub fn download_mime_type(name: &str) -> &'static str {
+    let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "csv" => "text/csv",
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "xml" => "application/xml",
+        "json" => "application/json",
+        "xfdf" => "application/vnd.adobe.xfdf",
+        "fdf" => "application/vnd.fdf",
+        "rtf" => "application/rtf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -293,7 +462,7 @@ pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::of1(&array);
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/pdf");
+    opts.set_type(download_mime_type(name));
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(err)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;

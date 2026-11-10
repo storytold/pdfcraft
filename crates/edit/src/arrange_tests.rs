@@ -34,7 +34,7 @@ fn image(index: usize) -> ObjectTarget {
 
 /// The page's content streams, each with its runs of whitespace made single spaces.
 fn contents(doc: &Document) -> Vec<String> {
-    checked_streams(doc, 0).unwrap().iter().map(|(_, data)| String::from_utf8_lossy(data).split_whitespace().collect::<Vec<_>>().join(" ")).collect()
+    checked_streams(doc, 0).unwrap().iter().map(|s| String::from_utf8_lossy(&s.data).split_whitespace().collect::<Vec<_>>().join(" ")).collect()
 }
 
 fn saved(doc: &Document) -> Vec<u8> {
@@ -294,10 +294,10 @@ fn an_image_sharing_its_scope_moves_alone_with_its_transform() {
 fn a_path_split_between_streams_moves_whole_and_only_changed_streams_are_new() {
     let data = ["1 0 0 rg 10 10 100 100", "re f 0 0 1 rg 50 50 100 100 re f"];
     let mut doc = arrange_page(&data);
-    let old: Vec<Object> = checked_streams(&doc, 0).unwrap().into_iter().map(|(o, _)| o).collect();
+    let old: Vec<Object> = checked_streams(&doc, 0).unwrap().into_iter().map(|s| s.entry).collect();
     assert_eq!(arrange(&mut doc, path(0), ZOrder::Forward), path(1));
     assert_eq!(contents(&doc), ["1 0 0 rg", "0 0 1 rg 50 50 100 100 re f q 1 0 0 rg 10 10 100 100 re f Q"]);
-    let new: Vec<Object> = checked_streams(&doc, 0).unwrap().into_iter().map(|(o, _)| o).collect();
+    let new: Vec<Object> = checked_streams(&doc, 0).unwrap().into_iter().map(|s| s.entry).collect();
     assert!(new[0] != old[0] && new[1] != old[1], "{old:?} {new:?}");
     for (o, data) in old.iter().zip(data) {
         let Object::Stream(s) = &*doc.resolve(o) else { panic!("{o:?} is not a stream") };

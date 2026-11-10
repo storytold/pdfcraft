@@ -7,7 +7,7 @@
 use std::ops::RangeInclusive;
 
 use kurbo::{BezPath, ParamCurveNearest, PathEl, Point, Shape};
-use pdfcraft_content::{Matrix, Op, Pieces};
+use pdfcraft_content::{Matrix, Op};
 use pdfcraft_cos::{Dict, Document};
 
 use crate::EditError;
@@ -53,7 +53,7 @@ pub struct PagePath {
     /// Whether it fills or strokes with a pattern (a tiling or a shading), which is fixed to the
     /// page: a `cm` moves the path but not its pattern.
     pub pattern: bool,
-    /// Its operators in the page's joined content (see [`Pieces`]), for the path edits.
+    /// Its operators in the page's joined content (see [`pdfcraft_content::Pieces`]), for the path edits.
     pub(crate) ops: RangeInclusive<usize>,
     /// The CTM it is drawn with.
     pub(crate) matrix: Matrix,
@@ -135,10 +135,10 @@ pub fn page_paths(doc: &Document, page: usize) -> Result<Vec<PagePath>, EditErro
             .unwrap_or_default()
     };
     let (ext_gstates, colour_spaces) = (category(b"ExtGState"), category(b"ColorSpace"));
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
+    let marked: Vec<bool> = streams.iter().map(|s| crate::place::stream_tag(doc, &s.entry).is_some()).collect();
     let any_marked = marked.contains(&true);
     let in_mark = |piece: usize| marked.get(piece) == Some(&true);
-    let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     let mut state = GState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut out = Vec::new();
