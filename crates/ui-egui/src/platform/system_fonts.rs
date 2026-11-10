@@ -4,9 +4,10 @@
 //! only draws characters none of them has, such as an Arabic file name in a build without
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
-//! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
-//! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! [`tamil_fallback`], [`khmer_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi,
+//! Telugu, Sinhala, Tamil, Khmer, Hebrew and Korean when one is installed. It is read at runtime
+//! and never embedded or shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off
+//! (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -32,6 +33,8 @@ const TELUGU_PROBE: char = '\u{0C15}';
 const SINHALA_PROBE: char = '\u{0D9A}';
 /// Tamil letter ka (க): the face must have it to cover Tamil.
 const TAMIL_PROBE: char = '\u{0B95}';
+/// Khmer letter ka (ក): the face must have it to cover Khmer.
+const KHMER_PROBE: char = '\u{1780}';
 /// Hebrew letter alef: the face must have it to cover Hebrew.
 const HEBREW_PROBE: char = '\u{05D0}';
 /// Hangul syllable hih (힣, U+D7A3), the last of the 11,172 modern syllables: a face with it has
@@ -106,6 +109,13 @@ pub fn sinhala_fallback() -> Option<Arc<FontData>> {
 pub fn tamil_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&tamil_candidates(), TAMIL_PROBE)).clone()
+}
+
+/// The installed fallback face for Khmer, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn khmer_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&khmer_candidates(), KHMER_PROBE)).clone()
 }
 
 /// The installed fallback face for Hebrew, read once. `None` when it is turned off or no
@@ -274,6 +284,32 @@ fn tamil_candidates() -> Vec<PathBuf> {
             "noto/NotoSansTamilUI-Regular.ttf",
             "lohit-tamil-fonts/Lohit-Tamil.ttf",
             "truetype/lohit-tamil/Lohit-Tamil.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Khmer faces, best first. Khmer UI ships with Windows 8 and later;
+/// DaunPenh and MoolBoran are the older Windows Khmer faces. On macOS 26 both Apple families
+/// are in `Supplemental/`. Neither Nirmala UI nor the general fallback has Khmer.
+fn khmer_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["KhmerUI.ttf", "daunpenh.ttf", "moolbor.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        ["/System/Library/Fonts/Supplemental/Khmer Sangam MN.ttf", "/System/Library/Fonts/Supplemental/Khmer MN.ttc"]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansKhmerUI-Regular.ttf",
+            "google-noto/NotoSansKhmer-Regular.ttf",
+            "google-noto-vf/NotoSansKhmer[wght].ttf",
+            "truetype/noto/NotoSansKhmer-Regular.ttf",
+            "truetype/noto/NotoSansKhmerUI-Regular.ttf",
+            "noto/NotoSansKhmer-Regular.ttf",
+            "noto/NotoSansKhmerUI-Regular.ttf",
+            "truetype/khmeros/KhmerOSsys.ttf",
+            "truetype/khmeros/KhmerOS.ttf",
         ])
     }
 }
@@ -555,13 +591,21 @@ mod tests {
         assert!(script_fallback(&candidates, HANGUL_PROBE).is_none());
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
+        assert!(script_fallback(&candidates, KHMER_PROBE).is_none());
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            khmer_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
