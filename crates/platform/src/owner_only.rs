@@ -132,10 +132,19 @@ const ICACLS: &str = "icacls.exe";
 /// A tool Windows ships, started by its full path (review on #3956). Started by bare name, a
 /// `whoami.exe`, `powershell.exe` or `icacls.exe` found first (next to the app, or earlier on the
 /// search path) would answer instead, and `whoami`'s answer is what every check here trusts.
+///
+/// Each tool is a console program and the app is not, so without `CREATE_NO_WINDOW` Windows gives
+/// every one of them a console window of its own, which flashes up while the app writes its
+/// `--control` file. The flag doesn't touch the pipes `output()` reads the answer through.
 #[cfg(windows)]
 fn system_tool(relative: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt as _;
+    /// `CREATE_NO_WINDOW`, from the Windows process creation flags.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let root = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
-    std::process::Command::new(root.join("System32").join(relative))
+    let mut command = std::process::Command::new(root.join("System32").join(relative));
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 #[cfg(windows)]
@@ -382,6 +391,28 @@ mod tests {
             assert!(path.is_absolute() && path.is_file(), "{path:?}");
             assert!(path.to_string_lossy().to_ascii_lowercase().contains(r"\system32\"), "{path:?}");
         }
+    }
+
+    /// The tools start without a console window: the app has no console, so a tool that isn't
+    /// told otherwise gets a window of its own, which flashes up. The started PowerShell reports
+    /// its console's window and the processes attached to that console. Both are checked, because
+    /// a tool started without the flag by a process that has a console shares it instead, and that
+    /// console may itself have no window (a test run started by a service or an IDE).
+    #[cfg(windows)]
+    #[test]
+    fn the_tools_start_without_a_console_window() {
+        const PROBE: &str = r#"Add-Type -Namespace PdfCraftProbe -Name Console -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow(); [DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] ids, uint count);'
+$ids = New-Object uint32[] 256
+$n = [PdfCraftProbe.Console]::GetConsoleProcessList($ids, 256)
+"$([PdfCraftProbe.Console]::GetConsoleWindow()) $($ids[0..($n-1)] -join ',')""#;
+        let out = system_tool(POWERSHELL).args(["-NoProfile", "-NonInteractive", "-Command", PROBE]).output().unwrap();
+        // The answer still comes back through the pipe.
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text} {}", String::from_utf8_lossy(&out.stderr));
+        let (window, attached) = text.trim().split_once(' ').unwrap();
+        assert_eq!(window, "0", "the tool has a console window: {text}");
+        let attached: Vec<u32> = attached.split(',').map(|id| id.parse().unwrap()).collect();
+        assert!(!attached.is_empty() && !attached.contains(&std::process::id()), "the tool shares this process's console: {text}");
     }
 
     #[test]

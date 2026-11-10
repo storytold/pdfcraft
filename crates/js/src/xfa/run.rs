@@ -160,6 +160,9 @@ pub(crate) fn run_here(
             num_pages: doc.page_count,
             page: doc.page,
             info: Vec::new(),
+            // The XFA event target has no `getPageBox`, so its field objects need no boxes.
+            page_boxes: Vec::new(),
+            page_rotations: Vec::new(),
             xfa: true,
             highlight: doc.highlight,
         },
