@@ -3871,3 +3871,34 @@ fn a_shared_name_tree_kids_array_first_met_deep_is_read_again_shallower() {
     crate::import::name_tree_entries(&doc, &Object::Dict(root), 0, &mut crate::import::Seen::new(), &mut out);
     assert_eq!(out, vec![(b"deep".to_vec(), Object::Int(7))]);
 }
+
+/// A direct child of a shared indirect `/Kids` array, read at depth 32 (its own `/Kids` cut), lists
+/// its `/Names` once when a shallower node reads the array again, and that revisit still reaches
+/// the `/Kids` the limit cut.
+#[test]
+fn a_shared_kids_array_lists_a_direct_childs_names_once() {
+    let key = |k: &[u8]| Object::String(pdfcraft_cos::PdfString::literal(k.to_vec()));
+    let mut doc = Document::new_empty();
+    let mut below = Dict::new();
+    below.set(b"Names".to_vec(), Object::Array(vec![key(b"below"), Object::Int(2)]));
+    let mut child = Dict::new();
+    child.set(b"Names".to_vec(), Object::Array(vec![key(b"child"), Object::Int(1)]));
+    child.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(below)]));
+    let shared = doc.add(Object::Array(vec![Object::Dict(child)]));
+    let mut node = Dict::new();
+    node.set(b"Kids".to_vec(), Object::Ref(shared));
+    // The innermost node sits at depth 31: the array's child at depth 32 is read, its kids are cut.
+    for _ in 0..30 {
+        let mut up = Dict::new();
+        up.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node)]));
+        node = up;
+    }
+    let mut near = Dict::new();
+    near.set(b"Kids".to_vec(), Object::Ref(shared));
+    let mut root = Dict::new();
+    root.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node), Object::Dict(near)]));
+    let mut out = Vec::new();
+    crate::import::name_tree_entries(&doc, &Object::Dict(root), 0, &mut crate::import::Seen::new(), &mut out);
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(out, vec![(b"below".to_vec(), Object::Int(2)), (b"child".to_vec(), Object::Int(1))]);
+}

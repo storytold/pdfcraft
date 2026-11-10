@@ -444,9 +444,13 @@ pub(crate) const MAX_NAME_TREE_KEY_BYTES: usize = 64 << 20;
 /// named by many entries is copied once per entry).
 pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut Seen, out: &mut Vec<(Vec<u8>, Object)>) {
     let mut key_bytes = out.iter().map(|(k, _)| k.len()).fold(0usize, usize::saturating_add);
-    name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes, &mut std::collections::HashSet::new());
+    name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes, &mut std::collections::HashSet::new(), (None, Vec::new()));
 }
 
+/// Where a name-tree node sits: the indirect object it is (or is under), then its path of `/Kids` indices from there.
+type NodeId = (Option<ObjRef>, Vec<usize>);
+
+#[allow(clippy::too_many_arguments)]
 fn name_tree_entries_within(
     src: &Document,
     node: &Object,
@@ -454,7 +458,8 @@ fn name_tree_entries_within(
     seen: &mut Seen,
     out: &mut Vec<(Vec<u8>, Object)>,
     key_bytes: &mut usize,
-    emitted: &mut std::collections::HashSet<ObjRef>,
+    emitted: &mut std::collections::HashSet<NodeId>,
+    place: NodeId,
 ) {
     if depth > 32 || node.as_ref().is_some_and(|r| !first_at(seen, r, depth)) {
         return;
@@ -464,7 +469,10 @@ fn name_tree_entries_within(
     // A node read again from a shallower path (where `first_at` lets it through) has already
     // listed its entries: listing them again would copy each name and value twice, and the
     // shallower revisit is only there to reach the descendants the depth limit cut.
-    let names_once = node.as_ref().is_none_or(|r| emitted.insert(r));
+    // An indirect node is identified by its reference; a direct one by where it sits under the
+    // nearest indirect object above it, which a re-read of that object repeats.
+    let place = node.as_ref().map_or(place, |r| (Some(r), Vec::new()));
+    let names_once = emitted.insert(place.clone());
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
     let names = d.get(b"Names").map(|n| src.resolve(n));
@@ -482,8 +490,13 @@ fn name_tree_entries_within(
         }
     }
     let kids = name_tree_kids(src, d, depth, seen);
-    for k in kids.as_deref().and_then(Object::as_array).into_iter().flatten() {
-        name_tree_entries_within(src, k, depth + 1, seen, out, key_bytes, emitted);
+    let kids_ref = d.get(b"Kids").and_then(Object::as_ref);
+    for (i, k) in kids.as_deref().and_then(Object::as_array).into_iter().flatten().enumerate() {
+        let at = match kids_ref {
+            Some(r) => (Some(r), vec![i]),
+            None => (place.0, [place.1.as_slice(), &[i]].concat()),
+        };
+        name_tree_entries_within(src, k, depth + 1, seen, out, key_bytes, emitted, at);
     }
 }
 
