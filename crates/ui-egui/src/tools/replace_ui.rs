@@ -7,11 +7,18 @@ use std::collections::BTreeMap;
 use pdfcraft_engine::find_replace::{Replace, Replacement, Which};
 
 use crate::PdfCraftApp;
+use crate::canvas::FindHit;
 
 impl PdfCraftApp {
     /// Replace the find bar's highlighted match (`all` false) or every match in the document, in
     /// view `i`, with its Replace field's text.
     pub(crate) fn replace_found(&mut self, i: usize, all: bool) {
+        // A comment hit has no glyphs. Said here, before the view is borrowed for the plan.
+        if !all && highlighted_is_comment(self, i) {
+            let why = crate::i18n::t("not editable text");
+            self.notify(crate::i18n::fmt(tl!("Not replaced: {why}"), &[("why", why)]));
+            return;
+        }
         let Some(view) = self.views.get(i) else { return };
         let Some(find) = view.find.as_ref() else { return };
         if find.case_query.trim().is_empty() {
@@ -28,14 +35,16 @@ impl PdfCraftApp {
             // What the find bar holds on each page it has searched, so matches no paragraph
             // holds (a form field, a comment) are counted rather than lost.
             let mut found: BTreeMap<usize, usize> = view.texts.keys().map(|p| (*p, 0)).collect();
-            for (p, _) in &find.matches {
-                let n = found.entry(*p).or_insert(0);
+            for hit in &find.matches {
+                let n = found.entry(hit.page()).or_insert(0);
                 *n = n.saturating_add(1);
             }
             ((0..doc.info.pages.len()).collect::<Vec<_>>(), Which::All, Some(found))
         } else {
             // The highlighted match, by where its first and last glyphs are drawn.
-            let Some((page, range)) = find.current.and_then(|c| find.matches.get(c)).cloned() else { return };
+            // A comment hit was reported above; what remains is page text.
+            let Some(hit) = find.current.and_then(|c| find.matches.get(c)) else { return };
+            let Some((page, range)) = text_span(hit) else { return };
             let centre = |g: usize| {
                 view.texts.get(&page).and_then(|t| t.glyphs.get(g)).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0])
             };
@@ -88,4 +97,35 @@ fn outcome(plan: &Replacement, all: bool) -> Option<String> {
         message.push_str(&crate::i18n::fmt(tl!("{k} skipped: {why}"), &[("k", &skipped.to_string()), ("why", &why)]));
     }
     Some(message)
+}
+
+/// The highlighted hit is a comment, and there is a query to replace. An empty query is left
+/// to the caller, which does nothing.
+fn highlighted_is_comment(app: &PdfCraftApp, i: usize) -> bool {
+    let Some(find) = app.views.get(i).and_then(|view| view.find.as_ref()) else { return false };
+    if find.case_query.trim().is_empty() {
+        return false;
+    }
+    find.current.and_then(|c| find.matches.get(c)).is_some_and(|hit| text_span(hit).is_none())
+}
+
+/// The page and glyph range of a page-text hit. A comment hit is not editable page text.
+fn text_span(hit: &FindHit) -> Option<(usize, std::ops::Range<usize>)> {
+    match hit {
+        FindHit::Text { page, range } => Some((*page, range.clone())),
+        FindHit::Comment { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_span;
+    use crate::canvas::FindHit;
+
+    #[test]
+    fn replace_takes_a_text_hit_and_leaves_a_comment() {
+        assert_eq!(text_span(&FindHit::text(2, 4..9)), Some((2, 4..9)));
+        let comment = FindHit::Comment { page: 1, index: 0, top: 10.0, rect: [0.0, 0.0, 1.0, 1.0], kind: "Note".into(), excerpt: "zebra".into() };
+        assert_eq!(text_span(&comment), None);
+    }
 }

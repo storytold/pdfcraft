@@ -2610,6 +2610,8 @@ fn note(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     }
 }
 
