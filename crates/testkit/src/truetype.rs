@@ -17,6 +17,8 @@ pub enum Cmap<'a> {
     Unicode(&'a [(char, u16)]),
     /// A Macintosh (1, 0) subtable mapping codes to glyph ids.
     Mac(&'a [(u8, u16)]),
+    /// A Macintosh (1, 0) subtable, then a Unicode (3, 1) one (the last in the table).
+    MacThenUnicode(&'a [(u8, u16)], &'a [(char, u16)]),
 }
 
 fn be16(out: &mut Vec<u8>, n: u16) {
@@ -73,31 +75,78 @@ pub fn subset(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>)
 /// [`subset`] whose glyphs have their own advance widths, `widths(gid)` in units of 1000 per em
 /// (`None`: every glyph 600 wide, one metric for all, as [`subset`]).
 pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>, widths: Option<&dyn Fn(u16) -> u16>) -> Vec<u8> {
+    let square: crate::Outline<'_> = &[&[(0, 0), (500, 0), (500, 500), (0, 500)]];
+    let outlines: Vec<(u16, crate::Outline<'_>)> = drawn.iter().map(|&gid| (gid, square)).collect();
+    program(num_glyphs, &outlines, cmap, post, widths)
+}
+
+/// A TrueType program with `num_glyphs` glyphs (at least 1) where each glyph of `outlines` draws
+/// its polygons (one contour each, of on-curve points in units of 1000 per em) and every other
+/// glyph is empty; `cmap` and `post` as for [`subset`], every glyph 600 wide.
+pub fn with_outlines(num_glyphs: u16, outlines: &[(u16, crate::Outline<'_>)], cmap: Cmap<'_>, post: Option<u32>) -> Vec<u8> {
+    program(num_glyphs, outlines, cmap, post, None)
+}
+
+/// A simple glyph drawing `contours`, each a polygon of on-curve points, two-byte coordinates.
+fn simple_glyph(contours: crate::Outline<'_>) -> Vec<u8> {
+    let points: Vec<(i16, i16)> = contours.iter().flat_map(|c| c.iter().copied()).collect();
+    let mut g = Vec::new();
+    be16(&mut g, u16::try_from(contours.len()).unwrap_or(0));
+    let (x0, y0, x1, y1) =
+        points.iter().fold((i16::MAX, i16::MAX, i16::MIN, i16::MIN), |(a, b, c, d), &(x, y)| (a.min(x), b.min(y), c.max(x), d.max(y)));
+    for n in [x0, y0, x1, y1] {
+        g.extend_from_slice(&n.to_be_bytes());
+    }
+    let mut end = 0usize;
+    for c in contours {
+        end = end.saturating_add(c.len());
+        be16(&mut g, u16::try_from(end.saturating_sub(1)).unwrap_or(0));
+    }
+    be16(&mut g, 0);
+    g.extend(std::iter::repeat_n(1u8, points.len()));
+    let mut at = (0i16, 0i16);
+    let mut ys = Vec::new();
+    for &(x, y) in &points {
+        g.extend_from_slice(&x.wrapping_sub(at.0).to_be_bytes());
+        ys.extend_from_slice(&y.wrapping_sub(at.1).to_be_bytes());
+        at = (x, y);
+    }
+    g.extend(ys);
+    if g.len() % 2 == 1 {
+        g.push(0);
+    }
+    g
+}
+
+fn program(
+    num_glyphs: u16,
+    outlines: &[(u16, crate::Outline<'_>)],
+    cmap: Cmap<'_>,
+    post: Option<u32>,
+    widths: Option<&dyn Fn(u16) -> u16>,
+) -> Vec<u8> {
     let num_glyphs = num_glyphs.max(1);
-    // One square: one contour of four on-curve points, two-byte coordinates.
-    let mut square = Vec::new();
-    for n in [1i16, 0, 0, 500, 500] {
-        square.extend_from_slice(&n.to_be_bytes());
-    }
-    be16(&mut square, 3);
-    be16(&mut square, 0);
-    square.extend([1u8; 4]);
-    for d in [0i16, 500, 0, -500, 0, 0, 500, 0] {
-        square.extend_from_slice(&d.to_be_bytes());
-    }
     let mut glyf = Vec::new();
     let mut loca = Vec::new();
     // One lookup per glyph, so a program of tens of thousands of glyphs builds quickly.
-    let mut draws = vec![false; usize::from(num_glyphs)];
-    for &gid in drawn {
+    let mut draws: Vec<Option<crate::Outline<'_>>> = vec![None; usize::from(num_glyphs)];
+    for &(gid, contours) in outlines {
         if let Some(d) = draws.get_mut(usize::from(gid)) {
-            *d = true;
+            *d = Some(contours);
         }
     }
+    let mut cache: Option<(crate::Outline<'_>, Vec<u8>)> = None;
     for gid in 0..num_glyphs {
         be32(&mut loca, u32::try_from(glyf.len()).unwrap_or(u32::MAX));
-        if draws.get(usize::from(gid)).copied().unwrap_or(false) {
-            glyf.extend_from_slice(&square);
+        if let Some(Some(contours)) = draws.get(usize::from(gid)).copied() {
+            match &cache {
+                Some((c, bytes)) if std::ptr::eq(*c, contours) => glyf.extend_from_slice(bytes),
+                _ => {
+                    let bytes = simple_glyph(contours);
+                    glyf.extend_from_slice(&bytes);
+                    cache = Some((contours, bytes));
+                }
+            }
         }
     }
     be32(&mut loca, u32::try_from(glyf.len()).unwrap_or(u32::MAX));
@@ -135,22 +184,31 @@ pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: 
     maxp.resize(32, 0);
 
     let mut tables: Vec<([u8; 4], Vec<u8>)> = Vec::new();
-    let subtable = match cmap {
-        Cmap::None => None,
-        Cmap::Mac(pairs) => Some(((1u16, 0u16), format4(&pairs.iter().map(|&(c, g)| (u16::from(c), g)).collect::<Vec<_>>()))),
-        Cmap::Symbolic(pairs) => Some(((3, 0), format4(&pairs.iter().map(|&(c, g)| (0xF000 | u16::from(c), g)).collect::<Vec<_>>()))),
-        Cmap::Unicode(pairs) => {
-            Some(((3, 1), format4(&pairs.iter().map(|&(c, g)| (u16::try_from(u32::from(c)).unwrap_or(0xFFFD), g)).collect::<Vec<_>>())))
-        }
+    let mac = |pairs: &[(u8, u16)]| ((1u16, 0u16), format4(&pairs.iter().map(|&(c, g)| (u16::from(c), g)).collect::<Vec<_>>()));
+    let unicode = |pairs: &[(char, u16)]| {
+        ((3u16, 1u16), format4(&pairs.iter().map(|&(c, g)| (u16::try_from(u32::from(c)).unwrap_or(0xFFFD), g)).collect::<Vec<_>>()))
     };
-    if let Some(((platform, encoding), sub)) = subtable {
+    let subtables = match cmap {
+        Cmap::None => vec![],
+        Cmap::Mac(pairs) => vec![mac(pairs)],
+        Cmap::Symbolic(pairs) => vec![((3, 0), format4(&pairs.iter().map(|&(c, g)| (0xF000 | u16::from(c), g)).collect::<Vec<_>>()))],
+        Cmap::Unicode(pairs) => vec![unicode(pairs)],
+        Cmap::MacThenUnicode(m, u) => vec![mac(m), unicode(u)],
+    };
+    if !subtables.is_empty() {
         let mut t = Vec::new();
         be16(&mut t, 0);
-        be16(&mut t, 1);
-        be16(&mut t, platform);
-        be16(&mut t, encoding);
-        be32(&mut t, 12);
-        t.extend(sub);
+        be16(&mut t, u16::try_from(subtables.len()).unwrap_or(0));
+        let mut offset = 4usize.saturating_add(8usize.saturating_mul(subtables.len()));
+        for ((platform, encoding), sub) in &subtables {
+            be16(&mut t, *platform);
+            be16(&mut t, *encoding);
+            be32(&mut t, u32::try_from(offset).unwrap_or(u32::MAX));
+            offset = offset.saturating_add(sub.len());
+        }
+        for (_, sub) in subtables {
+            t.extend(sub);
+        }
         tables.push((*b"cmap", t));
     }
     tables.push((*b"glyf", glyf));

@@ -29,6 +29,14 @@
 
 pub mod cff;
 pub mod truetype;
+pub mod type1;
+
+/// A glyph's contour for the synthetic programs ([`truetype::with_outlines`], [`type1::program`],
+/// [`cff::named`]): a polygon of on-curve points, in units of 1000 per em.
+pub type Polygon<'a> = &'a [(i16, i16)];
+
+/// A glyph's contours.
+pub type Outline<'a> = &'a [Polygon<'a>];
 
 /// A small PDF with a classic cross-reference table, built one object at a time.
 ///

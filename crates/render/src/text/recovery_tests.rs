@@ -1312,6 +1312,7 @@ fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, ha
         glyph_facts_built: after.glyph_facts_built - before.glyph_facts_built,
         program_walks: after.program_walks - before.program_walks,
         type3_key_hashes: after.type3_key_hashes - before.type3_key_hashes,
+        outlines_classified: after.outlines_classified - before.outlines_classified,
     };
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }

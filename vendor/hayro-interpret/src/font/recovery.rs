@@ -20,7 +20,9 @@
 //! Rules are named by the mechanism they read, never by a language or a producer, and tried
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
+mod accents;
 mod candidate;
+mod code_page;
 mod orders;
 #[allow(
     dead_code,
@@ -30,11 +32,13 @@ mod widths;
 
 use crate::font::FontFlags;
 use crate::font::{glyph_name_numbers, is_numbered_glyph_name};
+use code_page::CodePageByOutline;
 use hayro_cmap::BfString;
 use hayro_syntax::object::dict::keys::{
     BASE_FONT, ENCODING, FLAGS, FONT_DESC, FONT_WEIGHT, ITALIC_ANGLE,
 };
 use hayro_syntax::object::{Dict, Name};
+use kurbo::BezPath;
 use orders::{mac_glyph_char, symbol_char};
 use skrifa::raw::TableProvider;
 use skrifa::raw::types::Version16Dot16;
@@ -52,17 +56,27 @@ pub enum RecoveryRule {
     /// table, format 1), from a TrueType program that keeps its original glyph ids, or from
     /// glyph names that only number the glyph id (`/g55`): see [`MacGlyphOrder`].
     MacGlyphOrder,
+    /// Codes from 0x80 on that a simple font reads as WinAnsi but whose glyphs draw the letters of
+    /// Windows-1250 or Windows-1257 (`č` at 0xE8, `ā` at 0xE2), as the glyphs' own accents show:
+    /// see [`CodePageByOutline`]. Tried first: where another rule reads the same code (the
+    /// Macintosh order reading a glyph id), the outline is the stronger evidence.
+    CodePageByOutline,
 }
 
 impl RecoveryRule {
     /// Every rule, in the order they are tried.
-    pub const ORDER: [Self; 2] = [Self::NumberedLatin1Names, Self::MacGlyphOrder];
+    pub const ORDER: [Self; 3] = [
+        Self::CodePageByOutline,
+        Self::NumberedLatin1Names,
+        Self::MacGlyphOrder,
+    ];
 
     /// A stable name for logs and tests.
     pub fn name(self) -> &'static str {
         match self {
             Self::NumberedLatin1Names => "numbered-latin1-names",
             Self::MacGlyphOrder => "mac-glyph-order",
+            Self::CodePageByOutline => "code-page-by-outline",
         }
     }
 }
@@ -84,6 +98,8 @@ pub(crate) enum Counter {
     ProgramWalk,
     /// A Type 3 font's dictionary hashed for its cache key.
     Type3KeyHash,
+    /// A glyph's outline drawn and classified by its accent (`CodePageByOutline`).
+    OutlineClassified,
 }
 
 /// Counts `counter` on this thread (only with the `test-counters` feature).
@@ -99,6 +115,7 @@ pub(crate) fn count(counter: Counter) {
             Counter::GlyphFactsBuilt => &mut n.glyph_facts_built,
             Counter::ProgramWalk => &mut n.program_walks,
             Counter::Type3KeyHash => &mut n.type3_key_hashes,
+            Counter::OutlineClassified => &mut n.outlines_classified,
         };
         *field = field.saturating_add(1);
         c.set(n);
@@ -124,6 +141,9 @@ pub struct RecoveryCounters {
     pub program_walks: usize,
     /// Type 3 font dictionaries hashed for a cache key.
     pub type3_key_hashes: usize,
+    /// Glyph outlines drawn and classified by their accent: at most 128 a font (its codes from
+    /// 0x80 on), once.
+    pub outlines_classified: usize,
 }
 
 #[cfg(feature = "test-counters")]
@@ -136,6 +156,7 @@ thread_local! {
             glyph_facts_built: 0,
             program_walks: 0,
             type3_key_hashes: 0,
+            outlines_classified: 0,
         })
     };
 }
@@ -175,6 +196,12 @@ pub mod test_hooks {
     /// those it reads as their base letters, with the widths `width` gives.
     pub fn accents_as_wide_as_bases(drawn: &[u32], width: &dyn Fn(u16) -> Option<f32>) -> bool {
         super::accents_as_wide_as_bases(drawn, width)
+    }
+
+    /// The accent an outline draws above its base letter, by name (`Caron`, `DoubleAcute` …),
+    /// and whether it reaches below the baseline ([`super::accents::classify`]).
+    pub fn accent_of(path: &kurbo::BezPath) -> Option<(String, bool)> {
+        super::accents::classify(path).map(|s| (format!("{:?}", s.mark), s.below))
     }
 }
 
@@ -282,6 +309,17 @@ pub(crate) struct FontFacts<'a> {
         reason = "read by the standard-order rules that build on this layer"
     )]
     pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+    /// Simple fonts: a code's `/ToUnicode` text, when the font has a map and it names the code.
+    pub(crate) to_unicode_text: Option<&'a dyn Fn(u8) -> Option<BfString>>,
+    /// Simple fonts: a code's text by the font's encoding and glyph names, `/ToUnicode` aside (the
+    /// strict text of a font without a map).
+    pub(crate) encoding_text: Option<&'a dyn Fn(u8) -> Option<BfString>>,
+    /// Simple fonts with an embedded program: the outline of the glyph a code draws, as drawn (1000
+    /// units per em); nothing for a code that draws `.notdef`.
+    pub(crate) code_outline: Option<&'a dyn Fn(u8) -> Option<BezPath>>,
+    /// Simple fonts: a code's width as `/Widths` gives it (not `/MissingWidth` or a standard
+    /// font's).
+    pub(crate) code_width: Option<&'a dyn Fn(u8) -> Option<f32>>,
 }
 
 impl FontFacts<'_> {
@@ -300,6 +338,10 @@ impl FontFacts<'_> {
             ids: None,
             id_width: None,
             id_text: None,
+            to_unicode_text: None,
+            encoding_text: None,
+            code_outline: None,
+            code_width: None,
         }
     }
 }
@@ -325,6 +367,8 @@ pub(crate) struct GlyphFacts<'a> {
         reason = "read by the standard-order rules that build on this layer"
     )]
     pub(crate) id: Option<u32>,
+    /// Simple fonts: the character code.
+    pub(crate) code: Option<u8>,
 }
 
 /// One recovery rule.
@@ -352,12 +396,15 @@ pub(crate) trait Rule {
 pub(crate) struct Guards {
     numbered: Option<<NumberedLatin1Names as Rule>::Guard>,
     mac: Option<<MacGlyphOrder as Rule>::Guard>,
+    code_page: Option<<CodePageByOutline as Rule>::Guard>,
 }
 
 impl Guards {
     /// Whether some rule can take a font of `kind` ([`Rule::KINDS`]).
     fn read(kind: FontKind) -> bool {
-        NumberedLatin1Names::KINDS.contains(&kind) || MacGlyphOrder::KINDS.contains(&kind)
+        NumberedLatin1Names::KINDS.contains(&kind)
+            || MacGlyphOrder::KINDS.contains(&kind)
+            || CodePageByOutline::KINDS.contains(&kind)
     }
 
     fn decide(font: &FontFacts<'_>) -> Self {
@@ -365,12 +412,13 @@ impl Guards {
         Self {
             numbered: guard::<NumberedLatin1Names>(font),
             mac: guard::<MacGlyphOrder>(font),
+            code_page: guard::<CodePageByOutline>(font),
         }
     }
 
     /// Whether no rule takes the font: nothing is ever recovered from it.
     fn none(&self) -> bool {
-        self.numbered.is_none() && self.mac.is_none()
+        self.numbered.is_none() && self.mac.is_none() && self.code_page.is_none()
     }
 }
 
@@ -490,6 +538,7 @@ impl std::fmt::Debug for Guards {
         f.debug_struct("Guards")
             .field("numbered", &self.numbered.is_some())
             .field("mac", &self.mac.is_some())
+            .field("code_page", &self.code_page)
             .finish()
     }
 }
@@ -526,6 +575,9 @@ impl RecoveryCache {
             }
             RecoveryRule::MacGlyphOrder => {
                 apply::<MacGlyphOrder>(guards.mac.as_ref(), &font, glyph)
+            }
+            RecoveryRule::CodePageByOutline => {
+                apply::<CodePageByOutline>(guards.code_page.as_ref(), &font, glyph)
             }
         })
     }

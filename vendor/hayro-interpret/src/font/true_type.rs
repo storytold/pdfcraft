@@ -3,8 +3,8 @@ use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win
 use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
-    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode, read_to_unicode,
-    strip_subset_prefix, unicode_from_name,
+    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode,
+    read_to_unicode, strip_subset_prefix, unicode_from_name,
 };
 use crate::util::OptionLog;
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
@@ -207,6 +207,24 @@ impl TrueTypeFont {
             Kind::Standard(s) => s.code_to_ps_name(c),
         };
         let code_glyph = |c: u8| (self.map_code(c), self.char_code_to_unicode(u32::from(c)));
+        let to_unicode_text = |c: u8| {
+            self.to_unicode
+                .as_ref()
+                .and_then(|t| t.lookup_bf_string(u32::from(c)))
+        };
+        let encoding_text = |c: u8| self.encoding_text(u32::from(c));
+        let code_outline = |c: u8| {
+            let glyph = self.map_code(c);
+            (glyph != GlyphId::NOTDEF).then(|| self.outline_glyph(glyph))
+        };
+        let code_width = |c: u8| match &self.kind {
+            Kind::Embedded(e) => match e.widths.get(usize::from(c)) {
+                Some(Width::Value(w)) => Some(*w),
+                _ => None,
+            },
+            Kind::Standard(_) => None,
+        };
+        let embedded = matches!(self.kind, Kind::Embedded(_));
         let facts = || FontFacts {
             kind: FontKind::TrueType,
             base_font: self.recovery.base_font.as_deref(),
@@ -219,6 +237,10 @@ impl TrueTypeFont {
                 Kind::Standard(_) => None,
             },
             code_glyph: Some(&code_glyph),
+            to_unicode_text: Some(&to_unicode_text),
+            encoding_text: Some(&encoding_text),
+            code_outline: embedded.then_some(&code_outline as &dyn Fn(u8) -> Option<BezPath>),
+            code_width: Some(&code_width),
             ..FontFacts::of_kind(FontKind::TrueType)
         };
         let glyph = || GlyphFacts {
@@ -226,6 +248,7 @@ impl TrueTypeFont {
             name: u8::try_from(code).ok().and_then(names),
             strict,
             id: None,
+            code: u8::try_from(code).ok(),
         };
         self.recovery
             .cache
@@ -238,7 +261,12 @@ impl TrueTypeFont {
         {
             return Some(c);
         }
+        self.encoding_text(code)
+    }
 
+    /// PdfCraft patch (104): the code's text by the font's encoding, glyph names and program,
+    /// `/ToUnicode` aside: the strict text of a code `/ToUnicode` doesn't name.
+    fn encoding_text(&self, code: u32) -> Option<BfString> {
         match &self.kind {
             Kind::Embedded(e) => {
                 // PdfCraft patch (79): see `EmbeddedKind::symbolic_text`.

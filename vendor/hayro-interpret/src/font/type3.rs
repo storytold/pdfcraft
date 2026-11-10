@@ -283,6 +283,7 @@ impl<'a> Type3<'a> {
             name: u8::try_from(code).ok().and_then(names),
             strict,
             id: Some(code),
+            code: None,
         };
         self.recovery.cache.recover(FontKind::Type3, facts, glyph)
     }
