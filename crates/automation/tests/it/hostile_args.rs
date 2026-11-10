@@ -110,20 +110,29 @@ fn escapes(base: &std::path::Path, linked: bool) -> Vec<String> {
     out
 }
 
-/// A symbolic link to a folder, where the system allows one (Windows needs Developer Mode or an
-/// administrator for it, #948).
-fn dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+/// Windows developers need Developer Mode or SeCreateSymbolicLinkPrivilege. Hosted Windows CI
+/// sets PDFCRAFT_REQUIRE_SYMLINK_TESTS=1 so missing privileges fail instead of reducing coverage.
+fn plant_escape_link(base: &Path, root: &Path) -> bool {
+    let link = root.join("link-out");
     #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-    }
+    let result = std::os::unix::fs::symlink(base, &link);
     #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(target, link)
-    }
+    let result = std::os::windows::fs::symlink_dir(base, &link);
     #[cfg(not(any(unix, windows)))]
-    {
-        Err(std::io::Error::other(format!("no symbolic links here: {} {}", target.display(), link.display())))
+    let result = Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "symlink fixture unavailable"));
+    match result {
+        Ok(()) => {
+            assert_eq!(link.canonicalize().expect("resolve planted link"), base.canonicalize().expect("resolve outside directory"));
+            true
+        }
+        Err(error) => {
+            let required = std::env::var_os("PDFCRAFT_REQUIRE_SYMLINK_TESTS").is_some_and(|v| v == "1");
+            // ERROR_PRIVILEGE_NOT_HELD is an environment limitation, not a confinement result.
+            let unavailable = cfg!(windows) && error.raw_os_error() == Some(1314);
+            assert!(unavailable && !required, "cannot create required escape-link fixture: {error}");
+            eprintln!("symlink escape cases unavailable: {error}; all traversal/absolute-path cases still run (Windows CI requires symlinks)");
+            false
+        }
     }
 }
 
@@ -329,15 +338,9 @@ fn no_tool_escapes_the_root() {
     .expect("outside file");
     let before = listing(&base);
 
-    // A link inside the root pointing out of it, where the system allows one to be made. Without
-    // it `link-out/…` is an ordinary path inside the root, which tools that write rightly accept.
-    let linked = match dir_symlink(&base, &root.join("link-out")) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("escapes through a symbolic link not checked: {e}");
-            false
-        }
-    };
+    // Without the Windows symlink privilege, this would be an ordinary path inside root.
+    // Only add it to the escape cases if the link actually exists. CI requires the real link.
+    let linked = plant_escape_link(&base, &root);
 
     let roots = AutomationRoots::new(Some(&root), Some(&root)).expect("roots");
     let modes = [("--root", Automation::new().with_root(&root).expect("root")), ("automation roots", Automation::new().with_automation_roots(roots))];

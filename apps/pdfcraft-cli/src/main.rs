@@ -36,8 +36,11 @@ macro_rules! mcp_usage {
     () => {
         "\
 pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
+                    [--allow-hot-folder-admin]
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+                                                           --allow-hot-folder-admin lets the agent install and control the Hot
+                                                           Folder system service and change its stored source credentials
                                                            --automation-read-root / --automation-write-root confine the files the
                                                            agent's tools read (open, combine, import, fonts, certificates…) and
                                                            write (save, export, extract, split, reports…) to DIR, links followed;

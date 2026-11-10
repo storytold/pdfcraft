@@ -487,17 +487,30 @@ fn count_decoded(_n: u64) {
     DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
 }
 
+/// Validate both dictionary dimensions before any allocation, including soft masks.
+fn dimensions(d: &Dict, n: usize) -> Option<(u32, u32, usize)> {
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    let pixels = u64::from(w).checked_mul(u64::from(h))?;
+    if pixels == 0 || pixels > MAX_PIXELS || !matches!(n, 1 | 3) {
+        return None;
+    }
+    let bytes = usize::try_from(pixels).ok()?.checked_mul(n)?;
+    Some((w, h, bytes))
+}
+
 /// 8-bit samples of an image (`n` components), decoded, with `/DecodeParms` given by reference
 /// too ([`Document::with_direct_parms`]): read without them, a predictor's tag bytes would shift
 /// every row, and the image would be written back wrong. `None` for a JPEG whose colour transform
-/// readers may disagree about ([`ycc_encoded`]), and for data that decodes past what the samples
+/// readers may disagree about ([`ycc_encoded`]), for dimensions that overflow or exceed
+/// [`MAX_PIXELS`] ([`dimensions`], checked before any allocation), and for data that decodes past what the samples
 /// can need ([`allowance`]).
 pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    let (w, h, bytes) = dimensions(&s.dict, n)?;
+    // Encoded input past what decoding may produce is not copied or expanded either.
+    let allowance = allowance(bytes, h)?;
+    if s.raw.len() > allowance {
         return None;
     }
-    let bytes = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(n)?;
     if is_dct(s)? {
         // The colour transform matters to three components only (§7.4.8). CMYK and YCCK JPEGs
         // never get here: the colour space check excludes them. The JPEG's own size must be the
@@ -510,7 +523,7 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBud
         count_decoded(u64::from(w) * u64::from(h));
         (v.len() == bytes).then_some(v)
     } else {
-        let v = budget.decode_filters(doc, s, allowance(bytes, h)?).ok()?;
+        let v = budget.decode_filters(doc, s, allowance).ok()?;
         Some(v.get(..bytes)?.to_vec())
     }
 }
@@ -736,13 +749,15 @@ fn is_stencil(doc: &Document, mask: &Object) -> bool {
 }
 
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
-/// Returns the new image and its new soft mask, if the result is smaller.
+/// Returns the new image and its new soft mask (with the one it replaces), if the result is
+/// smaller. `mask_users` counts the images referring to each soft mask.
 fn process(
     doc: &Document,
     s: &Stream,
     ppi: f64,
     settings: &ImageSettings,
     n: usize,
+    mask_users: &HashMap<ObjRef, usize>,
     budget: &mut ImageBudget,
 ) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
     let d = &s.dict;
@@ -760,11 +775,14 @@ fn process(
         return None;
     }
     let was_dct = is_dct(s)?;
-    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
-        return None;
-    }
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && settings.target_ppi.is_finite();
+    let (w, h, _) = dimensions(d, n)?;
+    let resize = settings.downsample
+        && ppi.is_finite()
+        && settings.above_ppi.is_finite()
+        && settings.target_ppi.is_finite()
+        && ppi > settings.above_ppi
+        && settings.target_ppi > 0.0
+        && settings.target_ppi < ppi;
     let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
     let (nw, nh) = if resize {
         // Downsampling never enlarges: a target above the image's own resolution (or a hostile
@@ -788,6 +806,7 @@ fn process(
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
     let mut smask = None;
+    let mut replaced_mask = 0;
     if let Some(mr) = d.reference(b"SMask") {
         let mobj = doc.get(mr);
         let Object::Stream(m) = &*mobj else { return None };
@@ -795,18 +814,19 @@ fn process(
             if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
                 return None;
             }
-            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+            let (mw, mh, _) = dimensions(&m.dict, 1)?;
             let mpx = pixels(doc, m, 1, budget)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
+            if mask_users.get(&mr).copied().unwrap_or(0) <= 1 {
+                replaced_mask = m.raw.len();
+            }
         }
     }
-    let before = s.raw.len()
-        + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
-            Object::Stream(m) => m.raw.len(),
-            _ => 0,
-        });
-    let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
+    // The original mask stays for its other users; only a mask no other image refers to is
+    // replaced, and counted as saved (a full save collects it).
+    let before = s.raw.len().checked_add(replaced_mask)?;
+    let after = new.raw.len().checked_add(smask.as_ref().map_or(0, |(_, m)| m.raw.len()))?;
     (after < before).then_some((new, smask))
 }
 
@@ -1347,6 +1367,15 @@ pub(crate) fn run(
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
     let (ppi, mut defaults, read) = walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    let mut mask_users: HashMap<ObjRef, usize> = HashMap::new();
+    for num in doc.object_numbers() {
+        let r = ObjRef { num, generation: doc.generation(num) };
+        if let Object::Stream(s) = &*doc.get(r)
+            && let Some(m) = s.dict.reference(b"SMask")
+        {
+            *mask_users.entry(m).or_default() += 1;
+        }
+    }
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
@@ -1389,8 +1418,8 @@ pub(crate) fn run(
                 return Err(OptimizeError::Cancelled);
             }
             if let Some((r, ppi)) = rest.first() {
-                let decision = decide(doc, *r, *ppi, defaults.contains(&r.num), settings, budget);
-                apply(doc, decision, report, &mut jbig2, &mut group);
+                let decision = decide(doc, *r, *ppi, defaults.contains(&r.num), settings, &mask_users, budget);
+                apply(doc, decision, report, &mut jbig2, &mut group, &mut mask_users);
             }
             done += 1;
             continue;
@@ -1402,7 +1431,7 @@ pub(crate) fn run(
         let allowed = budget.work_left();
         let used = AtomicU64::new(0);
         let tried = {
-            let (doc, defaults) = (&*doc, &defaults);
+            let (doc, defaults, mask_users) = (&*doc, &defaults, &mask_users);
             crate::pool::map(
                 batch,
                 threads,
@@ -1411,7 +1440,7 @@ pub(crate) fn run(
                         return None;
                     }
                     let mut own = ImageBudget::with_work(allowed);
-                    let decision = decide(doc, *r, *ppi, defaults.contains(&r.num), settings, &mut own);
+                    let decision = decide(doc, *r, *ppi, defaults.contains(&r.num), settings, mask_users, &mut own);
                     let cost = allowed.saturating_sub(own.work_left());
                     used.fetch_add(cost, Ordering::Relaxed);
                     (own.refused() == 0).then_some((decision, cost))
@@ -1425,9 +1454,9 @@ pub(crate) fn run(
                     budget.charge(cost);
                     decision
                 }
-                _ => decide(doc, *r, *ppi, defaults.contains(&r.num), settings, budget),
+                _ => decide(doc, *r, *ppi, defaults.contains(&r.num), settings, &mask_users, budget),
             };
-            apply(doc, decision, report, &mut jbig2, &mut group);
+            apply(doc, decision, report, &mut jbig2, &mut group, &mut mask_users);
         }
         done += batch.len();
     }
@@ -1527,8 +1556,15 @@ enum Decision {
 }
 
 /// Do what was decided for one picture, and count it.
-fn apply(doc: &mut Document, decision: Decision, report: &mut Report, jbig2: &mut bool, group: &mut Vec<Held>) {
-    let (image, before, new, resampled, smask, bits) = match decision {
+fn apply(
+    doc: &mut Document,
+    decision: Decision,
+    report: &mut Report,
+    jbig2: &mut bool,
+    group: &mut Vec<Held>,
+    mask_users: &mut HashMap<ObjRef, usize>,
+) {
+    let (image, before, mut new, resampled, smask, bits) = match decision {
         Decision::NotAnImage => return,
         Decision::Stays { refused } => {
             report.images += 1;
@@ -1548,10 +1584,16 @@ fn apply(doc: &mut Document, decision: Decision, report: &mut Report, jbig2: &mu
     }
     let side = |key: &[u8]| new.dict.int(key).and_then(|v| u32::try_from(v).ok());
     let held = bits.zip(side(b"Width")).zip(side(b"Height"));
-    doc.set(image, Object::Stream(new));
-    if let Some((mr, m)) = smask {
-        doc.set(mr, Object::Stream(m));
+    // The resampled mask is the image's own: another image may still draw with the old one, which
+    // a full save collects once nothing does.
+    if let Some((old, m)) = smask {
+        if let Some(users) = mask_users.get_mut(&old) {
+            *users = users.saturating_sub(1);
+        }
+        let private_mask = doc.add(Object::Stream(m));
+        new.dict.set(b"SMask".to_vec(), Object::Ref(private_mask));
     }
+    doc.set(image, Object::Stream(new));
     // A JBIG2 image waits for `share`, which codes the group once it is full.
     if let Some(((bits, width), height)) = held {
         hold_in(group, Held { image, bits, width, height }, SHARED_BYTES, |group| share(doc, group, report));
@@ -1559,7 +1601,15 @@ fn apply(doc: &mut Document, decision: Decision, report: &mut Report, jbig2: &mu
 }
 
 /// Work out what's to become of picture `r`, changing nothing yet.
-fn decide(doc: &Document, r: ObjRef, ppi: f64, defaults: bool, settings: &Settings, budget: &mut ImageBudget) -> Decision {
+fn decide(
+    doc: &Document,
+    r: ObjRef,
+    ppi: f64,
+    defaults: bool,
+    settings: &Settings,
+    mask_users: &HashMap<ObjRef, usize>,
+    budget: &mut ImageBudget,
+) -> Decision {
     let obj = doc.get(r);
     let Object::Stream(s) = &*obj else { return Decision::NotAnImage };
     let refused = budget.refused();
@@ -1575,7 +1625,7 @@ fn decide(doc: &Document, r: ObjRef, ppi: f64, defaults: bool, settings: &Settin
         return Decision::Replace { image: r, before: s.raw.len(), new, resampled, smask: None, bits };
     }
     let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-    let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
+    let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, mask_users, budget));
     // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
     // mask resampled with it.
     let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -2113,7 +2163,7 @@ mod dimension_tests {
         with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));
         let spent = |s: &Stream| {
             let mut budget = ImageBudget::with_work(u64::MAX);
-            process(&doc, s, 720.0, &Settings::default().gray, 1, &mut budget).expect("resampled, and smaller");
+            process(&doc, s, 720.0, &Settings::default().gray, 1, &HashMap::new(), &mut budget).expect("resampled, and smaller");
             u64::MAX - budget.work_left()
         };
         assert_eq!(spent(&with_mask), spent(&image("DeviceGray")) + cost);

@@ -12,6 +12,7 @@ mod button_caption;
 mod find_text;
 mod form_bulk;
 mod hostile_args;
+mod hot_folder;
 mod list_selection;
 mod model_3d;
 mod model_render;

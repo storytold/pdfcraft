@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "a7620386409bc691c7e223917db186ec447362f655fd81a1196d9853dcac1330"
+sha256 = "e4e1edd2ef26e8bd9488fd0bd1f7078f768ae5d3b1ff3657d31c6829398873dc"
 
 [[document]]
 source = "vendor/edit-session/LICENSE-MIT"

@@ -375,7 +375,9 @@ fn find_owned(o: &Object, role: Held, keys: &[&[u8]], held: &mut [usize], next: 
     let mut found = false;
     if role != Held::Map {
         for (i, k) in keys.iter().enumerate() {
-            if d.contains(k)
+            // An empty array (`/AF []`) holds nothing to remove: counting it would make an
+            // absent category look present and rewrite the document for nothing.
+            if d.get(k).is_some_and(|v| !matches!(v, Object::Array(a) if a.is_empty()))
                 && let Some(n) = held.get_mut(i)
             {
                 *n = n.saturating_add(1);
@@ -942,6 +944,22 @@ pub(crate) fn remove_counted(
     let kept_before = crate::globals::kept(doc)?;
     let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
     let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
+    // Empty categories are already satisfied. Do not normalize page/catalog structures,
+    // or remove empty containers, then claim that nothing was changed. Filter them even
+    // alongside a populated category so every removal has a corresponding report entry. Form
+    // fields with an AcroForm still flatten, and the hidden text or layers their appearances
+    // bring onto the page are counted by no scan before it, so those stay chosen with them.
+    let chosen: Vec<_> = which
+        .iter()
+        .copied()
+        .filter(|h| count(*h) > 0 || (fields && matches!(h, Hidden::FormFields | Hidden::HiddenText | Hidden::HiddenLayers)))
+        .collect();
+    // With none left, images taken off their pages may still be unlinked below, a removal of its
+    // own. Without those either, the run refuses before it touches anything.
+    if chosen.is_empty() && crate::interp::unlink_undrawn(&mut doc.clone())? == 0 {
+        return Err(RedactError::NothingToApply);
+    }
+    let which = chosen.as_slice();
     // Pages' annotation lists change only for these; otherwise every page is left as it is.
     let annotations = every_page || fields || which.iter().any(|h| matches!(h, Hidden::Comments | Hidden::Attachments | Hidden::LinksActionsScripts));
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened

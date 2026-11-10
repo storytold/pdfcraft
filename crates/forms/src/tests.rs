@@ -4070,6 +4070,27 @@ fn document_scripts_read_each_name_tree_node_once() {
 }
 
 #[test]
+fn checkbox_labels_can_include_the_recognized_box_mark() {
+    use crate::detect::{Shapes, Word, detect};
+    let shapes = Shapes { boxes: vec![[30.0, 50.0, 40.0, 60.0]], rules: Vec::new() };
+    for (text, rect, expected) in [
+        ("Haupt", [46.0, 51.0, 75.0, 59.0], "Haupt"),
+        ("□Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("☐ Haupt", [30.0, 50.0, 75.0, 60.0], "Haupt"),
+        ("☑Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("☒Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("Haupt", [34.0, 49.0, 75.0, 62.0], "Check Box1"),
+        ("□Haupt", [10.0, 49.0, 75.0, 62.0], "Check Box1"),
+        ("□Haupt", [34.0, 70.0, 75.0, 82.0], "Check Box1"),
+        ("□", [30.0, 50.0, 40.0, 60.0], "Check Box1"),
+    ] {
+        let found = detect(&[Word { text: text.into(), rect }], &shapes, &[], &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, expected, "{text} {rect:?}");
+    }
+}
+
+#[test]
 fn name_tree_nodes_sharing_one_long_kids_array_queue_it_a_bounded_number_of_times() {
     // 10,000 nodes share one /Kids array of 210,001 entries: the leaf, every node, and the leaf
     // 200,000 times more. Queuing that array once per node would hold two billion entries.

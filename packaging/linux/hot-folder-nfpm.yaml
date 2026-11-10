@@ -1,0 +1,40 @@
+name: pdfcraft-hot-folder
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+maintainer: ${PDFCRAFT_MAINTAINER}
+description: Optional PdfCraft folder automation with a system-boot background service.
+homepage: https://github.com/storytold/pdfcraft
+license: MIT OR Apache-2.0
+depends:
+  - pdfcraft
+  - systemd
+  - util-linux
+overrides:
+  deb:
+    depends:
+      - pdfcraft
+      - systemd
+      - util-linux
+      - passwd
+      - libdbus-1-3
+  rpm:
+    depends:
+      - pdfcraft
+      - systemd
+      - util-linux
+      - shadow-utils
+      - dbus-libs
+contents:
+  - src: ${HOT_STAGE}/usr/bin/pdfcraft-hot-folder
+    dst: /usr/bin/pdfcraft-hot-folder
+    file_info:
+      mode: 0755
+  - src: packaging/linux/hot-folder.desktop
+    dst: /usr/share/applications/ai.storyteller.pdfcraft.hot-folder.desktop
+  - src: docs/hot-folder.md
+    dst: /usr/share/doc/pdfcraft-hot-folder/README.md
+scripts:
+  postinstall: packaging/linux/hot-folder-postinst.sh
+  preremove: packaging/linux/hot-folder-prerm.sh
+  postremove: packaging/linux/hot-folder-postrm.sh

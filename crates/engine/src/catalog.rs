@@ -267,6 +267,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("In multiple files", "files", "ocr.recognize_batch", Ready),
                 item("Enhance scanned file", "sparkles", "ocr.enhance", Ready),
                 item("Enhance camera image", "camera", "ocr.enhance_camera", Ready),
+                item("Correct scanned pages", "crop", "ocr.correct_scan", Ready),
                 item("Correct recognized text", "text-select", "ocr.correct", Ready),
             ],
         }],

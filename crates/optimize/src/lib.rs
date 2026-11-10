@@ -231,6 +231,8 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Drop images and forms listed in page resources but never drawn.
+    pub remove_unused_xobjects: bool,
     /// Discard User Data: take `GoToR`, `GoToE`, `Launch` and `ImportData` actions, and `Thread`
     /// actions with an `/F`, out of links and bookmarks; a link left with nothing to do is
     /// removed. Links within the document and web links stay.
@@ -238,6 +240,45 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Compress document structure and non-image streams without changing image data,
+    /// removing user data, or pruning resource lists, links and named destinations.
+    /// The engine still deduplicates identical resources and writes a full save.
+    /// Pass an empty hidden-information discard list when using this profile.
+    pub fn lossless() -> Self {
+        let images = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+        Self {
+            compatibility: Compatibility::Retain,
+            workers: None,
+            merge_fragments: false,
+            color: images,
+            gray: images,
+            mono: MonoSettings { downsample: false, compression: MonoCompression::Retain, ..MonoSettings::REDUCE },
+            discard_thumbnails: false,
+            discard_alternate_images: false,
+            discard_tags: false,
+            discard_search_index: false,
+            discard_print_settings: false,
+            discard_form_actions: false,
+            discard_external_refs: false,
+            flate_unencoded: true,
+            object_streams: true,
+            // Re-encoding LZW streams would change encoded image data.
+            lzw_to_flate: false,
+            remove_invalid_links: false,
+            remove_unreferenced_dests: false,
+            remove_unused_xobjects: false,
+        }
+    }
+}
+
+impl Settings {
+    /// Whether every image setting keeps images as they are: no resampling, no recompression.
+    pub fn retains_images(&self) -> bool {
+        [self.color, self.gray].iter().all(|s| !s.downsample && s.compression == Compression::Retain)
+            && !self.mono.downsample
+            && self.mono.compression == MonoCompression::Retain
+    }
+
     /// Whether `write_full` should pack non-stream objects into compressed object streams:
     /// enabled when `object_streams` is set and the target version is not PDF 1.4 (§7.5.7).
     pub fn effective_object_streams(&self) -> bool {
@@ -266,6 +307,7 @@ impl Default for Settings {
             lzw_to_flate: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            remove_unused_xobjects: true,
             discard_external_refs: false,
         }
     }
@@ -364,6 +406,17 @@ pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, Optim
     optimize_with_progress(doc, settings, &mut |_| true)
 }
 
+/// Whether the unencoded-stream pass may touch `s`.
+fn flate_candidate(s: &pdfcraft_cos::Stream, settings: &Settings) -> bool {
+    // Retaining images also keeps unencoded image streams byte-for-byte; otherwise this generic
+    // stream pass would encode images that the image pass left alone.
+    if s.dict.name(b"Subtype") == Some(b"Image") && settings.retains_images() {
+        return false;
+    }
+    // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
+    !(s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64)
+}
+
 /// [`optimize`], calling `progress` before each image and before the clean-up (and now and then
 /// during a long one). Returning `false` stops with [`OptimizeError::Cancelled`]; `doc` is then
 /// partly optimized and should be dropped.
@@ -386,7 +439,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     if !progress(Stage::CleanUp) {
         return Err(OptimizeError::Cancelled);
     }
-    report.unused_xobjects = unused::remove_unused(doc, &pages, progress)?;
+    if settings.remove_unused_xobjects {
+        report.unused_xobjects = unused::remove_unused(doc, &pages, progress)?;
+    }
     if settings.discard_thumbnails {
         for p in &pages {
             if doc.get(*p).as_dict().is_some_and(|d| d.contains(b"Thumb")) {
@@ -398,18 +453,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
         }
     }
     if settings.discard_alternate_images {
-        for num in doc.object_numbers() {
-            let r = ObjRef { num, generation: doc.generation(num) };
-            let alt = matches!(&*doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") && s.dict.contains(b"Alternates"));
-            if alt {
-                if let Object::Stream(s) = &*doc.get(r) {
-                    let mut s = s.clone();
-                    s.dict.remove(b"Alternates");
-                    doc.set(r, Object::Stream(s));
-                }
-                report.alternate_images += 1;
-            }
-        }
+        report.alternate_images = discard_alternate_images(doc);
     }
     let root = doc.root();
     if let Some(chosen) = settings.compatibility.version() {
@@ -487,8 +531,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
-            if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
+            if !flate_candidate(s, settings) {
                 continue;
             }
             let replacement = if s.dict.contains(b"Filter") {
@@ -506,6 +549,24 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
         }
     }
     Ok(report)
+}
+
+/// Take `/Alternates` off every image, returning how many had one.
+fn discard_alternate_images(doc: &mut Document) -> usize {
+    let mut count = 0;
+    for num in doc.object_numbers() {
+        let r = ObjRef { num, generation: doc.generation(num) };
+        let alt = matches!(&*doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") && s.dict.contains(b"Alternates"));
+        if alt {
+            if let Object::Stream(s) = &*doc.get(r) {
+                let mut s = s.clone();
+                s.dict.remove(b"Alternates");
+                doc.set(r, Object::Stream(s));
+            }
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are

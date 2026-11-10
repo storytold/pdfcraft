@@ -166,7 +166,12 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
     let args = args.as_slice();
     validate_options("mcp", args, MCP_OPTIONS)?;
     let compact = args.iter().any(|a| a == "--compact");
-    let mut auto = automation(args)?;
+    // An agent may install boot services or change stored credentials only when the user says so.
+    let hot_folder_admin = args.iter().any(|a| a == "--allow-hot-folder-admin");
+    let mut auto = automation(args)?.with_hot_folder_admin(hot_folder_admin);
+    if hot_folder_admin {
+        let _ = writeln!(std::io::stderr().lock(), "pdfcraft-cli: Hot Folder administration allowed (system service and source credentials)");
+    }
     if let Some(roots) = roots {
         let show = |root: Option<&Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
         let _ = writeln!(

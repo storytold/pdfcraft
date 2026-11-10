@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>PdfCraft</title>
+  <options customize="always" require-scripts="false" rootVolumeOnly="true"/>
+  <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+  <choices-outline><line choice="pdfcraft"/><line choice="hot-folder"/></choices-outline>
+  <choice id="pdfcraft" title="PdfCraft" start_selected="true" enabled="false">
+    <pkg-ref id="ai.storyteller.pdfcraft.pkg"/>
+  </choice>
+  <choice id="hot-folder" title="PdfCraft Hot Folder" start_selected="false"
+      description="Optional folder automation and a background service at system startup, running under your user account. Only tasks you configure and enable are processed.">
+    <pkg-ref id="ai.storyteller.pdfcraft.hot-folder.pkg"/>
+  </choice>
+  <pkg-ref id="ai.storyteller.pdfcraft.pkg" version="@SHORT_VERSION@" auth="Root">PdfCraft-component.pkg</pkg-ref>
+  <pkg-ref id="ai.storyteller.pdfcraft.hot-folder.pkg" version="@SHORT_VERSION@" auth="Root">HotFolder-component.pkg</pkg-ref>
+</installer-gui-script>
