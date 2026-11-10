@@ -764,6 +764,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "auto_rotate": { "type": "boolean" },
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
                 "binding": { "type": "string", "enum": ["left", "right"] },
+                "creep": { "type": "number", "minimum": 0, "maximum": 10, "description": "Booklet creep compensation: points each sheet's pages move toward the fold, times the sheet's place from the outside (default 0)." },
                 "overlap": { "type": "number", "minimum": 0 },
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },

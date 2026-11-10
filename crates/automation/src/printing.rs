@@ -227,6 +227,7 @@ impl Automation {
                     s => return Err(bad(format!("unknown booklet_subset {s:?}"))),
                 },
                 binding: if a.opt_str("binding")? == Some("right") { Binding::Right } else { Binding::Left },
+                creep: a.opt_num("creep")?.unwrap_or(0.0),
             },
             "poster" => Layout::Poster {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
@@ -291,7 +292,7 @@ mod tests {
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
-        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left, creep: 0.0 };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
