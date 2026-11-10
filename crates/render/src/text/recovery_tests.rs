@@ -1471,7 +1471,10 @@ fn a_type0_font_whose_few_names_agree_with_the_mac_order_is_read_in_it() {
     let (strict, recovered, plain) = layers(&parse(type0_page_with_to_unicode(kept_ids(text, Cmap::None), &g, &mac_widths(text, 0), Some(""))));
     assert_eq!(strict, plain);
     assert!(strict.glyphs.is_empty());
-    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text), "an empty /ToUnicode");
+    let r = recovered.expect("an empty /ToUnicode");
+    assert_eq!(r.text.plain_text(), text);
+    // An empty map leaves the spaces to the order like the letters.
+    assert!(r.recovery.iter().flatten().any(|x| x.text == hayro::hayro_interpret::hayro_cmap::BfString::Char(' ')), "the spaces are read too");
     let e = mac_gid('e');
     let tu = format!("<{e:04X}> <0065>");
     let program = kept_ids(text, Cmap::Unicode(&[('I', mac_gid('I')), ('d', mac_gid('d'))]));
