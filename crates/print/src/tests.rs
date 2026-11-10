@@ -1690,6 +1690,36 @@ fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #2630 and #6100: paper discovery must respect the same delay-load guard as submission.
+/// The nonexistent queue makes a missing guard observable without requiring printer hardware.
+#[cfg(windows)]
+#[test]
+fn paper_detection_without_print_dlls_never_reaches_the_driver() {
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paper-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for missing in PRINT_DLLS {
+        SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+        PRINTER_BACKEND_CALLS.with(|c| c.set(0));
+        let name = "PdfCraft test: no such printer";
+        let papers = crate::spool::printer_papers(name);
+        let info = crate::spool::printer_paper_info(name);
+        let default = crate::spool::printer_default_paper(name);
+        let calls = PRINTER_BACKEND_CALLS.with(|c| c.get());
+        // A broken guard must not open a real dialog while this regression fails.
+        let properties = (calls == 0).then(|| crate::spool::show_printer_properties(name, None));
+        SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+        assert!(papers.is_empty());
+        assert_eq!(info, (Vec::new(), None));
+        assert_eq!(default, None);
+        assert_eq!(calls, 0, "paper queries must not reach the backend without {missing}");
+        assert!(matches!(properties, Some(Err(crate::PrintError::Spool(m))) if m.contains(missing)));
+        std::fs::write(dir.join(missing), b"").unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn printer_papers_and_default_paper_api() {
     // Nonexistent printer returns empty

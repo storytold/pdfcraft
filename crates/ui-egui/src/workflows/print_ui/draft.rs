@@ -540,7 +540,8 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(Some(print::paper_media_option(Some(&self.paper_name()), self.paper_size())))
+            // A user's custom label is not a keyword from the driver's media catalog.
+            .chain(Some(print::paper_media_option((!self.paper_is_custom()).then(|| self.paper_name()).as_deref(), self.paper_size())))
             .collect(),
         }
     }

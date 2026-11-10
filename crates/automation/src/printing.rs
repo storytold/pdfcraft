@@ -75,9 +75,9 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
         if let Some(size) = parse_custom_dimensions(p) {
             return Ok((size, Some(print::paper_media(None, size))));
         }
-        // 4. A size of its own: "8.5x14in", "210x297mm", "10x15cm". It names no media.
+        // 4. Explicit units request the same stock as point dimensions.
         if let Some(size) = paper_size(p) {
-            return Ok((size, None));
+            return Ok((size, Some(print::paper_media(None, size))));
         }
         return Err(bad(format!(
             "unknown paper {p:?}; choose one of {}, a paper from printer_papers, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
@@ -450,9 +450,19 @@ mod tests {
         assert_eq!(job(json!({}), Some("Custom.300x500pt")).options, [media("Custom.300x500")]);
 
         assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        // A size of its own is laid out as asked and names no media.
-        assert_eq!(resolve_paper(Some("8.5x14in"), None).ok(), Some(((612.0, 1008.0), None)));
-        assert!(job(json!({}), Some("8.5x14in")).options.is_empty());
+        // Every accepted dimension syntax requests the same stock from the queue.
+        for (input, size) in [
+            ("8.5x14in", (612.0, 1008.0)),
+            ("210x297mm", (210.0 * 72.0 / 25.4, 297.0 * 72.0 / 25.4)),
+            ("10x15cm", (10.0 * 72.0 / 2.54, 15.0 * 72.0 / 2.54)),
+            ("300x500pt", (300.0, 500.0)),
+        ] {
+            let expected = print::paper_media(None, size);
+            let (resolved_size, resolved_media) = resolve_paper(Some(input), None).unwrap();
+            assert!((resolved_size.0 - size.0).abs() < 0.01 && (resolved_size.1 - size.1).abs() < 0.01, "{input}");
+            assert_eq!(resolved_media.as_deref(), Some(expected.as_str()), "{input}");
+            assert_eq!(job(json!({}), Some(input)).options, [media(&expected)], "{input}");
+        }
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some("Letter"), None, &[]).ok().map(|j| j.printer), Some(None));
         assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some("Letter"), None, &[]).is_err());
     }

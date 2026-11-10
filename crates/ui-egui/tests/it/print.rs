@@ -1538,6 +1538,68 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(8);
 }
 
+/// A paper explicitly added while discovery is pending stays selected after its reply and reopen.
+#[test]
+fn adding_custom_paper_overrides_pending_driver_default() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex, mpsc};
+    let mut h = harness();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
+    let first_read = Arc::new(Mutex::new(Some(release_rx)));
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![Printer { name: "Labeller".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(move |_| {
+        let pending = first_read.lock().unwrap().take();
+        if let Some(rx) = pending {
+            let _ = started_tx.send(());
+            let _ = rx.recv();
+        }
+        vec![("Driver label".into(), (288.0, 432.0))]
+    }));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| Some(("Driver label".into(), (288.0, 432.0)))));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        h.run_steps(1);
+        if started_rx.try_recv().is_ok() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "paper discovery started");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.get_by_label("Custom…").click();
+    h.run_steps(2);
+    let units = h.state().print_draft.units.per_point();
+    h.state_mut().print_draft.custom_new = Some(("Card".into(), format!("{}", 300.0 * units), format!("{}", 500.0 * units)));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.paper_overridden, "Add is an explicit paper choice");
+    assert!(!h.state().print_draft.papers_loading(), "the explicit choice need not wait for detection");
+    release_tx.send(()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.papers_loading.is_some() {
+        assert!(std::time::Instant::now() < deadline, "paper discovery completed");
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.paper_name(), "Card");
+    let (w, h_pts) = h.state().print_draft.paper_size();
+    assert!((w - 300.0).abs() < 0.01 && (h_pts - 500.0).abs() < 0.01);
+    h.state_mut().open_print();
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.paper_name(), "Card", "reopening keeps the explicit choice");
+}
+
+/// A name entered by the user is not a keyword from the printer's media catalog.
+#[test]
+fn a_named_custom_paper_requests_its_dimensions_from_the_spooler() {
+    let mut d = pdfcraft_ui_egui::PrintDraft::default();
+    d.add_custom_paper(serde_json::from_value(serde_json::json!({"name": "Card", "width": 300.0, "height": 500.0})).unwrap());
+    assert_eq!(d.job("card.pdf").options, [("media".to_string(), "Custom.300x500".to_string())]);
+}
+
 /// Page setup: a paper size of one's own joins the Paper list (Custom…) and prints at its size.
 /// The printer it was printed on keeps it (#2001) by name, across a restart, and Remove takes it
 /// off the list; the printer's setup then leaves the paper as it is.

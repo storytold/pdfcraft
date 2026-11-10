@@ -460,12 +460,18 @@ pub type Paper = (String, (f64, f64));
 /// Empty when the printer reports none or on platforms where driver capabilities are not queried.
 #[cfg(windows)]
 pub fn printer_papers(printer: &str) -> Vec<Paper> {
+    // A call into a missing delay-loaded PrintTicket DLL would terminate the process (#2630).
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
     let _provider = print_ticket_provider();
     printer_papers_internal(printer)
 }
 
 #[cfg(windows)]
 fn printer_papers_internal(printer: &str) -> Vec<Paper> {
+    #[cfg(test)]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     use winprint::ticket::{FeatureOptionPack as _, FeatureOptionPackWithPredefined as _};
     let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
     let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
@@ -517,6 +523,9 @@ pub fn printer_default_paper(printer: &str) -> Option<Paper> {
 
 /// Reads the supported paper sizes and the default paper size configured for `printer`.
 pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
+    if missing_print_dll().is_some() {
+        return (Vec::new(), None);
+    }
     #[cfg(windows)]
     let _provider = print_ticket_provider();
     #[cfg(windows)]
@@ -543,6 +552,9 @@ pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
 /// settings (such as tray or quality) are not captured; general driver settings should
 /// be configured through [`open_printer_preferences`] (Properties…).
 pub fn show_printer_properties(printer: &str, parent: Option<isize>) -> Result<Option<Paper>, crate::PrintError> {
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
     #[cfg(windows)]
     {
         let devmode = match craft_print::rgb::settings_dialog(printer, None, parent) {

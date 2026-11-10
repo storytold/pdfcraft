@@ -107,6 +107,8 @@ impl PrintDraft {
             self.custom_papers.remove(0);
         }
         self.custom_papers.push(paper);
+        // Add is an explicit choice too: an outstanding driver read must not replace it.
+        self.paper_overridden = true;
         self.paper = self.papers.len() + self.custom_papers.len() - 1;
     }
 
