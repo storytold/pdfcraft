@@ -169,7 +169,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             })
             .collect());
     }
-    let text = String::from_utf8_lossy(bytes);
+    let text = std::str::from_utf8(bytes).map_err(|e| DataError::Malformed(format!("the file is not valid UTF-8 ({e})")))?;
     let t = text.trim_start_matches('\u{feff}').trim_start();
     check_form_xml_depth(t)?;
     let xml = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
@@ -350,7 +350,7 @@ fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let report = if bytes.starts_with(b"%FDF") {
         import_fdf(doc, bytes)?
     } else {
-        let text = String::from_utf8_lossy(bytes);
+        let text = std::str::from_utf8(bytes).map_err(|e| DataError::Malformed(format!("the file is not valid UTF-8 ({e})")))?;
         let t = text.trim_start_matches('\u{feff}').trim_start();
         if t.starts_with("<?xml") || t.starts_with("<xfdf") || t.starts_with('<') {
             match import_xfdf(doc, t) {
@@ -358,7 +358,7 @@ fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
                 other => other?,
             }
         } else {
-            import_table(doc, &text)?
+            import_table(doc, text)?
         }
     };
     if report.comments == 0 && report.fields == 0 && report.rejected.is_empty() {

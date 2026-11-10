@@ -2645,3 +2645,42 @@ fn copies_keep_their_intent_cloud_and_pdfcraft_keys() {
     assert_eq!(got[0].name(b"Subtype"), Some(b"Square".as_slice()), "not taken from the attribute");
     assert!(got[0].get(b"PCRef").is_none() && got[1].get(b"PCAngle").is_none(), "{got:?}");
 }
+
+/// Issue #5242: malformed UTF-8 in XML, XFDF, CSV and tab-delimited form data must be rejected
+/// with `DataError::Malformed` before modifying fields or comments, while genuinely UTF-8-encoded
+/// U+FFFD continues to import.
+#[test]
+fn malformed_utf8_form_data_is_refused_without_modifying_document() -> Result<(), Box<dyn std::error::Error>> {
+    let mut doc = blank();
+    set_value(&mut doc, "Name", &FieldValue::Text("Ada".into()))?;
+    let bad_inputs: &[&[u8]] = &[
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><fields><Name>caf\xff</Name></fields>",
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"Name\"><value>caf\xff</value></field></fields></xfdf>",
+        b"Name\ncaf\xff\n",
+        b"Name\tAgree\ncaf\xff\tYes\n",
+    ];
+    for &bad in bad_inputs {
+        if !matches!(import(&mut doc, bad), Err(DataError::Malformed(_))) {
+            return Err(format!("expected DataError::Malformed for {:?}", String::from_utf8_lossy(bad)).into());
+        }
+        let current = fields(&doc).into_iter().find(|f| f.name == "Name").ok_or("missing Name field")?.value;
+        if current != ["Ada"] {
+            return Err(format!("failed import mutated Name to {current:?}").into());
+        }
+    }
+    if !matches!(data_values(bad_inputs.get(1).copied().unwrap_or_default()), Err(DataError::Malformed(_))) {
+        return Err("expected DataError::Malformed from data_values on invalid UTF-8 XFDF".into());
+    }
+
+    // Valid UTF-8 containing an explicit U+FFFD replacement character still imports cleanly.
+    let valid_fffd = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><fields><Name>caf\u{fffd}</Name></fields>";
+    let report = import(&mut doc, valid_fffd.as_bytes())?;
+    if report.fields != 1 {
+        return Err(format!("expected 1 imported field, got {}", report.fields).into());
+    }
+    let updated = fields(&doc).into_iter().find(|f| f.name == "Name").ok_or("missing Name field")?.value;
+    if updated != ["caf\u{fffd}"] {
+        return Err(format!("expected explicit U+FFFD to survive import, got {updated:?}").into());
+    }
+    Ok(())
+}
