@@ -865,6 +865,21 @@ fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut Pre
     ui.add_space(6.0);
     ctx.checkbox(ui, &mut app.invert_middle_drag, tl!("Invert middle-button drag"), t);
     ctx.label_secondary(ui, tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way."), t);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Touch mode"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.touch_mode,
+            &[
+                (crate::touch::TouchMode::Auto, tl_ctx!("touch mode", crate::touch::TouchMode::Auto.label())),
+                (crate::touch::TouchMode::Always, tl_ctx!("touch mode", crate::touch::TouchMode::Always.label())),
+                (crate::touch::TouchMode::Never, tl_ctx!("touch mode", crate::touch::TouchMode::Never.label())),
+            ],
+        );
+    });
+    ctx.label_secondary(ui, tl!("Enhance interactions, handles, and panning for touchscreens."), t);
 }
 
 /// Content for Card 4: Identity

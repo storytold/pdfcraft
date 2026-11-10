@@ -56,6 +56,9 @@ impl PdfCraftApp {
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
+            ("touch_mode", _) => {
+                self.touch_mode = touch::TouchMode::parse(value).ok_or("touch_mode must be auto, always, or never")?;
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

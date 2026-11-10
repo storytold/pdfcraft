@@ -605,6 +605,20 @@ pub struct DocView {
     clicks: u32,
     last_press_time: f64,
     last_press_pos: Option<Pos2>,
+    /// Whether the active interaction was originated by touch.
+    pub(crate) is_touch: bool,
+    /// Sticky touch indicator: stays true after touch lift until non-touch pointer motion arrives.
+    pub(crate) touch_ui: bool,
+    /// True while an active press is owned by a draggable page item (comment, field, object).
+    pub(crate) press_keeps_drag: bool,
+    /// Touch drag panning state for canvas navigation.
+    pub(crate) touch_panning: bool,
+    /// Contact start timestamp, screen position, and page index for touch long-press word selection.
+    pub(crate) touch_press: Option<(f64, Pos2, usize)>,
+    /// Which touch selection handle (start or end pin) is actively being dragged.
+    pub(crate) touch_handle_dragging: Option<crate::touch::TouchHandle>,
+    /// Whether the current touch contact has already triggered a long-press selection.
+    pub(crate) touch_long_pressed: bool,
     /// Full screen: a click's page turn, when it falls due (input time) and which way. It waits
     /// out the double-click time, as the click may be the first of a double-click selecting a word.
     present_turn: Option<(f64, bool)>,
@@ -1084,6 +1098,13 @@ impl DocView {
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
+            is_touch: false,
+            touch_ui: false,
+            press_keeps_drag: false,
+            touch_panning: false,
+            touch_press: None,
+            touch_handle_dragging: None,
+            touch_long_pressed: false,
             present_turn: None,
             last_queue: Vec::new(),
             hold_rasters: false,
@@ -1395,6 +1416,7 @@ struct PageEnv<'a> {
     fill_text_border: crate::fill_sign::TextBorder,
     today: (i64, u32, u32),
     can_paste_image: bool,
+    pub(crate) touch_mode: crate::touch::TouchMode,
 }
 
 /// What the page-scroll closure produces for the rest of the frame.
@@ -1417,6 +1439,8 @@ struct PageOut {
     page_action: Option<PageMenuAction>,
     paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
+    any_down: bool,
+    press_keeps_drag: bool,
     /// The pointer is over a link, comment, field or what is placed on the page: a click there is
     /// for it, and turns no page in full screen.
     on_object: bool,
@@ -1887,6 +1911,8 @@ fn draw_pages(
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
+    view.is_touch = ptr.is_touch;
+    view.touch_ui = PagePointer::sticky_touch(ui);
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -1976,6 +2002,8 @@ fn draw_pages(
         open_table,
         page_action: _,
         primary_down: _,
+        any_down: _,
+        press_keeps_drag,
         on_object: _,
         refused,
         row_on_screen: _,
@@ -2229,6 +2257,8 @@ fn draw_pages(
         page_action,
         paste_comments_at,
         primary_down: ptr.primary_down,
+        any_down: ptr.any_down,
+        press_keeps_drag,
         on_object,
         refused,
         row_on_screen,
@@ -2658,15 +2688,16 @@ struct ScrollGeometry<'a> {
     avail: Rect,
     middle_gesture: bool,
     hand: bool,
+    touch_pan: bool,
 }
 
 /// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
 fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
-    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand, touch_pan } = *geometry;
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
-        drag: if middle_gesture {
+        drag: if middle_gesture || view.touch_handle_dragging.is_some() || view.press_keeps_drag {
             egui::scroll_area::DragScroll::Never
-        } else if hand {
+        } else if hand || touch_pan {
             egui::scroll_area::DragScroll::Always
         } else {
             egui::scroll_area::DragScroll::OnTouch
@@ -2695,7 +2726,8 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     // page only after that frame was drawn, a frame behind. The frame egui tells the drag from a
     // click, the page catches up with all the pointer has moved since the press. A jump asked for
     // below still wins.
-    if hand
+    let hand_or_touch = hand || touch_pan;
+    if hand_or_touch
         && !middle_gesture
         && let Some(id) = view.page_widget.filter(|id| ui.ctx().is_being_dragged(*id))
     {
@@ -2706,6 +2738,10 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         };
         if moved != Vec2::ZERO {
             view.end_find_following();
+            if touch_pan {
+                view.touch_panning = true;
+                view.fling.touch_move(ui.input(|i| i.time), moved);
+            }
         }
         // Within the content, as egui keeps it: past an end the page would show there for a
         // frame and spring back. `max` is never NaN or below zero, so the clamp can't panic.
@@ -2768,8 +2804,20 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
 /// search following, a pan holds back fresh tile renders until it settles, a glide keeps going or
 /// stops, and the vertical direction is kept for continuous view's prefetch. Whether a pan is
 /// still settling.
-fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::scroll_area::ScrollAreaOutput<T>, glide: Vec2) -> bool {
+fn track_scroll<T>(
+    ui: &egui::Ui,
+    view: &mut DocView,
+    out: &egui::containers::scroll_area::ScrollAreaOutput<T>,
+    glide: Vec2,
+    animates: bool,
+    any_down: bool,
+) -> bool {
     let scroll_offset = out.state.clamped_offset();
+    let touch_ended = view.touch_panning && !any_down;
+    if touch_ended {
+        view.touch_panning = false;
+        view.fling.touch_end(ui.input(|i| i.time), animates);
+    }
     // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
     // above: its two scroll-bar tracks/handles and, for touch or the Hand tool, its drag
     // background. The output gives us the area id, and egui's pinned ScrollArea registers those
@@ -3007,12 +3055,28 @@ fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect
 
 /// Pinch / ctrl+scroll zoom, anchored on the pointer or the current page.
 fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rect: Rect, enabled: bool) {
-    if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && enabled && ui.rect_contains_pointer(navigation_rect) {
+    let multi_touch_info = ui.input(|i| i.multi_touch());
+    let over_nav = ui.rect_contains_pointer(navigation_rect) || multi_touch_info.as_ref().is_some_and(|m| navigation_rect.contains(m.center_pos));
+    if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && enabled && over_nav {
         let z = view.zoom * zoom_delta;
         match zoom_anchor(ui) {
-            Some(p) => view.zoom_at(z, p),
+            Some(p) => {
+                view.zoom_at(z, p);
+                if let Some(m) = &multi_touch_info
+                    && m.translation_delta != Vec2::ZERO
+                    && let Some((_, _, _, rel)) = view.zoom_anchor.as_mut()
+                {
+                    *rel += m.translation_delta;
+                }
+            }
             None => view.set_zoom(z),
         }
+    } else if let Some(m) = &multi_touch_info
+        && m.translation_delta != Vec2::ZERO
+        && enabled
+        && over_nav
+    {
+        view.sync_scroll = Some(view.last_scroll - m.translation_delta);
     } else if view.goto_point.is_none() && zoom_delta == 1.0 {
         // The find step has been laid out and no zoom is easing on: zoom at the pointer again.
         // egui spreads a ⌘/Ctrl-wheel notch over about a quarter of a second; while the pointer
@@ -3305,10 +3369,24 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
     let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
 
+    let touch_pan_active = app.quick_tool == QuickTool::Select
+        && (view.is_touch || view.touch_panning)
+        && view.touch_handle_dragging.is_none()
+        && !view.press_keeps_drag
+        && app.touch_mode.is_active(view.is_touch);
     let mut scroll = page_scroll_area(
         ui,
         view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+        &ScrollGeometry {
+            rects: &rects,
+            y_shift,
+            content_w,
+            content_h,
+            avail,
+            middle_gesture,
+            hand: app.quick_tool == QuickTool::Hand,
+            touch_pan: touch_pan_active,
+        },
     );
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -3368,7 +3446,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll = refine_goto_point(
+        scroll,
+        view,
+        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand, touch_pan: touch_pan_active },
+    );
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
     let env = PageEnv {
@@ -3431,6 +3513,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         tool,
         units,
         unobstructed,
+        touch_mode: app.touch_mode,
         visible_pages: &visible_pages,
         y_shift,
         fill_text_size: app.fill_text_size,
@@ -3467,11 +3550,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         page_action,
         paste_comments_at,
         primary_down,
+        any_down,
+        press_keeps_drag,
         on_object,
         mut refused,
         row_on_screen,
         stamp_placed,
     } = page_out;
+    view.press_keeps_drag = press_keeps_drag && any_down;
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
         // At the top once the page's top edge shows where going to a page puts it (a gap
         // below the window's top). Within a point, as for wheel paging, so layout rounding
@@ -3501,7 +3587,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // backdrop/older tiles instead of queueing a storm of interprets (one per frame) that
     // the workers cannot cancel mid-operator. Fresh tiles go out once the pan settles;
     // pages with nothing on screen yet still queue.
-    let pan_held = track_scroll(ui, view, &out, glide);
+    let pan_held = track_scroll(ui, view, &out, glide, animates, any_down);
     plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held, hand });
 
     let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);

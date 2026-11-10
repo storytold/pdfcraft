@@ -451,7 +451,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
         && resp.clicked()
         && pressed_away
         && !(done_clicked || cancel_clicked || reset_clicked)
-        && hover_pos.is_some_and(|p| matches!(crop_part(xf, info, page, Some(image), mode, p), None | Some(CropPart::Page)));
+        && hover_pos.is_some_and(|p| matches!(crop_part(xf, info, page, Some(image), mode, p, view.is_touch), None | Some(CropPart::Page)));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
@@ -581,10 +581,11 @@ pub(crate) fn handle_hit(
     let obb = ImageObb::from_image(image, xf, info, page);
     let picture = |part| Owner::Picture { index: s.index, part };
     let knob = if obb.is_rotated { obb.s_rot } else { rotate_knob(b, clip).0 };
-    if knob.distance(p) < 8.0 {
+    let grab_radius = crate::touch::handle_grab_radius(view.is_touch);
+    if knob.distance(p) <= grab_radius {
         return Some(Hit::new(picture(PicturePart::Knob), Layer::Handle, egui::CursorIcon::Grab));
     }
-    let (grip, (handle, _)) = obb.handles().into_iter().enumerate().find(|(_, (_, point))| point.distance(p) < 8.0)?;
+    let (grip, (handle, _)) = obb.handles().into_iter().enumerate().find(|(_, (_, point))| point.distance(p) <= grab_radius)?;
     Some(Hit::new(picture(PicturePart::Corner(grip)), Layer::Handle, obb.handle_cursor(handle)))
 }
 
@@ -599,7 +600,7 @@ pub(crate) fn handle_hit(
 pub(crate) fn crop_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
     let s = view.image_selection.as_ref().filter(|s| s.page == page)?;
     let mode = s.crop.as_ref()?;
-    let part = crop_part(xf, info, page, images.get(s.index), mode, p)?;
+    let part = crop_part(xf, info, page, images.get(s.index), mode, p, view.is_touch)?;
     let icon = match part {
         CropPart::Page if mode.controls.iter().any(|r| r.contains(p)) => egui::CursorIcon::PointingHand,
         CropPart::Grip(g) => GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()),
@@ -612,13 +613,22 @@ pub(crate) fn crop_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pd
 /// What of crop mode `mode` on the picture `image` lies under `p` ([`crop_hit`]): a control (as
 /// [`CropPart::Page`]), a grip, the box kept, the picture outside it, or the rest of the page;
 /// `None` off the page, its grips and its controls.
-fn crop_part(xf: &PageXform, info: &DocInfo, page: usize, image: Option<&pdfcraft_engine::PageImage>, mode: &CropMode, p: Pos2) -> Option<CropPart> {
+fn crop_part(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    image: Option<&pdfcraft_engine::PageImage>,
+    mode: &CropMode,
+    p: Pos2,
+    is_touch: bool,
+) -> Option<CropPart> {
     if mode.controls.iter().any(|r| r.contains(p)) {
         return Some(CropPart::Page);
     }
     let kept = image.and_then(|image| crop_frames(xf, info, page, image, mode.keep)).map(|(_, k)| k);
+    let reach = if is_touch { crate::touch::TOUCH_HANDLE_GRAB_RADIUS } else { CROP_GRIP_REACH };
     // The grips reach past the page's edge, where those of a picture filling its page lie half.
-    if let Some(g) = kept.and_then(|k| crop_handles(k).iter().position(|h| h.distance(p) < CROP_GRIP_REACH)) {
+    if let Some(g) = kept.and_then(|k| crop_handles(k).iter().position(|h| h.distance(p) <= reach)) {
         return Some(CropPart::Grip(g));
     }
     if !xf.rect.contains(p) {
