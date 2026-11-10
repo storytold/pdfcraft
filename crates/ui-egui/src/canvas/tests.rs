@@ -3422,6 +3422,38 @@ fn a_failed_recovered_text_request_fails_the_pages_text() {
     assert!(app.views[0].text_failed.contains(&0), "the page's text failed");
 }
 
+/// Review finding: a recovered-text request that fails for a page whose strict text Find already
+/// read fails only the recovery: the page keeps its text and its Find matches, records nothing
+/// recovered (so it isn't asked again), and isn't counted as failed.
+#[test]
+fn a_failed_recovered_text_request_keeps_strict_text_already_read() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("one.pdf", None, text_pages_pdf(&["placeholder"])).unwrap();
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let v = &mut app.views[0];
+    v.texts.insert(0, Arc::new(strict));
+    v.find = Some(Find { query: "ab".into(), matches: vec![(0, 0..2)], current: Some(0), ..Default::default() });
+    let request = RenderRequest { page: 0, kind: RequestKind::RecoveredText, tag: TEXT_TAG, ..Default::default() };
+    v.last_queue = vec![request];
+    let result = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: Some("page 1 took longer than 20 s".into()),
+        text: None,
+        recovered: None,
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    v.receive_result(&egui::Context::default(), result);
+    assert!(!v.text_failed.contains(&0), "only the recovery failed");
+    assert!(v.has_page_text(0), "the strict text stays");
+    assert!(matches!(v.recovered.get(&0), Some(None)), "nothing recovered, not asked again");
+    let find = v.find.as_ref().expect("find");
+    assert_eq!((find.matches.clone(), find.current), (vec![(0, 0..2)], Some(0)), "Find keeps its matches");
+}
+
 /// Review finding: Copy with formatting whose copy a cap cut falls back to the whole selection,
 /// recovered glyphs included, uncapped as the strict text is, not to the capped copy's text.
 #[test]

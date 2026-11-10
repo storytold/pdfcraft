@@ -595,7 +595,8 @@ pub struct DocView {
     /// pages on screen), with Copy with formatting's layer where a recovery rule read some glyph:
     /// text selection works on it there (so text only it has can be selected), while Find,
     /// search and plain Copy keep to `texts`. `None`: nothing was recovered. (A failed request
-    /// fails the page's text: `text_failed`.)
+    /// fails the page's text, `text_failed`, unless its strict text is already in `texts`: then
+    /// it records `None`.)
     pub(crate) recovered: HashMap<usize, Option<Arc<RecoveredText>>>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
