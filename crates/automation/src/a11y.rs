@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use crate::json::one_based;
-use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_atomic};
+use crate::{Args, Automation, Result, ToolError, child, failed, write_atomic};
 
 #[cfg(any())]
 mod documents;
@@ -324,14 +324,14 @@ impl Automation {
             .iter()
             .map(|i| json!({ "clause": i.clause, "message": i.message, "page": i.page.map(|p| p + 1), "fixable": i.fixable }))
             .collect();
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
         let after = self.pdfa_verify(a)?;
         let remaining = after["issues"].clone();
         let fixed: Vec<Value> =
             before.iter().filter(|i| i["fixable"] == true && !remaining.as_array().unwrap_or(&Vec::new()).contains(i)).cloned().collect();
         let mut out = after;
         out["fixed"] = Value::Array(fixed);
-        Ok(out)
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -374,24 +374,10 @@ impl Automation {
                 .and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string()))
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
             out.push(match result {
-                Ok(r) => {
-                    let target = child(&folder, &name);
-                    let target = if target.exists() {
-                        let stem =
-                            std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                        unused(&folder, &stem)
-                    } else {
-                        target
-                    };
-                    if target.exists() {
-                        json!({ "path": p, "error": format!("{}: no unused output name available", target.display()) })
-                    } else {
-                        match write_atomic(&target, &r.bytes) {
-                            Ok(()) => json!({ "path": p, "output": target.to_string_lossy(), "log": r.log }),
-                            Err(e) => json!({ "path": p, "error": e.to_string() }),
-                        }
-                    }
-                }
+                Ok(r) => match crate::batch::publish(&child(&folder, &name), &r.bytes) {
+                    Ok(target) => json!({ "path": p, "output": target.to_string_lossy(), "log": r.log }),
+                    Err(e) => json!({ "path": p, "error": e.to_string() }),
+                },
                 Err(e) => json!({ "path": p, "error": e }),
             });
         }
@@ -475,8 +461,8 @@ impl Automation {
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
         let pages = self.compare_pages_arg(a)?;
-        let n = self.session.mark_differences_of(old, new, &pages).map_err(failed)?;
-        Ok(json!({ "comments": n }))
+        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences_of(old, new, &pages)).map_err(failed)?;
+        Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }
 

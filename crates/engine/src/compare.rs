@@ -77,11 +77,17 @@ impl Session {
         b.check_copying()?;
         let (old_words, new_words) = (a.words_on_pages(pages), b.words_on_pages(pages));
         let mut c = pdfcraft_compare::compare(&old_words, &new_words);
+        let new_pages = b.info.pages.len();
         for ch in &mut c.changes {
-            if ch.new.rects.is_empty() {
-                ch.new.page = ch.old.page;
+            // A deletion keeps the newer document's own anchor when it has one. Otherwise it goes
+            // on the old page when the newer document has that page, or else on the newer
+            // document's last page, at its top left.
+            if ch.new.rects.is_empty() && ch.new.near.is_none() {
+                let page = ch.old.page.min(new_pages.saturating_sub(1));
+                ch.new.page = page;
+                ch.new.near = if ch.old.page == page { ch.old.rects.first().copied() } else { None };
                 if ch.new.near.is_none() {
-                    ch.new.near = ch.old.rects.first().copied();
+                    ch.new.near = b.info.pages.get(page).map(|info| info.crop.map(f64::from));
                 }
             }
             if ch.old.rects.is_empty() {
