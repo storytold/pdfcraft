@@ -60,6 +60,10 @@ pub enum WireError {
     UnsupportedShape(&'static str),
     #[error("{0} cannot be restyled in a shared session")]
     NotRestylable(&'static str),
+    #[error("{0} cannot be moved in a shared session")]
+    NotMovable(&'static str),
+    #[error("{0} cannot be reshaped in a shared session")]
+    NotReshapable(&'static str),
     #[error("the annotation payload is malformed: {0}")]
     Malformed(String),
     #[error("{field} is invalid: {why}")]
@@ -732,6 +736,357 @@ impl InfoUpdate {
 fn unit_field(value: &Value, field: &'static str) -> Result<f64, WireError> {
     let number = finite_field(value, field)?;
     if (0.0..=1.0).contains(&number) { Ok(number) } else { Err(WireError::Invalid { field, why: "must be between 0 and 1".into() }) }
+}
+
+// ── Part opacity, a move and the geometry of a comment ───────────────────────
+
+/// How close two geometry numbers must be to count as the same value: the engine
+/// writes three decimals, and a move adds its offset to the numbers it read.
+const GEOMETRY_EPSILON: f64 = 1e-3;
+
+/// A comment's `/Rect` corners in order, at least 1 pt wide and high: what a
+/// move's compare-and-set compares and what a resize names.
+fn rect_field(value: &Value, field: &'static str) -> Result<[f64; 4], WireError> {
+    let entries =
+        value.as_array().filter(|entries| entries.len() == 4).ok_or_else(|| WireError::Invalid { field, why: "expected [x0, y0, x1, y1]".into() })?;
+    let mut numbers = [0.0; 4];
+    for (slot, entry) in numbers.iter_mut().zip(entries) {
+        *slot = finite_field(entry, field)?;
+    }
+    let rect = [numbers[0].min(numbers[2]), numbers[1].min(numbers[3]), numbers[0].max(numbers[2]), numbers[1].max(numbers[3])];
+    if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+        return Err(WireError::Invalid { field, why: "at least 1 pt wide and high".into() });
+    }
+    Ok(rect)
+}
+
+/// A comment's points in user space: a line's two ends, a polygon's corners or a
+/// callout's arrow point (and knee). Bounded by [`MAX_TOTAL_POINTS`].
+fn points_field(value: &Value, field: &'static str) -> Result<Vec<[f64; 2]>, WireError> {
+    let entries = value.as_array().ok_or_else(|| WireError::Invalid { field, why: "expected a list of [x, y] points".into() })?;
+    if entries.is_empty() {
+        return Err(WireError::Invalid { field, why: "at least one point".into() });
+    }
+    if entries.len() > MAX_TOTAL_POINTS {
+        return Err(WireError::TooMany { what: "points", count: entries.len(), max: MAX_TOTAL_POINTS });
+    }
+    let mut points = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let pair = entry.as_array().filter(|pair| pair.len() == 2).ok_or_else(|| WireError::Invalid { field, why: "each point is [x, y]".into() })?;
+        points.push([finite_field(&pair[0], field)?, finite_field(&pair[1], field)?]);
+    }
+    Ok(points)
+}
+
+/// A comment's `/Rect` corners from a wire value, as `annotation.move`'s
+/// `expect` names them: four finite numbers, at least 1 pt wide and high.
+pub fn rect_from_value(value: &Value) -> Result<[f64; 4], WireError> {
+    rect_field(value, "expect")
+}
+
+/// Whether a rect still is what `expect` names, within [`GEOMETRY_EPSILON`].
+pub fn rect_matches(expect: [f64; 4], current: Option<[f64; 4]>) -> bool {
+    current.is_some_and(|current| (0..4).all(|i| (expect[i] - current[i]).abs() <= GEOMETRY_EPSILON))
+}
+
+fn same_points(expect: &[[f64; 2]], current: &[[f64; 2]]) -> bool {
+    expect.len() == current.len() && expect.iter().zip(current).all(|(a, b)| (0..2).all(|i| (a[i] - b[i]).abs() <= GEOMETRY_EPSILON))
+}
+
+/// Whether a drag moves `props`: text markup and the caret of a Replace Text
+/// proposal stay where their text is (keep in step with the comment tool).
+fn on_text(props: &Props) -> bool {
+    matches!(props.subtype.as_str(), "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
+        || (props.subtype == "Caret" && props.intent.as_deref() == Some("Replace"))
+}
+
+/// The fill's and the text's own opacities of an existing comment, as
+/// `annotation.parts` sets them (RFC §3.1.6).
+///
+/// `annotation.update` sets the whole comment's opacity; this operation sets a
+/// part's, the line or border keeping the comment's. It is one addressable
+/// operation over the engine's `Edit::PartOpacity`, and the same compare-and-set
+/// undo: the accepted operation carries `before` (the numbers it replaced).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PartsUpdate {
+    /// A shape's or text box's fill opacity (0–1); `None` leaves it as it is.
+    pub fill: Option<f64>,
+    /// A text box's, typewriter text's or callout's text opacity.
+    pub text: Option<f64>,
+}
+
+impl PartsUpdate {
+    /// Whether the update names no part at all.
+    pub fn is_empty(&self) -> bool {
+        self.fill.is_none() && self.text.is_none()
+    }
+
+    /// The body of an `annotation.parts`: `{"action": …, "parts": {…}}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.parts", "parts": self.to_value() })
+    }
+
+    /// The `parts` object on its own, as the accepted operation's `parts`,
+    /// `before` and `expect` write it.
+    pub fn to_value(&self) -> Value {
+        let mut object = Map::new();
+        if let Some(fill) = self.fill {
+            object.insert("fill".into(), json!(fill));
+        }
+        if let Some(text) = self.text {
+            object.insert("text".into(), json!(text));
+        }
+        Value::Object(object)
+    }
+
+    /// Read the `parts` object of an `annotation.parts`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let parts = payload.get("parts").filter(|value| !value.is_null()).ok_or_else(|| WireError::Malformed("the update names no part".into()))?;
+        Self::from_value(parts)
+    }
+
+    /// Read a `parts` object: the numbers present are the ones the update sets.
+    pub fn from_value(parts: &Value) -> Result<Self, WireError> {
+        let object = parts.as_object().ok_or_else(|| WireError::Malformed("the parts must be an object".into()))?;
+        let mut update = Self::default();
+        for (key, field) in object {
+            match key.as_str() {
+                "fill" => update.fill = Some(unit_field(field, "fill opacity")?),
+                "text" => update.text = Some(unit_field(field, "text opacity")?),
+                other => return Err(WireError::Invalid { field: "parts", why: format!("{other:?} is not a part of a comment") }),
+            }
+        }
+        if update.is_empty() {
+            return Err(WireError::Malformed("the parts name no opacity".into()));
+        }
+        Ok(update)
+    }
+
+    /// Refuse a part the comment does not draw, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        if !props.restylable {
+            return Err(WireError::NotRestylable("this comment's appearance"));
+        }
+        if self.fill.is_some() && !props.fillable {
+            return Err(WireError::Invalid { field: "fill opacity", why: "this comment has no fill".into() });
+        }
+        if self.text.is_some() && props.text_opacity.is_none() {
+            return Err(WireError::Invalid {
+                field: "text opacity",
+                why: "only text boxes, typewriter text and callouts have text of their own".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The opacities the comment had for exactly the parts this update sets —
+    /// what the accepted operation carries as `before` and what an undo sets back.
+    pub fn before(&self, props: &Props) -> Self {
+        Self { fill: self.fill.and(props.fill_opacity), text: self.text.and(props.text_opacity) }
+    }
+
+    /// Whether the comment's parts still are the ones `expect` names.
+    pub fn still_matches(&self, props: &Props) -> bool {
+        if self.fill.is_some_and(|value| props.fill_opacity.is_none_or(|current| (value - current).abs() > STYLE_EPSILON)) {
+            return false;
+        }
+        if self.text.is_some_and(|value| props.text_opacity.is_none_or(|current| (value - current).abs() > STYLE_EPSILON)) {
+            return false;
+        }
+        true
+    }
+
+    /// What the engine's `Edit::PartOpacity` takes: `None` leaves a part as it is.
+    pub fn apply_to(&self) -> (Option<f64>, Option<f64>) {
+        (self.fill, self.text)
+    }
+}
+
+/// The final geometry of an existing comment, as `annotation.geometry` sets it
+/// (RFC §3.1.6): a resize (a rectangle) or a reshape (points).
+///
+/// The rectangle is the frame Comment Properties and the comment bar resize — a
+/// callout's text box, else the comment's `/Rect` — because the engine's
+/// `Edit::ResizeAnnotation` takes exactly that. The accepted operation carries
+/// `before` and `after` (the frames the engine drew around the edit), so an undo
+/// restores the old frame and refuses if someone moved the comment since.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GeometryUpdate {
+    /// Where a resize puts the comment.
+    Rect([f64; 4]),
+    /// A line's two ends, connected lines' or a polygon's corners, or a callout's
+    /// arrow point and knee.
+    Points(Vec<[f64; 2]>),
+}
+
+impl GeometryUpdate {
+    /// The body of an `annotation.geometry`: `{"action": …, "geometry": {…}}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.geometry", "geometry": self.to_value() })
+    }
+
+    /// The `geometry` object on its own, as the accepted operation's `geometry`,
+    /// `before`, `after` and `expect` write it.
+    pub fn to_value(&self) -> Value {
+        match self {
+            Self::Rect(rect) => json!({ "rect": rect }),
+            Self::Points(points) => json!({ "points": points }),
+        }
+    }
+
+    /// Read the `geometry` object of an `annotation.geometry`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let geometry =
+            payload.get("geometry").filter(|value| !value.is_null()).ok_or_else(|| WireError::Malformed("the update names no geometry".into()))?;
+        Self::from_value(geometry)
+    }
+
+    /// Read a geometry object: exactly one of `rect` and `points`.
+    pub fn from_value(geometry: &Value) -> Result<Self, WireError> {
+        let object = geometry.as_object().ok_or_else(|| WireError::Malformed("the geometry must be an object".into()))?;
+        let rect = object.get("rect");
+        let points = object.get("points");
+        if let Some(other) = object.keys().find(|key| *key != "rect" && *key != "points") {
+            return Err(WireError::Invalid { field: "geometry", why: format!("{other:?} is not a geometry of a comment") });
+        }
+        match (rect, points) {
+            (Some(rect), None) => Ok(Self::Rect(rect_field(rect, "rect")?)),
+            (None, Some(points)) => Ok(Self::Points(points_field(points, "points")?)),
+            (Some(_), Some(_)) => Err(WireError::Invalid { field: "geometry", why: "a rect or points, not both".into() }),
+            (None, None) => Err(WireError::Malformed("the geometry names no rect or points".into())),
+        }
+    }
+
+    /// The rectangle a resize names, if this is one.
+    pub fn rect(&self) -> Option<[f64; 4]> {
+        match self {
+            Self::Rect(rect) => Some(*rect),
+            Self::Points(_) => None,
+        }
+    }
+
+    /// The points a reshape names, if this is one.
+    pub fn points(&self) -> &[[f64; 2]] {
+        match self {
+            Self::Rect(_) => &[],
+            Self::Points(points) => points,
+        }
+    }
+
+    /// Refuse a comment this geometry cannot be set on, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        match self {
+            Self::Rect(_) => {
+                if !matches!(props.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") {
+                    return Err(WireError::Invalid { field: "rect", why: format!("{} comments can't be resized", props.subtype) });
+                }
+                if props.frame.is_none() {
+                    return Err(WireError::Invalid { field: "rect", why: "the comment's rectangle can't be read".into() });
+                }
+            }
+            Self::Points(points) => {
+                if props.intent.as_deref().is_some_and(|intent| intent.ends_with("Dimension")) {
+                    return Err(WireError::NotReshapable("a measurement"));
+                }
+                if props.points.is_empty() {
+                    return Err(WireError::NotReshapable("this comment's points"));
+                }
+                match (props.subtype.as_str(), points.len()) {
+                    ("Line", 2) | ("PolyLine" | "Polygon", 2..) | ("FreeText", 1 | 2) => {}
+                    ("Line", _) => return Err(WireError::Invalid { field: "points", why: "a line has two ends".into() }),
+                    ("FreeText", _) => {
+                        return Err(WireError::Invalid { field: "points", why: "a callout has an arrow point and, optionally, a knee".into() });
+                    }
+                    ("PolyLine" | "Polygon", _) => return Err(WireError::Invalid { field: "points", why: "at least two corners".into() }),
+                    (other, _) => {
+                        return Err(WireError::Invalid { field: "points", why: format!("{other} comments have no points to reshape") });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The geometry the comment had — what the accepted operation carries as
+    /// `before` and what an undo sets again.
+    pub fn before(&self, props: &Props) -> Option<Self> {
+        match self {
+            Self::Rect(_) => props.frame.map(Self::Rect),
+            Self::Points(_) => (!props.points.is_empty()).then(|| Self::Points(props.points.clone())),
+        }
+    }
+
+    /// The geometry the comment has now, in this update's shape: what the
+    /// accepted operation carries as `after` (an undo's compare-and-set).
+    pub fn observed(&self, props: &Props) -> Option<Self> {
+        self.before(props)
+    }
+
+    /// Whether the comment's geometry still is the one `expect` names.
+    pub fn still_matches(&self, props: &Props) -> bool {
+        match self {
+            Self::Rect(rect) => rect_matches(*rect, props.frame),
+            Self::Points(points) => same_points(points, &props.points),
+        }
+    }
+}
+
+/// A move of an existing comment by `(dx, dy)` points, as `annotation.move`
+/// sets it (RFC §3.1.6).
+///
+/// The engine's `Edit::MoveAnnotation` shifts the comment, its pop-up and its
+/// points; the accepted operation carries `before` and `after` (the comment's
+/// `/Rect` around the move), so the undo is a move by the opposite offset that
+/// refuses if someone moved the comment since.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoveUpdate {
+    pub dx: f64,
+    pub dy: f64,
+}
+
+impl MoveUpdate {
+    /// The body of an `annotation.move`: `{"action": …, "dx": …, "dy": …}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.move", "dx": self.dx, "dy": self.dy })
+    }
+
+    /// Read the body of an `annotation.move`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let dx = payload.get("dx").ok_or_else(|| WireError::Malformed("the move names no dx".into()))?;
+        let dy = payload.get("dy").ok_or_else(|| WireError::Malformed("the move names no dy".into()))?;
+        Ok(Self { dx: finite_field(dx, "dx")?, dy: finite_field(dy, "dy")? })
+    }
+
+    /// Refuse a comment that does not move with a drag, before anything changes.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        if on_text(props) {
+            return Err(WireError::NotMovable("text markup"));
+        }
+        if props.rect.is_none() {
+            return Err(WireError::Invalid { field: "rect", why: "the comment's rectangle can't be read".into() });
+        }
+        Ok(())
+    }
+
+    /// The `/Rect` the comment had — what the accepted operation carries as
+    /// `before`, and what an undo moves back to.
+    pub fn before(&self, props: &Props) -> Option<[f64; 4]> {
+        props.rect
+    }
+
+    /// The `/Rect` a move of `rect` leaves: a move shifts all four numbers.
+    pub fn after(&self, rect: [f64; 4]) -> [f64; 4] {
+        [rect[0] + self.dx, rect[1] + self.dy, rect[2] + self.dx, rect[3] + self.dy]
+    }
 }
 
 fn width_field(value: &Value) -> Result<f64, WireError> {

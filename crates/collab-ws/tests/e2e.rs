@@ -1603,6 +1603,187 @@ fn two_clients_resize_text_and_rename_a_note_and_undo_them() -> Result<(), Box<d
     Ok(())
 }
 
+/// A comment's parts and a move are addressable operations: both replicas
+/// converge on each, the undo built from the accepted operation puts both back,
+/// and a comment that cannot carry the edit is refused without moving the
+/// version.
+#[test]
+fn two_clients_change_parts_and_move_a_comment_and_undo_them() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let box_ = pdfcraft_engine::Shape::TextBox { rect: [20.0, 120.0, 180.0, 170.0], font_size: 10.0 };
+    let note = pdfcraft_engine::Shape::Note { at: [60.0, 240.0], icon: pdfcraft_engine::NoteIcon::Comment };
+    add_shape_on_both(&mut ada, &mut bo, &doc, box_, "ada-box", "op-add-box")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, note, "ada-note", "op-add-note")?;
+
+    // The fill's and the text's own opacities.
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-parts")?,
+            base,
+            0,
+            annotation("ada-box", 0),
+            json!({"action": "annotation.parts", "parts": {"fill": 0.5, "text": 0.4}}),
+        ),
+    )?;
+    for peer in [&ada, &bo] {
+        let props = style_of(peer, "ada-box")?;
+        assert!((props.fill_opacity.unwrap_or_default() - 0.5).abs() < 1e-3, "the fill's opacity is on every replica");
+        assert!((props.text_opacity.unwrap_or_default() - 0.4).abs() < 1e-3);
+    }
+    assert_eq!(applied.op.payload["before"], json!({"fill": 1.0, "text": 1.0}));
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the parts have no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.parts");
+    assert_eq!(undo.payload["expect"], json!({"fill": 0.5, "text": 0.4}));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-parts")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let props = style_of(peer, "ada-box")?;
+        assert_eq!(props.fill_opacity, Some(1.0), "the old parts are back on every replica");
+        assert_eq!(props.text_opacity, Some(1.0));
+    }
+
+    // A move of the box.
+    let start = style_of(&bo, "ada-box")?.rect.ok_or("the box has no rect")?;
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(doc.clone(), OpId::new("op-move")?, base, 0, annotation("ada-box", 0), json!({"action": "annotation.move", "dx": 9.0, "dy": -4.0})),
+    )?;
+    let moved = [start[0] + 9.0, start[1] - 4.0, start[2] + 9.0, start[3] - 4.0];
+    for peer in [&ada, &bo] {
+        let rect = style_of(peer, "ada-box")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((rect[i] - moved[i]).abs() < 1e-3, "the move is on every replica: {rect:?}");
+        }
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the move has no inverse")?;
+    assert_eq!(undo.payload["dx"], json!(-9.0));
+    assert_eq!(undo.payload["expect"], json!(moved));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-move")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let rect = style_of(peer, "ada-box")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((rect[i] - start[i]).abs() < 1e-3, "the undo puts it back on every replica: {rect:?}");
+        }
+    }
+
+    // Refusals: a note has no rectangle to resize, a text box no points to
+    // reshape. Neither is broadcast, and neither moves the version.
+    let version = ada.version;
+    for (id, target, payload, code) in [
+        (
+            "op-resize-note",
+            annotation("ada-note", 0),
+            json!({"action": "annotation.geometry", "geometry": {"rect": [1.0, 1.0, 30.0, 30.0]}}),
+            ErrorCode::Invalid,
+        ),
+        (
+            "op-points-box",
+            annotation("ada-box", 0),
+            json!({"action": "annotation.geometry", "geometry": {"points": [[1.0, 1.0], [30.0, 30.0]]}}),
+            ErrorCode::Unsupported,
+        ),
+    ] {
+        ada.send(merge_op(doc.clone(), OpId::new(id)?, version, 0, target, payload))?;
+        match ada.settle()? {
+            ServerMessage::Rejected(rejected) => assert_eq!(rejected.code, code, "{id}: {}", rejected.message),
+            other => return Err(format!("expected a rejection for {id}, got {other:?}").into()),
+        }
+        assert_eq!(ada.version, version, "a refusal does not move the version");
+    }
+    Ok(())
+}
+
+/// A resize and a reshape are addressable operations: both replicas converge on
+/// each, and the undo built from `before`/`after` puts both back.
+#[test]
+fn two_clients_resize_and_reshape_a_comment_and_undo_them() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let box_ = pdfcraft_engine::Shape::TextBox { rect: [20.0, 120.0, 180.0, 170.0], font_size: 10.0 };
+    let line = pdfcraft_engine::Shape::Line {
+        from: [20.0, 20.0],
+        to: [150.0, 100.0],
+        start: pdfcraft_engine::LineEnding::None,
+        end: pdfcraft_engine::LineEnding::OpenArrow,
+    };
+    add_shape_on_both(&mut ada, &mut bo, &doc, box_, "ada-box", "op-add-box")?;
+    add_shape_on_both(&mut ada, &mut bo, &doc, line, "ada-line", "op-add-line")?;
+
+    // A resize of the box.
+    let start = style_of(&bo, "ada-box")?.frame.ok_or("the box has no frame")?;
+    let target = [start[0] + 3.0, start[1] + 3.0, start[2] + 3.0, start[3] + 6.0];
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-resize")?,
+            base,
+            0,
+            annotation("ada-box", 0),
+            json!({"action": "annotation.geometry", "geometry": {"rect": target}}),
+        ),
+    )?;
+    assert_eq!(applied.op.payload["after"], json!({"rect": target}));
+    for peer in [&ada, &bo] {
+        let rect = style_of(peer, "ada-box")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((rect[i] - target[i]).abs() < 1e-3, "the resize is on every replica: {rect:?}");
+        }
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the resize has no inverse")?;
+    assert_eq!(undo.payload["expect"], json!({"rect": target}));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-resize")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let rect = style_of(peer, "ada-box")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((rect[i] - start[i]).abs() < 1e-3, "the old rectangle is back: {rect:?}");
+        }
+    }
+
+    // A reshape of the line's end.
+    let points = style_of(&bo, "ada-line")?.points;
+    let reshaped = vec![points[0], [points[1][0], points[1][1] - 30.0]];
+    let base = bo.version;
+    let applied = apply_on_both(
+        &mut bo,
+        &mut ada,
+        merge_op(
+            doc.clone(),
+            OpId::new("op-reshape")?,
+            base,
+            0,
+            annotation("ada-line", 0),
+            json!({"action": "annotation.geometry", "geometry": {"points": reshaped}}),
+        ),
+    )?;
+    for peer in [&ada, &bo] {
+        let now = style_of(peer, "ada-line")?.points;
+        assert!((now[1][1] - reshaped[1][1]).abs() < 1e-3, "both replicas see the new end: {now:?}");
+    }
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the reshape has no inverse")?;
+    assert_eq!(undo.payload["geometry"]["points"], json!(points));
+    apply_on_both(&mut ada, &mut bo, Op { op_id: OpId::new("op-undo-reshape")?, ..undo })?;
+    for peer in [&ada, &bo] {
+        let now = style_of(peer, "ada-line")?.points;
+        assert!((now[1][1] - points[1][1]).abs() < 1e-3, "the old end is back: {now:?}");
+    }
+    Ok(())
+}
+
 /// A style detail the comment cannot carry is refused before the document
 /// changes, and an undo whose value someone else replaced is a conflict: neither
 /// moves the version and both replicas keep the other user's change.

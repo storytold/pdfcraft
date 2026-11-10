@@ -1,6 +1,7 @@
 use super::{
-    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, IconWire, InfoUpdate, MAX_STROKE_POINTS, MAX_STROKES, MarkWire, MarkupWire,
-    ReviewStateWire, ShapeWire, StampWire, StyleFields, StyleUpdate, StyleWire, WireError,
+    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MAX_STROKE_POINTS, MAX_STROKES, MarkWire,
+    MarkupWire, MoveUpdate, PartsUpdate, ReviewStateWire, ShapeWire, StampWire, StyleFields, StyleUpdate, StyleWire, WireError, rect_from_value,
+    rect_matches,
 };
 use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NoteIcon, ReviewState, Shape, StampKind, Style};
 use serde_json::json;
@@ -200,6 +201,10 @@ fn square() -> pdfcraft_annot::Props {
         border_shape: None,
         fill_opacity: Some(1.0),
         text_opacity: None,
+        rect: Some([10.0, 10.0, 80.0, 40.0]),
+        frame: Some([10.0, 10.0, 80.0, 40.0]),
+        points: Vec::new(),
+        intent: None,
     }
 }
 
@@ -337,6 +342,186 @@ fn before_records_only_what_the_update_names_and_the_undo_checks_it() {
     let mut theirs = redrawn;
     theirs.endings = Some(vec![LineEnding::None, LineEnding::None]);
     assert!(!update.still_matches(&theirs), "someone changed the endings since");
+}
+
+#[test]
+fn a_parts_update_round_trips_and_refuses_a_part_the_comment_has_not() -> Result<(), BoxError> {
+    let update = PartsUpdate { fill: Some(0.4), text: Some(0.8) };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.parts");
+    assert_eq!(payload["parts"], json!({"fill": 0.4, "text": 0.8}));
+    assert_eq!(PartsUpdate::from_payload(&payload)?, update);
+    assert_eq!(PartsUpdate::from_value(&json!({"fill": 1.0, "text": 0.0}))?, PartsUpdate { fill: Some(1.0), text: Some(0.0) });
+    assert_eq!(PartsUpdate { fill: Some(0.5), text: None }.to_value(), json!({"fill": 0.5}));
+
+    // An opacity is 0–1, an unknown key or an empty object is refused.
+    for bad in [json!({"fill": 1.5}), json!({"text": -0.1}), json!({"fill": "half"}), json!({"fill": null})] {
+        assert!(PartsUpdate::from_value(&bad).is_err(), "{bad}");
+    }
+    assert!(matches!(PartsUpdate::from_value(&json!({"opacity": 0.5})), Err(WireError::Invalid { field: "parts", .. })));
+    assert!(matches!(PartsUpdate::from_value(&json!({})), Err(WireError::Malformed(_))));
+    assert!(matches!(PartsUpdate::from_payload(&json!({"action": "annotation.parts"})), Err(WireError::Malformed(_))));
+
+    // A rectangle has a fill and no text of its own; a note has neither.
+    let square = square();
+    assert!(update.check_for(&square).is_err(), "a rectangle has no text of its own");
+    assert!(PartsUpdate { fill: Some(0.4), text: None }.check_for(&square).is_ok());
+    let mut note = square.clone();
+    note.subtype = "Text".into();
+    note.fillable = false;
+    note.fill_opacity = None;
+    assert!(matches!(PartsUpdate { fill: Some(0.4), text: None }.check_for(&note), Err(WireError::Invalid { field: "fill opacity", .. })));
+
+    let mut text = square.clone();
+    text.subtype = "FreeText".into();
+    text.text_opacity = Some(1.0);
+    let both = PartsUpdate { fill: Some(0.3), text: Some(1.0) };
+    assert!(both.check_for(&text).is_ok());
+    let mut current = text.clone();
+    current.fill_opacity = Some(0.5);
+    current.text_opacity = Some(0.9);
+    assert_eq!(both.before(&current), PartsUpdate { fill: Some(0.5), text: Some(0.9) }, "only the parts the update names");
+    assert!(!both.still_matches(&current), "the parts the update sets are not there yet");
+    let mut changed = text.clone();
+    changed.fill_opacity = Some(0.3);
+    changed.text_opacity = Some(1.0);
+    assert!(both.still_matches(&changed));
+    changed.text_opacity = Some(0.2);
+    assert!(!both.still_matches(&changed), "someone changed the text's opacity since");
+    let mut locked = text;
+    locked.locked = true;
+    assert!(matches!(both.check_for(&locked), Err(WireError::NotRestylable(_))));
+    Ok(())
+}
+
+#[test]
+fn a_geometry_update_round_trips_a_rect_and_refuses_a_bad_one() -> Result<(), BoxError> {
+    let rect = GeometryUpdate::Rect([20.0, 30.0, 90.0, 70.0]);
+    let payload = rect.to_payload();
+    assert_eq!(payload["action"], "annotation.geometry");
+    assert_eq!(payload["geometry"], json!({"rect": [20.0, 30.0, 90.0, 70.0]}));
+    assert_eq!(GeometryUpdate::from_payload(&payload)?, rect);
+
+    // Corners come in any order; a rectangle under 1 pt and non-finite numbers are refused.
+    assert_eq!(GeometryUpdate::from_value(&json!({"rect": [90.0, 70.0, 20.0, 30.0]}))?, rect);
+    for bad in [
+        json!({"rect": [1.0, 2.0, 3.0]}),
+        json!({"rect": [10.0, 10.0, 10.5, 40.0]}),
+        json!({"rect": [0.0, 0.0, true, 1.0]}),
+        json!({}),
+        json!({"rect": [10.0, 10.0, 50.0, 50.0], "points": [[1.0, 1.0]]}),
+        json!({"radius": 3.0}),
+    ] {
+        assert!(GeometryUpdate::from_value(&bad).is_err(), "{bad}");
+    }
+
+    // A resize names a rectangle of a comment the engine can resize; a callout
+    // whose text box can't be read only moves.
+    let square = square();
+    assert!(rect.check_for(&square).is_ok());
+    assert_eq!(rect.before(&square), square.frame.map(GeometryUpdate::Rect));
+    assert_eq!(rect.observed(&square), rect.before(&square));
+    let mut frame = square.clone();
+    frame.frame = Some([20.0, 30.0, 90.0, 70.0]);
+    assert!(rect.still_matches(&frame));
+    frame.frame = Some([20.0, 30.5, 90.0, 70.0]);
+    assert!(!rect.still_matches(&frame), "someone resized the comment since");
+    let mut note = square.clone();
+    note.subtype = "Text".into();
+    assert!(matches!(rect.check_for(&note), Err(WireError::Invalid { field: "rect", .. })));
+    let mut callout = square;
+    callout.subtype = "FreeText".into();
+    callout.frame = None;
+    assert!(matches!(rect.check_for(&callout), Err(WireError::Invalid { field: "rect", .. })));
+    Ok(())
+}
+
+#[test]
+fn a_geometry_update_round_trips_points_and_a_measurement_keeps_its_own() -> Result<(), BoxError> {
+    let points = GeometryUpdate::Points(vec![[1.0, 2.0], [30.0, 40.0]]);
+    assert_eq!(points.to_value(), json!({"points": [[1.0, 2.0], [30.0, 40.0]]}));
+    assert_eq!(GeometryUpdate::from_value(&points.to_value())?, points);
+    for bad in [json!({"points": []}), json!({"points": [[1.0]]}), json!({"points": [[1.0, 2.0], [3.0, "4"]]})] {
+        assert!(GeometryUpdate::from_value(&bad).is_err(), "{bad}");
+    }
+
+    // A line has two ends, a polygon at least two corners, a callout one or two
+    // points; a measurement keeps the points it measured.
+    let square = square();
+    let mut line = square.clone();
+    line.subtype = "Line".into();
+    line.points = vec![[1.0, 2.0], [30.0, 40.0]];
+    assert!(points.check_for(&line).is_ok());
+    assert!(matches!(
+        GeometryUpdate::Points(vec![[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]).check_for(&line),
+        Err(WireError::Invalid { field: "points", .. })
+    ));
+    let mut polygon = square.clone();
+    polygon.subtype = "Polygon".into();
+    polygon.points = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]];
+    assert!(GeometryUpdate::Points(vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]).check_for(&polygon).is_ok());
+    assert!(matches!(GeometryUpdate::Points(vec![[0.0, 0.0]]).check_for(&polygon), Err(WireError::Invalid { .. })));
+    let mut callout = square;
+    callout.subtype = "FreeText".into();
+    callout.points = vec![[1.0, 2.0]];
+    assert!(GeometryUpdate::Points(vec![[5.0, 6.0]]).check_for(&callout).is_ok());
+    assert!(GeometryUpdate::Points(vec![[5.0, 6.0], [7.0, 8.0]]).check_for(&callout).is_ok());
+    assert!(matches!(
+        GeometryUpdate::Points(vec![[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]).check_for(&callout),
+        Err(WireError::Invalid { field: "points", .. })
+    ));
+    let mut dimension = line.clone();
+    dimension.intent = Some("LineDimension".into());
+    assert!(matches!(GeometryUpdate::Points(vec![[0.0, 0.0], [1.0, 1.0]]).check_for(&dimension), Err(WireError::NotReshapable(_))));
+
+    // The before and the compare-and-set are the points themselves.
+    let reshape = GeometryUpdate::Points(vec![[5.0, 5.0], [40.0, 50.0]]);
+    assert_eq!(reshape.before(&line), Some(GeometryUpdate::Points(vec![[1.0, 2.0], [30.0, 40.0]])));
+    let mut moved = line.clone();
+    moved.points = vec![[5.0, 5.0], [40.0, 50.0]];
+    assert!(reshape.still_matches(&moved));
+    moved.points[1] = [41.0, 50.0];
+    assert!(!reshape.still_matches(&moved), "someone moved an end since");
+    let mut locked = line;
+    locked.locked = true;
+    assert!(matches!(reshape.check_for(&locked), Err(WireError::NotRestylable(_))));
+    Ok(())
+}
+
+#[test]
+fn a_move_round_trips_and_keeps_text_markup_in_place() -> Result<(), BoxError> {
+    let update = MoveUpdate { dx: 5.0, dy: -3.0 };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.move");
+    assert_eq!(payload["dx"], json!(5.0));
+    assert_eq!(payload["dy"], json!(-3.0));
+    assert_eq!(MoveUpdate::from_payload(&payload)?, update);
+    for bad in [json!({"dx": 1.0}), json!({"dy": 1.0}), json!({"dx": "5", "dy": 0.0}), json!({"dx": 1.0, "dy": null})] {
+        assert!(MoveUpdate::from_payload(&bad).is_err(), "{bad}");
+    }
+
+    let square = square();
+    let rect = square.rect.expect("a rectangle");
+    assert_eq!(update.before(&square), Some(rect));
+    assert_eq!(update.after(rect), [rect[0] + 5.0, rect[1] - 3.0, rect[2] + 5.0, rect[3] - 3.0]);
+    assert!(rect_matches(rect, square.rect));
+    assert!(!rect_matches(update.after(rect), square.rect));
+    assert_eq!(rect_from_value(&json!(rect))?, rect);
+    assert!(rect_from_value(&json!([1.0, 2.0])).is_err());
+    assert!(rect_from_value(&json!([1.0, 2.0, 1.5, 4.0])).is_err(), "a rectangle under 1 pt is not one");
+
+    // A text markup stays on its text; a locked comment stays put.
+    let mut markup = square.clone();
+    markup.subtype = "Highlight".into();
+    assert!(matches!(update.check_for(&markup), Err(WireError::NotMovable(_))));
+    let mut caret = square.clone();
+    caret.subtype = "Caret".into();
+    caret.intent = Some("Replace".into());
+    assert!(matches!(update.check_for(&caret), Err(WireError::NotMovable(_))));
+    let mut locked = square;
+    locked.locked = true;
+    assert!(matches!(update.check_for(&locked), Err(WireError::NotRestylable(_))));
+    Ok(())
 }
 
 #[test]

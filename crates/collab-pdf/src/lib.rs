@@ -61,7 +61,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_annot::{AnnotationInput, FontSizeUpdate, InfoUpdate, ReviewStateWire, StyleUpdate, WireError};
+use pdfcraft_collab_annot::{
+    AnnotationInput, FontSizeUpdate, GeometryUpdate, InfoUpdate, MoveUpdate, PartsUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
+    rect_matches,
+};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
 use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldConflicts, FieldValue, FormFieldKind, Session};
@@ -470,6 +473,117 @@ impl PdfAdapter {
         }
         payload["info"] = update.to_value();
         payload["before"] = before.to_value();
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Set the fill's and the text's own opacities of a comment (RFC §3.1.6):
+    /// one addressable operation over `Edit::PartOpacity`.
+    ///
+    /// The parts the update names are checked against the comment before
+    /// anything changes; the accepted operation carries the numbers it replaced
+    /// (`before`), so an undo is a normal operation every replica can replay.
+    fn update_parts(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = PartsUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        // An undo names the parts it left: if someone changed them since, putting
+        // the old ones back would overwrite their edit (ADR-0010 §3).
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = PartsUpdate::from_value(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment's parts changed since; the undo would overwrite it", false));
+            }
+        }
+        let before = update.before(&props);
+        let (fill, text) = update.apply_to();
+        self.apply_edit(Edit::PartOpacity { page, index, fill, text })?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["parts"] = update.to_value();
+        payload["before"] = before.to_value();
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Move a comment (RFC §3.1.6): one addressable operation over
+    /// `Edit::MoveAnnotation`.
+    ///
+    /// The accepted operation carries the `/Rect` the move started from
+    /// (`before`) and the one it left (`after`); an undo is a move by the
+    /// opposite offset whose `expect` is `after`.
+    fn move_comment(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = MoveUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        let before = update.before(&props).ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the comment's rectangle can't be read", false))?;
+        // An undo names the place it left: if someone moved the comment since,
+        // moving it back would overwrite their drag (ADR-0010 §3).
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = rect_from_value(expect).map_err(map_wire)?;
+            if !rect_matches(expect, props.rect) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment moved since; the undo would overwrite it", false));
+            }
+        }
+        self.apply_edit(Edit::MoveAnnotation { page, index, dx: update.dx, dy: update.dy })?;
+        // What the engine wrote, not what arithmetic predicts: three decimals and
+        // a sum are not the same number, and the undo's compare-and-set reads the
+        // document back.
+        let after = self.document_or_error()?.comment_props(page, index).and_then(|props| props.rect).unwrap_or_else(|| update.after(before));
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["before"] = json!(before);
+        payload["after"] = json!(after);
+        Ok(json!({ "nm": name }))
+    }
+
+    /// Set the final geometry of a comment (RFC §3.1.6): a resize
+    /// (`Edit::ResizeAnnotation`) or a reshape (`Edit::ReshapeAnnotation`), one
+    /// addressable operation each.
+    ///
+    /// The accepted operation carries the geometry the engine drew before and
+    /// after the edit (`before`, `after`), so an undo restores the old frame or
+    /// points and refuses if someone changed the geometry since.
+    fn update_geometry(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = GeometryUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        let before = update.before(&props).ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the comment's geometry can't be read", false))?;
+        // An undo names the geometry it left: if someone resized or reshaped the
+        // comment since, restoring the old one would overwrite their edit.
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = GeometryUpdate::from_value(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment's geometry changed since; the undo would overwrite it", false));
+            }
+        }
+        match &update {
+            GeometryUpdate::Rect(rect) => self.apply_edit(Edit::ResizeAnnotation { page, index, rect: *rect })?,
+            GeometryUpdate::Points(points) => self.apply_edit(Edit::ReshapeAnnotation { page, index, points: points.clone() })?,
+        }
+        let after = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .and_then(|props| update.observed(&props))
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the comment's geometry can't be read after the edit", false))?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["geometry"] = update.to_value();
+        payload["before"] = before.to_value();
+        payload["after"] = after.to_value();
         Ok(json!({ "nm": name }))
     }
 
@@ -1006,6 +1120,21 @@ impl Adapter for PdfAdapter {
                 let page = self.page_index(page)?;
                 self.update_info(page, &name, &mut effective.payload)?
             }
+            ("annotation.parts", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_parts(page, &name, &mut effective.payload)?
+            }
+            ("annotation.move", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.move_comment(page, &name, &mut effective.payload)?
+            }
+            ("annotation.geometry", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_geometry(page, &name, &mut effective.payload)?
+            }
             ("annotation.reply", ConflictClass::Merge) => {
                 let (page, name) = annotation_target(&effective)?;
                 self.reply(self.page_index(page)?, &name, &effective.payload)?
@@ -1163,7 +1292,9 @@ fn annotation_target(op: &Op) -> Result<(PageRef, String), AdapterError> {
 /// `Unsupported`, malformed data is `Invalid`. Neither is retryable.
 fn map_wire(error: WireError) -> AdapterError {
     let code = match &error {
-        WireError::UnsupportedShape(_) | WireError::NotRestylable(_) => ErrorCode::Unsupported,
+        WireError::UnsupportedShape(_) | WireError::NotRestylable(_) | WireError::NotMovable(_) | WireError::NotReshapable(_) => {
+            ErrorCode::Unsupported
+        }
         WireError::Malformed(_) | WireError::Invalid { .. } | WireError::TooMany { .. } => ErrorCode::Invalid,
     };
     AdapterError::new(code, error.to_string(), false)
@@ -2628,6 +2759,323 @@ mod tests {
         let replayed = style_of(&fresh, "n1")?;
         assert_eq!(replayed.author, "editor");
         assert_eq!(replayed.subject, "Sticky Note");
+        Ok(())
+    }
+
+    /// A comment's fill and text have opacities of their own: `annotation.parts`
+    /// sets them as one operation, a fresh replica replays it, and an undo is
+    /// refused when someone changed a part since — without a change.
+    #[test]
+    fn a_parts_update_sets_the_fill_and_text_opacities_and_undoes_as_one_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let add = op(
+            "add-box",
+            ConflictClass::Merge,
+            Target::Page(page),
+            0,
+            0,
+            json!({"action": "annotation.add", "nm": "t1",
+                   "shape": {"kind": "text_box", "rect": [10.0, 100.0, 180.0, 160.0], "font_size": 10.0},
+                   "style": {"color": [0.0, 0.0, 0.0], "opacity": 1.0, "width": 1.0, "fill": [0.0, 1.0, 0.0]},
+                   "contents": "Some text", "author": DEFAULT_AUTHOR}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+        let props = style_of(room.adapter(), "t1")?;
+        assert_eq!(props.fill_opacity, Some(1.0));
+        assert_eq!(props.text_opacity, Some(1.0));
+
+        let parts = op(
+            "parts-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            1,
+            0,
+            json!({"action": "annotation.parts", "parts": {"fill": 0.4, "text": 0.7}}),
+        )?;
+        let applied = room.apply(&editor, &parts, 0)?;
+        assert_eq!(applied.op.payload["parts"], json!({"fill": 0.4, "text": 0.7}));
+        assert_eq!(applied.op.payload["before"], json!({"fill": 1.0, "text": 1.0}), "the opacities it replaced");
+        assert!(applied.op.payload.get("expect").is_none(), "the accepted operation carries no compare-and-set");
+        let props = style_of(room.adapter(), "t1")?;
+        assert!((props.fill_opacity.unwrap_or_default() - 0.4).abs() < 1e-6);
+        assert!((props.text_opacity.unwrap_or_default() - 0.7).abs() < 1e-6);
+
+        // A rectangle has a fill but no text: the whole update is refused, and the version stays.
+        room.apply(&editor, &rectangle("r1", room.version())?, 0)?;
+        let version = room.version();
+        let no_text = op(
+            "parts-text-rect",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            version,
+            0,
+            json!({"action": "annotation.parts", "parts": {"text": 0.5}}),
+        )?;
+        let refused = room.apply(&editor, &no_text, 0).err().ok_or("a text opacity on a rectangle was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Invalid, "{}", refused.message);
+        assert_eq!(room.version(), version, "a refused operation does not move the version");
+
+        // Someone changes a part: the undo's compare-and-set fails and their value stays.
+        let theirs = op(
+            "parts-theirs",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.parts", "parts": {"text": 0.9}}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let version = room.version();
+        let undo = op(
+            "undo-parts",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            version,
+            0,
+            json!({"action": "annotation.parts", "parts": {"fill": 1.0, "text": 1.0}, "expect": {"fill": 0.4, "text": 0.7}}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another opacity")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(room.version(), version);
+        assert!((style_of(room.adapter(), "t1")?.text_opacity.unwrap_or_default() - 0.9).abs() < 1e-6);
+
+        // With the parts as the operation left them, the undo puts the old ones back.
+        let undo = op(
+            "undo-parts-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "t1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.parts", "parts": {"fill": 1.0, "text": 1.0}, "expect": {"fill": 0.4, "text": 0.9}}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        let props = style_of(room.adapter(), "t1")?;
+        assert_eq!(props.fill_opacity, Some(1.0));
+        assert_eq!(props.text_opacity, Some(1.0));
+
+        // Replay on a fresh replica.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &add)?;
+        fresh.apply(&editor, &applied.op)?;
+        fresh.apply(&editor, &undone.op)?;
+        let replayed = style_of(&fresh, "t1")?;
+        assert_eq!(replayed.fill_opacity, Some(1.0));
+        assert_eq!(replayed.text_opacity, Some(1.0));
+        Ok(())
+    }
+
+    /// A move and a resize are addressable operations on a comment: the accepted
+    /// operation carries the rectangle before and after, a fresh replica replays
+    /// it, and a stale undo is refused without a change.
+    #[test]
+    fn a_move_and_a_resize_are_addressable_and_undo_with_a_compare_and_set() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &rectangle("r1", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let start = style_of(room.adapter(), "r1")?.rect.ok_or("the rectangle has no rect")?;
+
+        let mv = op(
+            "move-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            1,
+            0,
+            json!({"action": "annotation.move", "dx": 20.0, "dy": -5.0}),
+        )?;
+        let applied = room.apply(&editor, &mv, 0)?;
+        assert_eq!(applied.op.payload["before"], json!(start));
+        let moved = style_of(room.adapter(), "r1")?.rect.ok_or("no rect")?;
+        for (i, delta) in [20.0, -5.0, 20.0, -5.0].into_iter().enumerate() {
+            assert!((moved[i] - (start[i] + delta)).abs() < 1e-3, "a move shifts /Rect: {moved:?}");
+        }
+        assert_eq!(applied.op.payload["after"], json!(moved));
+
+        // Someone drags it elsewhere: the undo's compare-and-set fails and their place stays.
+        let theirs = op(
+            "move-theirs",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            2,
+            0,
+            json!({"action": "annotation.move", "dx": 1.0, "dy": 1.0}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let version = room.version();
+        let undo = op(
+            "undo-move",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            version,
+            0,
+            json!({"action": "annotation.move", "dx": -20.0, "dy": 5.0, "expect": moved}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another drag")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(room.version(), version);
+        let after_theirs = style_of(room.adapter(), "r1")?.rect.ok_or("no rect")?;
+        assert!((after_theirs[0] - (moved[0] + 1.0)).abs() < 1e-3, "the other drag stayed");
+
+        // With the comment where the move left it, the undo puts it back.
+        let undo = op(
+            "undo-move-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.move", "dx": -21.0, "dy": 4.0, "expect": after_theirs}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        let back = style_of(room.adapter(), "r1")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((back[i] - start[i]).abs() < 1e-3, "the undo puts the rectangle back: {back:?}");
+        }
+
+        let frame = back;
+        let target = [frame[0] + 10.0, frame[1] + 10.0, frame[2] + 10.0, frame[3] + 20.0];
+        let resize = op(
+            "resize-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"rect": target}}),
+        )?;
+        let resized = room.apply(&editor, &resize, 0)?;
+        assert_eq!(resized.op.payload["geometry"], json!({"rect": target}));
+        assert_eq!(resized.op.payload["before"], json!({"rect": frame}));
+        assert_eq!(resized.op.payload["after"], json!({"rect": target}));
+        let now = style_of(room.adapter(), "r1")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((now[i] - target[i]).abs() < 1e-3, "a resize sets /Rect: {now:?}");
+        }
+
+        // Replay both on a fresh replica, then undo the resize with its own CAS.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &rectangle("r1", 0)?)?;
+        fresh.apply(&editor, &applied.op)?;
+        fresh.apply(&editor, &undone.op)?;
+        fresh.apply(&editor, &resized.op)?;
+        let replayed = style_of(&fresh, "r1")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((replayed[i] - target[i]).abs() < 1e-3);
+        }
+        let undo_resize = op(
+            "undo-resize",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"rect": frame}, "expect": {"rect": target}}),
+        )?;
+        room.apply(&editor, &undo_resize, 0)?;
+        let back = style_of(room.adapter(), "r1")?.rect.ok_or("no rect")?;
+        for i in 0..4 {
+            assert!((back[i] - frame[i]).abs() < 1e-3, "the undo puts the frame back: {back:?}");
+        }
+        Ok(())
+    }
+
+    /// A line's ends are reshaped as one addressable operation; a comment with no
+    /// points is refused before the document changes, and a stale undo changes
+    /// nothing.
+    #[test]
+    fn a_reshape_sets_the_points_of_a_line_and_refuses_a_comment_without_them() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let add = op(
+            "add-line",
+            ConflictClass::Merge,
+            Target::Page(page),
+            0,
+            0,
+            json!({"action": "annotation.add", "nm": "l1",
+                   "shape": {"kind": "line", "from": [20.0, 20.0], "to": [120.0, 120.0], "start": "none", "end": "open_arrow"},
+                   "style": {"color": [1.0, 0.0, 0.0], "opacity": 1.0, "width": 1.0},
+                   "contents": "", "author": DEFAULT_AUTHOR}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+        let start = style_of(room.adapter(), "l1")?.points;
+        assert_eq!(start.len(), 2, "a line has two ends");
+
+        let points = vec![[20.0, 20.0], [120.0, 40.0]];
+        let reshape = op(
+            "reshape-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            1,
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"points": points}}),
+        )?;
+        let applied = room.apply(&editor, &reshape, 0)?;
+        assert_eq!(applied.op.payload["before"], json!({"points": start}));
+        assert_eq!(applied.op.payload["after"], json!({"points": points}));
+        let now = style_of(room.adapter(), "l1")?.points;
+        assert_eq!(now.len(), 2);
+        assert!((now[1][1] - 40.0).abs() < 1e-3, "the end moved: {now:?}");
+
+        // A rectangle has no points to reshape: refused whole, version unmoved.
+        room.apply(&editor, &rectangle("r1", room.version())?, 0)?;
+        let version = room.version();
+        let no_points = op(
+            "reshape-rect",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            version,
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"points": points}}),
+        )?;
+        let refused = room.apply(&editor, &no_points, 0).err().ok_or("a rectangle was reshaped")?;
+        assert_eq!(refused.code, ErrorCode::Unsupported, "{}", refused.message);
+        assert_eq!(room.version(), version);
+
+        // Someone moves the end again: the undo cannot overwrite it.
+        let theirs = op(
+            "reshape-theirs",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"points": [[20.0, 20.0], [90.0, 90.0]]}}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let version = room.version();
+        let undo = op(
+            "undo-reshape",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            version,
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"points": start}, "expect": {"points": points}}),
+        )?;
+        let refused = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another reshape")?;
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert_eq!(room.version(), version);
+        assert!((style_of(room.adapter(), "l1")?.points[1][0] - 90.0).abs() < 1e-3);
+
+        // With the points as the operation left them, the undo puts the old ones back.
+        let undo = op(
+            "undo-reshape-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "l1".into() },
+            room.version(),
+            0,
+            json!({"action": "annotation.geometry", "geometry": {"points": start}, "expect": {"points": [[20.0, 20.0], [90.0, 90.0]]}}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        let back = style_of(room.adapter(), "l1")?.points;
+        assert!((back[1][0] - start[1][0]).abs() < 1e-3 && (back[1][1] - start[1][1]).abs() < 1e-3, "{back:?}");
+
+        // Replay: add, reshape, undo on a fresh replica.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &add)?;
+        fresh.apply(&editor, &applied.op)?;
+        fresh.apply(&editor, &undone.op)?;
+        let replayed = style_of(&fresh, "l1")?.points;
+        assert!((replayed[1][0] - start[1][0]).abs() < 1e-3, "{replayed:?}");
         Ok(())
     }
 

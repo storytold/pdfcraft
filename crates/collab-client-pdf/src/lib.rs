@@ -13,7 +13,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_annot::{
-    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, IconWire, InfoUpdate, ReviewStateWire, StyleUpdate, WireError,
+    AnnotationInput, BorderShapeWire, EndingWire, FontSizeUpdate, GeometryUpdate, IconWire, InfoUpdate, MoveUpdate, PartsUpdate, ReviewStateWire,
+    StyleUpdate, WireError, rect_from_value,
 };
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
 use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
@@ -44,7 +45,11 @@ pub enum ProjectionError {
 impl From<WireError> for ProjectionError {
     fn from(error: WireError) -> Self {
         match error {
-            WireError::UnsupportedShape(_) | WireError::NotRestylable(_) | WireError::TooMany { .. } => Self::Unsupported(error.to_string()),
+            WireError::UnsupportedShape(_)
+            | WireError::NotRestylable(_)
+            | WireError::NotMovable(_)
+            | WireError::NotReshapable(_)
+            | WireError::TooMany { .. } => Self::Unsupported(error.to_string()),
             WireError::Malformed(_) | WireError::Invalid { .. } => Self::Invalid(error.to_string()),
         }
     }
@@ -145,6 +150,42 @@ pub fn info_payload(update: &InfoUpdate) -> Value {
 /// the comment still has the ones `expect` names.
 pub fn info_restore_payload(info: &InfoUpdate, expect: &InfoUpdate) -> Value {
     json!({"action": "annotation.info", "info": info.to_value(), "expect": expect.to_value()})
+}
+
+/// The body of an `annotation.parts`: the final opacity of a comment's fill and
+/// of its text, named by the operation's target.
+pub fn parts_payload(update: &PartsUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The update that undoes one: the parts `update` puts back, applied only if the
+/// comment's parts still are the ones it left.
+pub fn parts_restore_payload(update: &PartsUpdate, expect: &PartsUpdate) -> Value {
+    json!({"action": "annotation.parts", "parts": update.to_value(), "expect": expect.to_value()})
+}
+
+/// The body of an `annotation.move`: the offset of a comment, named by the
+/// operation's target.
+pub fn move_annotation_payload(update: &MoveUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The move that undoes one: the opposite offset, applied only if the comment's
+/// `/Rect` still is the one the move left.
+pub fn move_annotation_restore_payload(update: &MoveUpdate, expect: [f64; 4]) -> Value {
+    json!({"action": "annotation.move", "dx": -update.dx, "dy": -update.dy, "expect": expect})
+}
+
+/// The body of an `annotation.geometry`: the final rectangle or points of a
+/// comment, named by the operation's target.
+pub fn geometry_payload(update: &GeometryUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The geometry that undoes one: the frame or points `update` puts back, applied
+/// only if the comment's geometry still is the one the edit left.
+pub fn geometry_restore_payload(update: &GeometryUpdate, expect: &GeometryUpdate) -> Value {
+    json!({"action": "annotation.geometry", "geometry": update.to_value(), "expect": expect.to_value()})
 }
 
 /// One style update for a group of interactive style edits on the same comment.
@@ -340,6 +381,40 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             update.check_for(&props)?;
             let (author, subject, icon) = update.apply_to();
             Ok(Edit::SetAnnotationInfo { page, index, author, subject, icon })
+        }
+        ("annotation.parts", ConflictClass::Merge) => {
+            // The final fill and text opacities of an existing comment.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = PartsUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            let (fill, text) = update.apply_to();
+            Ok(Edit::PartOpacity { page, index, fill, text })
+        }
+        ("annotation.move", ConflictClass::Merge) => {
+            // A comment moved by an offset, addressed by its `/NM`.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = MoveUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            Ok(Edit::MoveAnnotation { page, index, dx: update.dx, dy: update.dy })
+        }
+        ("annotation.geometry", ConflictClass::Merge) => {
+            // The final rectangle or points of an existing comment.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = GeometryUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            match update {
+                GeometryUpdate::Rect(rect) => Ok(Edit::ResizeAnnotation { page, index, rect }),
+                GeometryUpdate::Points(points) => Ok(Edit::ReshapeAnnotation { page, index, points }),
+            }
         }
         ("annotation.reply", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
@@ -714,6 +789,65 @@ pub fn ops_for_edit(
                 info_payload(&update),
             )])
         }
+        Edit::PartOpacity { page, index, fill, text } => {
+            let nm = name_at(document, *page, *index)?;
+            let update = PartsUpdate { fill: *fill, text: *text };
+            if update.is_empty() {
+                return Err(ProjectionError::Unsupported(edit.label().to_string()));
+            }
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                parts_payload(&update),
+            )])
+        }
+        Edit::MoveAnnotation { page, index, dx, dy } => {
+            let nm = name_at(document, *page, *index)?;
+            let update = MoveUpdate { dx: *dx, dy: *dy };
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                move_annotation_payload(&update),
+            )])
+        }
+        Edit::ResizeAnnotation { page, index, rect } => {
+            let nm = name_at(document, *page, *index)?;
+            let update = GeometryUpdate::Rect(*rect);
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                geometry_payload(&update),
+            )])
+        }
+        Edit::ReshapeAnnotation { page, index, points } => {
+            let nm = name_at(document, *page, *index)?;
+            let update = GeometryUpdate::Points(points.clone());
+            let props = document.comment_props(*page, *index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), *page))?;
+            update.check_for(&props)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                geometry_payload(&update),
+            )])
+        }
         Edit::Batch { label, edits } => {
             // One undo step of the interface (Comment Properties ▸ OK) may
             // restyle a comment, resize its text and change its author, subject
@@ -1025,11 +1159,17 @@ fn style_op(
     Ok(merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, update.to_payload()))
 }
 
-/// The operations one `Edit::Batch` from Comment Properties becomes: the style
-/// (`annotation.update`), the font size (`annotation.font_size`) and the
-/// author/subject/icon (`annotation.info`) of one comment, in that order. Each
-/// is its own addressable operation; the caller's history group undoes them as
-/// one step. `None` when the batch is not all property edits on one comment.
+/// The operations one `Edit::Batch` from Comment Properties (or a comment drag)
+/// becomes, grouped by the comment each edit addresses: the style
+/// (`annotation.update`), the part opacities (`annotation.parts`), the font size
+/// (`annotation.font_size`), the author/subject/icon (`annotation.info`), the
+/// moves (`annotation.move`) and the geometry (`annotation.geometry`), in that
+/// order within one comment. Each is its own addressable operation; the caller's
+/// history group undoes them as one step. A batch of several comments (Comment
+/// Properties applied to a selection, or a group drag) is one group of
+/// operations per comment, so one refused comment refuses the whole batch before
+/// anything is sent. `None` when the batch carries an edit no operation covers.
+#[allow(clippy::too_many_arguments)]
 fn annotation_property_ops(
     document: &Document,
     edits: &[Edit],
@@ -1039,56 +1179,94 @@ fn annotation_property_ops(
     epoch: u64,
     counter: &mut u64,
 ) -> Result<Option<Vec<Op>>, ProjectionError> {
-    let mut target: Option<(usize, usize)> = None;
-    let mut style: Vec<Edit> = Vec::new();
-    let mut size = None;
-    let mut info = InfoUpdate::default();
+    // The comments in the order the interface first names them; each one's edits
+    // in the interface's order.
+    let mut groups: Vec<((usize, usize), Vec<Edit>)> = Vec::new();
     for edit in edits {
         let (page, index) = match edit {
             Edit::StyleAnnotation { page, index, .. }
             | Edit::FillAnnotation { page, index, .. }
             | Edit::BorderColorAnnotation { page, index, .. }
             | Edit::BorderShapeAnnotation { page, index, .. }
+            | Edit::PartOpacity { page, index, .. }
             | Edit::FontSizeAnnotation { page, index, .. }
-            | Edit::SetAnnotationInfo { page, index, .. } => (*page, *index),
+            | Edit::SetAnnotationInfo { page, index, .. }
+            | Edit::MoveAnnotation { page, index, .. }
+            | Edit::ResizeAnnotation { page, index, .. }
+            | Edit::ReshapeAnnotation { page, index, .. } => (*page, *index),
             _ => return Ok(None),
         };
-        if target.get_or_insert((page, index)) != &(page, index) {
-            return Ok(None);
-        }
-        match edit {
-            Edit::FontSizeAnnotation { size: named, .. } => size = Some(*named),
-            Edit::SetAnnotationInfo { author, subject, icon, .. } => {
-                if let Some(author) = author {
-                    info.author = Some(Some(author.clone()));
-                }
-                if let Some(subject) = subject {
-                    info.subject = Some(Some(subject.clone()));
-                }
-                if let Some(icon) = icon {
-                    info.icon = Some(IconWire::from(*icon));
-                }
-            }
-            other => style.push(other.clone()),
+        match groups.iter_mut().find(|(key, _)| *key == (page, index)) {
+            Some((_, list)) => list.push(edit.clone()),
+            None => groups.push(((page, index), vec![edit.clone()])),
         }
     }
-    let Some((page, index)) = target else { return Ok(None) };
-    let nm = name_at(document, page, index)?;
-    let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page))?;
-    let address = Target::Annotation { page: PageRef { index: page as u32, epoch }, nm };
+    if groups.is_empty() {
+        return Ok(None);
+    }
     let mut ops = Vec::new();
-    if !style.is_empty() {
-        let (_, _, update) = style_update_for_edits(&style).ok_or_else(|| ProjectionError::Unsupported("a style edit".into()))?;
-        update.check_for(&props)?;
-        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), update.to_payload()));
-    }
-    if let Some(size) = size {
-        FontSizeUpdate { size }.check_for(&props)?;
-        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), font_size_payload(size)));
-    }
-    if !info.is_empty() {
-        info.check_for(&props)?;
-        ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address, info_payload(&info)));
+    for ((page, index), edits) in groups {
+        let nm = name_at(document, page, index)?;
+        let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page))?;
+        let address = Target::Annotation { page: PageRef { index: page as u32, epoch }, nm };
+        let mut style: Vec<Edit> = Vec::new();
+        let mut parts = PartsUpdate::default();
+        let mut named_parts = false;
+        let mut size = None;
+        let mut info = InfoUpdate::default();
+        let mut moves = Vec::new();
+        let mut geometries = Vec::new();
+        for edit in edits {
+            match edit {
+                Edit::FontSizeAnnotation { size: named, .. } => size = Some(named),
+                Edit::SetAnnotationInfo { author, subject, icon, .. } => {
+                    if let Some(author) = author {
+                        info.author = Some(Some(author));
+                    }
+                    if let Some(subject) = subject {
+                        info.subject = Some(Some(subject));
+                    }
+                    if let Some(icon) = icon {
+                        info.icon = Some(IconWire::from(icon));
+                    }
+                }
+                Edit::PartOpacity { fill, text, .. } => {
+                    parts.fill = fill;
+                    parts.text = text;
+                    named_parts = true;
+                }
+                Edit::MoveAnnotation { dx, dy, .. } => moves.push(MoveUpdate { dx, dy }),
+                Edit::ResizeAnnotation { rect, .. } => geometries.push(GeometryUpdate::Rect(rect)),
+                Edit::ReshapeAnnotation { points, .. } => geometries.push(GeometryUpdate::Points(points)),
+                other => style.push(other),
+            }
+        }
+        if !style.is_empty() {
+            let (_, _, update) = style_update_for_edits(&style).ok_or_else(|| ProjectionError::Unsupported("a style edit".into()))?;
+            update.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), update.to_payload()));
+        }
+        // After the style, whose fill and width decide which parts show.
+        if named_parts && !parts.is_empty() {
+            parts.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), parts_payload(&parts)));
+        }
+        if let Some(size) = size {
+            FontSizeUpdate { size }.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), font_size_payload(size)));
+        }
+        if !info.is_empty() {
+            info.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), info_payload(&info)));
+        }
+        for update in moves {
+            update.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), move_annotation_payload(&update)));
+        }
+        for update in geometries {
+            update.check_for(&props)?;
+            ops.push(merge_op(doc.clone(), next_id(client_id, counter)?, base_version, epoch, address.clone(), geometry_payload(&update)));
+        }
     }
     Ok((!ops.is_empty()).then_some(ops))
 }
@@ -1168,6 +1346,12 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             }
             merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, info_restore_payload(&before, &update))
         }
+        "annotation.parts" => return parts_inverse(document, op, op_id, base, epoch, doc),
+        "annotation.move" => return move_inverse(document, op, op_id, base, epoch, doc),
+        // A resize's or a reshape's `after` is what the engine drew, which this
+        // replica cannot know before the edit is applied: the undo is patched
+        // from the accepted operation (`inverse_after`), like a restyle's.
+        "annotation.geometry" => return Ok(None),
         "annotation.delete" => return Ok(None),
         "field.set_value" => {
             let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
@@ -1219,6 +1403,34 @@ fn combine_inverse(op: &Op, op_id: OpId, doc: DocKey, base: u64, epoch: u64) -> 
     Ok(structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: at as u32, epoch }), split_pages_payload(count)))
 }
 
+/// The inverse of an `annotation.parts`: the opacities the operation replaced,
+/// applied only if the comment's parts still are the ones it left. `None` when
+/// the operation named no part.
+fn parts_inverse(document: &Document, op: &Op, op_id: OpId, base: u64, epoch: u64, doc: DocKey) -> Result<Option<Op>, ProjectionError> {
+    let (page, nm) = annotation_target(op)?;
+    let index = annotation_index(document, page.index as usize, &nm)?;
+    let props = document.comment_props(page.index as usize, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+    let update = PartsUpdate::from_payload(&op.payload)?;
+    let before = update.before(&props);
+    if before.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, parts_restore_payload(&before, &update))))
+}
+
+/// The inverse of an `annotation.move`: the comment moves back, applied only if
+/// it still sits where this move left it. `inverse_after` replaces the guess of
+/// where that is with the server's `after`.
+fn move_inverse(document: &Document, op: &Op, op_id: OpId, base: u64, epoch: u64, doc: DocKey) -> Result<Option<Op>, ProjectionError> {
+    let (page, nm) = annotation_target(op)?;
+    let index = annotation_index(document, page.index as usize, &nm)?;
+    let props = document.comment_props(page.index as usize, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+    let update = MoveUpdate::from_payload(&op.payload)?;
+    let Some(before) = update.before(&props) else { return Ok(None) };
+    let expect = update.after(before);
+    Ok(Some(merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, move_annotation_restore_payload(&update, expect))))
+}
+
 /// The inverse of a deletion, once the server has answered how to undo it: the
 /// accepted operation carries the `copy` token of what it removed. `None` when
 /// the server kept no copy (the comment was not the room's, or the page was too
@@ -1259,6 +1471,33 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let Target::Annotation { page, nm } = &op.target else { return None };
         let target = Target::Annotation { page: *page, nm: nm.clone() };
         return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, info_restore_payload(&before, &info)));
+    }
+    // Part opacities, a move and a comment's geometry are undone the same way:
+    // from what the server says the operation replaced (`before`) and, for a
+    // move and a geometry, from the geometry it left (`after`).
+    if action == "annotation.parts" {
+        let parts = PartsUpdate::from_payload(&op.payload).ok()?;
+        let before = PartsUpdate::from_value(op.payload.get("before")?).ok()?;
+        if before.is_empty() {
+            return None;
+        }
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, parts_restore_payload(&before, &parts)));
+    }
+    if action == "annotation.move" {
+        let update = MoveUpdate::from_payload(&op.payload).ok()?;
+        let after = rect_from_value(op.payload.get("after")?).ok()?;
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, move_annotation_restore_payload(&update, after)));
+    }
+    if action == "annotation.geometry" {
+        let update = GeometryUpdate::from_value(op.payload.get("before")?).ok()?;
+        let after = GeometryUpdate::from_value(op.payload.get("after")?).ok()?;
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, geometry_restore_payload(&update, &after)));
     }
     // A replaced page comes back from the copy the server kept — and when it
     // kept none (the page was over the budget), the undo is still sent, naming
@@ -2232,9 +2471,10 @@ mod tests {
     }
 
     /// One undo step of Comment Properties stays one step: a batch that restyles
-    /// a comment, resizes its text and renames its author becomes three
-    /// addressable operations, in that order, and refuses as a whole if any part
-    /// is not an annotation property edit.
+    /// a comment, changes its parts, resizes its text, renames its author, moves
+    /// it and resizes it becomes one addressable operation per kind, in that
+    /// order. A batch over several comments is one group of operations per
+    /// comment, and a batch with an edit the wire does not carry is refused whole.
     #[test]
     fn a_mixed_properties_batch_becomes_one_operation_per_kind() -> Result<(), Box<dyn std::error::Error>> {
         use pdfcraft_engine as engine;
@@ -2252,32 +2492,309 @@ mod tests {
             id,
             &merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&new, "box-1")?),
         )?;
+        let rect_shape = engine::Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] };
+        let rect_new = engine::NewAnnotation {
+            page: 0,
+            shape: rect_shape.clone(),
+            style: engine::Style::default_for(&rect_shape),
+            contents: String::new(),
+            author: "Ada".into(),
+        };
+        apply(
+            &mut session,
+            id,
+            &merge_op(
+                doc()?,
+                OpId::new("a1")?,
+                0,
+                0,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                super::add_annotation_payload(&rect_new, "rect-1")?,
+            ),
+        )?;
         let document = session.get(id).ok_or("gone")?;
-        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("box-1")).ok_or("the box is missing")?;
+        let index = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("box-1")).map(|a| a.index).ok_or("the box is missing")?;
+        let rect_index =
+            document.info.annotations.iter().find(|a| a.name.as_deref() == Some("rect-1")).map(|a| a.index).ok_or("the rectangle is missing")?;
+        let frame = document.comment_props(0, index).and_then(|props| props.frame).ok_or("the box has no frame")?;
+        let resized = [frame[0] + 5.0, frame[1] + 5.0, frame[2] + 5.0, frame[3] + 5.0];
         let batch = engine::Edit::Batch {
             label: "Change comment properties".into(),
             edits: vec![
                 engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None },
+                engine::Edit::PartOpacity { page: 0, index, fill: Some(0.4), text: Some(0.6) },
                 engine::Edit::FontSizeAnnotation { page: 0, index, size: 14.0 },
                 engine::Edit::SetAnnotationInfo { page: 0, index, author: Some("Bo".into()), subject: None, icon: None },
+                engine::Edit::MoveAnnotation { page: 0, index, dx: 5.0, dy: 5.0 },
+                engine::Edit::ResizeAnnotation { page: 0, index, rect: resized },
             ],
         };
         let mut counter = 0;
         let ops = super::ops_for_edit(document, &batch, doc()?, "ada", 1, 0, &mut counter)?;
         let actions: Vec<String> = ops.iter().map(|op| op.payload["action"].as_str().unwrap_or_default().to_owned()).collect();
-        assert_eq!(actions, ["annotation.update", "annotation.font_size", "annotation.info"]);
+        assert_eq!(
+            actions,
+            ["annotation.update", "annotation.parts", "annotation.font_size", "annotation.info", "annotation.move", "annotation.geometry"]
+        );
         assert!(ops.iter().all(|op| op.target == ops[0].target), "every operation addresses the same comment");
+        assert_eq!(ops[1].payload["parts"], serde_json::json!({"fill": 0.4, "text": 0.6}));
+        assert_eq!(ops[4].payload["dx"], serde_json::json!(5.0));
+        assert_eq!(ops[5].payload["geometry"]["rect"], serde_json::json!(resized));
+
+        // A batch over two comments is one group per comment: the interface's
+        // multi-selection change is not refused.
+        let document = session.get(id).ok_or("gone")?;
+        let two = engine::Edit::Batch {
+            label: "Change comment properties".into(),
+            edits: vec![
+                engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 1.0, 0.0]), opacity: None, width: None, endings: None },
+                engine::Edit::StyleAnnotation { page: 0, index: rect_index, color: Some([0.0, 1.0, 0.0]), opacity: None, width: None, endings: None },
+            ],
+        };
+        let mut counter = 0;
+        let ops = super::ops_for_edit(document, &two, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops.len(), 2, "one operation per comment");
+        assert_ne!(ops[0].target, ops[1].target);
+        assert!(ops.iter().all(|op| op.payload["action"] == "annotation.update"));
 
         // A batch with an edit the wire does not carry is refused whole.
         let mixed = engine::Edit::Batch {
-            label: "Change comment properties".into(),
+            label: "Edit comment".into(),
             edits: vec![
                 engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None },
-                engine::Edit::MoveAnnotation { page: 0, index, dx: 5.0, dy: 5.0 },
+                engine::Edit::SetAnnotationPopup { page: 0, index, rect: Some([10.0, 10.0, 90.0, 60.0]), open: None },
             ],
         };
         let document = session.get(id).ok_or("gone")?;
         assert!(matches!(super::ops_for_edit(document, &mixed, doc()?, "ada", 1, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
+        Ok(())
+    }
+
+    fn index_of(session: &Session, id: pdfcraft_engine::DocId, nm: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(session
+            .get(id)
+            .and_then(|document| document.info.annotations.iter().find(|a| a.name.as_deref() == Some(nm)).map(|a| a.index))
+            .ok_or("the comment is missing")?)
+    }
+
+    fn props_of(session: &Session, id: pdfcraft_engine::DocId, index: usize) -> Result<pdfcraft_engine::CommentProps, Box<dyn std::error::Error>> {
+        Ok(session.get(id).and_then(|document| document.comment_props(0, index)).ok_or("no properties")?)
+    }
+
+    /// A comment's parts and a move are addressable operations: two replicas
+    /// apply the accepted operation to the same state, the inverse built from it
+    /// puts both back, and an edit the wire cannot carry builds no operation.
+    #[test]
+    fn a_parts_update_and_a_move_round_trip_two_replicas() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_collab_proto::{ActorId, Applied, Op};
+        use pdfcraft_engine as engine;
+
+        let (mut ada, ada_id) = open()?;
+        let (mut bo, bo_id) = open()?;
+        let box_shape = engine::Shape::TextBox { rect: [10.0, 100.0, 180.0, 160.0], font_size: 10.0 };
+        let box_new = engine::NewAnnotation {
+            page: 0,
+            shape: box_shape.clone(),
+            style: engine::Style::default_for(&box_shape),
+            contents: "Box".into(),
+            author: "Ada".into(),
+        };
+        let add_box =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&box_new, "box-1")?);
+        let note = merge_op(
+            doc()?,
+            OpId::new("a1")?,
+            0,
+            0,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            add_note_payload("note-1", [40.0, 250.0], "hello", "Ada"),
+        );
+        for op in [&add_box, &note] {
+            apply(&mut ada, ada_id, op)?;
+            apply(&mut bo, bo_id, op)?;
+        }
+        let both = |ada: &mut Session, bo: &mut Session, op: &Op| -> Result<(), ProjectionError> {
+            apply(ada, ada_id, op)?;
+            apply(bo, bo_id, op)?;
+            Ok(())
+        };
+        let accepted = |op: &Op, before: serde_json::Value, after: serde_json::Value| -> Result<Applied, Box<dyn std::error::Error>> {
+            let mut op = op.clone();
+            op.payload["before"] = before;
+            op.payload["after"] = after;
+            Ok(Applied { op_id: op.op_id.clone(), actor_id: ActorId::new("ada")?, version: 1, epoch: 0, op, result: serde_json::json!({}) })
+        };
+
+        // The box's fill and text opacities.
+        let index = index_of(&ada, ada_id, "box-1")?;
+        let mut counter = 0;
+        let edit = engine::Edit::PartOpacity { page: 0, index, fill: Some(0.4), text: Some(0.6) };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["action"], "annotation.parts");
+        assert_eq!(ops[0].payload["parts"], serde_json::json!({"fill": 0.4, "text": 0.6}));
+        let before = props_of(&ada, ada_id, index)?;
+        let applied = accepted(
+            &ops[0],
+            serde_json::json!({"fill": before.fill_opacity, "text": before.text_opacity}),
+            serde_json::json!({"fill": 0.4, "text": 0.6}),
+        )?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for props in [props_of(&ada, ada_id, index)?, props_of(&bo, bo_id, index)?] {
+            assert!((props.fill_opacity.unwrap_or_default() - 0.4).abs() < 1e-3);
+            assert!((props.text_opacity.unwrap_or_default() - 0.6).abs() < 1e-3);
+        }
+        let undo = super::inverse_after(&applied).ok_or("the parts have an inverse")?;
+        assert_eq!(undo.payload["action"], "annotation.parts");
+        assert_eq!(undo.payload["expect"], serde_json::json!({"fill": 0.4, "text": 0.6}), "the undo names the parts the edit left");
+        both(&mut ada, &mut bo, &undo)?;
+        for props in [props_of(&ada, ada_id, index)?, props_of(&bo, bo_id, index)?] {
+            assert_eq!(props.fill_opacity, Some(1.0));
+            assert_eq!(props.text_opacity, Some(1.0));
+        }
+
+        // A move.
+        let start = props_of(&ada, ada_id, index)?.rect.ok_or("no rect")?;
+        let mut counter = 0;
+        let edit = engine::Edit::MoveAnnotation { page: 0, index, dx: 7.0, dy: 3.0 };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 2, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["action"], "annotation.move");
+        let after = [start[0] + 7.0, start[1] + 3.0, start[2] + 7.0, start[3] + 3.0];
+        let applied = accepted(&ops[0], serde_json::json!(start), serde_json::json!(after))?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for props in [props_of(&ada, ada_id, index)?, props_of(&bo, bo_id, index)?] {
+            let rect = props.rect.ok_or("no rect")?;
+            for i in 0..4 {
+                assert!((rect[i] - after[i]).abs() < 1e-3, "both replicas moved: {rect:?}");
+            }
+        }
+        let undo = super::inverse_after(&applied).ok_or("the move has an inverse")?;
+        assert_eq!(undo.payload["dx"], serde_json::json!(-7.0));
+        assert_eq!(undo.payload["expect"], serde_json::json!(after));
+        both(&mut ada, &mut bo, &undo)?;
+        for props in [props_of(&ada, ada_id, index)?, props_of(&bo, bo_id, index)?] {
+            let rect = props.rect.ok_or("no rect")?;
+            for i in 0..4 {
+                assert!((rect[i] - start[i]).abs() < 1e-3, "the undo puts it back: {rect:?}");
+            }
+        }
+
+        // An edit the wire cannot carry builds no operation and changes nothing:
+        // a sticky note has no rectangle to resize.
+        let note_index = index_of(&ada, ada_id, "note-1")?;
+        let annotations = ada.get(ada_id).ok_or("gone")?.info.annotations.len();
+        let mut counter = 0;
+        let refused = super::ops_for_edit(
+            ada.get(ada_id).ok_or("gone")?,
+            &engine::Edit::ResizeAnnotation { page: 0, index: note_index, rect: [1.0, 1.0, 30.0, 30.0] },
+            doc()?,
+            "ada",
+            3,
+            0,
+            &mut counter,
+        );
+        assert!(matches!(refused, Err(ProjectionError::Invalid(_))), "a note cannot be resized");
+        assert_eq!(ada.get(ada_id).ok_or("gone")?.info.annotations.len(), annotations);
+        let rect = props_of(&ada, ada_id, note_index)?.rect.ok_or("no rect")?;
+        assert!((rect[0] - 1.0).abs() > 1e-6, "the note did not move: {rect:?}");
+        Ok(())
+    }
+
+    /// A resize and a reshape are addressable operations: two replicas apply the
+    /// accepted operation, and the inverse built from `before`/`after` puts both
+    /// back.
+    #[test]
+    fn a_resize_and_a_reshape_round_trip_two_replicas() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_collab_proto::{ActorId, Applied, Op};
+        use pdfcraft_engine as engine;
+
+        let (mut ada, ada_id) = open()?;
+        let (mut bo, bo_id) = open()?;
+        let box_shape = engine::Shape::TextBox { rect: [10.0, 100.0, 180.0, 160.0], font_size: 10.0 };
+        let box_new = engine::NewAnnotation {
+            page: 0,
+            shape: box_shape.clone(),
+            style: engine::Style::default_for(&box_shape),
+            contents: "Box".into(),
+            author: "Ada".into(),
+        };
+        let add_box =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&box_new, "box-1")?);
+        let line_shape =
+            engine::Shape::Line { from: [20.0, 20.0], to: [120.0, 120.0], start: engine::LineEnding::None, end: engine::LineEnding::OpenArrow };
+        let line_new = engine::NewAnnotation {
+            page: 0,
+            shape: line_shape.clone(),
+            style: engine::Style::default_for(&line_shape),
+            contents: String::new(),
+            author: "Ada".into(),
+        };
+        let add_line = merge_op(
+            doc()?,
+            OpId::new("a1")?,
+            0,
+            0,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            super::add_annotation_payload(&line_new, "line-1")?,
+        );
+        for op in [&add_box, &add_line] {
+            apply(&mut ada, ada_id, op)?;
+            apply(&mut bo, bo_id, op)?;
+        }
+        let both = |ada: &mut Session, bo: &mut Session, op: &Op| -> Result<(), ProjectionError> {
+            apply(ada, ada_id, op)?;
+            apply(bo, bo_id, op)?;
+            Ok(())
+        };
+        let accepted = |op: &Op, before: serde_json::Value, after: serde_json::Value| -> Result<Applied, Box<dyn std::error::Error>> {
+            let mut op = op.clone();
+            op.payload["before"] = before;
+            op.payload["after"] = after;
+            Ok(Applied { op_id: op.op_id.clone(), actor_id: ActorId::new("ada")?, version: 1, epoch: 0, op, result: serde_json::json!({}) })
+        };
+
+        // A resize.
+        let index = index_of(&ada, ada_id, "box-1")?;
+        let frame = props_of(&ada, ada_id, index)?.frame.ok_or("no frame")?;
+        let target = [frame[0] + 4.0, frame[1] + 4.0, frame[2] + 4.0, frame[3] + 8.0];
+        let mut counter = 0;
+        let edit = engine::Edit::ResizeAnnotation { page: 0, index, rect: target };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["action"], "annotation.geometry");
+        assert_eq!(ops[0].payload["geometry"]["rect"], serde_json::json!(target));
+        let applied = accepted(&ops[0], serde_json::json!({"rect": frame}), serde_json::json!({"rect": target}))?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for props in [props_of(&ada, ada_id, index)?, props_of(&bo, bo_id, index)?] {
+            let rect = props.rect.ok_or("no rect")?;
+            for i in 0..4 {
+                assert!((rect[i] - target[i]).abs() < 1e-3, "both replicas resized: {rect:?}");
+            }
+        }
+        let undo = super::inverse_after(&applied).ok_or("the resize has an inverse")?;
+        assert_eq!(undo.payload["geometry"]["rect"], serde_json::json!(frame));
+        assert_eq!(undo.payload["expect"], serde_json::json!({"rect": target}));
+        both(&mut ada, &mut bo, &undo)?;
+        assert!((props_of(&ada, ada_id, index)?.frame.ok_or("no frame")?[2] - frame[2]).abs() < 1e-3);
+        assert!((props_of(&bo, bo_id, index)?.frame.ok_or("no frame")?[3] - frame[3]).abs() < 1e-3);
+
+        // A reshape of the line's end.
+        let line_index = index_of(&ada, ada_id, "line-1")?;
+        let start = props_of(&ada, ada_id, line_index)?.points;
+        let points = vec![start[0], [start[1][0], start[1][1] - 40.0]];
+        let mut counter = 0;
+        let edit = engine::Edit::ReshapeAnnotation { page: 0, index: line_index, points: points.clone() };
+        let ops = super::ops_for_edit(ada.get(ada_id).ok_or("gone")?, &edit, doc()?, "ada", 2, 0, &mut counter)?;
+        assert_eq!(ops[0].payload["geometry"]["points"], serde_json::json!(points));
+        let applied = accepted(&ops[0], serde_json::json!({"points": start}), serde_json::json!({"points": points}))?;
+        both(&mut ada, &mut bo, &applied.op)?;
+        for props in [props_of(&ada, ada_id, line_index)?, props_of(&bo, bo_id, line_index)?] {
+            assert!((props.points[1][1] - points[1][1]).abs() < 1e-3, "both replicas reshaped: {:?}", props.points);
+        }
+        let undo = super::inverse_after(&applied).ok_or("the reshape has an inverse")?;
+        assert_eq!(undo.payload["geometry"]["points"], serde_json::json!(start));
+        both(&mut ada, &mut bo, &undo)?;
+        for props in [props_of(&ada, ada_id, line_index)?, props_of(&bo, bo_id, line_index)?] {
+            assert!((props.points[1][1] - start[1][1]).abs() < 1e-3, "the undo puts the end back: {:?}", props.points);
+        }
         Ok(())
     }
 
