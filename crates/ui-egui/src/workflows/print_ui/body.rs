@@ -85,7 +85,7 @@ fn colour_handling(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
     use print::colour::Intent;
     let profiles = d.colour_profiles.get_or_insert_with(print::colour::installed_profiles);
     let shown = match (&d.colour, &d.colour_path) {
-        (None, _) => tl!("Printer manages colours").to_string(),
+        (None, _) => tl!("Printer manages colors").to_string(),
         (Some(c), path) => {
             path.as_ref().and_then(|p| profiles.iter().find(|i| i.path == *p)).map_or_else(|| c.profile.name().to_string(), |i| i.name.clone())
         }
@@ -97,7 +97,7 @@ fn colour_handling(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
             .selected_text(shown)
             .width(260.0)
             .show_ui(ui, |ui| {
-                if ui.selectable_label(d.colour.is_none(), tl!("Printer manages colours")).clicked() {
+                if ui.selectable_label(d.colour.is_none(), tl!("Printer manages colors")).clicked() {
                     chosen = Some(None);
                 }
                 for p in profiles.iter() {
@@ -544,9 +544,12 @@ pub(crate) fn body(
                 .default_open(d.as_image || d.colour.is_some())
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // A Color Handling profile converts pictures, so it prints as image.
-                        ui.add_enabled(d.colour.is_none(), widgets::checkbox(&mut d.as_image, tl!("Print as image")));
-                        ui.add_enabled_ui(d.as_image, |ui| {
+                        // A Color Handling profile converts pictures, so it prints as image; the box shows
+                        // that without changing the user's own choice.
+                        let managed = d.colour.is_some();
+                        let mut shown = d.as_image || managed;
+                        ui.add_enabled(!managed, widgets::checkbox(if managed { &mut shown } else { &mut d.as_image }, tl!("Print as image")));
+                        ui.add_enabled_ui(d.as_image || managed, |ui| {
                             ui.label(tl!("Resolution:"));
                             let mut dpi = d.dpi.round() as u32;
                             combo(ui, "print-dpi", tl!("Resolution:"), &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
@@ -560,8 +563,11 @@ pub(crate) fn body(
                         .small()
                         .color(t.text_muted),
                     );
-                    ui.add_space(6.0);
-                    colour_handling(ui, d, t);
+                    // The browser sets colour itself, and the web build has no installed profiles.
+                    if !cfg!(target_arch = "wasm32") && d.printer.as_deref() != Some(crate::web_print::BROWSER_PRINTER) {
+                        ui.add_space(6.0);
+                        colour_handling(ui, d, t);
+                    }
                 });
         });
         ui.add_space(12.0);

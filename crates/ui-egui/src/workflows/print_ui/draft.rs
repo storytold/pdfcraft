@@ -72,7 +72,8 @@ pub struct PrintDraft {
     pub as_image: bool,
     pub dpi: f64,
     /// Color Handling: the profile the pictures are converted into, with the intent and black
-    /// point compensation; `None` leaves colour to the printer. A profile prints as image.
+    /// point compensation; `None` leaves colour to the printer. A profile prints as image without
+    /// changing `as_image`, so going back to the printer restores the user's own choice.
     pub colour: Option<print::colour::ManagedColour>,
     /// The installed file `colour` was read from.
     pub colour_path: Option<std::path::PathBuf>,
@@ -312,7 +313,6 @@ impl PrintDraft {
                     self.colour.as_ref().map_or((print::colour::Intent::RelativeColorimetric, true), |c| (c.intent, c.black_point));
                 self.colour = Some(print::colour::ManagedColour { profile, intent, black_point });
                 self.colour_path = Some(path.to_path_buf());
-                self.as_image = true;
             }
             Err(e) => self.colour_error = Some(e),
         }

@@ -822,6 +822,7 @@ mod tests {
         let mut draft = PrintDraft::default();
         draft.choose_colour_profile(Some(&wide));
         assert_eq!(draft.colour_error, None);
+        assert!(!draft.as_image, "the profile prints as image without changing the user's own choice");
         if let Some(c) = &mut draft.colour {
             c.intent = print::colour::Intent::Perceptual;
             c.black_point = false;
@@ -835,7 +836,13 @@ mod tests {
         assert_eq!(draft.colour_path.as_deref(), Some(wide.as_path()), "the choice stays as it was");
 
         draft.choose_colour_profile(None);
-        assert!(draft.settings(1, &[]).unwrap().raster.is_some_and(|r| r.colour.is_none()), "the printer manages colour again");
+        assert!(draft.settings(1, &[]).unwrap().raster.is_none(), "the printer manages colour, and Print as image is the user's own again");
+
+        let mut own = PrintDraft { as_image: true, ..PrintDraft::default() };
+        own.choose_colour_profile(Some(&wide));
+        own.choose_colour_profile(None);
+        assert!(own.as_image);
+        assert!(own.settings(1, &[]).unwrap().raster.is_some_and(|r| r.colour.is_none()), "still prints as image, without the profile");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
