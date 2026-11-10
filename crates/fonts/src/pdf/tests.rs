@@ -437,7 +437,7 @@ fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
 /// The editor's program list reads a legacy Thai font's metrics after its program. With the program
 /// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
 /// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
-/// listed, as with plenty. A ToUnicode with data is refused by the allowance, and the program isn't.
+/// listed. A ToUnicode with data is refused by the allowance, and the program isn't.
 #[test]
 fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");

@@ -72,7 +72,8 @@ pub struct Metrics {
     /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
     /// Type 3 font's height) is a guess. It is set exactly when the allowance counted a refusal
     /// during the read ([`DecodeBudget::refused`]), which callers that share it may refuse on; a
-    /// stream that fails on its own data doesn't set it, with or without anything left.
+    /// read that fails without one, such as an empty stream behind a filter nothing decodes,
+    /// doesn't set it, with or without anything left.
     pub past_allowance: bool,
 }
 
@@ -423,9 +424,9 @@ impl<'a> Reads<'a> {
     /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
     /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
     /// with no more left than that total, it spends all of it and counts as refused. Only what
-    /// the allowance counts as refused ([`DecodeBudget::refused`]) is: a stream that fails on its
-    /// own data fails the same with more left, even when it spends the last of it or nothing was
-    /// left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
+    /// the allowance counts as refused ([`DecodeBudget::refused`]) is noted: a read that fails
+    /// without one, such as an empty stream behind a filter nothing decodes, fails the same with
+    /// more left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
         let refused = self.budget.refused();
         match self.budget.decode_stages_within(self.doc, stream, max) {
@@ -502,7 +503,8 @@ fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option
         left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
         let Ok(data) = read else {
             // As in `Reads::decode`, only a refusal the allowance counts: a description that fails
-            // on its own data, spending the last of it, leaves the rest to be refused above.
+            // without one (an empty one nothing decodes, once the allowance is spent) leaves the
+            // rest to be read, or refused above.
             if reads.budget.refused() > refused {
                 // The rest go unread too, for want of the reading's allowance.
                 reads.refused = true;
