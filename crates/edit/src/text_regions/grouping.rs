@@ -310,6 +310,19 @@ fn embedded_reading(text: &str) -> String {
     format!("{trail}{core}{lead}")
 }
 
+/// Whether the text of `row` and of `prev` sits in different paragraph elements of the page's
+/// logical structure (and none in the same one). Word tags every paragraph, so this keeps apart
+/// paragraphs it sets only 6 pt apart, and a heading from the body under it, which the spacing
+/// rules can't tell from a paragraph's own rows. Rows without structure (an untagged page, text an
+/// edit wrote) say nothing.
+fn in_other_structure_paragraphs(prev: &[usize], row: &[usize], lines: &[TextLine]) -> bool {
+    let elements = |row: &[usize]| -> Vec<u32> {
+        row.iter().filter_map(|i| lines.get(*i)).filter(|l| l.text.chars().any(char::is_alphanumeric)).filter_map(|l| l.structure).collect()
+    };
+    let (above, below) = (elements(prev), elements(row));
+    !above.is_empty() && !below.is_empty() && !above.iter().any(|e| below.contains(e))
+}
+
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -345,6 +358,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 && (prev.origin.bt_op == line.origin.bt_op
                     || gap > prev.size.min(line.size) * 0.01
                     || !same_style(prev, line)
+                    // Tagged as one paragraph: Word sets a word in another language as a run
+                    // of its own, touching the rest of the row.
+                    || prev.structure.is_some_and(|element| line.structure == Some(element))
                     || prev.text.ends_with(char::is_whitespace)
                     || line.text.starts_with(char::is_whitespace))
         });
@@ -464,6 +480,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8
                 && gap < max_gap
+                && !in_other_structure_paragraphs(prev_row, row, lines)
         });
         if !joins {
             blocks.push(TextBlock {
