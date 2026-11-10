@@ -1319,7 +1319,7 @@ fn a_selected_area_prints_alone_fitted_or_at_actual_size() {
             area,
             Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: false },
         ),
-        (vec![0], area, Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }),
+        (vec![0], area, Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep: 0.0 }),
         (vec![0], area, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true }),
         (vec![0], area, Layout::Label { flip: false }),
     ] {
