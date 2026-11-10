@@ -174,6 +174,9 @@ impl Automation {
                         // reports; `to_page` is never set from it, because it is not our page.
                         v["remote_page"] = json!(page.saturating_add(1));
                         v["zoom"] = zoom_value(*zoom);
+                        // The action's own name, as any action this tool does not address by
+                        // page reports it (ISO 32000-2 Table 211, `/S /GoToR`).
+                        v["other"] = json!("GoToR");
                     }
                     (LinkAction::Other(o), None) => v["other"] = json!(o),
                 }
