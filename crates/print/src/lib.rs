@@ -20,6 +20,7 @@
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
+mod font_names;
 pub mod range;
 pub mod spool;
 #[cfg(test)]
@@ -43,7 +44,7 @@ pub use settings::{
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{
-    LABEL_MARGIN, MARGIN, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
+    LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
 };
 
 /// The names of the Print dialog's choices, shared by the `doc_print` tool and the settings

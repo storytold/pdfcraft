@@ -106,6 +106,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             allowed: true,
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
+            keys: Default::default(),
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
@@ -165,11 +166,17 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     let changed = vec![listed(0, 0, "something else", None), listed(0, 1, "B", Some((0, 0)))];
     assert_eq!(after_delete(&before, &changed, gone, (0, 2)), None);
 
-    let mut view = CommentView { selected: Some((0, 2)), editing: Some((0, 3, "typed".into())), ..Default::default() };
-    view.annotation_deleted(&before, &after, gone);
+    let info = DocInfo { annotations: before.clone(), ..Default::default() };
+    let mut view = CommentView::from_info(&info);
+    view.selected = Some((0, 2));
+    view.editing = Some((0, 3, "typed".into()));
+    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
+    view.document_changed(&DocInfo { annotations: after.clone(), ..Default::default() });
     assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
-    let mut view = CommentView { editing: Some((0, 4, "typed".into())), editor_focus: Some(EditorFocus::Take), ..Default::default() };
-    view.annotation_deleted(&before, &after, gone);
+    let mut view = CommentView::from_info(&info);
+    view.editing = Some((0, 4, "typed".into()));
+    view.editor_focus = Some(EditorFocus::Take);
+    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
 }
 
@@ -554,6 +561,137 @@ fn text_boxes_fit_their_text() {
     assert!(long[3] - long[1] > 50.0);
 }
 
+#[test]
+fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
+    let annot = |index: usize, name: &str| Annotation {
+        page: 0,
+        index,
+        subtype: "Text".into(),
+        rect: [10.0, 10.0, 30.0, 30.0],
+        color: None,
+        author: None,
+        contents: Some(name.into()),
+        modified: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        name: Some(name.into()),
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    // Page 0 has a Widget at index 0 (not in `info.annotations`), and Text comments at 1 and 2.
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        annotations: vec![annot(1, "c1"), annot(2, "c2")],
+        ..Default::default()
+    };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    view.comments.selected = Some((0, 2));
+    view.comments.open_editor(0, 2, "draft".into());
+    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(2), text: "body".into(), focus: false });
+    view.comments.gesture = Some(Gesture::Move { page: 0, index: 2, from: pos2(0.0, 0.0) });
+
+    // Moving/editing in place or appending a comment at index 3 preserves (0, 2) selection/editing/gesture.
+    let mut appended = info.clone();
+    appended.annotations.push(annot(3, "c3"));
+    view.document_changed(&appended);
+    assert_eq!(view.comments.selected, Some((0, 2)));
+    assert!(view.comments.editing.is_some());
+    assert!(view.comments.composer.is_some());
+    assert!(view.comments.gesture.is_some());
+
+    // Deleting comment 1 shifts comment 2 down to index 1: stale state at (0, 2) and shifted (0, 1) must clear.
+    let mut shifted = info.clone();
+    shifted.annotations = vec![annot(1, "c2")];
+    view.comments.selected = Some((0, 1));
+    view.comments.open_editor(0, 1, "for c1, not c2".into());
+    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "for c1".into(), focus: false });
+    view.comments.gesture = Some(Gesture::Move { page: 0, index: 1, from: pos2(0.0, 0.0) });
+    view.document_changed(&shifted);
+    assert_eq!(view.comments.selected, None);
+    assert_eq!(view.comments.editing, None);
+    assert_eq!(view.comments.composer, None);
+    assert_eq!(view.comments.gesture, None);
+
+    // Pressing Delete when `selected` holds a widget index (0, 0) or stale index (0, 2) emits no edit.
+    let ctx = egui::Context::default();
+    for bad_index in [0, 2] {
+        view.comments.selected = Some((0, bad_index));
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut out = ctx.run_ui(input, |ui| {
+            let mut tool = QuickTool::Select;
+            keys(ui.ctx(), crate::page_keys::PageKeys::new(false), &mut view, &shifted, &mut tool, true);
+        });
+        out.textures_delta.clear();
+        assert_eq!(view.comments.selected, None);
+        assert_eq!(view.pending_edit, None, "index {bad_index} must not emit DeleteAnnotation");
+    }
+}
+
+/// An unnamed comment has no object name to tell it from the one that slid into its index.
+/// Deleting the earlier one still drops selection, editing, the composer and a gesture that
+/// pointed at that index.
+#[test]
+fn an_unnamed_shift_clears_state_for_the_old_index() {
+    let annot = |index: usize| Annotation {
+        page: 0,
+        index,
+        subtype: "Text".into(),
+        rect: [10.0, 10.0, 30.0, 30.0],
+        color: None,
+        author: None,
+        contents: None,
+        modified: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        name: None,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let info = DocInfo {
+        pages: vec![
+            PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 },
+            PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 },
+        ],
+        annotations: vec![annot(1), annot(2)],
+        ..Default::default()
+    };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    view.comments.selected = Some((0, 1));
+    view.comments.open_editor(0, 1, "the first note".into());
+    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
+    view.comments.gesture = Some(Gesture::Move { page: 0, index: 1, from: pos2(0.0, 0.0) });
+    let mut shifted = info.clone();
+    shifted.annotations = vec![annot(1)];
+    view.document_changed(&shifted);
+    assert_eq!(view.comments.selected, None);
+    assert_eq!(view.comments.editing, None);
+    assert_eq!(view.comments.composer, None);
+    assert_eq!(view.comments.gesture, None);
+}
+
 /// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
 /// 32000-2 §12.5.6.2), and Make Current Properties Default on it updates the Replace Text tool. A
 /// caret of its own (Insert Text) still updates the Insert Text tool.
@@ -612,6 +750,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
         allowed: true,
         hidden: false,
         redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
     };
     let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
     let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
