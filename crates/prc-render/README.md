@@ -24,6 +24,9 @@ walk.camera(aspect) -> Result<Camera, RenderError>
 Camera::ray_through(x, y, width, height) -> Result<Ray, RenderError>   // the ray through an image position
 pick(&[WorldMesh], &Ray) -> Option<Hit>                              // the nearest triangle on it
 PickIndex::new(&[WorldMesh]) / .pick(&Ray) / .pick_where(&Ray, max_distance, include)
+nav::Orbit::named(NamedView, perspective, Upright) / nav::Orbit::looking(direction, up, perspective)
+orbit.turn(yaw, pitch) / pan_by([right, up]) / zoom_at(&Bounds, reach, aspect, factor, [right, up]) / anchor_at(&Camera, point) / centre_on / refit
+orbit.camera(&Bounds, nav::reach(&[WorldMesh], &Bounds), aspect) -> Result<Camera, RenderError>
 ```
 
 - `nav` is a viewer's orbit control without the GUI: the fitted view holds the sphere round the model's centre that
