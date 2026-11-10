@@ -116,8 +116,11 @@ struct LegacyFace {
     space: f64,
 }
 
-/// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
-/// (each at most 16 MiB): a page may name many of them.
+/// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
+/// 16 MiB), which it keeps, and the streams of the metrics read to measure them and to adapt their
+/// programs' cmaps: their CMaps and glyph maps, and a subset's program again, for which of its
+/// glyphs have outlines. A page may name many of them. The metrics read to find the subsets among
+/// the page's fonts aren't charged to it.
 const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
@@ -900,6 +903,9 @@ fn legacy_thai_font(
     }
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
     let mut candidates = vec![source.font.clone()];
+    // Every name on the page is read here for its face name alone, aliases of one font and other
+    // faces' fonts too, with no total, as before: charged to the edit's allowance, each alias would
+    // pay again and other faces would spend what the face's subsets need.
     candidates.extend(fonts.iter().filter_map(|(name, font)| {
         let font = doc.dict(font)?;
         (pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, &font).base_font) == family).then(|| String::from_utf8_lossy(name).into_owned())
@@ -914,9 +920,15 @@ fn legacy_thai_font(
         let face = match object.and_then(|o| cache.values().find(|face| face.object == Some(o))) {
             Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), object, ..*alias },
             None => {
-                let metrics = Metrics::from_dict(doc, &font);
-                let space = source_space(doc, fonts, &metrics);
-                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new);
+                // Read within the edit's allowance; past it the subset goes unread, and the edit is
+                // refused below.
+                let metrics = Metrics::from_dict_within(doc, &font, budget);
+                let (space, glyphs) = if metrics.past_allowance {
+                    (0.0, None)
+                } else {
+                    let space = source_space(doc, fonts, &metrics);
+                    (space, pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new))
+                };
                 let style = FontStyle::of(doc, &font, &metrics);
                 LegacyFace { glyphs, metrics, style, object, space }
             }
@@ -924,9 +936,11 @@ fn legacy_thai_font(
         cache.insert(name, face);
     }
     // A subset left unread would count as unusable, silently changing which subset draws the text.
-    if budget.remaining() == 0 {
+    // A read refused for want of the allowance is what refuses the edit: reads that spent it to the
+    // byte refused nothing.
+    if budget.refused() > 0 {
         return Err(EditError::Invalid(format!(
-            "the page's {} subsets need more than {} MiB of font programs for one edit; choose a replacement font for this text",
+            "the page's {} subsets need more than {} MiB of font data for one edit; choose a replacement font for this text",
             source.base_font.rsplit('+').next().unwrap_or(&source.base_font),
             MAX_THAI_PROGRAMS >> 20
         )));

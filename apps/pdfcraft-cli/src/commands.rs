@@ -434,11 +434,20 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     for warning in &p.warnings {
         match warning {
             pdfcraft_render::RenderWarning::ContentTruncated => {
-                let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+                );
             }
             pdfcraft_render::RenderWarning::ColourFallback => {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
+            }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: an image with a malformed Indexed colour table may be drawn wrongly or not at all"
+                );
             }
             pdfcraft_render::RenderWarning::Type3WidthsMissing => {
                 let _ = writeln!(

@@ -6844,6 +6844,142 @@ fn reading_follows_forms_however_their_resources_are_stored() {
     }
 }
 
+/// #3503: a form XObject's `/BBox` clips its content, so text drawn outside it is not shown and
+/// should not be read either -- matching the renderer, which already honours the clip.
+#[test]
+fn form_bbox_clips_text_from_reading() {
+    let page = stream("", "/Fm Do");
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 6 0 R >> >>",
+        "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &fm,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE"]);
+}
+
+/// #3503: a page's own `re`/`W`/`n` clip (not a form's `/BBox`) hides text outside it the same
+/// way, and `Q` lifts it again -- the clip is scoped to its `q`/`Q` like the rest of the graphics
+/// state, not a one-way switch.
+#[test]
+fn page_re_w_n_clip_hides_text_from_reading_until_q() {
+    let page = stream(
+        "",
+        "q 0 0 50 50 re W n BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 100 100 Td (AFTER) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE", "AFTER"]);
+}
+
+/// The text `reading_blocks` reads on a 400 × 400 pt page drawing `content` with Helvetica as
+/// `/F1`, and forms `/Fa` and `/Fb` (objects 6 and 7) with the given dictionary entries and content.
+fn read_clipped(content: &str, forms: [(&str, &str); 2]) -> Vec<String> {
+    let font = "/Font << /F1 5 0 R >>";
+    let resources = format!("<< {font} /XObject << /Fa 6 0 R /Fb 7 0 R >> >>");
+    let form = |(dict, body): (&str, &str)| stream(&format!("/Type /XObject /Subtype /Form {dict} /Resources {resources}"), body);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents 4 0 R >>"),
+        &stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &form(forms[0]),
+        &form(forms[1]),
+    ]);
+    text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+/// #5075 review: a `/BBox` with anything but four numbers is no bound. Reading the numbers it
+/// happens to hold (`[0 /Bad 0 50 50]` as `[0 0 50 50]`) invented a clip and hid real text.
+#[test]
+fn a_malformed_form_bbox_clips_nothing() {
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET";
+    for bbox in ["[0 /Bad 0 50 50]", "[0 0 50]", "[0 0 50 50 60]", "[0 (x) 50 50]"] {
+        let texts = read_clipped("/Fa Do", [(&format!("/BBox {bbox}"), body), ("", "")]);
+        assert_eq!(texts, ["INSIDE", "OUTSIDE"], "/BBox {bbox}");
+    }
+}
+
+/// #5075 review: a clipping path of several rectangles clips to all of them, not to the last one
+/// drawn (text seen through the first rectangle was hidden), and not to the box around them
+/// either (text in the gap between them was read, though nothing of it shows).
+#[test]
+fn a_clip_of_several_rectangles_keeps_text_in_each() {
+    let content = "q 0 0 50 50 re 100 100 50 50 re W n BT /F1 12 Tf 5 5 Td (FIRST) Tj ET BT /F1 12 Tf 105 105 Td (SECOND) Tj ET \
+                   BT /F1 12 Tf 60 60 Td (GAP) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["FIRST", "SECOND"]);
+}
+
+/// #5075 review: a form's `/BBox` clips however thin it is and wherever its matrix puts it. A box
+/// one point by 1e-10 was taken for no box (its area fell under a fixed threshold), and one moved
+/// 1e12 points away lost its area to rounding; either way the text outside it was read.
+#[test]
+fn a_thin_or_far_off_form_bbox_still_clips() {
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET";
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let thin = read_clipped(&format!("/Fa Do {after}"), [("/BBox [0 0 1 1e-10]", body), ("", "")]);
+    assert_eq!(thin, ["AFTER"], "a thin /BBox");
+    let far = read_clipped(&format!("/Fa Do {after}"), [("/Matrix [1 0 0 1 1e12 1e12] /BBox [0 0 100 100]", body), ("", "")]);
+    assert_eq!(sorted(far), ["AFTER", "INSIDE"], "a /BBox 1e12 points away");
+}
+
+/// #5075 review: a clip of no area has no inside, so nothing drawn under it shows (ISO 32000-2
+/// §8.5.4). It was taken for no clip at all, and everything under it was read.
+#[test]
+fn a_clip_of_no_area_shows_nothing() {
+    let content = "q 0 0 100 0 re W n BT /F1 12 Tf 5 5 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["AFTER"]);
+}
+
+/// #5075 review: what shows is the intersection of every clip in force. A long run that crosses a
+/// page clip and, apart from it, a form's `/BBox` overlaps each of them but shows in neither, as it
+/// does not when one form's `/BBox` lies apart from the one of the form it is drawn in.
+#[test]
+fn disjoint_clips_show_nothing_between_them() {
+    let run = "BT /F1 12 Tf 5 10 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET";
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    // A page clip and a form's `/BBox` side by side.
+    let page_clip = format!("q 0 0 50 50 re W n /Fa Do Q {after}");
+    assert_eq!(read_clipped(&page_clip, [("/BBox [100 0 150 50]", run), ("", "")]), ["AFTER"]);
+    // A form's `/BBox` and the `/BBox` of the form inside it, side by side.
+    let nested = format!("/Fa Do {after}");
+    assert_eq!(read_clipped(&nested, [("/BBox [0 0 50 50]", "/Fb Do"), ("/BBox [100 0 150 50]", run)]), ["AFTER"]);
+}
+
+/// #5075 review: a clip turned with its matrix keeps its turned shape. Its upright bounding box
+/// takes in corners it does not cover, and text there was read although it is clipped away.
+#[test]
+fn a_turned_clip_hides_text_in_the_corners_of_its_bounding_box() {
+    // A 100 pt square turned 45° about (200, 0): a diamond with its lower corner at (200, 0).
+    // Undone straight after the clip, so the text is drawn upright on the page.
+    let (turn, undo) =
+        ("0.70710678 0.70710678 -0.70710678 0.70710678 200 0 cm", "0.70710678 -0.70710678 0.70710678 0.70710678 -141.421356 141.421356 cm");
+    let texts = "BT /F1 6 Tf 132 3 Td (CORNER) Tj ET BT /F1 6 Tf 195 65 Td (CENTRE) Tj ET";
+    let page_clip = format!("q {turn} 0 0 100 100 re W n {undo} {texts} Q");
+    assert_eq!(read_clipped(&page_clip, [("", ""), ("", "")]), ["CENTRE"], "a turned page clip");
+    // The same diamond as a form's `/BBox`, under its `/Matrix`.
+    let matrix = "/Matrix [0.70710678 0.70710678 -0.70710678 0.70710678 200 0] /BBox [0 0 100 100]";
+    assert_eq!(read_clipped("/Fa Do", [(matrix, &format!("{undo} {texts}")), ("", "")]), ["CENTRE"], "a turned form /BBox");
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -6958,24 +7094,28 @@ fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
 /// missing are read once (or skipped) without panicking or looping.
+///
+/// `/BBox [0 0 20 420]` is wide enough to hold every form's own text below (#3503 clips a form's
+/// content to its `/BBox`; this test is about the loop and resource handling, not clipping).
 #[test]
 fn hostile_form_xobjects_are_read_once() {
     let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
     let font = "/Font << /F1 5 0 R >>";
     let lp = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
         "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
     );
     let a = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /B 8 0 R >> >>"),
         "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
     );
     let b = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /A 7 0 R >> >>"),
         "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
     );
-    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
-    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let nores = stream("/Subtype /Form /BBox [0 0 20 420]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad =
+        stream(&format!("/Subtype /Form /BBox [0 0 20 420] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
     let doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -9257,6 +9397,113 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), false).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::Watermark).unwrap(), 1);
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
+}
+
+/// Printer marks: drawn outside the trim box as a removable page mark; the page
+/// is widened to make room when asked and the trim box stays; running again replaces them.
+#[test]
+fn printer_marks_are_drawn_outside_the_trim_box_and_removable() {
+    use crate::printer_marks::PrinterMarks;
+    let mut doc = fixture();
+    let page_content_text = |doc: &Document, page: usize| String::from_utf8_lossy(&page_content_bytes(doc, page)).into_owned();
+    let page = page_list(&doc)[0].clone();
+    // A trim box inside a letter-size page, 36 pt in: room for the marks, bleed marks included
+    // (the bleed box is 9 pt out, so they reach 33 pt beyond the trim box), without widening.
+    doc.update_dict(page.obj, |d| {
+        d.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 612.0, 792.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"TrimBox".to_vec(), Object::Array([36.0, 36.0, 576.0, 756.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"BleedBox".to_vec(), Object::Array([27.0, 27.0, 585.0, 765.0].iter().map(|v| Object::Real(*v)).collect()));
+    })
+    .unwrap();
+    let marks = PrinterMarks { label: "Quote 1042.pdf".into(), date: "2026-10-13".into(), ..PrinterMarks::default() };
+    let widened = add_printer_marks(&mut doc, &[0, 1], &marks, false).unwrap();
+    assert_eq!(widened, vec![1], "page 2 has no trim box inside its media box, so it was widened");
+    assert_eq!(marks_present(&doc), vec![MarkKind::PrinterMarks]);
+    let text = page_content_text(&doc, 0);
+    assert!(text.contains("/PCMark /PrinterMarks"), "{text}");
+    // A trim mark at the lower-left corner: vertical below the box, horizontal to its left.
+    assert!(text.contains("36 30 m 36 12 l S") && text.contains("30 36 m 12 36 l S"), "{text}");
+    assert!(text.contains("/PCReg CS 1 SCN /PCReg cs 1 scn"), "registration colour: {text}");
+    assert!(!text.contains("1 1 1 1 K"), "not four process inks alone: {text}");
+    assert!(text.contains("[1 1] 0 d") && text.contains("27 21 m 27 3 l S"), "dashed bleed marks: {text}");
+    assert!(text.contains("1 0 0 0 k") && text.contains("0 0 0 0.25 k"), "colour bars: {text}");
+    assert!(text.contains("(Quote 1042.pdf  1 of 3  2026-10-13) Tj"), "page information: {text}");
+    // Page 2: the media box grew by 36 pt a side around its (whole-page) trim box.
+    let p2 = page_list(&doc)[1].clone();
+    let media: Vec<f64> = p2.dict.get(b"MediaBox").and_then(|m| m.as_array()).unwrap().iter().filter_map(|v| v.as_f64()).collect();
+    assert_eq!(media, vec![-36.0, -36.0, 636.0, 836.0]);
+    // Again with replace: still one set of marks per page; without replace, two.
+    add_printer_marks(&mut doc, &[0], &marks, true).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 1);
+    add_printer_marks(&mut doc, &[0], &marks, false).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 2);
+    assert_eq!(remove_marks(&mut doc, &[0, 1], MarkKind::PrinterMarks).unwrap(), 3);
+    assert!(marks_present(&doc).is_empty());
+    // Nothing chosen, or a bad weight, is refused.
+    let none = PrinterMarks { trim: false, bleed: false, registration: false, color_bars: false, page_info: false, ..PrinterMarks::default() };
+    assert!(add_printer_marks(&mut doc, &[0], &none, false).is_err());
+    assert!(add_printer_marks(&mut doc, &[0], &PrinterMarks { line_weight: 0.0, ..PrinterMarks::default() }, false).is_err());
+}
+
+/// Convert colours: device, ICC-based and separation colours in page content
+/// and forms become the target's operators; black is preserved; patterns stay; a second run
+/// finds nothing.
+#[test]
+fn colours_are_converted_to_gray_rgb_and_cmyk() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // An ICCBased RGB space and a spot colour (Separation to CMYK, Type 2 tint).
+    let mut icc = Dict::new();
+    icc.set(b"N".to_vec(), Object::Int(3));
+    let icc_ref = doc.add(Object::Stream(Stream::flate(icc, b"not a real profile")));
+    let mut fun = Dict::new();
+    fun.set(b"FunctionType".to_vec(), Object::Int(2));
+    fun.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    fun.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    fun.set(b"C1".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(1), Object::Int(0)]));
+    fun.set(b"N".to_vec(), Object::Int(1));
+    let mut cs = Dict::new();
+    cs.set(b"CS0".to_vec(), Object::Array(vec![Object::name("ICCBased"), Object::Ref(icc_ref)]));
+    cs.set(b"Spot".to_vec(), Object::Array(vec![Object::name("Separation"), Object::name("Red"), Object::name("DeviceCMYK"), Object::Dict(fun)]));
+    let mut res = Dict::new();
+    res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+    let content = b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S /CS0 cs 0 1 0 scn 0 0 20 20 re f /Spot cs 1 scn 30 30 20 20 re f 0 g 60 60 10 10 re f 0.5 g 70 70 5 5 re f";
+    let c = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(c));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    // Grayscale.
+    let mut gray = doc.clone();
+    let done = convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap();
+    assert_eq!((done.colours, done.pages), (6, 1), "{done:?}");
+    let t = flat(&page_content_bytes(&gray, 0));
+    assert!(t.contains("0.299 g 10 10 50 50 re f"), "red → its luma: {t}");
+    assert!(t.contains("0.114 G 0 0 m 100 100 l S"), "blue stroke: {t}");
+    assert!(t.contains("0 g 0 1 0 scn") || t.contains("0.587 g 0 0 20 20 re f"), "ICC green through its space: {t}");
+    assert!(t.contains("0.587 g 0 0 20 20 re f"), "{t}");
+    assert!(t.contains("0.299 g 30 30 20 20 re f"), "the spot's tint through its CMYK alternate (0 1 1 0 = red): {t}");
+    assert!(t.contains("0 g 60 60 10 10 re f") && t.contains("0.5 g 70 70 5 5 re f"), "gray stays gray: {t}");
+    assert!(!t.contains("/CS0 cs") && !t.contains("/Spot cs"), "named spaces are gone: {t}");
+    assert_eq!(convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap().colours, 0, "nothing left");
+    // CMYK with black preserved; without, black is still 100% K by the formula.
+    let mut cmyk = doc.clone();
+    let s = ConvertColours { target: ColourTarget::Cmyk, ..ConvertColours::default() };
+    convert_colours(&mut cmyk, &[0], &s, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&cmyk, 0));
+    assert!(t.contains("0 1 1 0 k 10 10 50 50 re f"), "red: {t}");
+    assert!(t.contains("0 0 0 1 k 60 60 10 10 re f"), "black preserved: {t}");
+    assert!(t.contains("0 0 0 0.5 k 70 70 5 5 re f"), "gray 0.5 → 50% K: {t}");
+    // RGB: the spot becomes its red.
+    let mut rgbd = doc.clone();
+    convert_colours(&mut rgbd, &[0], &ConvertColours { target: ColourTarget::Rgb, ..ConvertColours::default() }, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&rgbd, 0));
+    assert!(t.contains("1 0 0 rg 30 30 20 20 re f"), "{t}");
+    assert!(t.contains("1 0 0 rg 10 10 50 50 re f"), "already RGB, kept: {t}");
 }
 
 /// Fix hairlines: zero-width strokes and strokes thinner than the threshold on
@@ -13364,6 +13611,43 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
 }
 
 #[test]
+fn page_rules_refuse_unread_graphics_state() {
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("UnsupportedFilter"));
+    let unread = Stream::from_raw(dict, b"2 0 0 2 0 0 cm".to_vec());
+    let damaged = damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    for stream in [unread, damaged] {
+        let mut doc = image_page_with("10 10 m 100 10 l S");
+        let incomplete = doc.add(Object::Stream(stream));
+        doc.update_dict(ObjRef::new(3, 0), |page| {
+            page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(incomplete), Object::Ref(ObjRef::new(4, 0))]));
+        })
+        .unwrap();
+        assert!(page_rules(&doc, 0).is_err(), "later geometry cannot be trusted after unread graphics state");
+    }
+    assert_eq!(page_rules(&image_page_with("10 10 m 100 10 l S"), 0).unwrap(), [[10.0, 10.0, 100.0, 10.0]]);
+}
+
+#[test]
+fn image_editing_frame_keeps_page_edge_outside_explicit_clips() {
+    for (prefix, expected) in [
+        ("", [-30.0, -20.0, 70.0, 80.0]),
+        ("-10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+        ("/PdfCraftImageCrop MP -10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+    ] {
+        let doc = image_page_with(&format!("q {prefix}100 0 0 100 -30 -20 cm /Im0 Do Q"));
+        for doc in [&doc, &reopen(&doc)] {
+            let im = images::page_images(doc, 0).unwrap().remove(0);
+            assert_eq!(im.frame_rect(), Some(expected));
+            assert_eq!(im.has_editor_crop(), prefix.starts_with("/PdfCraftImageCrop"));
+            assert_eq!(im.visible_rect.unwrap()[0..2], [0.0, 0.0]);
+            assert!(!im.contains([-5.0, 10.0]), "out-of-page pixels stay unselectable");
+            assert!(im.contains([10.0, 10.0]));
+        }
+    }
+}
+
+#[test]
 fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_font() {
     let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
     let cmap =
@@ -14028,6 +14312,29 @@ fn legacy_thai_subsets_are_read_within_one_budget_per_edit() {
     let error = text::rewrite_block(&mut distinct, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
     assert!(error.contains("THSarabunPSK") && error.contains("MiB") && error.contains("choose a replacement font"), "{error}");
     assert_eq!(pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// An edit whose THSarabunPSK subset spends the edit's allowance to the byte goes through: only a
+/// read refused for want of it refuses the edit. The subset is read four times over its program
+/// (the edit's metrics read, `LegacyThaiFont`'s, the editor's program read and its metrics read)
+/// and three times over its ToUnicode, so a program 192 bytes short of 16 MiB and a ToUnicode of
+/// 256 bytes cost exactly the 64 MiB; a byte more of ToUnicode is three past it.
+#[test]
+fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let edit = |unicode_len: usize| {
+        let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+        unicode.resize(unicode_len, b' ');
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).map(|_| ()).map_err(|e| e.to_string())
+    };
+    assert_eq!(edit(256), Ok(()));
+    let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 
 /// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is

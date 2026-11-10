@@ -59,10 +59,14 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
+pub use print_ui::{
+    Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSetup, PrinterSource, Spooler, TwoSidedSource, Which as PrintWhich, system_printers,
+    system_two_sided,
+};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+pub mod viewer_prefs;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
@@ -110,11 +114,13 @@ use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
+use dialogs::convert_colours_ui;
 use dialogs::credits;
 use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
+use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
@@ -325,6 +331,19 @@ pub struct PdfCraftApp {
     /// The user closed the right panel, so opening a document leaves it closed instead of
     /// showing its comments or bookmarks (#1590). Remembered across restarts.
     pub right_panel_closed: bool,
+    /// A portfolio that just opened and the name-tree key of the attachment it presents first
+    /// (`/Collection /D`), opened by [`Self::present_portfolios`] on the next frame while the
+    /// portfolio is still the active tab.
+    portfolio_initial: Option<(DocId, String)>,
+    /// The document whose tab [`Self::present_portfolios`] last saw active.
+    portfolio_seen: Option<DocId>,
+    /// Browser file reads still under way (drops, the web file picker): each file opens in front
+    /// when it arrives.
+    #[cfg(target_arch = "wasm32")]
+    web_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// A portfolio's file list is showing in place of this panel (`None`: the panel was
+    /// closed), given back when its tab is left.
+    portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -366,6 +385,19 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
+    /// them into the page (#2149). Off once the user says not to ask again.
+    pub ask_to_lock_signatures: bool,
+    /// Documents with a Fill & Sign signature placed since their last save, asked about on
+    /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
+    pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    pub(crate) pending_lock: Option<editing::PendingLock>,
+    /// The document whose lock question was just answered: the save that follows the answer
+    /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
+    /// save that fails or is cancelled asks again next time.
+    pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
+    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub fill_tool: fill_sign::FillTool,
@@ -389,6 +421,11 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
+    pub spooler: Option<Spooler>,
+    /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
+    /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
+    pub two_sided_source: Option<TwoSidedSource>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
@@ -522,6 +559,8 @@ pub struct PdfCraftApp {
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
+    /// Attachment description being edited: (document, name-tree key, description).
+    pub attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
@@ -544,6 +583,9 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// A dynamic form's preSign step, run when signing a field began: the document and its undo
+    /// depth after the step. Taken back if signing ends without a signature.
+    pub(crate) presign: Option<(DocId, usize)>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).
@@ -718,6 +760,8 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
+    pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
@@ -774,6 +818,9 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
+    /// A document just opened asks for its window to fit its first page or to be centred
+    /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
+    pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }
