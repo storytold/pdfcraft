@@ -344,6 +344,9 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let direct = crate::draw::with_direct_values(doc, raw);
     let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
+    if !is_comment_subtype(&subtype) {
+        return None;
+    }
     // A text box reports the colour and size it is drawn in (`/DA`, or `/DS` where it sets one).
     let style = (subtype == "FreeText").then(|| text_style::text_style(d, None));
     let color = match &style {

@@ -6200,6 +6200,9 @@ fn printing_through_tools() {
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": printed }))["document"]["pages"].as_u64(), Some(n.div_ceil(4)));
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "path": "poster.pdf" }));
     assert!(r["sheets"].as_u64().unwrap() > 1);
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "booklet", "creep": 1.5, "path": "booklet.pdf" }));
+    assert_eq!(r["sheets"].as_u64(), Some(n.div_ceil(4) * 2), "creep keeps the booklet's sheets");
+    assert!(a.call("doc_print", &json!({ "doc": doc, "layout": "booklet", "creep": -1, "path": "x.pdf" })).is_err(), "negative creep");
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }

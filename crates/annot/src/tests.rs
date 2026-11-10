@@ -2094,7 +2094,8 @@ fn a_member_whose_primary_is_missing_is_a_comment_of_its_own() {
     let (orphans, _) = oval_to(&mut doc, 150.0, Some(or), Some("Group"), "orphans");
     let (on_page, _) = oval_to(&mut doc, 200.0, Some(page), Some("Group"), "on-page");
     let link = links::add(&mut doc, 0, [10.0, 600.0, 110.0, 620.0], &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
-    let (_, lr) = annot_ref(&mut doc, 0, link).unwrap();
+    // `annot_ref` takes comments only; the link's reference comes from the page's `/Annots`.
+    let Some(Object::Ref(lr)) = crate::lookup::annots(&doc, page).get(link).cloned() else { panic!("the link is an indirect object") };
     let (on_link, onr) = oval_to(&mut doc, 250.0, Some(lr), Some("Group"), "on-link");
     doc.update_dict(lr, |d| {
         d.set(b"F".to_vec(), Object::Int(4 | 128));
@@ -2826,6 +2827,28 @@ fn non_markup_annotations_are_not_comments() {
     }
     for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
         assert!(is_comment_subtype(s), "{s}");
+    }
+    // #3916: comment edits must refuse non-comment annotations (form widgets, links, pop-ups)
+    // when a stale `/Annots` index points at one.
+    for subtype in ["Widget", "Link", "Popup", "Watermark"] {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        d.set(b"Rect".to_vec(), num_array(&[10.0, 10.0, 50.0, 30.0]));
+        d.set(b"Contents".to_vec(), PdfString::text("keep me"));
+        let w = doc.add(Object::Dict(d));
+        let p = page_refs(&doc).unwrap()[0];
+        let mut a = annots(&doc, p);
+        a.push(Object::Ref(w));
+        let idx = a.len() - 1;
+        set_annots(&mut doc, p, a).unwrap();
+
+        assert_eq!(delete_annotation(&mut doc, 0, idx), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(set_contents(&mut doc, 0, idx, "overwritten", &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(move_annotation(&mut doc, 0, idx, 5.0, 5.0, &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(props(&doc, 0, idx), None, "{subtype}");
+        assert_eq!(text(&list(&doc, 0)[idx], b"Contents"), "keep me", "{subtype} contents must be untouched");
     }
 }
 
