@@ -19,12 +19,65 @@ fn fields() -> Vec<FieldState> {
 
 /// The document these tests' scripts run in.
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], highlight: false, xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
 
 /// Run AcroForm JavaScript `script` for `event` on these tests' document and fields.
 fn go(script: &str, event: &Event) -> Outcome {
     run(script, event, &doc(), &fields(), &[], Limits::default())
+}
+
+#[test]
+fn calculate_now_reports_errors_and_continues() {
+    let calculations =
+        vec![("bad".into(), "getField('price').value = 'partial'; throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
+    let state = Arc::new(vec![
+        FieldState::new("bad", FieldType::Text, vec![]),
+        FieldState::new("good", FieldType::Text, vec![]),
+        FieldState::new("price", FieldType::Text, vec![]),
+    ]);
+    let outcome = run_shared_calculations(
+        "calculateNow(); console.println('continued');",
+        &Event::doc("Console"),
+        &doc(),
+        state,
+        &[],
+        &calculations,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert!(outcome.console.iter().any(|line| line.contains("calculation script for bad failed: Error: broken")), "{outcome:?}");
+    assert!(outcome.console.iter().any(|line| line == "continued"), "{outcome:?}");
+    assert_eq!(outcome.changed.iter().find(|field| field.name == "good").unwrap().value, ["ok"]);
+    assert!(outcome.changed.iter().all(|field| field.name != "price"), "{outcome:?}");
+    assert_eq!(outcome.formatted, BTreeSet::from(["good".into()]));
+}
+
+#[test]
+fn calculate_now_sets_read_only_fields_and_handles_hundreds() {
+    let mut states = Vec::new();
+    let mut calculations = Vec::new();
+    for index in 0..300 {
+        let name = format!("field{index}");
+        let mut state = FieldState::new(name.clone(), FieldType::Text, vec![]);
+        state.readonly = true;
+        states.push(state);
+        calculations.push((name, "event.value = 'calculated';".into()));
+    }
+    let state = Arc::new(states);
+    let outcome =
+        run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), Arc::clone(&state), &[], &calculations, Limits::default());
+    assert_eq!(outcome.error, None, "{outcome:?}");
+    assert_eq!(outcome.changed.len(), 300);
+    assert!(outcome.changed.iter().all(|field| field.value == ["calculated"] && field.readonly));
+}
+
+#[test]
+fn caught_calculate_now_recursion_has_a_step_limit() {
+    let calculations: Vec<_> = (0..600).map(|index| (format!("loop{index}"), "try { calculateNow(); } catch (e) {}".into())).collect();
+    let state = Arc::new(calculations.iter().map(|(name, _)| FieldState::new(name.clone(), FieldType::Text, vec![])).collect());
+    let outcome = run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), state, &[], &calculations, Limits::default());
+    assert!(outcome.error.as_deref().is_some_and(|error| error.contains("calculateNow evaluation limit exceeded")), "{outcome:?}");
 }
 
 #[test]
@@ -48,6 +101,49 @@ fn the_outcome_says_whether_the_script_assigned_event_value() {
     assert_eq!((o.value.as_str(), o.value_set), ("7", false));
     let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
     assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
+#[test]
+fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
+    let mut document = doc();
+    document.page_boxes = vec![
+        [
+            [10.0, 20.0, 210.0, 320.0],
+            [20.0, 30.0, 200.0, 310.0],
+            [25.0, 35.0, 195.0, 305.0],
+            [30.0, 40.0, 190.0, 300.0],
+            [35.0, 45.0, 185.0, 295.0]
+        ];
+        3
+    ];
+    document.page_rotations = vec![0, 90, 270];
+    let out = run(
+        "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 1), this.getPageBox('Bleed', 0), this.getPageBox('Trim', 0), this.getPageBox('Art', 2)])",
+        &Event::doc("Console"),
+        &document,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("[[0,280,180,0],[-10,190,290,-10],[5,275,175,5],[10,270,170,10],[15,165,265,15]]"));
+}
+
+#[test]
+fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
+    for script in [
+        "this.getPageBox('BBox')",
+        "this.getPageBox(1)",
+        "this.getPageBox('Crop', -1)",
+        "this.getPageBox('Crop', 1.5)",
+        "this.getPageBox('Crop', 3)",
+        "this.getPageBox('Crop', null)",
+        "this.getPageBox('Crop', true)",
+        "this.getPageBox('Crop', '0')",
+    ] {
+        let out = go(script, &Event::doc("Console"));
+        assert!(out.error.is_some(), "{script}");
+    }
 }
 
 #[test]
@@ -392,10 +488,14 @@ fn app_alert_titles_are_clipped_and_charged() {
     let mut h = Host {
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc(),
+        calculations: Arc::new(Vec::new()),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     };

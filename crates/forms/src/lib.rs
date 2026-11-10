@@ -51,7 +51,7 @@ pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
 use values::has_password_flag;
 use values::write_value;
-pub(crate) use values::{ask_viewers_to_redraw, merged_appearance};
+pub(crate) use values::{ask_viewers_to_redraw, merged_appearance, redraw_calculated_value};
 pub use values::{
     calculations_changed, clear_password_values, has_password_values, password_values, recalculate, recalculate_with, reset, restore_password_values,
     set_value, set_value_with, set_values,

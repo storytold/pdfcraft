@@ -3615,6 +3615,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
+                        formatted: false,
                         read_only: None,
                         required: None,
                         display: None,

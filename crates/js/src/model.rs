@@ -114,6 +114,10 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
     pub highlight: bool,
     /// The document has an XFA form, so scripts see `xfa_installed`.
@@ -293,6 +297,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
+    /// Fields updated by Calculate scripts; their Format script must redraw the appearance.
+    pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
     pub console: Vec<String>,
