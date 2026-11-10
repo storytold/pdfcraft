@@ -897,6 +897,78 @@ fn glyphs_are_placed_with_the_text_matrix_and_the_form_matrix() {
     assert!(proof.entries[0].detail.contains("glyph(s) still show"));
 }
 
+/// The proof reads an operator's operands from the end, as the renderer does: a surplus before
+/// them doesn't hide the text a `Tf`, `TJ` or `Do` after it draws, or the image a `Do` draws.
+#[test]
+fn the_proof_reads_operands_from_the_end() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET",
+    );
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o");
+    let image_form =
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im1 8 0 R >> >>", b"q 50 0 0 12 10 98 cm (x) /Im1 Do Q");
+    for (content, spec) in [
+        (&b"BT (x) /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET"[..], Spec::default()),
+        (b"BT /F1 10 Tf 10 100 Td (x) [(SECRETVALUE)] TJ ET", Spec::default()),
+        (b"(x) /Fm1 Do", Spec { resources: "/XObject << /Fm1 7 0 R >>", extra: vec![form.clone()], ..Spec::default() }),
+        // An image under the mark, and one in a form under it.
+        (b"q 50 0 0 12 10 98 cm (x) /Im1 Do Q", Spec { resources: "/XObject << /Im1 7 0 R >>", extra: vec![image.clone()], ..Spec::default() }),
+        (b"(x) /Fm1 Do", Spec { resources: "/XObject << /Fm1 7 0 R >>", extra: vec![image_form.clone(), image.clone()], ..Spec::default() }),
+    ] {
+        let mut doc = marked_content(content, spec);
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
+/// The proof reads the text state's operands from the end too. In each case the text starts outside
+/// the region and only the operand after the surplus brings a glyph into it: char spacing, word
+/// spacing, horizontal scaling, leading with `T*`, rise, and the spacing `"` sets.
+#[test]
+fn the_proof_reads_the_text_states_operands_from_the_end() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for content in [
+        &b"BT /F1 10 Tf -60 100 Td (x) 70 Tc (AB) Tj ET"[..],
+        b"BT /F1 10 Tf -60 100 Td (x) 70 Tw (A B) Tj ET",
+        b"BT /F1 10 Tf -60 100 Td (x) 1500 Tz (AB) Tj ET",
+        b"BT /F1 10 Tf 10 200 Td (x) 100 TL T* (A) Tj ET",
+        b"BT /F1 10 Tf 10 200 Td (x) -100 Ts (A) Tj ET",
+        b"BT /F1 10 Tf -60 100 Td (x) 0 70 (AB) \" ET",
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
+/// An image a Type 3 glyph (one without resources of its own, drawing through the page's) draws
+/// after a surplus operand can't be placed, as one it draws without one can't: the region is
+/// unverifiable.
+#[test]
+fn an_image_a_type3_glyph_draws_after_a_surplus_operand_is_found() {
+    let spec = Spec {
+        resources: "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>",
+        extra: vec![
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+               /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+                .to_vec(),
+            stream("", b"10 0 d0 (x) /Im0 Do"),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+        ],
+        ..Spec::default()
+    };
+    let mut doc = open(build_with(b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET BT /T3 12 Tf 150 20 Td (a) Tj ET", spec));
+    mark(&mut doc, &[REGION]);
+    let (_, proof) = run(&mut doc);
+    assert_eq!(proof.entries[0].status, Status::Unverifiable, "{}", proof.to_text());
+}
+
 #[test]
 fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     // The word also stays on the page legitimately (so page text, the raw file and decoded

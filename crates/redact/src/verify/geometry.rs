@@ -188,7 +188,7 @@ impl Geo<'_> {
                     }
                 }
                 b"Do" => {
-                    let Some(entry) = op.name(0).and_then(|n| xobjects.get(n)) else { continue };
+                    let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let obj = self.doc.resolve(entry);
                     let Object::Stream(s) = &*obj else { continue };
                     match s.dict.name(b"Subtype") {
@@ -344,7 +344,7 @@ impl Geo<'_> {
             match op.op.as_slice() {
                 b"BI" => return Ok(true),
                 b"Do" => {
-                    let Some(entry) = op.name(0).and_then(|n| xobjects.get(n)) else { continue };
+                    let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
                     match x.dict.name(b"Subtype") {
                         Some(b"Image") => return Ok(true),

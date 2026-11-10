@@ -571,7 +571,7 @@ impl Walk {
                 Some(op)
             }
             b"cs" | b"CS" => {
-                if op.name(0) != Some(b"Pattern") {
+                if op.last_name() != Some(b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
@@ -656,10 +656,10 @@ impl Walk {
             }
             b"Tf" => self.select_font(doc, scope, op),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                    self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
         }
@@ -864,7 +864,8 @@ fn clean_replacements(
             if !op.is("BDC") || !affected.contains(&op.span.start) {
                 continue;
             }
-            let property = match op.operands.get(1) {
+            // The property list is the last operand, as the renderer reads it.
+            let property = match op.back(0) {
                 Some(Object::Name(name)) => properties.get(name).map(|p| doc.resolve(p)),
                 Some(p) => Some(doc.resolve(p)),
                 None => None,
@@ -874,7 +875,7 @@ fn clean_replacements(
                 for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
                     stripped |= dict.remove(key).is_some();
                 }
-                if stripped && let Some(property) = op.operands.get_mut(1) {
+                if stripped && let Some(property) = op.operands.last_mut() {
                     *property = Object::Dict(dict);
                     *changed = true;
                     report.replacement_text += 1;

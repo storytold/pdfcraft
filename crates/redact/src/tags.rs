@@ -52,7 +52,8 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
     for op in pdfcraft_content::parse(data).ops {
         match op.op.as_slice() {
             b"BDC" => {
-                let id = match op.operands.get(1) {
+                // The property list is the last operand, as the renderer reads it.
+                let id = match op.back(0) {
                     Some(Object::Name(n)) => resources.get(b"Properties").and_then(|p| {
                         let props = doc.resolve(p);
                         let prop = doc.resolve(props.as_dict()?.get(n)?);
@@ -86,9 +87,7 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
         }
         let draws = match op.op.as_slice() {
             b"Tj" | b"'" | b"\"" => op.operands.last().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty()),
-            b"TJ" => {
-                op.operands.first().and_then(Object::as_array).is_some_and(|a| a.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty())))
-            }
+            b"TJ" => op.back(0).and_then(Object::as_array).is_some_and(|a| a.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty()))),
             b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" | b"Do" | b"BI" => true,
             _ => false,
         };

@@ -151,7 +151,7 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
                 }
             }
             b"cs" | b"CS" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.last_name() {
                     used.colorspaces.insert(n.to_vec());
                 }
             }
@@ -166,17 +166,17 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
                 }
             }
             b"gs" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.last_name() {
                     used.extgstates.insert(n.to_vec());
                 }
             }
             b"Tf" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.name_back(1) {
                     used.fonts.insert(n.to_vec());
                 }
             }
             b"BDC" | b"DP" => {
-                if let Some(n) = op.name(1) {
+                if let Some(n) = op.last_name() {
                     used.properties.insert(n.to_vec());
                 }
             }
@@ -315,7 +315,7 @@ fn scan_content_stream(
             }
             b"gs" => {
                 apply_text_op(ctx, res, &op, &mut current_font);
-                if let Some(name) = op.name(0) {
+                if let Some(name) = op.last_name() {
                     scan_soft_mask(ctx, res, holder_ref, name, depth)?;
                 }
             }
@@ -338,12 +338,12 @@ fn scan_content_stream(
 fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
     match op.op.as_slice() {
         b"Tf" => {
-            if let Some(name) = op.name(0) {
+            if let Some(name) = op.name_back(1) {
                 *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
             }
         }
         b"gs" => {
-            if let Some(name) = op.name(0)
+            if let Some(name) = op.last_name()
                 && let Some((k, _)) = resolve_extgstate_font(ctx.doc, res, name)
             {
                 *current_font = Some(k);
@@ -477,7 +477,7 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
     while let Some(op) = ops.get(cursor) {
         let selected = match op.op.as_slice() {
             b"gs" => op
-                .name(0)
+                .last_name()
                 .and_then(|n| states.get(n))
                 .and_then(|s| doc.resolve(s).as_dict().and_then(|s| s.get(b"SMask").cloned()))
                 .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(Object::as_ref))),
@@ -584,11 +584,11 @@ pub(crate) fn prune_type3_from_resources(
     let mut drawn_font_names = HashSet::new();
     for op in &ops {
         if op.is("Tf") {
-            if let Some(name) = op.name(0) {
+            if let Some(name) = op.name_back(1) {
                 drawn_font_names.insert(name.to_vec());
             }
         } else if op.is("gs")
-            && let Some(name) = op.name(0)
+            && let Some(name) = op.last_name()
         {
             let extg = res_dict(doc, res, b"ExtGState");
             if let Some(font_obj) = extg.get(name).and_then(|state_obj| gs_font_object(doc, state_obj)) {
