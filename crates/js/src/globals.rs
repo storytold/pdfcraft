@@ -1,10 +1,10 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
-    Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
-    error, js_string,
+    Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
+    Source, error, js_string,
 };
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -177,6 +177,55 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
+/// Return a page box in Acrobat's rotated-user-space order: left, top, right, bottom.
+fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = arg(args, 0);
+    let name = if name.is_undefined() {
+        "Crop".to_string()
+    } else {
+        name.as_string().ok_or_else(|| error("getPageBox box name must be a string"))?.to_std_string_escaped()
+    };
+    let which = match name.as_str() {
+        "Media" | "MediaBox" => 0,
+        "Crop" | "CropBox" => 1,
+        "Bleed" | "BleedBox" => 2,
+        "Trim" | "TrimBox" => 3,
+        "Art" | "ArtBox" => 4,
+        _ => return Err(error("getPageBox box name must be Media, Crop, Trim, Bleed, or Art")),
+    };
+    let page_value = arg(args, 1);
+    let page = if page_value.is_undefined() {
+        0
+    } else {
+        if !page_value.is_number() {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        let page = page_value.to_number(ctx)?;
+        if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        page as usize
+    };
+    let (rect, rotation, crop) = {
+        let h = host(ctx)?.borrow();
+        let boxes = h.doc.page_boxes.get(page).ok_or_else(|| error("getPageBox page is outside the document"))?;
+        let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
+        (boxes[which], rotation, boxes[1])
+    };
+    let [x0, y0, x1, y1] = rect;
+    let [cx0, cy0, cx1, cy1] = crop;
+    let rotated = match rotation {
+        90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
+        180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
+        270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
+        _ => [x0 - cx0, y1 - cy0, x1 - cx0, y0 - cy0],
+    };
+    if !rotated.iter().all(|value| value.is_finite()) {
+        return Err(error("getPageBox returned non-finite coordinates"));
+    }
+    Ok(JsArray::from_iter(rotated.into_iter().map(JsValue::from), ctx).into())
+}
+
 /// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
 /// type one.
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
@@ -193,6 +242,149 @@ fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue
 fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     host(ctx)?.borrow_mut().console.clear();
     Ok(JsValue::undefined())
+}
+
+/// Recalculate fields in the document's `/CO` order against the writes already made by this
+/// script. A small depth cap stops calculate scripts from recursing forever.
+fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_CALCULATE_DEPTH: usize = 8;
+    let calculations = {
+        let shared = host(ctx)?;
+        let mut h = shared.borrow_mut();
+        if h.calculate_depth >= MAX_CALCULATE_DEPTH {
+            return Err(error("calculateNow recursion limit exceeded"));
+        }
+        h.calculate_depth += 1;
+        Arc::clone(&h.calculations)
+    };
+    let previous_event = match ctx.global_object().get(js_string!("event"), ctx) {
+        Ok(event) => event,
+        Err(error) => {
+            if let Ok(shared) = host(ctx) {
+                let mut h = shared.borrow_mut();
+                h.calculate_depth = h.calculate_depth.saturating_sub(1);
+            }
+            return Err(error);
+        }
+    };
+    let result = (|| {
+        for (name, script) in calculations.iter() {
+            {
+                let mut h = host(ctx)?.borrow_mut();
+                if h.calculate_steps >= super::run::MAX_CALCULATE_STEPS {
+                    return Err(error("calculateNow evaluation limit exceeded"));
+                }
+                h.calculate_steps = h.calculate_steps.saturating_add(1);
+            }
+            let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == *name).cloned() else { continue };
+            if let Some(why) = super::run::refuse(script) {
+                host(ctx)?.borrow_mut().print(format!("calculation script for {name} failed: {why}"));
+                continue;
+            }
+            let event = Event::field("Calculate", name, &field.value.first().cloned().unwrap_or_default());
+            let (object, _) = event_object(ctx, &event)?;
+            ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            let (fields_before, changed_before, formatted_before) = {
+                let h = host(ctx)?.borrow();
+                (Arc::clone(&h.fields), h.changed.clone(), h.formatted.clone())
+            };
+            if let Err(cause) = ctx.eval(Source::from_bytes(script)) {
+                let mut h = host(ctx)?.borrow_mut();
+                h.fields = fields_before;
+                h.changed = changed_before;
+                h.formatted = formatted_before;
+                h.print(format!("calculation script for {name} failed: {cause}"));
+                continue;
+            }
+            let rc = object.get(js_string!("rc"), ctx)?;
+            if !rc.to_boolean() {
+                continue;
+            }
+            let value = object.get(js_string!("value"), ctx)?;
+            let value = text(&value, ctx)?;
+            let shared = host(ctx)?;
+            let mut h = shared.borrow_mut();
+            if let Some((index, _)) = h.fields.iter().enumerate().find(|(_, f)| f.name == *name) {
+                let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
+                target.value = vec![value];
+                h.changed.insert(index);
+                h.formatted.insert(index);
+            }
+        }
+        Ok(JsValue::undefined())
+    })();
+    let restored = ctx.global_object().set(js_string!("event"), previous_event, true, ctx).map(|_| JsValue::undefined());
+    if let Ok(shared) = host(ctx) {
+        let mut h = shared.borrow_mut();
+        h.calculate_depth = h.calculate_depth.saturating_sub(1);
+    }
+    result.and(restored)
+}
+
+/// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+/// `AFSimple_Calculate(op, names)`, with the semantics of the native Simple calculation
+/// (`pdfcraft_forms::af::calculate`), so a total read right after `calculateNow()` is the one the
+/// commit path writes: a name also stands for every field under it (`b` sums `b.c` and `b.d`),
+/// each field counts its first value, and values are read as `AFMakeNumber` reads typed text
+/// (currency, `%`, group separators, a comma decimal separator), anything else counting as 0.
+fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_EXPANDED_VALUES: usize = 1 << 20;
+    let op = text(&arg(args, 0), ctx)?;
+    let names = strings(&arg(args, 1), ctx)?;
+    let values: Vec<f64> = {
+        let shared = host(ctx)?;
+        let h = shared.borrow();
+        let mut values = Vec::new();
+        for name in &names {
+            let prefix = format!("{name}.");
+            for f in h.fields.iter().filter(|f| f.name == *name || f.name.starts_with(&prefix)) {
+                if let Some(v) = f.value.first() {
+                    if values.len() >= MAX_EXPANDED_VALUES {
+                        return Ok(s("0"));
+                    }
+                    values.push(make_number(v).unwrap_or(0.0));
+                }
+            }
+        }
+        values
+    };
+    let result = match op.as_str() {
+        "SUM" => values.iter().sum(),
+        // An empty product is 0, as the native calculation has it, not 1.
+        "PRD" if values.is_empty() => 0.0,
+        "PRD" => values.iter().product(),
+        "AVG" if values.is_empty() => 0.0,
+        "AVG" => values.iter().sum::<f64>() / values.len() as f64,
+        "MIN" => values.iter().copied().fold(f64::INFINITY, f64::min),
+        "MAX" => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        _ => 0.0,
+    };
+    Ok(s(&if result.is_finite() { js_number(result) } else { "0".into() }))
+}
+
+/// `AFMakeNumber`'s reading of typed text, as `pdfcraft_forms::af::make_number` has it: currency
+/// symbols, spaces, `'` and `%` ignored, `(7)` negative, and a comma the decimal separator when
+/// it comes last (`1.234,56`) or is not followed by exactly three digits.
+fn make_number(s: &str) -> Option<f64> {
+    let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && !matches!(c, '$' | '€' | '£' | '¥' | '\'' | '%')).collect();
+    if t.is_empty() {
+        return None;
+    }
+    let neg = t.starts_with('(') && t.ends_with(')');
+    let t = t.trim_start_matches('(').trim_end_matches(')');
+    let normalized = match (t.rfind(','), t.rfind('.')) {
+        (Some(c), Some(d)) if c > d => t.replace('.', "").replace(',', "."),
+        (Some(c), None) if t.len() - c - 1 != 3 => t.replace(',', "."),
+        _ => t.replace(',', ""),
+    };
+    let v: f64 = normalized.parse().ok()?;
+    v.is_finite().then_some(if neg { -v } else { v })
+}
+
+/// A number as JavaScript prints it (integers without a fraction), as the native calculation
+/// writes it.
+fn js_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -233,14 +425,16 @@ const XFA_VERSION: f64 = 3.5;
 /// `numPages`, `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`,
 /// `display` and `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 10] = [
+    let globals: [(&str, usize, NativeFunction); 12] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
-        ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("calculateNow", 0, NativeFunction::from_fn_ptr(calculate_now)),
+        ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
+        ("getPageBox", 2, NativeFunction::from_fn_ptr(get_page_box)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
         ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
