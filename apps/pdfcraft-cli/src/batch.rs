@@ -15,6 +15,7 @@ const OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--dpi", takes_value: true },
     OptionSpec { name: "--language", takes_value: true },
     OptionSpec { name: "--ocr-all-pages", takes_value: false },
+    OptionSpec { name: "--log", takes_value: true },
 ];
 
 pub(super) fn run(args: &[String]) -> Result<(), CliError> {
@@ -56,6 +57,13 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     let mut auto = automation(args)?;
     let content = auto.call("doc_batch", &params).map_err(|e| e.to_string())?;
     let failed = content.iter().any(|c| matches!(c, pdfcraft_automation::Content::Json(v) if v["failed"].as_u64().is_some_and(|n| n > 0)));
+    if let Some(path) = flag(args, "--log") {
+        let log = content.iter().find_map(|c| match c {
+            pdfcraft_automation::Content::Json(v) => v["log"].as_str().map(str::to_owned),
+            _ => None,
+        });
+        std::fs::write(path, log.unwrap_or_default()).map_err(|e| format!("batch: cannot write --log {path}: {e}"))?;
+    }
     print_output(&auto, content, None)?;
     if failed { Err("batch: one or more files failed; see the JSON report".into()) } else { Ok(()) }
 }

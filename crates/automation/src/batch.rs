@@ -284,8 +284,8 @@ impl Automation {
                 }
             }
         }
-        let skipped = files.len().saturating_sub(completed + failed_count);
-        let escape = |text: &str| text.replace('\r', "\\r").replace('\n', "\\n");
+        let skipped = files.iter().filter(|file| file["status"] == "skipped").count();
+        let escape = |text: &str| text.replace('\\', "\\\\").replace('\r', "\\r").replace('\n', "\\n");
         let mut lines = Vec::new();
         for f in &files {
             let (Some(path), Some(status)) = (f.get("path").and_then(|v| v.as_str()), f.get("status").and_then(|v| v.as_str())) else {
@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
+--- END ===
     fn doc_batch_dry_run_lists_outputs_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("input")).unwrap();
@@ -434,13 +434,18 @@ mod tests {
             let escaped = input_dir.path().join("a\nb.pdf");
             std::fs::write(&escaped, b"broken").expect("escaped input");
             let escaped_str = escaped.to_str().expect("input path is UTF-8");
-            let args_value = json!({"steps":["optimize"],"paths":[escaped_str],"out_dir":out_str});
+            // A literal backslash followed by n must not log the same as a newline.
+            let literal = input_dir.path().join(r"a\nb.pdf");
+            std::fs::write(&literal, b"broken").expect("literal backslash input");
+            let literal_str = literal.to_str().expect("input path is UTF-8");
+            let args_value = json!({"steps":["optimize"],"paths":[escaped_str, literal_str],"out_dir":out_str});
             let args = Args(&args_value);
             let result = automation.doc_batch(&args).expect("batch should return a report for a newline path");
             let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
                 panic!("batch result should carry a plain-text per-file log: {result}");
             };
-            assert!(log.contains(r"a\nb.pdf"), "log should escape newlines in paths: {log}");
+            assert!(log.contains(r"a\nb.pdf: error"), "log should escape newlines in paths: {log}");
+            assert!(log.contains(r"a\\nb.pdf: error"), "log should escape a literal backslash: {log}");
             assert!(!log.contains("a\nb.pdf"), "log should not contain a raw newline in a path: {log}");
         }
     }

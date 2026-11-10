@@ -31,6 +31,26 @@ fn cli_batch_reports_partial_failure_and_continues_into_subfolders() {
 }
 
 #[test]
+fn cli_batch_writes_the_log_file_only_when_asked() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-batch-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("input")).unwrap();
+    std::fs::write(dir.join("input/broken.pdf"), b"broken").unwrap();
+    let base = ["batch", "input", "--steps", "optimize", "--out-dir", "out"];
+
+    let plain = Command::new(BIN).current_dir(&dir).args(base).output().unwrap();
+    assert!(!plain.status.success());
+    assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.path().extension().is_some_and(|x| x == "log")));
+
+    let log = dir.join("batch.log");
+    let logged = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log).output().unwrap();
+    assert!(!logged.status.success(), "a failed batch still exits with an error");
+    let text = std::fs::read_to_string(&log).expect("log file written for a failed batch");
+    assert!(text.contains("broken.pdf") && text.contains("error"), "{text}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cli_batch_rejects_bad_flags_before_creating_outputs() {
     for args in [
         vec!["batch", "--steps"],
