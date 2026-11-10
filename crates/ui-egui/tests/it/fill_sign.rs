@@ -426,6 +426,24 @@ fn the_border_is_one_button_in_the_bar_and_its_controls_a_popup() {
     assert_eq!(h.state().fill_text_border_shape, BorderShape::Oval);
     assert!(h.query_by_label("Border colour").is_some(), "choosing a shape leaves the popup open");
 
+    h.get_by_label("Red").click();
+    h.run_steps(4);
+    assert_eq!(h.state().fill_text_border_color, Some([0.89, 0.13, 0.13]));
+    assert!(h.query_by_label("1 pt").is_some(), "choosing a colour leaves the popup open");
+    h.get_by_label("Other colour…").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("1 pt").is_some(), "opening the colour picker leaves the popup open");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    // The picker holds 8-bit colour, so the colour it applies is the nearest one.
+    let applied = h.state().fill_text_border_color.expect("a colour of its own");
+    assert!(
+        applied.iter().zip([0.89, 0.13, 0.13]).all(|(a, b)| (a - b).abs() < 1.0 / 255.0),
+        "the picker starts from the current colour: {applied:?}"
+    );
+    assert!(h.query_by_label("1 pt").is_some(), "applying a picked colour leaves the popup open");
+    assert!(h.query_by_label("Apply").is_none(), "and closes the picker");
+
     in_column(&h, "Border: 1 pt");
     assert_eq!(h.get_by_label("Hotbar settings").rect().center().y, settings_y, "a border doesn't lengthen the bar");
     click(&mut h, 300.0, 400.0);
