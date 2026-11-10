@@ -2858,6 +2858,18 @@ evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_
 notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
 
 [[feature]]
+id = "organize.drag-pages-out"
+title = "Drag pages out of the window as a new PDF"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "partial"
+commands = []
+tools = ["page_extract"]
+evidence = ["crates/ui-egui/tests/it/organize_drag.rs::a_page_dragged_out_of_the_window_is_offered_as_a_file_and_stays_put", "crates/ui-egui/src/workflows/drag_out.rs::names_say_which_pages_the_file_holds", "crates/ui-egui/src/workflows/drag_out.rs::old_offered_files_are_removed_and_new_ones_kept"]
+notes = "Windows: a page drag from the Pages panel or the Organize grid that leaves the window becomes a system drag of the dragged pages as a PDF (as Extract Pages makes it, with unsaved edits), which a folder, the desktop or another program takes as a file; nothing moves in the document. Named after the document and pages (\"Plan (pages 3-5).pdf\"), written under the temporary folder's \"PdfCraft drags\", removed after an hour. Uses the drag crate for the system drag loop. Headless, page_extract writes the same file. Missing: macOS, Linux and the web build (the drag stays inside the window); the automated test simulates the pointer leaving, and the system drag was checked by hand on Windows 11."
+
+[[feature]]
 id = "organize.extract-separate-files"
 title = "Extract pages as separate files"
 area = "D"
