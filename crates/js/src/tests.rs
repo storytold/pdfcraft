@@ -1660,7 +1660,21 @@ $host.gotoURL("https://example.org")"#,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
         );
-        assert!(o.error.unwrap().contains("too long"));
+        assert!(o.abandoned && o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{o:?}");
+        // Stopped by its clock, a script keeps none of its changes, as when the caller stops
+        // waiting first: the outcome is the same whichever side notices. A loop adding rows
+        // until the clock stops it kept up to 1000 new rows when the script noticed first.
+        let o = crate::formcalc::run_formcalc_at(
+            "while (1) do table._row.addInstance(1) endwhile",
+            &ev,
+            &doc,
+            std::sync::Arc::new(form()),
+            false,
+            Limits { loop_iterations: u64::MAX, recursion: 32 },
+            Some(std::time::Duration::from_millis(50)),
+        );
+        assert!(o.abandoned && o.effects.is_empty() && o.notes.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{:?}", o.error);
         assert!(run_hostile_formcalc(&format!("{}1{}", "-".repeat(5000), "")).error.is_some());
         assert!(run_hostile_formcalc("var s = \"x\"\nfor i = 1 upto 100 do s = Concat(s, s) endfor\nLen(s)").error.unwrap().contains("too long"));
         assert!(run_hostile_formcalc("Space(1e12)").error.is_none());
@@ -1908,6 +1922,16 @@ mod session {
         slow.timeout = std::time::Duration::from_millis(200);
         let o = s.run(slow);
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
+        // Whether the script's clock or the session's wait notices first, a FormCalc loop
+        // adding rows until the time is up is abandoned with none of its rows, and the session
+        // is dead after it.
+        let mut s = XfaSession::new(XfaDoc::default());
+        let mut slow = script("while (1) do table._row.addInstance(1) endwhile", true, "form1[0].page1[0].go[0]", "click");
+        slow.limits = Limits { loop_iterations: u64::MAX, recursion: 32 };
+        slow.timeout = std::time::Duration::from_millis(200);
+        let o = s.run(slow);
+        assert!(o.abandoned && o.effects.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(s.dead().is_some_and(|w| w.contains("abandoned")));
     }
 }
 

@@ -678,6 +678,8 @@ fn printer_options_come_from_the_ppd() {
     assert!(spool::parse_ppd("*OpenUI *Broken\n*Broken A/B\n").is_empty(), "unclosed or malformed blocks are skipped");
 }
 
+/// A driver option's current choice is read from `lpoptions`, and a job passes `lp` only the
+/// driver options that are well-formed PPD keywords, never the ones PdfCraft sets itself.
 #[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
@@ -698,6 +700,53 @@ fn printer_option_defaults_and_job_arguments() {
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
 
+/// CUPS is asked to turn the sheets (`orientation-requested` 4) when every one is landscape, a
+/// booklet's included; portrait, mixed, square and empty jobs say nothing (#2713).
+#[test]
+fn landscape_sheets_ask_cups_to_turn_the_page() {
+    let landscape = |size: (f64, f64)| Sheet { size, ..Sheet::default() };
+    let ask = Some(("orientation-requested".to_string(), "4".to_string()));
+    // A landscape Size sheet, and a booklet (always landscape sheets), are both turned.
+    let page = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&page), ask);
+    let booklet =
+        layout(&[(200.0, 300.0); 4], &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }))
+            .unwrap();
+    assert_eq!(cups_orientation(&booklet), ask);
+    // Portrait sheets, mixed jobs and nothing at all say nothing.
+    let portrait = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&portrait), None);
+    assert_eq!(cups_orientation(&[landscape((792.0, 612.0)), landscape((612.0, 792.0))]), None, "a mixed job is not turned as a whole");
+    assert_eq!(cups_orientation(&[landscape((612.0, 612.0))]), None, "a square sheet has no orientation");
+    assert_eq!(cups_orientation(&[]), None);
+    // `lp` is given it, among the job's other options.
+    let job = Job { options: ask.into_iter().collect(), ..Job::default() };
+    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+}
+
+/// Both submission paths add the orientation through `add_cups_orientation`: after the job's
+/// other options, never over an orientation the job already names (a driver choice), so `lp` is
+/// never given it twice, and not on Windows, whose print ticket sets it.
+#[test]
+fn a_job_that_names_its_orientation_keeps_it() {
+    let landscape = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    let media = ("media".to_string(), "Letter".to_string());
+    let mut options = vec![media.clone()];
+    add_cups_orientation(&mut options, &landscape);
+    let turned = if cfg!(windows) { vec![media] } else { vec![media, ("orientation-requested".to_string(), "4".to_string())] };
+    assert_eq!(options, turned);
+    // Added again, it isn't doubled.
+    add_cups_orientation(&mut options, &landscape);
+    assert_eq!(options, turned);
+    // A choice already made stands, however its name is cased: CUPS reads option names without
+    // regard to case, so a second one would replace it.
+    for key in ["orientation-requested", "Orientation-Requested", "ORIENTATION-REQUESTED"] {
+        let mut chosen = vec![(key.to_string(), "5".to_string())];
+        add_cups_orientation(&mut chosen, &landscape);
+        assert_eq!(chosen, [(key.to_string(), "5".to_string())], "{key}");
+    }
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod cups_options {
     use crate::spool;
@@ -710,7 +759,9 @@ mod cups_options {
     /// The child process stands in for lpoptions, recording its real arguments.
     #[test]
     fn stand_in_for_lpoptions() {
-        let Some(record) = std::env::var_os(RECORD) else { return };
+        let Some(record) = std::env::var_os(RECORD) else {
+            return;
+        };
         let args: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(1).collect();
         std::fs::write(std::path::Path::new(&record).join("args"), args.join("\n")).unwrap();
         let answer = std::env::var(ANSWER).unwrap();
@@ -828,6 +879,13 @@ mod cups_options {
             long_queue.as_str(),
             long_queue_instance.as_str(),
             long_instance.as_str(),
+            // A destination cannot be an argument: `lpoptions` would take these as options.
+            "-Office",
+            "-E",
+            "-",
+            "--",
+            "Office/-l",
+            "Office/--",
         ] {
             assert!(
                 spool::printer_options_via_within(destination, &dir, command(&dir, "InputSlot: *Auto"), LIMIT, "en").is_empty(),
@@ -835,6 +893,120 @@ mod cups_options {
             );
             assert!(!dir.join("args").exists(), "{destination:?}: rejected before spawning");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// #4699: when the queue's PPD is not readable, build the option list from `lpoptions -l`
+    /// instead of returning an empty dialog.
+    #[test]
+    fn unreadable_ppd_falls_back_to_lpoptions_list() {
+        let dir = folder();
+        // No PPD file: the PPD path is unreadable, just as on Arch where cupsd keeps it at
+        // 0640 root:cups.
+        let lpoptions_out = "MediaType/Media Type: *Stationery PhotographicGlossy StationeryInkjet Com.brotherBp71\ncupsPrintQuality/cupsPrintQuality: Draft *Normal High\nPageSize/Page Size: A4 Letter\nDuplex/Duplex: *None DuplexNoTumble\nno colon on this line\nEmpty/Empty:\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["MediaType", "cupsPrintQuality"], "PageSize is handled by the dialog and must be skipped");
+
+        let media_type = options.iter().find(|o| o.key == "MediaType").unwrap();
+        assert_eq!(media_type.label, "Media Type");
+        assert_eq!(media_type.default, "Stationery");
+        assert_eq!(
+            media_type.choices,
+            [
+                ("Stationery".into(), "Stationery".into()),
+                ("PhotographicGlossy".into(), "PhotographicGlossy".into()),
+                ("StationeryInkjet".into(), "StationeryInkjet".into()),
+                ("Com.brotherBp71".into(), "Com.brotherBp71".into()),
+            ]
+        );
+
+        let quality = options.iter().find(|o| o.key == "cupsPrintQuality").unwrap();
+        assert_eq!(quality.label, "cupsPrintQuality");
+        assert_eq!(quality.default, "Normal");
+        assert_eq!(quality.choices, [("Draft".into(), "Draft".into()), ("Normal".into(), "Normal".into()), ("High".into(), "High".into())]);
+
+        // The starring decides the fallback default, wherever the starred choice sits.
+        let lpoptions_out = "MediaType/Media Type: Plain *Glossy Matte\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].default, "Glossy", "the starred choice is the fallback default");
+        assert_eq!(options[0].choices, [("Plain".into(), "Plain".into()), ("Glossy".into(), "Glossy".into()), ("Matte".into(), "Matte".into())]);
+
+        // A PPD path that exists but cannot be opened at all, for a reason other than NotFound:
+        // ENOTDIR fails for root as well, where a 0o000 file would still be readable.
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+        let options = spool::printer_options_via_within("Office", &blocker, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1, "an unopenable PPD falls back as an unreadable one does");
+
+        // A readable PPD whose *OpenUI blocks yield nothing (driverless queues): the fallback still
+        // fills the list, and the PPD's translations apply to it.
+        std::fs::write(dir.join("Empty.ppd"), b"*PPD-Adobe: \"4.3\"\n*cupsLanguages: \"it\"\n*it.Translation MediaType/Tipo di supporto: \"\"\n")
+            .unwrap();
+        let options = spool::printer_options_via_within("Empty", &dir, command(&dir, lpoptions_out), LIMIT, "it");
+        assert_eq!(options.len(), 1, "a readable PPD without options falls back too");
+        assert_eq!(options[0].label, "Tipo di supporto", "the readable PPD still translates the fallback list");
+
+        // A queue instance reaches lpoptions as the destination, and falls back the same way.
+        let options = spool::printer_options_via_within("Office/Instance", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        let recorded = std::fs::read_to_string(dir.join("args")).unwrap();
+        assert!(recorded.contains("Office/Instance"), "the instance is the destination: {recorded}");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// CUPS prints a custom option's template instead of its choices — `Custom`, `Custom.PASSCODE`,
+    /// `Custom.STRING`, `Custom.WIDTHxHEIGHT`: the dialog has no field to collect the value, so
+    /// offering the template would send that literal text to the driver.
+    #[test]
+    fn custom_value_templates_are_not_offered() {
+        let dir = folder();
+        let lpoptions_out = "Pin/Pin: *Custom.PASSCODE\nJobPassword/Job Password: 1234 *5678 Custom.PASSWORD\nScale/Scale: *Custom.REAL\nSolo/Solo: *Custom\nMediaType/Media Type: *Plain Custom.Glossy Matte\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["JobPassword", "MediaType"], "an option whose choices are all templates is dropped");
+
+        let password = options.iter().find(|o| o.key == "JobPassword").unwrap();
+        assert_eq!(password.choices, [("1234".into(), "1234".into()), ("5678".into(), "5678".into())]);
+        assert_eq!(password.default, "5678", "a template is never a choice");
+
+        let media_type = options.iter().find(|o| o.key == "MediaType").unwrap();
+        assert_eq!(media_type.choices, [("Plain".into(), "Plain".into()), ("Matte".into(), "Matte".into())]);
+        assert_eq!(media_type.default, "Plain");
+
+        // A starred template is never offered as a choice, and never replaced by an invented
+        // default: the printer keeps the template, so standing the first real choice in its
+        // place would show a value the job does not use.
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, "Pin/Pin: *Custom.PASSCODE 1234\n"), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].choices, [("1234".into(), "1234".into())]);
+        assert_eq!(options[0].default, "", "an uncollectable default is not a choice");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `list_group()` prints `Keyword/Text:` and then bare choice keywords, so the text may carry a
+    /// colon while the choices cannot: the split belongs at the last one.
+    #[test]
+    fn an_option_text_may_contain_a_colon() {
+        let dir = folder();
+        let lpoptions_out = "Media/Supporto: Tipo: *A B\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].key, "Media");
+        assert_eq!(options[0].label, "Supporto: Tipo", "the text keeps its colon");
+        assert_eq!(options[0].choices, [("A".into(), "A".into()), ("B".into(), "B".into())], "no choice is invented from the text");
+        assert_eq!(options[0].default, "A");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_listing_is_capped_the_way_the_ppd_is() {
+        let dir = folder();
+        let listing: String = (0..500).map(|i| format!("Option{i}/Option {i}: *A B\n")).collect();
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, &listing), LIMIT, "en");
+        assert_eq!(options.len(), 400, "the fallback honours the same cap as parse_ppd");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -936,8 +1108,24 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("A0", "iso_a0_841x1189mm"),
             ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
             ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+            ("Folio (8.5 x 13 in)", "na_foolscap_8.5x13in"),
+            ("F4 (210 x 330 mm)", "om_folio_210x330mm"),
         ]
     );
+}
+
+/// #4777: Folio (8.5 × 13 in) and F4 (210 × 330 mm) presets are offered, fed by their
+/// PWG 5101.1 media names (`na_foolscap_8.5x13in` and `om_folio_210x330mm`) and laid out at their
+/// proper dimensions.
+#[test]
+fn folio_and_f4_paper_sizes_are_available() {
+    let folio = PAPERS.iter().position(|(name, _)| *name == "Folio (8.5 x 13 in)").expect("Folio present");
+    assert_eq!(cups_media(folio), Some("na_foolscap_8.5x13in"));
+    assert_eq!(PAPERS[folio].1, (612.0, 936.0));
+
+    let f4 = PAPERS.iter().position(|(name, _)| *name == "F4 (210 x 330 mm)").expect("F4 present");
+    assert_eq!(cups_media(f4), Some("om_folio_210x330mm"));
+    assert_eq!(PAPERS[f4].1, (595.28, 935.43));
 }
 
 /// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
@@ -1332,6 +1520,52 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
+}
+
+/// #2630: a Windows installation without the print DLLs is told so, before anything calls into
+/// a delay-loaded DLL that is not there.
+#[cfg(windows)]
+#[test]
+fn missing_print_dlls_are_named() {
+    use crate::spool::{PRINT_DLLS, missing_print_dll_in};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[0]));
+    std::fs::write(dir.join(PRINT_DLLS[0]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[1]));
+    std::fs::write(dir.join(PRINT_DLLS[1]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2630: on a Windows without the print DLLs, the public entry points answer before any call
+/// into the delay-loaded DLLs: no printers, and printing refused naming the DLL. The job names a
+/// printer that doesn't exist and the bytes aren't a PDF, so a missing guard fails here with
+/// another error rather than reaching a real printer.
+#[cfg(windows)]
+#[test]
+fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printers, submit, submit_with_progress};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+    let job = crate::spool::Job { printer: Some("PdfCraft test: no such printer".into()), ..Default::default() };
+    let named = |r: Result<String, crate::PrintError>| match r {
+        Err(crate::PrintError::Spool(m)) => m.contains(PRINT_DLLS[0]),
+        _ => false,
+    };
+    assert!(named(submit(b"not a PDF", &job)), "submit names the missing DLL");
+    let mut called = false;
+    assert!(named(submit_with_progress(b"not a PDF", &job, &mut |_, _| called = true)), "submit_with_progress names it");
+    assert!(!called, "no sheet reached a spooler");
+    // Not only an empty list, which a machine without printers gives anyway: the backend wasn't asked.
+    PRINTER_BACKEND_CALLS.with(|c| c.set(0));
+    assert!(printers().is_empty(), "no printers are listed");
+    assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

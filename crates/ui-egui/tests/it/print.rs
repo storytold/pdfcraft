@@ -264,6 +264,67 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
 }
 
+/// #2713, #3739: Print to a CUPS queue tells it when every sheet runs landscape, so a
+/// landscape sheet (an A4 landscape page, or a 6 × 4 label, laid out on Letter) is turned onto
+/// the portrait paper instead of printed unrotated at 100% and cut off at the paper's edge. A
+/// driver choice for the orientation stands and isn't sent twice.
+#[test]
+fn printing_landscape_sheets_tells_cups_to_turn_them() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex};
+    let s = pdfcraft_engine::Session::new();
+    let bytes = s.create_blank(842.0, 595.0, 2).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("landscape.pdf", None, bytes.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let jobs: Arc<Mutex<Vec<spool::Job>>> = Arc::default();
+    let sent = Arc::clone(&jobs);
+    h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &spool::Job| {
+        sent.lock().unwrap().push(job.clone());
+        Ok(String::new())
+    }));
+    // Print to the queue; `choose` sets the driver's choices once the dialog has its printer.
+    let print = |h: &mut Harness<'static, PdfCraftApp>, choose: &dyn Fn(&mut pdfcraft_ui_egui::PrintDraft)| -> spool::Job {
+        let before = jobs.lock().unwrap().len();
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.printer = Some("Test_Queue".into());
+        h.run_steps(2);
+        choose(&mut h.state_mut().print_draft);
+        h.run_steps(1);
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() > before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+    };
+    let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
+    // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
+    let job = print(&mut h, &|_| {});
+    assert_eq!(orientation(&job), if cfg!(windows) { vec![] } else { vec!["4".to_string()] }, "{:?}", job.options);
+    // A driver choice for the orientation goes instead, once.
+    let job = print(&mut h, &|d| {
+        let choice = spool::PrinterOption {
+            key: "orientation-requested".into(),
+            label: "Orientation".into(),
+            group: "General".into(),
+            choices: vec![("4".into(), "Landscape".into()), ("5".into(), "Reverse landscape".into())],
+            default: "4".into(),
+        };
+        d.driver_options = Some(("Test_Queue".into(), vec![choice]));
+        d.driver_choices.insert("orientation-requested".into(), "5".into());
+    });
+    assert_eq!(orientation(&job), ["5"], "{:?}", job.options);
+}
+
 /// Properties… shows the printer driver's own options (CUPS) and sends only those changed.
 #[test]
 fn print_dialog_shows_the_printer_driver_options() {
@@ -808,7 +869,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     h.get_by_label("A4").click();
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, a4);
-    // Only paper should be added to persistence; these choices still belong to this session.
+    // Paper persists; copies, pages and orientation belong to this job (grayscale is remembered, #2001).
     let draft = &mut h.state_mut().print_draft;
     draft.copies = 5;
     draft.which = pdfcraft_ui_egui::PrintWhich::Range;
@@ -825,8 +886,10 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
-    assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+    // Grayscale is one of the preferences remembered across restarts (#2001); copies, pages and
+    // orientation are this job's and are not saved.
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, grayscale: true, ..Default::default() };
+    assert_eq!(app.print_draft, expected, "only the paper and the remembered preferences persist");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
@@ -944,4 +1007,224 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// An app restored from `saved` settings (if any), with a form open and its Print dialog shown.
+fn print_opened_with(saved: Option<&str>) -> PdfCraftApp {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    if let Some(saved) = saved {
+        app.restore(saved);
+    }
+    app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    app.open_print();
+    app
+}
+
+/// The choices that describe how an office prints (two-sided, grayscale, collate, page sizing,
+/// comments & forms, a booklet's binding side, Print as image and its resolution) survive a
+/// restart; the ones that describe one job (copies, pages, layout, orientation) start from the
+/// defaults each time Print opens, in the same session too (ISO 32000-2 Table 147 initialises them
+/// per document) (#2001, #6392).
+#[test]
+fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
+    use pdfcraft_engine::print::{Binding, BookletSubset, Content, LABEL_PAPER, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool::Duplex};
+    use pdfcraft_ui_egui::{PrintHandling, PrintWhich};
+    let open = print_opened_with;
+    let mut app = open(None);
+    let d = &mut app.print_draft;
+    d.duplex = Some(Duplex::LongEdge);
+    d.grayscale = true;
+    d.collate = false;
+    d.size = SizeMode::Custom(62.5);
+    d.custom_scale = 62.5;
+    d.content = Content::Document;
+    d.binding = Binding::Right;
+    d.as_image = true;
+    d.dpi = 600.0;
+    d.copies = 5;
+    d.which = PrintWhich::Range;
+    d.range = "2-3".into();
+    d.subset = Subset::Even;
+    d.reverse = true;
+    d.handling = PrintHandling::Booklet;
+    d.booklet_subset = BookletSubset::FrontOnly;
+    d.per_sheet = 16;
+    (d.custom_grid, d.cols, d.rows) = (true, 3, 5);
+    d.order = PageOrder::CutStack;
+    d.orientation = Orientation::Landscape;
+    let saved = app.persist();
+
+    // Opened again in the same session: this job's choices, the layout's own options included,
+    // start over; the rest carry on.
+    app.open_print();
+    let d = &app.print_draft;
+    assert_eq!((d.copies, d.which, d.range.as_str(), d.subset, d.reverse), (1, PrintWhich::All, "", Subset::All, false));
+    assert_eq!((d.handling, d.orientation), (PrintHandling::Size, Orientation::Auto));
+    assert_eq!((d.booklet_subset, d.per_sheet, d.order), (BookletSubset::BothSides, 2, PageOrder::Horizontal));
+    let fresh = pdfcraft_ui_egui::PrintDraft::default();
+    assert_eq!((d.custom_grid, d.cols, d.rows), (false, fresh.cols, fresh.rows));
+    assert_eq!((d.duplex, d.grayscale, d.collate, d.size, d.binding), (Some(Duplex::LongEdge), true, false, SizeMode::Custom(62.5), Binding::Right));
+
+    // A job printed on label stock: the next one is back on the paper Label replaced (#3564).
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    app.print_draft.paper = a4;
+    app.print_draft.set_handling(PrintHandling::Label);
+    assert_eq!(app.print_draft.paper, LABEL_PAPER);
+    app.open_print();
+    assert_eq!((app.print_draft.handling, app.print_draft.paper), (PrintHandling::Size, a4));
+
+    let again = open(Some(&saved));
+    let d = &again.print_draft;
+    assert_eq!(d.duplex, Some(Duplex::LongEdge));
+    assert!(d.grayscale);
+    assert!(!d.collate);
+    assert_eq!(d.size, SizeMode::Custom(62.5));
+    assert_eq!(d.custom_scale, 62.5);
+    assert_eq!(d.content, Content::Document);
+    assert_eq!(d.binding, Binding::Right, "a booklet's binding side is kept (#2707)");
+    assert!(d.as_image, "Print as image is kept, for a printer that needs pictures (#6392)");
+    assert_eq!(d.dpi, 600.0, "and its resolution");
+    assert_eq!(d.copies, 1, "copies are this job's");
+    assert_eq!(d.which, PrintWhich::All, "the page choice is this job's");
+    assert_eq!(d.range, "");
+}
+
+/// Settings are untrusted: an unknown name, a scale outside the dialog's range or a resolution it
+/// doesn't offer keeps the default (#2001, #6392).
+#[test]
+fn print_preferences_that_dont_parse_keep_the_defaults() {
+    use pdfcraft_engine::print::{Binding, Content, SizeMode, spool::Duplex};
+    let open = print_opened_with;
+    let garbage = r#"{"print": {"duplex": "sideways", "grayscale": "yes", "collate": null, "size": "custom", "custom_scale": 1e9, "comments_forms": 7, "binding": "up", "as_image": 1, "dpi": 72}}"#;
+    let d = open(Some(garbage)).print_draft;
+    assert!(!d.as_image);
+    assert_eq!(d.dpi, 300.0, "a resolution the dialog doesn't offer keeps the default");
+    assert_eq!(d.duplex, None, "an unknown name keeps the printer's own default");
+    assert!(!d.grayscale);
+    assert!(d.collate);
+    assert_eq!(d.custom_scale, 100.0, "a scale outside 1..=1000 keeps the default");
+    assert_eq!(d.size, SizeMode::Custom(100.0), "custom is honoured with the default scale");
+    assert_eq!(d.content, Content::DocumentAndMarkups);
+    assert_eq!(d.binding, Binding::Left);
+    let d = open(Some(r#"{"print": 5}"#)).print_draft;
+    assert_eq!(d.size, SizeMode::Fit);
+    // Leaving two-sided to the printer is remembered as such, over a different earlier choice.
+    let d = open(Some(r#"{"print": {"duplex": "printer"}}"#)).print_draft;
+    assert_eq!(d.duplex, None);
+    let d = open(Some(r#"{"print": {"duplex": "off"}}"#)).print_draft;
+    assert_eq!(d.duplex, Some(Duplex::Off));
+}
+
+/// #2001: each printer keeps the paper, sizing and two-sided choice it last printed with, across
+/// a restart, and the printer printed to last is chosen again. A label printer keeps 4 × 6 in
+/// at Actual size, single-sided, while the office printer keeps A4 at Fit, two-sided.
+#[test]
+fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
+    use pdfcraft_engine::print::spool::{Duplex, Job, Printer};
+    use pdfcraft_engine::print::{LABEL_PAPER, PAPERS, SizeMode};
+    use std::sync::{Arc, Mutex};
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let listed = Arc::new(Mutex::new(vec!["Office", "D520BT_Z"]));
+    let jobs: Arc<Mutex<Vec<Job>>> = Arc::default();
+    let attach = |h: &mut Harness<'static, PdfCraftApp>| {
+        let source = listed.clone();
+        h.state_mut().printer_source = Some(Arc::new(move || {
+            let names = source.lock().map(|n| n.clone()).unwrap_or_default();
+            names
+                .into_iter()
+                .map(|name| Printer { name: name.into(), default: name == "Office", two_sided: None, description: String::new() })
+                .collect()
+        }));
+        let sent = jobs.clone();
+        h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &Job| {
+            sent.lock().unwrap().push(job.clone());
+            Ok(String::new())
+        }));
+    };
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().dialog = None;
+        assert!(h.state_mut().execute("print.dialog"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().print_draft.printers_loading);
+        h.run_steps(2);
+    };
+    let print = |h: &mut Harness<'static, PdfCraftApp>| -> Job {
+        let before = jobs.lock().unwrap().len();
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() > before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+    };
+    let setup = |h: &Harness<'static, PdfCraftApp>| {
+        let d = &h.state().print_draft;
+        (d.printer.clone(), d.paper, d.size, d.duplex)
+    };
+    let label = (Some("D520BT_Z".to_string()), LABEL_PAPER, SizeMode::Actual, Some(Duplex::Off));
+    let office = (Some("Office".to_string()), a4, SizeMode::Fit, Some(Duplex::LongEdge));
+
+    let mut h = harness();
+    attach(&mut h);
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office"), "the system default first");
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("D520BT_Z".into());
+        d.printer_picked = true;
+        d.paper = LABEL_PAPER;
+        d.size = SizeMode::Actual;
+        d.duplex = Some(Duplex::Off);
+    }
+    h.run_steps(2);
+    assert_eq!(print(&mut h).printer.as_deref(), Some("D520BT_Z"));
+    open(&mut h);
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Office".into());
+        d.paper = a4;
+        d.size = SizeMode::Fit;
+        d.duplex = Some(Duplex::LongEdge);
+    }
+    h.run_steps(2);
+    assert_eq!(print(&mut h).printer.as_deref(), Some("Office"));
+
+    // Choosing the label printer in the dialog brings back what it printed with.
+    open(&mut h);
+    assert_eq!(setup(&h), office, "the same printer keeps this session's choices");
+    h.get_by_value("Office").click();
+    h.run_steps(2);
+    h.get_by_label("D520BT_Z").click();
+    h.run_steps(2);
+    assert_eq!(setup(&h), label);
+    let job = print(&mut h);
+    assert_eq!(job.duplex, Some(Duplex::Off));
+
+    // After a restart the label printer, printed to last, is chosen again with its setup, not
+    // the system default; choosing the office printer brings back A4, Fit and two-sided.
+    let saved = h.state().persist();
+    let mut r = harness_with_settings(Some(saved.clone()));
+    attach(&mut r);
+    open(&mut r);
+    assert_eq!(setup(&r), label, "the label printer and its 4 × 6 in at Actual size, single-sided");
+    r.get_by_value("D520BT_Z").click();
+    r.run_steps(2);
+    r.get_by_label("Office (default)").click();
+    r.run_steps(2);
+    assert_eq!(setup(&r), office);
+
+    // A remembered printer that is gone falls back to the system default, with its own setup.
+    *listed.lock().unwrap() = vec!["Office"];
+    let mut gone = harness_with_settings(Some(saved));
+    attach(&mut gone);
+    open(&mut gone);
+    assert_eq!(setup(&gone), office);
 }
