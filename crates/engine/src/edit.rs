@@ -155,12 +155,14 @@ pub enum Edit {
         left: Option<f64>,
         top: Option<f64>,
     },
-    /// Destinations panel ▸ Rename. Links and bookmarks that use the old name keep it.
+    /// Destinations panel ▸ Rename: where it goes is kept, and the document's own links, bookmarks
+    /// and GoTo actions that named it take the new name. Refused when the new name is taken.
     RenameDestination {
         name: String,
         new_name: String,
     },
-    /// Destinations panel ▸ Delete.
+    /// Destinations panel ▸ Delete. The document's own links, bookmarks and GoTo actions that named
+    /// it go to where it went instead.
     DeleteDestination {
         name: String,
     },
