@@ -413,12 +413,19 @@ impl Walker<'_> {
     /// else empty; elsewhere it is its data value (as saved, as scripts read it) or its template default.
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
-        // The field as scripts changed its properties (its validation, pictures, its tree).
+        // The field as scripts changed its properties (its validation, pictures, its tree):
+        // read again only for changes the live form takes from it; for others its tree is
+        // enough.
         let changed;
+        let mut props = None;
         let f = match self.ov.props.get(&som) {
-            Some(sets) => {
+            Some(sets) if crate::restyle::live_field_changes(sets) => {
                 changed = crate::restyle::restyled_field(f, sets);
                 &changed
+            }
+            Some(sets) => {
+                props = Some(Arc::new(crate::restyle::apply_props(&f.common.props, sets).0));
+                f
             }
             None => f,
         };
@@ -447,7 +454,7 @@ impl Walker<'_> {
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
-            props: Arc::clone(&f.common.props),
+            props: props.unwrap_or_else(|| Arc::clone(&f.common.props)),
         }
     }
 
@@ -480,7 +487,9 @@ impl Walker<'_> {
     /// The tree of properties of the object at `som` as scripts changed it, else `props`.
     fn props_at(&self, named: bool, som: &str, node: &Node) -> Arc<Props> {
         match self.sets(named, som) {
-            Some(sets) => Arc::clone(&crate::restyle::restyled(node, sets).common().props),
+            // The tree is what restyling would give it (the changes applied to it), without
+            // reading the object again.
+            Some(sets) => Arc::new(crate::restyle::apply_props(&node.common().props, sets).0),
             None => Arc::clone(&node.common().props),
         }
     }
