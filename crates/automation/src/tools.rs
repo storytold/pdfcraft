@@ -213,7 +213,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_rename",
             "Rename a document's file",
-            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is read-only or in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes).",
+            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes, a full path within the system limit).",
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),

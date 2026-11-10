@@ -4,8 +4,9 @@
 //!
 //! The rules are the same on every system, so a file renamed on one keeps working when the folder
 //! is synced to another: no path separators or `< > : " | ? *`, no control characters, no Windows
-//! device names (`CON`, `NUL`, `COM1`…), no name ending in a dot or a space, at most 255
-//! bytes of UTF-8 and 255 UTF-16 code units. The file keeps its extension: a name typed without it gets it back.
+//! device names (`CON`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9` and the superscript-digit forms),
+//! no name ending in a dot or a space, at most 255 bytes of UTF-8 and 255 UTF-16 code units, and
+//! a full path within this system's limit. The file keeps its extension: a name typed without it gets it back.
 
 use std::path::{Path, PathBuf};
 
@@ -24,8 +25,6 @@ pub enum RenameError {
     Invalid(String),
     /// Another file already has that name.
     Exists(String),
-    /// The file is marked read-only.
-    ReadOnly,
     /// The operating system refused (in use by another program, no permission, …).
     Failed(String),
 }
@@ -38,7 +37,6 @@ impl std::fmt::Display for RenameError {
             Self::Empty => write!(f, "the name is empty"),
             Self::Invalid(why) => write!(f, "{why}"),
             Self::Exists(name) => write!(f, "a file named {name} already exists in that folder"),
-            Self::ReadOnly => write!(f, "the file is read-only"),
             Self::Failed(why) => write!(f, "the file could not be renamed: {why}"),
         }
     }
@@ -49,10 +47,67 @@ impl std::error::Error for RenameError {}
 /// Characters no file name may hold on Windows, refused everywhere.
 const RESERVED_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 /// Windows device names, refused as a name's stem on every system.
-const DEVICE_NAMES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
-    "LPT6", "LPT7", "LPT8", "LPT9",
+const DEVICE_NAMES: [&str; 33] = [
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM0",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "COM\u{b9}",
+    "COM\u{b2}",
+    "COM\u{b3}",
+    "LPT0",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+    "LPT\u{b9}",
+    "LPT\u{b2}",
+    "LPT\u{b3}",
+    "CONIN$",
+    "CONOUT$",
+    "CLOCK$",
 ];
+/// The longest full path this system takes, where it can be known: Windows' `MAX_PATH` (260 with
+/// the closing NUL, in UTF-16 units; a `\\?\` path is exempt), Linux's `PATH_MAX` (4096 bytes) and
+/// macOS's (1024 bytes). Elsewhere there is no limit to check.
+#[cfg(windows)]
+const MAX_PATH_LEN: Option<usize> = Some(259);
+#[cfg(target_os = "macos")]
+const MAX_PATH_LEN: Option<usize> = Some(1023);
+#[cfg(target_os = "linux")]
+const MAX_PATH_LEN: Option<usize> = Some(4095);
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+const MAX_PATH_LEN: Option<usize> = None;
+
+/// The length of `path` in the unit this system limits it in.
+fn path_len(path: &Path) -> usize {
+    #[cfg(windows)]
+    {
+        path.as_os_str().encode_wide().count()
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().len()
+    }
+}
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 /// The longest file name the common file systems take: 255 bytes of UTF-8 (ext4, APFS) and 255
 /// UTF-16 code units (NTFS), so a name is checked against both, never by its characters.
 const MAX_NAME_LEN: usize = 255;
@@ -85,6 +140,14 @@ pub fn new_file_name(current: &Path, typed: &str) -> Result<String, RenameError>
     if name.len() > MAX_NAME_LEN || name.encode_utf16().count() > MAX_NAME_LEN {
         return Err(RenameError::Invalid(format!("a file name can be at most {MAX_NAME_LEN} bytes")));
     }
+    if let Some(limit) = MAX_PATH_LEN {
+        let full = current.with_file_name(&name);
+        // Windows' `\\?\` prefix lifts the limit.
+        let extended = cfg!(windows) && full.to_string_lossy().starts_with(r"\\?\");
+        if !extended && path_len(&full) > limit {
+            return Err(RenameError::Invalid(format!("the full path would be over this system's limit of {limit} characters: use a shorter name")));
+        }
+    }
     Ok(name)
 }
 
@@ -107,6 +170,39 @@ pub fn rename_target(current: &Path, typed: &str) -> Result<Option<PathBuf>, Ren
     Ok(Some(target))
 }
 
+/// Whether `a` and `b` are one file: a rename that only changes letter case on a case-insensitive
+/// file system.
+fn same_file(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// Move `old` to `new`, never replacing a file that already has that name (`AlreadyExists`).
+///
+/// `std::fs::rename` replaces its target on every system and std has no no-replace rename, so the
+/// move is a hard link (which fails atomically when `new` exists) and then the removal of `old`;
+/// if `old` can't be removed the new name is taken away again, so a failure never leaves both. Where
+/// hard links are not available (FAT/exFAT, some network shares, or any other error that means the
+/// link can't be made) it falls back to checking and then renaming: a file created in between is
+/// replaced, a window that remains only there. The same file under another letter case is plainly
+/// renamed (nothing to replace).
+fn move_no_replace(old: &Path, new: &Path) -> std::io::Result<()> {
+    if same_file(old, new) {
+        return std::fs::rename(old, new);
+    }
+    match std::fs::hard_link(old, new) {
+        Ok(()) => std::fs::remove_file(old).inspect_err(|_| {
+            let _ = std::fs::remove_file(new);
+        }),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotFound) => Err(e),
+        Err(_) => {
+            if new.symlink_metadata().is_ok() {
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            std::fs::rename(old, new)
+        }
+    }
+}
+
 impl Session {
     /// Rename the file of document `id` to `typed` (see [`rename_target`]), in its own folder. The
     /// document must have a file and no unsaved changes. Returns the new path; the document keeps
@@ -120,18 +216,17 @@ impl Session {
         let Some(target) = rename_target(&current, typed)? else {
             return Ok(current.to_string_lossy().into_owned());
         };
-        if std::fs::metadata(&current).is_ok_and(|m| m.permissions().readonly()) {
-            return Err(RenameError::ReadOnly);
-        }
-        // `rename_target` checked that the name is free, but this move still replaces a file that
-        // appeared in between (a sync client, another program): the window is small, and std has no
-        // no-replace rename on every system.
-        std::fs::rename(&current, &target).map_err(|e| {
-            RenameError::Failed(match e.kind() {
-                std::io::ErrorKind::PermissionDenied => "it is open in another program, or you don't have permission".into(),
-                std::io::ErrorKind::NotFound => "it is no longer where it was opened from".into(),
-                _ => e.to_string(),
-            })
+        // Whether the file itself is marked read-only is not checked: renaming needs write access
+        // to the folder, not to the file, and the system says so when it refuses.
+        // `rename_target` checked that the name is free, but a file may appear under it before the
+        // move (a sync client, another program): `move_no_replace` refuses to replace it.
+        move_no_replace(&current, &target).map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                RenameError::Exists(target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+            }
+            std::io::ErrorKind::PermissionDenied => RenameError::Failed("it is open in another program, or you don't have permission".into()),
+            std::io::ErrorKind::NotFound => RenameError::Failed("it is no longer where it was opened from".into()),
+            _ => RenameError::Failed(e.to_string()),
         })?;
         let path = target.to_string_lossy().into_owned();
         if let Ok(doc) = self.doc_mut(id) {
@@ -204,16 +299,64 @@ mod tests {
         assert!(Path::new(&cased).exists());
         assert_eq!(session.get(id).unwrap().name, "Second.pdf");
 
+        // A read-only file in a writable folder renames, as it does in the file manager.
         let mut perms = std::fs::metadata(&cased).unwrap().permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(&cased, perms.clone()).unwrap();
-        assert_eq!(session.rename_file(id, "third"), Err(RenameError::ReadOnly));
+        let third = session.rename_file(id, "third");
+        let moved = third.clone().unwrap_or_else(|_| cased.clone());
         #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
-        std::fs::set_permissions(&cased, perms).unwrap();
+        std::fs::set_permissions(&moved, perms).unwrap();
+        assert!(third.is_ok(), "{third:?}");
+        session.rename_file(id, "second").unwrap();
 
         session.doc_mut(id).unwrap().dirty = true;
         assert_eq!(session.rename_file(id, "third"), Err(RenameError::Unsaved));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_appears_under_the_new_name_is_never_replaced() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-rename-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (old, new) = (dir.join("old.pdf"), dir.join("new.pdf"));
+        std::fs::write(&old, b"mine").unwrap();
+        // Created after rename_target's check, before the move.
+        std::fs::write(&new, b"theirs").unwrap();
+        let err = move_no_replace(&old, &new).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&new).unwrap(), b"theirs", "the other file is untouched");
+        assert_eq!(std::fs::read(&old).unwrap(), b"mine", "and nothing was moved");
+        std::fs::remove_file(&new).unwrap();
+        move_no_replace(&old, &new).unwrap();
+        assert!(!old.exists(), "the old name is gone");
+        assert_eq!(std::fs::read(&new).unwrap(), b"mine");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "one name is left");
+        // The same file under another letter case is renamed, not refused.
+        move_no_replace(&new, &dir.join("NEW.pdf")).unwrap();
+        assert_eq!(std::fs::read(dir.join("NEW.pdf")).unwrap(), b"mine");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn more_device_names_and_a_path_too_long_are_refused() {
+        for device in ["COM0", "lpt0", "COM\u{b9}", "com\u{b2}.txt", "LPT\u{b3}"] {
+            assert!(matches!(name(device), Err(RenameError::Invalid(_))), "{device:?}");
+        }
+        assert!(name("COM10").is_ok());
+        if let Some(limit) = MAX_PATH_LEN {
+            let folder = Path::new(if cfg!(windows) { "C:\\docs" } else { "/docs" });
+            let mut dir = folder.to_path_buf();
+            while path_len(&dir) < limit - 60 {
+                dir.push("d".repeat(50));
+            }
+            let current = dir.join("report.pdf");
+            assert!(new_file_name(&current, "short").is_ok());
+            let long = "x".repeat(limit - path_len(&dir) - ".pdf".len());
+            assert!(matches!(new_file_name(&current, &long), Err(RenameError::Invalid(_))), "one past the limit");
+            assert!(new_file_name(&current, &long[1..]).is_ok(), "exactly at the limit");
+        }
     }
 }
