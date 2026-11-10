@@ -56,16 +56,21 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Lock the placed signatures into the page (#2149).
+    LockSignatures,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
-/// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// snapshot is, then pages cut at the renderer's limits, then the offer to lock a signature just
+/// placed, then the signature status bar, a form's scripts having been turned off, security,
+/// forms and warnings.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
+    lock_offer: bool,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -117,6 +122,29 @@ pub(super) fn notices(
         });
         if close {
             return Some(Notice::Close);
+        }
+    }
+    // Content cut at the renderer's limits (#623): what is missing is not visible, so the page
+    // is named in a bar of its own, which the signature, form and security bars below can't
+    // replace and dismissing them doesn't hide. Dismissing it covers the pages cut so far: a
+    // page found cut later shows it again.
+    if view.cut_pages.iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
+        cut_pages_bar(view, ui, t);
+    }
+    // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
+    // lock it into the page now. `lock_offer` is false for a digitally signed document.
+    if lock_offer && !view.lock_offer_dismissed {
+        let mut lock = false;
+        notice_bar(ui, t, "lock", t.accent_text, tl!("Signature added. Others can move it until it's locked.").to_string(), |ui| {
+            if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                view.lock_offer_dismissed = true;
+            }
+            if crate::widgets::pill_button(ui, tl!("Lock now"), true).clicked() {
+                lock = true;
+            }
+        });
+        if lock {
+            return Some(Notice::LockSignatures);
         }
     }
     if let Some((icon, color, template, arg)) = signed {
@@ -240,6 +268,33 @@ pub(super) fn notices(
         return Some(Notice::HideSecured);
     }
     open_security.then_some(Notice::Security).or(toggled)
+}
+
+/// The bar naming the pages whose content was cut at the renderer's limits (#623).
+fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui, t: &Tokens) {
+    let Some(&first) = view.cut_pages.iter().next() else { return };
+    let page = first.saturating_add(1).to_string();
+    let n = view.cut_pages.len();
+    let text = if n == 1 {
+        crate::i18n::fmt(
+            tl!("Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and only part of its text can be found or copied."),
+            &[("page", &page)],
+        )
+    } else {
+        crate::i18n::fmt(
+            tl!(
+                "{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and only part of their text can be found or copied."
+            ),
+            &[("n", &n.to_string()), ("page", &page)],
+        )
+    };
+    let mut dismiss = false;
+    notice_bar(ui, t, "triangle-alert", t.accent_text, text, |ui| {
+        dismiss = icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked();
+    });
+    if dismiss {
+        view.cut_notice_dismissed.extend(view.cut_pages.iter().copied());
+    }
 }
 
 /// One notice bar: an icon and a message on the left, `buttons` (added right to left) on the

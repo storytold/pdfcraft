@@ -1,5 +1,26 @@
 use super::*;
 
+/// What [`crate::reachable_objects`] gives is what a full save keeps: not an object nothing refers to, nor one
+/// a reference only dangles at, and a ring of references ends.
+#[test]
+fn what_is_reachable_is_what_a_full_save_keeps() {
+    let mut doc = Document::new_empty();
+    let root = doc.root().unwrap();
+    let kept = doc.add(Object::Int(7));
+    let dangling = ObjRef::new(4_000, 0);
+    let list = doc.add(Object::Null);
+    let ring = doc.add(Object::Array(vec![Object::Ref(list)]));
+    doc.set(list, Object::Array(vec![Object::Ref(kept), Object::Ref(ring), Object::Ref(dangling)]));
+    let orphan = doc.add(Object::Int(8));
+    doc.update_dict(root, |d| d.set(b"Held".to_vec(), Object::Ref(list))).unwrap();
+    let found = crate::reachable_objects(&doc).unwrap();
+    assert!([root, kept, list, ring].iter().all(|r| found.contains(&r.num)));
+    assert!(!found.contains(&orphan.num) && !found.contains(&dangling.num));
+    let saved = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let holds = |n: i64| saved.scan_objects().any(|(_, o)| matches!(*o, Object::Int(v) if v == n));
+    assert!(holds(7) && !holds(8));
+}
+
 std::thread_local! {
     /// How many times `Document::scan_for` read the file on this thread.
     pub(super) static FILE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -28,6 +49,67 @@ fn what_a_scan_of_the_file_did_not_find_is_remembered() {
     let clone = doc.clone();
     assert!(clone.try_get(3).is_err());
     assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "a clone has the same file");
+}
+
+/// An object found by a scan of the file, because its cross-reference offset is wrong, has its
+/// indirect `/Length` resolved as at the right offset. Unresolved, a stream ending in a misspelt
+/// `endstream` (`endstrea`) was searched on into a later object's `endstream`, and took that
+/// object's header and data as its own.
+#[test]
+fn a_scanned_stream_resolves_its_indirect_length() {
+    let mut out = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Length 4 0 R >>\nstream\nHELLO\nendstrea",
+            "5",
+            "<< /Length 5 >>\nstream\nWORLD\nendstream",
+        ],
+        "/Root 1 0 R",
+    );
+    // Point object 3's entry at the catalog, so only the scan finds it.
+    let at = |needle: &[u8], out: &[u8]| out.windows(needle.len()).position(|w| w == needle).unwrap();
+    let catalog = format!("{:010} 00000 n ", at(b"1 0 obj", &out));
+    let entry = at(format!("{:010} 00000 n ", at(b"3 0 obj", &out)).as_bytes(), &out);
+    out.splice(entry..entry + catalog.len(), catalog.bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let stream = doc.try_get(3).unwrap();
+    let Object::Stream(s) = &*stream else { panic!("stream expected: {stream:?}") };
+    assert_eq!(&s.raw[..], b"HELLO");
+}
+
+/// A scan of the file resolves only so many indirect `/Length` values. Each header that starts
+/// with the sought number is parsed, and a `/Length` naming an object the table cannot place scans
+/// the file for that one: with a hundred such headers, each naming another misplaced object, one
+/// lookup read the whole file a hundred and one times.
+#[test]
+fn a_scan_of_the_file_resolves_a_bounded_number_of_lengths() {
+    const HEADERS: u32 = 100;
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let catalog = out.len();
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let pages = out.len();
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n");
+    // Object 3 is defined only by headers inside this string, each with its own misplaced /Length.
+    out.extend_from_slice(b"4 0 obj (\n");
+    for k in 0..HEADERS {
+        out.extend_from_slice(format!("3 0 obj << /Length {} 0 R >> stream\nX\nendstream endobj\n", 10 + k).as_bytes());
+    }
+    out.extend_from_slice(b") endobj\n");
+    let size = 10 + HEADERS;
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for num in 1..size {
+        let at = if num == 2 { pages } else { catalog };
+        out.extend_from_slice(format!("{at:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    let three = doc.try_get(3).unwrap();
+    assert!(matches!(&*three, Object::Stream(_)), "{three:?}");
+    let scans = FILE_SCANS.with(std::cell::Cell::get);
+    assert!(scans <= 1 + super::state::ScanLengths::MAX as usize, "{scans} scans of the file");
 }
 
 /// An object can be nothing but a reference to another. A chain of them is followed, and one that

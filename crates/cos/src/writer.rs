@@ -789,13 +789,21 @@ fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
     }
 }
 
-/// Keep an existing `/ID`, or create one (two equal 16-byte strings, §14.4).
+/// Keep any existing two-element `/ID` array as it is, even a malformed one such as `[<> <>]` or `[1 2]` (an ordinary
+/// save preserves what it doesn't understand; Save as PDF/A replaces or completes it), or create one with
+/// [`new_file_id`] when there is none or it isn't a two-element array.
 fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     if matches!(trailer.get(b"ID"), Some(Object::Array(a)) if a.len() == 2) {
         return;
     }
+    trailer.set(b"ID".to_vec(), new_file_id(content, opts.id_seed));
+}
+
+/// A new file identifier for a file whose bytes are `content` (ISO 32000-1 14.4): an array of
+/// two equal 16-byte strings, the same for the same content and `seed`.
+pub fn new_file_id(content: &[u8], seed: u64) -> Object {
     // FNV-1a over a sample of the content and the seed: stable, dependency-free.
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ opts.id_seed;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
     for b in content.iter().step_by((content.len() / 4096).max(1)).chain(content.iter().rev().take(64)) {
         h ^= *b as u64;
         h = h.wrapping_mul(0x0100_0000_01b3);
@@ -804,7 +812,7 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     id.extend_from_slice(&h.to_be_bytes());
     id.extend_from_slice(&h.rotate_left(29).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
     let s = Object::String(PdfString { bytes: id, hex: true });
-    trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
+    Object::Array(vec![s.clone(), s])
 }
 
 /// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not

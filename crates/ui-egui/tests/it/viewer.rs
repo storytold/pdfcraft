@@ -181,7 +181,8 @@ fn find_shortcuts_advance_and_retreat_matches() {
     assert_eq!(n, 15);
     // Surrender text edit focus so canvas shortcut handler receives key events.
     h.state_mut().views[0].find.as_mut().unwrap().focus = false;
-    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("find-input")));
+    let find_input = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.surrender_focus(find_input));
     h.run_steps(2);
     let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
     // ⌘G advances to next match.
@@ -654,6 +655,24 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
 }
 
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). Typed in the page
+/// box, "(n)" goes to the nth page whatever its label, as print ranges take it, while a bare
+/// number is still a label first. On these pages (i, ii, 1, 2, 3) "1" is the third page and
+/// "(1)" the first; a position past the end, or anything else in parentheses, leaves the page.
+#[test]
+fn page_label_input_takes_a_position_in_parentheses() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.run_steps(3);
+    for (typed, page, displayed) in [("(1)", 0, "i"), ("1", 2, "1"), ("(4)", 3, "2"), ("( 2 )", 1, "ii"), ("(9)", 1, "ii"), ("(x)", 1, "ii")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
+}
+
 #[test]
 fn page_label_input_preserves_literal_whitespace_before_trimmed_lookup() {
     use pdfcraft_render::{DocInfo, PageInfo};
@@ -1055,6 +1074,122 @@ fn marquee_zoom_and_snapshot() {
     h.run_steps(4);
     let after = h.state().views[i].zoom;
     assert!(after > before * 2.0, "{before} → {after}");
+}
+
+/// Print a selected area: the area Snapshot copied stays outlined with a small menu under it;
+/// Print area… opens Print on just that area (Fit to paper), and Save as image… writes a PNG.
+#[test]
+fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    h.state_mut().system_clipboard = false;
+    assert!(h.state_mut().execute("edit.snapshot"));
+    drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
+    h.run_steps(2);
+    let (page, area) = h.state().views[i].area_pick.expect("the copied area is kept");
+    assert_eq!(page, 0);
+    assert!(area[2] - area[0] > 90.0 && area[3] - area[1] > 40.0, "{area:?}");
+    // Save as image… writes the copied picture as a PNG.
+    let dir = std::env::temp_dir().join(format!("pdfcraft-area-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    h.state_mut().save_override = Some(dir.join("area.png").to_string_lossy().into_owned());
+    h.get_by_label("Save as image…").click();
+    h.run_steps(3);
+    assert!(std::fs::read(dir.join("area.png")).expect("written").starts_with(b"\x89PNG"));
+    // Print area… opens Print on that area alone.
+    h.get_by_label("Print area…").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
+    assert_eq!(h.state().print_draft.which, PrintWhich::Area);
+    h.get_by_label_contains("Selected area (page 1,");
+    h.state_mut().print_draft.printer = None;
+    h.state_mut().save_override = Some(dir.join("area.pdf").to_string_lossy().into_owned());
+    h.run_steps(2);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).expect("saved"))).unwrap();
+    assert_eq!(pdfcraft_model::pages(&out).len(), 1, "one sheet for the area");
+    // The next Print is for pages again.
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // Another snapshot keeps its area; another tool puts it away.
+    drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
+    h.run_steps(2);
+    assert!(h.state().views[i].area_pick.is_some());
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    assert!(h.state().views[i].area_pick.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5716: what a snapshot holds doesn't depend on how far the page is zoomed out.
+#[test]
+fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().system_clipboard = false;
+    let mut sizes = Vec::new();
+    for zoom in ["25", "100"] {
+        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.run_steps(2);
+        // The text line of the page, as a marquee would give it.
+        sizes.push(h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot"));
+    }
+    assert_eq!(sizes[0], sizes[1], "the same pixels at either zoom");
+    assert_eq!(sizes[0], (688, 146), "165 × 35 pt at 300 ppi");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
+
+    // Zoomed in past the minimum, a snapshot has every pixel the screen shows, however far.
+    let ppp = h.ctx.pixels_per_point();
+    for zoom in [400.0_f32, 1600.0] {
+        h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+        h.run_steps(2);
+        let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
+        let on_screen = (165.0 * zoom / 100.0 * pdfcraft_ui_egui::canvas::PT * ppp).ceil() as u32;
+        assert!(w.abs_diff(on_screen) <= 1, "{w} pixels at {zoom}%, {on_screen} on screen");
+    }
+}
+
+/// #5716: at 300 ppi this page is more than the renderer draws in one tile, which would cut off
+/// the side the snapshot was taken for. A 2000 pt square with a black mark in its far corner.
+#[test]
+fn a_snapshot_of_a_large_page_reaches_its_far_corner() {
+    let stream = "0 0 0 rg 1900 0 100 100 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{stream}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        stream.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("large.pdf", None, pdf.into_bytes()).unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let (w, hgt) = h.state_mut().snapshot(i, 0, [0.0, 0.0, 2000.0, 2000.0]).expect("a snapshot");
+    assert!(w <= 4096 && hgt <= 4096 && w == hgt, "{w} × {hgt}");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
+    assert!(at(w * 98 / 100, hgt * 98 / 100) < 100, "the mark in the far corner is in it");
+    assert!(at(w / 2, hgt / 2) > 200, "and the page around it is white");
 }
 
 #[test]

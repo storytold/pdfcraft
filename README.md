@@ -331,7 +331,7 @@ Edits stay in memory, undoable, until `doc_save`. Saving to the same file append
 
 Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
 
-Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, and on macOS, Linux and FreeBSD one that another user owns or can read or write. The app doesn't start if it can't write the file.
+Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, or one that another user owns, or that another user or a group such as Administrators can read or write: on macOS, Linux and FreeBSD by its owner and mode (the app writes it with mode 600), on Windows by its owner and access list (the app gives it one with only you and SYSTEM on it). The app doesn't start if it can't write the file. On Windows, cmd.exe doesn't expand `~`: use `%USERPROFILE%\.pdfcraft-control.json` there.
 
 ```sh
 pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
@@ -472,11 +472,14 @@ Installers and executables are code-signed.
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.
+Windows doesn't offer the portable copy as a default PDF app on its own, since it registers nothing;
+`portable.txt` has the PowerShell lines that register it for your user only, and how to undo them.
 
 The MSI installs for your account only by default, without administrator privileges. Choose
 "Everyone on this computer" on its first page, or pass `ALLUSERS=1` from an elevated terminal, to install
 for all users. It adds "Edit with PdfCraft"
-to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
+and "Combine files in PdfCraft" (select several PDFs: they land in the Combine files tab of the
+running PdfCraft) to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
 images (.png .jpg .jpeg .tif .tiff .gif .bmp .jp2 .j2k .jpx) in File Explorer (on Windows 11, under
 "Show more options"), without changing which app opens them by default. For unattended deployment
 without a desktop shortcut (add `ALLUSERS=1`, from an elevated terminal, for an all-users install):
@@ -488,7 +491,7 @@ msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCU
 | Property | `=0` leaves out |
 |---|---|
 | `INSTALLDESKTOPSHORTCUT` | the desktop shortcut |
-| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" on PDF files |
+| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" and "Combine files in PdfCraft" on PDF files |
 | `INSTALLIMAGECONTEXTMENU` | "Create PDF with PdfCraft…" on images |
 
 All three are on for a first install. An upgrade keeps what the installed version has: a shortcut
