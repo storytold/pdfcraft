@@ -28,6 +28,35 @@ pub(crate) struct Hotbar {
     /// The Toolbar size slider is being adjusted with the keyboard (until it loses focus).
     #[serde(skip)]
     keyboard_sizing: bool,
+    /// The pass the Hotbar tools window was last drawn on.
+    #[serde(skip)]
+    picker_shown: Option<u64>,
+}
+
+impl Hotbar {
+    /// The Hotbar tools window is over the pages: open, and drawn on the last pass. Read mode, full
+    /// screen, Organize and a document that hides the toolbars don't draw the hotbar, and a window
+    /// they hide holds no keys.
+    pub(crate) fn picker_over_pages(&self, ctx: &egui::Context) -> bool {
+        self.picker_open && self.picker_shown.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
+    }
+
+    /// Closes the Hotbar tools window when the hotbar is `hidden` on this pass (Read mode or full
+    /// screen, which a native menu's click may have turned on just now), or the last pass didn't
+    /// draw it (Organize, or a document that hides the toolbars). Left open, it would hold the keys of the pass that hides it, and come
+    /// back over the pages on the pass that shows the hotbar again, after that pass's page keys
+    /// had been read without it.
+    pub(crate) fn close_hidden_picker(&mut self, ctx: &egui::Context, hidden: bool) {
+        if self.picker_open && (hidden || !self.picker_over_pages(ctx)) {
+            self.close_picker();
+        }
+    }
+
+    /// Closes the Hotbar tools window.
+    pub(crate) fn close_picker(&mut self) {
+        self.picker_open = false;
+        self.picker_shown = None;
+    }
 }
 
 impl Default for Hotbar {
@@ -45,6 +74,7 @@ impl Default for Hotbar {
             picker_open: false,
             picker_drag_pos: None,
             keyboard_sizing: false,
+            picker_shown: None,
         }
     }
 }
@@ -119,7 +149,7 @@ impl Hotbar {
 fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) -> bool {
     let settings = ui
         .push_id("hotbar-settings", |ui| {
-            icons::button(ui, "settings", cell, false, tl!("Hotbar settings")).on_hover_text(tl!("Hotbar settings / add tools"))
+            icons::labeled_button(ui, "settings", cell, false, tl!("Hotbar settings"), tl!("Hotbar settings / add tools"))
         })
         .inner;
     if settings.clicked() {
@@ -581,7 +611,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     let mut bar = std::mem::take(&mut app.hotbar);
     bar.normalize();
     let t = Tokens::get(&ctx);
-    let id = egui::Id::unique("quick-bar");
+    let id = app.panes.area_id("quick-bar");
     let full_side = bar.full_side && bar.dock.is_some();
     let bounds = if full_side { area } else { area.shrink(10.0) };
     if let Some(side) = bar.dock.clone() {
@@ -913,6 +943,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
         data.insert_temp(egui::Id::unique("custom-hotbar"), shown.response.rect.size());
     });
     bar.picker_open = picker_open;
+    bar.picker_shown = picker_open.then(|| ctx.cumulative_pass_nr());
     app.hotbar = bar;
     if let Some(id) = run {
         app.execute(id);

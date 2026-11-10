@@ -10,12 +10,13 @@ use crate::check_refresh_panic;
 use crate::edit::{EditCtx, check_permission, run_edit};
 use crate::history::{Keys, MAX_UNDO, Scope, keys_after, scope_of, uses_scripts};
 use crate::{
-    BookmarkPage, BookmarkRow, CombineSource, Combined, DataFormat, DocId, Document, Edit, EditError, Hidden, ImageResolution,
-    LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart, StatusCaptions, SummarySort,
-    TrustStore, XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, carry_verdict_marks, comment_list, comment_summary, decode_text,
-    display_bytes, display_config, guard, info_fields, js, local_utc_offset, note_warnings, open_source, open_source_with, optimize, outline_rows,
-    parse_ymd, print, print_raster, render_threads, scan_colours, set_default_layer_state, shown_under_redactions, signatures_of, source_kind,
-    sync_xfa_state, undrawn_notices, use_layer_choices, writable, xfa, xfa_sync_datasets,
+    BookmarkPage, BookmarkRow, CombineSource, Combined, DataFormat, DocId, Document, Edit, EditError, Hairlines, HairlinesFixed, Hidden,
+    ImageResolution, LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart,
+    StatusCaptions, SummarySort, TrustStore, XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, carry_verdict_marks, comment_list,
+    comment_summary, decode_text, display_bytes, display_config, guard, info_fields, js, local_utc_offset, note_warnings, open_source,
+    open_source_with, optimize, outline_rows, parse_ymd, print, print_layer_states, print_raster, render_threads, scan_colours,
+    set_default_layer_state, shown_under_redactions, signatures_of, source_kind, sync_xfa_state, undrawn_notices, use_layer_choices, writable, xfa,
+    xfa_sync_datasets,
 };
 
 mod editing;
@@ -44,6 +45,9 @@ pub struct Session {
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     pub(crate) date_language: Option<String>,
+    /// Highlight fields, as the viewer shows it: what forms' scripts read as
+    /// `app.runtimeHighlight` (off by default, as in a session without a viewer).
+    pub(crate) field_highlight: bool,
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,

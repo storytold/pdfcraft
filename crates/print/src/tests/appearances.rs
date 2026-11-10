@@ -85,6 +85,44 @@ fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     objects.as_dict().unwrap().get(name).unwrap().as_ref().unwrap()
 }
 
+/// Existing Link artwork prints as document content only when its flags allow printing.
+#[test]
+fn printable_link_appearance_survives_vector_print() {
+    for flags in [0, 2, 4, 6, 5] {
+        for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+            let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+            doc.update_dict(annot, |d| {
+                d.set(b"Subtype".to_vec(), Object::name("Link"));
+                d.set(b"F".to_vec(), Object::Int(flags));
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let expected = flags & 4 != 0 && flags & 2 == 0 && content != Content::FormFieldsOnly;
+            let printed = render(impose(&doc, &print_settings(content)).unwrap());
+            let color = if expected { [0, 255, 0, 255] } else { [255, 255, 255, 255] };
+            assert_eq!(pixel(&printed, 30, 70), color, "flags={flags}, content={content:?}");
+            let mut raster_source = doc.clone();
+            keep_printed(&mut raster_source, content);
+            let page = &pdfcraft_model::pages(&raster_source)[0];
+            let annots = raster_source.resolve(page.dict.get(b"Annots").unwrap());
+            assert_eq!(annots.as_array().unwrap().len(), usize::from(expected), "raster flags={flags}, content={content:?}");
+            assert_eq!(saved(&doc), before, "source remains unchanged");
+        }
+    }
+    for subtype in ["Link", "Popup"] {
+        let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+        doc.update_dict(annot, |d| {
+            d.set(b"Subtype".to_vec(), Object::name(subtype));
+            if subtype == "Link" {
+                d.remove(b"AP");
+            }
+        })
+        .unwrap();
+        let printed = render(impose(&doc, &print_settings(Content::DocumentAndMarkups)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "{subtype} must not acquire an appearance");
+    }
+}
+
 /// Printing keeps occupied page resource names and distinct annotation appearances intact,
 /// whether the page resources are direct or inherited from the page tree.
 #[test]
@@ -202,6 +240,97 @@ fn missing_subtype_appearance_survives_vector_print() {
     pdfcraft_cos::serialize(&Object::Dict(actual), &mut actual_bytes);
     pdfcraft_cos::serialize(&Object::Dict(expected), &mut expected_bytes);
     assert_eq!(actual_bytes, expected_bytes);
+}
+
+/// Appearance coordinates are independent of page units: a large BBox or Matrix can require
+/// placement coefficients far below four decimal places even on an ordinary 100-point page.
+#[test]
+fn annotation_placement_preserves_small_transform_coefficients() {
+    let (control, _, _) = widget_fixture(Some(Object::name("Form")), None);
+    let control = render(saved(&control));
+    for scale in [1.0, 4096.0, 75000.0] {
+        for scaled_matrix in [false, true] {
+            let (mut doc, ap, widget) = widget_fixture(Some(Object::name("Form")), None);
+            let mut form = doc.get(ap).as_dict().unwrap().clone();
+            let coordinates = if scaled_matrix { 1.0 } else { scale };
+            form.set(b"BBox".to_vec(), numbers(&[0.0, 0.0, 20.0 * coordinates, 10.0 * coordinates]));
+            if scaled_matrix {
+                form.set(b"Matrix".to_vec(), numbers(&[scale, 0.0, 0.0, scale, 7.0, -13.0]));
+            }
+            doc.set(
+                ap,
+                Object::Stream(Stream::flate(form, format!("/Ink cs 0 1 0 scn 0 0 {} {} re f", 20.0 * coordinates, 10.0 * coordinates).as_bytes())),
+            );
+            for (subtype, content) in [
+                ("Widget", Content::Document),
+                ("Widget", Content::FormFieldsOnly),
+                ("Square", Content::DocumentAndMarkups),
+                ("Stamp", Content::DocumentAndStamps),
+            ] {
+                doc.update_dict(widget, |d| d.set(b"Subtype".to_vec(), Object::name(subtype))).unwrap();
+                let before = saved(&doc);
+                let source = render(before.clone());
+                assert!(source.rgba == control.rgba, "equivalent source, scale={scale}, matrix={scaled_matrix}, {subtype}");
+                let printed = impose(&doc, &print_settings(content)).unwrap();
+                let reopened = Document::open(Arc::new(printed.clone())).unwrap();
+                assert_eq!(pdfcraft_model::pages(&reopened).len(), 1);
+                let printed = render(printed);
+                assert_eq!(pixel(&printed, 30, 70), [0, 255, 0, 255], "scale={scale}, matrix={scaled_matrix}, {subtype}");
+                if content != Content::FormFieldsOnly {
+                    assert!(printed.rgba == source.rgba, "scale={scale}, matrix={scaled_matrix}, {subtype}");
+                }
+                // Check the serialized placement too: sub-pixel translation rounding may be
+                // invisible at 72 dpi while still moving the appearance's physical corners.
+                let page = &pdfcraft_model::pages(&reopened)[0];
+                let page_form = reopened.get(xobject(&reopened, &page.dict, b"P0"));
+                let Object::Stream(page_form) = &*page_form else { panic!("page form") };
+                let parsed = pdfcraft_content::parse(&page_form.decoded().unwrap());
+                assert_eq!(parsed.skipped, 0);
+                let matrices: Vec<_> = parsed.ops.iter().filter(|op| op.is("cm")).collect();
+                assert_eq!(matrices.len(), 1);
+                let placement = Matrix(matrices[0].nums::<6>().unwrap());
+                let (x, y) = if scaled_matrix { (7.0, -13.0) } else { (0.0, 0.0) };
+                for ((x, y), expected) in [(placement.apply(x, y), (10.0, 20.0)), (placement.apply(x + 20.0 * scale, y + 10.0 * scale), (50.0, 40.0))]
+                {
+                    assert!((x - expected.0).abs() < 1e-10 && (y - expected.1).abs() < 1e-10, "corner ({x}, {y}) != {expected:?}");
+                }
+                assert_eq!(saved(&doc), before, "printing preserves the source");
+            }
+        }
+    }
+}
+
+#[test]
+fn unusable_appearance_geometry_keeps_page_artwork() {
+    let (mut control, _, _) = widget_fixture(Some(Object::name("Form")), None);
+    let page = pdfcraft_model::pages(&control)[0].obj;
+    control
+        .update_dict(page, |d| {
+            d.remove(b"Annots");
+        })
+        .unwrap();
+    let control = render(saved(&control));
+    for (bbox, matrix) in [
+        (None, None),
+        (Some(numbers(&[0.0, 0.0, 20.0])), None),
+        (Some(numbers(&[0.0, 0.0, 0.0, 10.0])), None),
+        (Some(numbers(&[0.0, 0.0, 20.0, 0.0])), None),
+        (Some(numbers(&[0.0, 0.0, 20.0, 10.0])), Some([0.0; 6])),
+    ] {
+        let (mut doc, ap, _) = widget_fixture(Some(Object::name("Form")), matrix);
+        let mut form = doc.get(ap).as_dict().unwrap().clone();
+        match bbox {
+            Some(bbox) => form.set(b"BBox".to_vec(), bbox),
+            None => {
+                form.remove(b"BBox");
+            }
+        }
+        doc.set(ap, Object::Stream(Stream::flate(form, b"/Ink cs 0 1 0 scn 0 0 20 10 re f")));
+        let before = saved(&doc);
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert!(printed.rgba == control.rgba, "unusable appearance is omitted without losing page artwork");
+        assert_eq!(saved(&doc), before);
+    }
 }
 
 #[test]

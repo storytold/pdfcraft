@@ -145,6 +145,8 @@ impl Session {
         editor.redo.clear();
         Self::adopt_keys(doc);
         Self::sync_dirty(doc);
+        // The changes whose exits ran are gone with the rest: skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
     }
@@ -215,6 +217,15 @@ impl Session {
             }
         }
         out
+    }
+
+    /// The snapshot [`Self::autosave_snapshots`] handed out for `id` could not be stored: the
+    /// document is due again, so the next autosave tries it again.
+    pub fn autosave_failed(&mut self, id: DocId) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
+            // Any generation but the current one leaves it due.
+            d.snapshot_generation = d.generation.wrapping_sub(1);
+        }
     }
 
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
