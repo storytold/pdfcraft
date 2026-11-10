@@ -1,5 +1,7 @@
 use super::*;
 
+/// The AcroForm fields these tests' scripts read and write: prices, a quantity, a total, a ZIP
+/// code, a check box and a drop-down with shown and saved items.
 fn fields() -> Vec<FieldState> {
     let mut agree = FieldState::new("agree", FieldType::CheckBox, vec![]);
     agree.options = vec![("Yes".into(), "Yes".into())];
@@ -15,10 +17,12 @@ fn fields() -> Vec<FieldState> {
     ]
 }
 
+/// The document these tests' scripts run in.
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], highlight: false, xfa: false }
 }
 
+/// Run AcroForm JavaScript `script` for `event` on these tests' document and fields.
 fn go(script: &str, event: &Event) -> Outcome {
     run(script, event, &doc(), &fields(), &[], Limits::default())
 }
@@ -626,7 +630,7 @@ mod xfa_model {
     /// Run the JavaScript `script` for `activity` on the test form, from the node at `target`.
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_xfa(script, &ev, &doc, &form(), Limits::default())
     }
 
@@ -1049,9 +1053,10 @@ mod formcalc {
     use crate::xfa::*;
     use crate::{Limits, Message, MessageButtons, MessageIcon};
 
+    /// Run FormCalc `script` as `target`'s `activity` script on [`form`].
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_formcalc(script, &ev, &doc, &form(), Limits::default())
     }
 
@@ -1627,11 +1632,26 @@ $host.gotoURL("https://example.org")"#,
             "for i = 1 upto 100000 do Eval(\"1\") endfor",
             &ev,
             &doc,
-            form(),
+            std::sync::Arc::new(form()),
+            false,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
         );
-        assert!(o.error.unwrap().contains("too long"));
+        assert!(o.abandoned && o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{o:?}");
+        // Stopped by its clock, a script keeps none of its changes, as when the caller stops
+        // waiting first: the outcome is the same whichever side notices. A loop adding rows
+        // until the clock stops it kept up to 1000 new rows when the script noticed first.
+        let o = crate::formcalc::run_formcalc_at(
+            "while (1) do table._row.addInstance(1) endwhile",
+            &ev,
+            &doc,
+            std::sync::Arc::new(form()),
+            false,
+            Limits { loop_iterations: u64::MAX, recursion: 32 },
+            Some(std::time::Duration::from_millis(50)),
+        );
+        assert!(o.abandoned && o.effects.is_empty() && o.notes.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{:?}", o.error);
         assert!(run_hostile_formcalc(&format!("{}1{}", "-".repeat(5000), "")).error.is_some());
         assert!(run_hostile_formcalc("var s = \"x\"\nfor i = 1 upto 100 do s = Concat(s, s) endfor\nLen(s)").error.unwrap().contains("too long"));
         assert!(run_hostile_formcalc("Space(1e12)").error.is_none());
@@ -1745,10 +1765,51 @@ mod session {
             source: source.into(),
             formcalc,
             event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
-            root: form(),
+            root: std::sync::Arc::new(form()),
             limits: Limits::default(),
             timeout: std::time::Duration::from_secs(3),
         }
+    }
+
+    /// The scripts of an event given the same form start from one flattened copy of it: the
+    /// second host shares the first one's text, and each host changes only its own copy.
+    #[test]
+    fn hosts_given_the_same_form_reuse_its_flattened_copy_and_change_only_their_own() {
+        let root = std::sync::Arc::new(form());
+        let doc = XfaDoc::default();
+        let mut first = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let second = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let shared = std::sync::Arc::clone(&first.nodes.get(1).expect("form1").som);
+        assert!(std::sync::Arc::ptr_eq(&shared, &second.nodes.get(1).expect("form1").som), "the second host starts from the first one's copy");
+        let qty = first.current;
+        let before = second.nodes.get(qty).map(|n| n.value.clone());
+        first.set_state(qty, XfaEffect::SetPresence { som: "form1[0].page1[0].qty[0]".into(), presence: "hidden".into() });
+        if let Some(n) = first.nodes.get_mut(qty) {
+            n.value = "99".into();
+        }
+        let third = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        for h in [&second, &third] {
+            assert_eq!(h.nodes.get(qty).map(|n| n.value.clone()), before);
+            assert_eq!(h.nodes.get(qty).map(|n| n.presence.to_string()).as_deref(), Some("visible"));
+        }
+        // Another form (a new `Arc`, even with the same content) is flattened again.
+        let other = crate::xfa::XHost::new(std::sync::Arc::new(form()), true, "form1[0].page1[0].qty[0]", &doc);
+        assert!(!std::sync::Arc::ptr_eq(&other.nodes.get(1).expect("form1").som, &shared));
+    }
+
+    /// One session given the same form for two scripts: what the first changed on its copy is
+    /// not in the second's.
+    #[test]
+    fn a_form_sent_again_does_not_carry_the_last_scripts_changes() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        let root = std::sync::Arc::new(form());
+        let mut a = script("qty.rawValue = 10; details.presence = 'visible'; qty.rawValue", false, "form1[0].page1[0].total[0]", "calculate");
+        a.root = std::sync::Arc::clone(&root);
+        assert_eq!(s.run(a).result.as_deref(), Some("10"));
+        let mut b = script("qty.rawValue + ':' + details.presence", false, "form1[0].page1[0].total[0]", "calculate");
+        b.root = std::sync::Arc::clone(&root);
+        let o = s.run(b);
+        assert_eq!(o.result.as_deref(), Some("4:hidden"), "{o:?}");
     }
 
     /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller
@@ -1768,7 +1829,7 @@ mod session {
         let o = s.run(script("qty * price", true, "form1[0].page1[0].total[0]", "calculate"));
         assert_eq!(o.result.as_deref(), Some("10"), "{o:?}");
         let mut with = script("qty * price", true, "form1[0].page1[0].total[0]", "calculate");
-        with.root.children[0].children[0].value = "10".into();
+        std::sync::Arc::make_mut(&mut with.root).children[0].children[0].value = "10".into();
         assert_eq!(s.run(with).result.as_deref(), Some("25"));
         // Nor do variables, globals, prototype changes or kept objects.
         s.run(script("leak = 5; String.prototype.trim = function () { return 'P' }; kept = qty; 1", false, "form1[0].page1[0].qty[0]", "calculate"));
@@ -1838,9 +1899,21 @@ mod session {
         slow.timeout = std::time::Duration::from_millis(200);
         let o = s.run(slow);
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
+        // Whether the script's clock or the session's wait notices first, a FormCalc loop
+        // adding rows until the time is up is abandoned with none of its rows, and the session
+        // is dead after it.
+        let mut s = XfaSession::new(XfaDoc::default());
+        let mut slow = script("while (1) do table._row.addInstance(1) endwhile", true, "form1[0].page1[0].go[0]", "click");
+        slow.limits = Limits { loop_iterations: u64::MAX, recursion: 32 };
+        slow.timeout = std::time::Duration::from_millis(200);
+        let o = s.run(slow);
+        assert!(o.abandoned && o.effects.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(s.dead().is_some_and(|w| w.contains("abandoned")));
     }
 }
 
+/// Scripts run on a shared field snapshot without changing it: a script's writes and a failed
+/// script's partial writes stay in its own result, and its globals don't reach the next script.
 #[test]
 fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     let initial = Arc::new(fields());
@@ -1873,6 +1946,119 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+mod data_objects {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// `exportDataObject`, as a document method or a bare global, asks to open the named attached
+    /// file when `nLaunch` is 1 or 2 and to save it otherwise; without `cName` it is an error.
+    #[test]
+    fn export_data_object_asks_to_open_or_save_an_attached_file() {
+        let o = go(
+            "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); exportDataObject('notes.txt'); \
+             this.exportDataObject({cName: 'form.pdf', nLaunch: 1});",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::OpenAttachment { name: "Guide.pdf".into(), open: true },
+                Request::OpenAttachment { name: "notes.txt".into(), open: false },
+                Request::OpenAttachment { name: "form.pdf".into(), open: true },
+            ]
+        );
+        let o = go("this.exportDataObject({nLaunch: 2})", &Event::field("Mouse Up", "total", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("cName")), "{:?}", o.error);
+        assert!(o.requests.is_empty());
+    }
+
+    /// Only `nLaunch` 1 and 2 open the file: other values (1.5, 3, a huge number) save it, as the
+    /// default 0 does.
+    #[test]
+    fn export_data_object_opens_only_for_n_launch_1_and_2() {
+        for launch in ["1.5", "3", "1e9", "-1"] {
+            let o = go(&format!("this.exportDataObject({{cName: 'Guide.pdf', nLaunch: {launch}}});"), &Event::field("Mouse Up", "total", ""));
+            assert_eq!(o.requests, [Request::OpenAttachment { name: "Guide.pdf".into(), open: false }], "nLaunch {launch}");
+        }
+    }
+
+    /// In an XFA script `event.target` is the document, so `exportDataObject` works on it, while
+    /// `xfa.event.target` is still the node the event happened on.
+    #[test]
+    fn in_xfa_scripts_event_target_is_the_document_and_xfa_event_target_the_node() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "event.target.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); xfa.event.target.name",
+            &event,
+            &XfaDoc::default(),
+            &super::xfa_model::form(),
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("go"), "xfa.event.target is still the button");
+        assert!(o.effects.contains(&XfaEffect::OpenAttachment { name: "Guide.pdf".into(), open: true }), "{:?}", o.effects);
+    }
+}
+
+mod runtime_highlight {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaNode, run_xfa};
+
+    /// `app.runtimeHighlight` in AcroForm scripts reads the viewer's setting, and setting it asks
+    /// for the change once and reads back the new value.
+    #[test]
+    fn app_runtime_highlight_reads_the_viewers_setting_and_asks_to_change_it() {
+        let ev = Event::field("Calculate", "total", "");
+        let on = DocInfo { highlight: true, ..doc() };
+        let o = run("event.value = String(app.runtimeHighlight);", &ev, &on, &fields(), &[], Limits::default());
+        assert_eq!((o.value.as_str(), o.requests.len()), ("true", 0));
+        let o = go("var was = app.runtimeHighlight; app.runtimeHighlight = true; event.value = was + ',' + app.runtimeHighlight;", &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "false,true", "the script reads back what it set");
+        assert_eq!(o.requests, vec![Request::Highlight(true)]);
+        // A script that toggles it over and over asks once, for where it ended.
+        let o = go("for (var i = 0; i < 5001; i++) { app.runtimeHighlight = !app.runtimeHighlight; }", &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.requests, vec![Request::Highlight(true)], "one request, the last setting");
+        // Past the request cap the request is dropped, and the script goes on reading the
+        // setting the viewer has.
+        let full = format!(
+            "for (var i = 0; i < {}; i++) app.execMenuItem('Print'); app.runtimeHighlight = true; event.value = String(app.runtimeHighlight);",
+            crate::xfa::MAX_EFFECTS
+        );
+        let o = go(&full, &ev);
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "false", "the dropped request changed nothing");
+        assert!(!o.requests.iter().any(|r| matches!(r, Request::Highlight(_))));
+    }
+
+    /// The same in XFA scripts, where the change is an effect; nothing is asked for when the
+    /// setting is already what the script wants.
+    #[test]
+    fn xfa_app_runtime_highlight_reads_the_setting_and_records_a_change() {
+        let ev = XfaEvent { activity: "layoutReady".into(), target: "form1[0]".into(), ..Default::default() };
+        let root = XfaNode { name: "form1".into(), som: "form1[0]".into(), ..Default::default() };
+        let script = "var was = app.runtimeHighlight; if (!app.runtimeHighlight) { app.runtimeHighlight = true; } was + ',' + app.runtimeHighlight";
+        let o = run_xfa(script, &ev, &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("false,true"));
+        assert_eq!(o.effects, vec![XfaEffect::Highlight(true)]);
+        let o = run_xfa(script, &ev, &XfaDoc { highlight: true, ..Default::default() }, &root, Limits::default());
+        assert_eq!((o.result.as_deref(), o.effects.len()), (Some("true,true"), 0), "already on: nothing to ask for");
+        // Past the effect cap the request is dropped, and the script still reads the setting the
+        // viewer has.
+        let full = format!(
+            "for (var i = 0; i < {}; i++) {{ xfa.host.beep(); }} app.runtimeHighlight = true; String(app.runtimeHighlight)",
+            crate::xfa::MAX_EFFECTS
+        );
+        let o = run_xfa(&full, &ev, &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("false"));
+        assert!(!o.effects.contains(&XfaEffect::Highlight(true)));
+    }
 }
 
 mod scand {

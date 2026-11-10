@@ -18,7 +18,11 @@ use pdfcraft_engine::{DocId, Session};
 pub(crate) fn run(files: &[String], javascript: bool) -> Vec<String> {
     let mut leftover = Vec::new();
     for file in files {
-        let printed = prepare(file, javascript).and_then(|(pdf, job)| spool::submit(&pdf, &job).map_err(|e| e.to_string()));
+        let printed = prepare(file, javascript).and_then(|(pdf, mut job)| {
+            // As the Print dialog sends it: on Windows large pictures become tiles (#5131).
+            let pdf = pdfcraft_engine::spooler::spooler_copy(pdf, &mut job);
+            spool::submit(&pdf, &job).map_err(|e| e.to_string())
+        });
         match printed {
             Ok(message) => log::info!("printed {file} on the default printer: {message}"),
             Err(e) => {
@@ -40,7 +44,12 @@ fn prepare(path: &str, javascript: bool) -> Result<(Vec<u8>, spool::Job), String
     let settings = settings(&sizes, &labels, actual_size)?;
     // Refuses a document whose permissions forbid printing.
     let pdf = session.print_pdf(id, &settings).map_err(|e| e.to_string())?;
-    Ok((pdf, job(&name, actual_size)))
+    let mut job = job(&name, actual_size);
+    // CUPS is told which way the sheets run (#2713), as for the Print dialog's jobs.
+    if let Ok(sheets) = print::layout(&sizes, &settings) {
+        print::add_cups_orientation(&mut job.options, &sheets);
+    }
+    Ok((pdf, job))
 }
 
 /// `path` opened in a session of its own, and its file name. JavaScript is on only when
@@ -100,6 +109,8 @@ fn job(title: &str, actual_size: bool) -> spool::Job {
         duplex: None,
         scaling: if actual_size { spool::Scaling::Exact } else { spool::Scaling::ShrinkToFit },
         grayscale: false,
+        // Set when the copy sent is made grey (`spooler_copy`, #5806); this job is in colour.
+        grey_pages: false,
         title: title.to_string(),
         options: Vec::new(),
     }

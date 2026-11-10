@@ -147,6 +147,7 @@ const EDIT: &[&str] = &[
     SELECT_ALL,
     SEP,
     "edit.find",
+    "edit.replace",
     "edit.advanced_search",
     SEP,
     "edit.column_select",
@@ -173,7 +174,7 @@ const DISPLAY: &[&str] = &[
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane", "view.split"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
-const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const MODES: &[&str] = &["view.full_screen", "view.read_mode", crate::viewer_prefs::TOGGLE];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -552,7 +553,7 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
