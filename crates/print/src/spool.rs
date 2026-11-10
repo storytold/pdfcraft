@@ -3,8 +3,88 @@
 
 pub use craft_print::{
     Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
+
+#[cfg(any(windows, test))]
+mod windows_duplex;
+
+/// Windows: the in-box DLLs printing draws and describes jobs with. The executables delay-load
+/// them (`apps/pdfcraft{,-cli}/build.rs`, and `build.rs` for this crate's tests: the same list)
+/// so a Windows installation without them still starts (#2630); a call into a missing
+/// delay-loaded DLL would end the process, so printing checks for them first.
+#[cfg(windows)]
+pub(crate) const PRINT_DLLS: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
+
+/// The first print DLL missing from `system32`, if any.
+#[cfg(windows)]
+pub(crate) fn missing_print_dll_in(system32: &std::path::Path) -> Option<&'static str> {
+    PRINT_DLLS.into_iter().find(|dll| !system32.join(dll).is_file())
+}
+
+#[cfg(all(windows, test))]
+thread_local! {
+    /// Tests: the folder the print DLLs are looked for in, instead of the system's, so the
+    /// public entry points can be checked against a Windows that lacks them.
+    pub(crate) static SYSTEM32_FOR_TEST: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+    /// Tests: how many times [`printers`], [`printer_queues`] or [`two_sided`] asked the system's
+    /// printer backend, so a test can tell the guard answered without relying on the machine
+    /// having no printers.
+    pub(crate) static PRINTER_BACKEND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The first print DLL this Windows installation lacks. `None` when all are there, and when the
+/// system folder is unknown (the loader then decides, as before).
+fn missing_print_dll() -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        #[cfg(test)]
+        if let Some(dir) = SYSTEM32_FOR_TEST.with(|d| d.borrow().clone()) {
+            return missing_print_dll_in(&dir);
+        }
+        let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"))?;
+        missing_print_dll_in(&std::path::Path::new(&root).join("System32"))
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+fn unavailable(dll: &str) -> crate::PrintError {
+    crate::PrintError::Spool(format!("printing needs {dll}, which this Windows installation lacks; use Save as PDF instead"))
+}
+
+/// The system's printers; none on a Windows installation without the print DLLs.
+pub fn printers() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::printers()
+}
+
+/// The system's print queues without asking any driver, so a Print dialog's list never waits on
+/// a printer (#2192); none on a Windows installation without the print DLLs, as [`printers`].
+pub fn printer_queues() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::printer_queues()
+}
+
+/// Whether `printer`'s driver takes two-sided settings, read for that one printer; it can wait
+/// on the device, so call it off the UI thread. Unknown on a Windows installation without the
+/// print DLLs: reading it goes through them.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::two_sided(printer)
+}
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
@@ -111,10 +191,14 @@ pub(crate) fn printer_options_via_within(
 ) -> Vec<PrinterOption> {
     let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
     // Retain the conservative name checks, applied to each component. Neither component is
-    // a path: reject dot components, backslashes and any additional separator before I/O.
+    // a path: reject dot components, backslashes and any additional separator before I/O. A
+    // leading `-` is refused too: `lpoptions` parses its argv with getopt, so `-p -E -l` would
+    // read `-E` as an option rather than as the destination, and `--` cannot help because it
+    // ends option parsing before the `-p` that names the queue.
     let valid = |name: &str| {
         !name.is_empty()
             && name.len() <= 64
+            && !name.starts_with('-')
             && !matches!(name, "." | "..")
             && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
     };
@@ -128,17 +212,128 @@ pub(crate) fn printer_options_via_within(
         f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
     });
     let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
+    let lpoptions_out = output_within(lpoptions.args(["-p", printer, "-l"]), limit).ok();
+    let current = lpoptions_out.as_deref().map(|out| parse_lpoptions(&String::from_utf8_lossy(out))).unwrap_or_default();
+    if options.is_empty() {
+        // The PPD is missing or unreadable (#4699). The same `lpoptions -l` listing carries every
+        // option with its choices and default; build a fallback list from it.
+        if let Some(out) = &lpoptions_out {
+            options = parse_lpoptions_list(&String::from_utf8_lossy(out));
+        }
+    }
+    // After the fallback: a readable PPD whose `*OpenUI` blocks yielded nothing still supplies the
+    // translations, and `localize` leaves options it cannot translate untouched.
     if let Some(b) = &ppd {
         localize(&mut options, b, lang);
     }
-    let current =
-        output_within(lpoptions.args(["-p", printer, "-l"]), limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default();
     for (key, value) in current {
         if let Some(o) = options.iter_mut().find(|o| o.key == key)
             && o.choices.iter().any(|(c, _)| *c == value)
         {
             o.default = value;
         }
+    }
+    options
+}
+
+/// Caps that match [`craft_print::parse_ppd`]: a malformed spooler answer is not allowed to
+/// dominate memory or the dialog.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_OPTIONS: usize = 400;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_CHOICES: usize = 400;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_LABEL: usize = 256;
+
+/// A PPD keyword: printable ASCII without spaces, `/`, `:`, `=` or `"`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+// The three name helpers below mirror `is_ppd_keyword`, `name_label` and `ppd_label` in craft-print,
+// which are private there: keep them in step with that crate, or they will accept in one reader what
+// the other refuses.
+fn is_lpoptions_keyword(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"'))
+}
+
+/// `Name/Label` → (`Name`, `Label`), the label falling back to the name.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn lpoptions_name_label(s: &str) -> (&str, &str) {
+    match s.split_once('/') {
+        Some((n, l)) if !l.trim().is_empty() => (n.trim(), l.trim()),
+        Some((n, _)) => (n.trim(), n.trim()),
+        None => (s.trim(), s.trim()),
+    }
+}
+
+/// `label`, cut to [`MAX_LPOPTIONS_LABEL`] characters.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn lpoptions_label(label: &str) -> String {
+    label.chars().take(MAX_LPOPTIONS_LABEL).collect()
+}
+
+/// Whether `choice` is a custom-value template. For a choice the user has to type, `lpoptions -l`
+/// prints `Custom`, `Custom.<TYPE>` (`Custom.PASSCODE`, `Custom.STRING`, …) or `Custom.WIDTHxHEIGHT`
+/// in place of the choices, and the value is not something Craft can collect: it would be sent to
+/// the driver as the literal text. The prefix is reserved by CUPS, case-insensitively.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn is_lpoptions_custom_template(choice: &str) -> bool {
+    match choice.split_once('.') {
+        Some((name, _)) => name.eq_ignore_ascii_case("Custom"),
+        None => choice.eq_ignore_ascii_case("Custom"),
+    }
+}
+
+/// Build [`PrinterOption`]s from the `lpoptions -p NAME -l` listing (`Key/Label: a *b c`). This is
+/// the fallback when the PPD cannot be read, so there is no group information: every option lands in
+/// one unnamed group, and the listing cannot say which options sit under `InstallableOptions`, so an
+/// optional-hardware entry that [`parse_ppd`] drops may appear here. The starred choice is the
+/// driver's default. Options Craft handles itself ([`HANDLED_OPTIONS`]) and custom-value templates
+/// ([`is_lpoptions_custom_template`]) are skipped.
+///
+/// The line is split at its **last** colon, not its first: `list_group()` prints the option as
+/// `"%s/%s:"` from the PPD's keyword and translated text, then every choice as a bare `" %s"`, so
+/// text such as `Supporto: Tipo` carries colons while a choice keyword cannot. Splitting at the
+/// first colon would turn the rest of the label into invented choices.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
+    let mut options = Vec::new();
+    for line in out.lines() {
+        let line = line.trim_end_matches('\r');
+        let Some((head, choices)) = line.rsplit_once(':') else {
+            continue;
+        };
+        let (key, label) = lpoptions_name_label(head);
+        if !is_lpoptions_keyword(key) || HANDLED_OPTIONS.contains(&key) {
+            continue;
+        }
+        let mut choice_list = Vec::new();
+        let mut default = String::new();
+        // Set when the choice CUPS marks is a template the dialog cannot collect. The printer keeps
+        // that value, so standing in the first retained choice would show a default the job does not
+        // use: only options changed away from the default are submitted.
+        let mut marked_template = false;
+        for token in choices.split_whitespace() {
+            let starred = token.starts_with('*');
+            let (choice_key, choice_label) = lpoptions_name_label(token.strip_prefix('*').unwrap_or(token));
+            if !is_lpoptions_keyword(choice_key) || is_lpoptions_custom_template(choice_key) {
+                marked_template |= starred && is_lpoptions_custom_template(choice_key);
+                continue;
+            }
+            if starred {
+                default = choice_key.to_string();
+            }
+            if choice_list.len() < MAX_LPOPTIONS_CHOICES && choice_list.iter().all(|(c, _)| c != choice_key) {
+                choice_list.push((choice_key.to_string(), lpoptions_label(choice_label)));
+            }
+        }
+        if choice_list.is_empty() || options.len() >= MAX_LPOPTIONS_OPTIONS {
+            continue;
+        }
+        if default.is_empty() && !marked_template {
+            // No choice marked at all: the dialog needs something selected, and the listing has
+            // nothing better than the first one to offer.
+            default = choice_list.first().map(|(c, _)| c.clone()).unwrap_or_default();
+        }
+        options.push(PrinterOption { key: key.to_string(), label: lpoptions_label(label), group: String::new(), choices: choice_list, default });
     }
     options
 }
@@ -192,13 +387,43 @@ fn spooled(job: &Job) -> Job {
 }
 
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
+    #[cfg(windows)]
+    let resolved = windows_duplex::job(job);
+    #[cfg(windows)]
+    let job = resolved.as_ref();
+    let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit(&pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
+    #[cfg(windows)]
+    let resolved = windows_duplex::job(job);
+    #[cfg(windows)]
+    let job = resolved.as_ref();
+    let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit_with_progress(&pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// The PDF as the system spooler takes it: with `rename` (Windows), its embedded TrueType and
+/// OpenType programs renamed, so Windows can't draw a subset's glyph numbers with an installed
+/// font of the same name (#3132, [`crate::font_names`]). A PDF that can't be read back goes as it
+/// is: the renaming only protects the text from Windows, and the job shouldn't fail over it.
+pub(crate) fn spooled_pdf(pdf: &[u8], rename: bool) -> std::borrow::Cow<'_, [u8]> {
+    if !rename {
+        return std::borrow::Cow::Borrowed(pdf);
+    }
+    match crate::font_names::distinct(pdf) {
+        Ok(Some(renamed)) => std::borrow::Cow::Owned(renamed),
+        Ok(None) | Err(_) => std::borrow::Cow::Borrowed(pdf),
+    }
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
@@ -212,7 +437,9 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
 fn ppd_languages(lang: &str) -> Vec<String> {
     let lang = lang.to_ascii_lowercase();
     let mut parts = lang.split(['-', '_']).filter(|p| !p.is_empty());
-    let Some(primary) = parts.next() else { return Vec::new() };
+    let Some(primary) = parts.next() else {
+        return Vec::new();
+    };
     let region = match (primary, parts.next()) {
         ("zh", Some("hans")) => Some("CN".to_string()),
         ("zh", Some("hant")) => Some("TW".to_string()),
@@ -244,7 +471,9 @@ pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
     let mut choices: HashMap<(String, String), String> = HashMap::new();
     let mut groups: HashMap<String, String> = HashMap::new();
     for line in ppd.split(|b| *b == b'\n') {
-        let Some(text) = std::str::from_utf8(line).ok() else { continue };
+        let Some(text) = std::str::from_utf8(line).ok() else {
+            continue;
+        };
         let text = text.trim_end_matches('\r');
         if let Some(rest) = text.strip_prefix("*OpenGroup:") {
             // Group label → keyword, since options carry their group's label.
@@ -254,10 +483,18 @@ pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
             }
             continue;
         }
-        let Some(rest) = text.strip_prefix(prefix.as_str()) else { continue };
-        let Some((head, _)) = rest.split_once(':') else { continue };
-        let Some((main, spec)) = head.split_once(' ') else { continue };
-        let Some((key, label)) = spec.split_once('/') else { continue };
+        let Some(rest) = text.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let Some((head, _)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some((main, spec)) = head.split_once(' ') else {
+            continue;
+        };
+        let Some((key, label)) = spec.split_once('/') else {
+            continue;
+        };
         let label = label.trim();
         if label.is_empty() {
             continue;

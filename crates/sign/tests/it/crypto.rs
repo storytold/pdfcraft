@@ -369,7 +369,7 @@ fn signed_ocsp(key: &pdfcraft_sign::PrivateKey, responder_id: &[u8], certs: Opti
         None => der::seq(&[&tbs, &alg, &der::bit_string(&sig)]),
     };
     let basic_type = der::oid("1.3.6.1.5.5.7.48.1.1");
-    der::seq(&[&der::int(0), &der::explicit(0, &der::seq(&[&basic_type, &der::octets(&basic)]))])
+    der::seq(&[&der::tlv(tag::ENUMERATED, &[0]), &der::explicit(0, &der::seq(&[&basic_type, &der::octets(&basic)]))])
 }
 
 fn mid_june() -> Time {
@@ -470,6 +470,9 @@ fn ocsp_responses_verify_and_match_the_certificate() {
     let wrong_key = OcspResponse::parse(&ocsp(&other, RevocationStatus::Good, this, next)).unwrap();
     assert_eq!(wrong_key.check(issuer, issuer, at), RevocationStatus::Unknown);
     // An error response is rejected at parse time.
+    let error = der::seq(&[&der::tlv(tag::ENUMERATED, &[6])]);
+    assert!(OcspResponse::parse(&error).is_err());
+    // responseStatus is an ENUMERATED (RFC 6960); an INTEGER is not one.
     let error = der::seq(&[&der::int(6)]);
     assert!(OcspResponse::parse(&error).is_err());
 }
@@ -523,6 +526,12 @@ fn rsa_signatures_are_read_with_every_digestinfo_variant() {
     let digest = DigestAlg::Sha256.digest(&[b"hello"]);
     for (name, sig) in [("standard", RSA_STD), ("no NULL", RSA_NO_NULL)] {
         assert!(key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &unhex(sig)).unwrap(), "{name}");
+    }
+    // Redundant leading zeros on the modulus change neither the result nor the arithmetic size.
+    if let pdfcraft_sign::keys::PublicKey::Rsa { n, e } = key {
+        let pad = |v: &[u8]| [vec![0u8; 1 << 16], v.to_vec()].concat();
+        let padded = pdfcraft_sign::keys::PublicKey::Rsa { n: pad(n), e: pad(e) };
+        assert!(padded.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &unhex(RSA_STD)).unwrap(), "padded key");
     }
     // The bare digest, with no DigestInfo, binds no hash algorithm: not a signature we accept.
     assert!(!key.verify(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &unhex(RSA_BARE)).unwrap(), "bare digest");
