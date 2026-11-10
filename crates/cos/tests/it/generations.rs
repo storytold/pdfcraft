@@ -544,15 +544,16 @@ fn drawn_by_cos(doc: &Document) -> Option<String> {
     Some(String::from_utf8_lossy(&stream.raw).trim().to_string())
 }
 
+/// A later `4 1 obj` used to take object 4's slot, so `4 0 R` read as null in cos and a full
+/// save wrote null, while the renderer drew the generation-0 cover (#6759).
 #[test]
 fn a_rebuilt_index_keeps_the_generation_0_body_the_page_draws() {
-    // A later `4 1 obj` used to take object 4's slot, so `4 0 R` read as null in cos and a full
-    // save wrote null, while the renderer drew the generation-0 cover (#6759).
     for bodies in [&[(0, COVER), (1, OTHER)][..], &[(1, OTHER), (0, COVER)], &[(0, COVER), (1, OTHER), (2, OTHER)]] {
         let bytes = rebuilt_page("4 0 R", bodies);
         assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{bodies:?}");
         let doc = Document::open(bytes).unwrap();
         assert!(doc.reconstructed());
+        assert!(!doc.rebuilt_with_unsettled_generations(), "{bodies:?}: only generation 0 is reached");
         assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{bodies:?}");
         let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
         assert_eq!(drawn_by_renderer(saved.clone()).as_deref(), Some(COVER), "{bodies:?}");
@@ -611,11 +612,11 @@ fn pages_drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Vec<String> {
     oracle.pages().iter().map(|p| String::from_utf8_lossy(p.page_stream().unwrap_or_default()).trim().to_string()).collect()
 }
 
+/// A newer revision reused number 5 as `5 1 obj`, a page its page tree lists as `5 1 R`; the
+/// older `5 0 obj` is only a stream length. Kept at generation 0, `5 1 R` read as null, the
+/// page fell out of a save, and the save was refused (PDFBOX-3785's `202097.pdf`, on #6767).
 #[test]
 fn a_rebuilt_index_keeps_a_reused_number_the_document_reaches() {
-    // A newer revision reused number 5 as `5 1 obj`, a page its page tree lists as `5 1 R`; the
-    // older `5 0 obj` is only a stream length. Kept at generation 0, `5 1 R` read as null, the
-    // page fell out of a save, and the save was refused (PDFBOX-3785's `202097.pdf`, on #6767).
     let bytes = rebuilt_objects(&[
         (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
         (5, 0, "27"),
@@ -628,18 +629,20 @@ fn a_rebuilt_index_keeps_a_reused_number_the_document_reaches() {
     assert_eq!(pages_drawn_by_renderer(bytes.clone()), [OTHER, COVER]);
     let doc = Document::open(bytes).unwrap();
     assert!(doc.reconstructed());
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
     assert_eq!(doc.get(ObjRef::new(5, 1)).as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
     let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
     assert_eq!(pages_drawn_by_renderer(saved), [OTHER, COVER]);
     assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(5 0)")), "{:?}", doc.repair_log());
 }
 
+/// `4 0 R` and `4 1 R` both drawn: one slot cannot hold both, so the renderer's generation-0
+/// rule stands, the other body is noted as left out, and the document says so.
 #[test]
 fn a_rebuilt_index_keeps_generation_0_when_the_document_reaches_both() {
-    // `4 0 R` and `4 1 R` both drawn: one slot cannot hold both, so the renderer's generation-0
-    // rule stands and the other body is noted as left out.
     let doc = Document::open(rebuilt_page("[4 0 R 4 1 R]", &[(0, COVER), (1, OTHER)])).unwrap();
     assert!(matches!(&*doc.get(ObjRef::new(4, 0)), Object::Stream(s) if &*s.raw == COVER.as_bytes()));
     assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
     assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(4 1)")), "{:?}", doc.repair_log());
+    assert!(doc.rebuilt_with_unsettled_generations());
 }

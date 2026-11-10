@@ -389,13 +389,15 @@ impl Session {
     }
 }
 
-/// Refuse to sign a file rebuilt from its object headers and not edited since (#6759). Its page
-/// is drawn from the damaged bytes, which the renderer rebuilds on its own, while signing writes
-/// the object graph rebuilt here in full. The two can disagree (an object one keeps and the other
-/// leaves out, see the repair log), so the signature could cover content the user never saw.
-/// Once the file is saved, or edited, the page shows that rewrite, which is what gets signed.
+/// Refuse to sign a rebuilt file, not edited since, whose page can show an object the signed file
+/// leaves out (#6759). The page is drawn from the damaged bytes, which the renderer rebuilds on
+/// its own, while signing writes the object graph rebuilt here in full. They differ only where the
+/// document reaches two generations of one object number
+/// ([`pdfcraft_cos::Document::rebuilt_with_unsettled_generations`]): the renderer draws both, and
+/// the graph keeps one. Any other rebuilt file, such as one with no cross-reference table at all,
+/// signs as before. Once the file is saved, or edited, the page shows the rewrite that is signed.
 fn shows_what_is_signed(d: &Document, cos: &pdfcraft_cos::Document) -> Result<(), EditError> {
-    if !cos.reconstructed() || cos.is_modified() {
+    if !cos.rebuilt_with_unsettled_generations() || cos.is_modified() {
         return Ok(());
     }
     if d.is_signed() {

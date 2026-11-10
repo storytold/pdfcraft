@@ -759,7 +759,7 @@ impl Document {
         self.revisions = Arc::new(Vec::new());
         log.push(format!("rebuilt cross-reference index from {object_count} object headers"));
         kept.retain(|_, (_, seen)| seen.len() > 1);
-        self.keep_the_generation_reached(&entries, &mut kept)?;
+        self.unsettled_generations = self.keep_the_generation_reached(&entries, &mut kept)?;
         let left_out: Vec<(u32, i32)> =
             kept.iter().flat_map(|(&num, (held, seen))| seen.keys().filter(move |&&g| g != *held).map(move |&g| (num, g))).collect();
         if !left_out.is_empty() {
@@ -786,7 +786,8 @@ impl Document {
     /// real `N 0 obj` to the stand-in. A slot given to another generation takes that
     /// generation, so `N 0 R`, which no reached object names, reads as null. When more than one
     /// generation is reached, the generation-0 rule stands (the #6759 case), and the caller
-    /// notes what it leaves out.
+    /// notes what it leaves out. Returns whether that happened, or the walk gave up: then some
+    /// reference the document reaches can read differently here than in the renderer.
     ///
     /// A stream's `/Length` does not count as reaching an object: it only says where the data
     /// ends, both readers look for `endstream` when it is wrong, and an older revision's length
@@ -795,11 +796,11 @@ impl Document {
         &mut self,
         entries: &Arc<BTreeMap<u32, XrefEntry>>,
         shared: &mut BTreeMap<u32, (i32, BTreeMap<i32, u64>)>,
-    ) -> Result<(), CosError> {
+    ) -> Result<bool, CosError> {
         // References followed before the walk gives up and the generation-0 rule stands.
         const MAX_WALK: usize = 1 << 21;
         if shared.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let mut reader = self.object_reader();
         let mut queue = Vec::new();
@@ -813,7 +814,7 @@ impl Document {
                 continue;
             }
             if visited.len() > MAX_WALK {
-                return Ok(());
+                return Ok(true);
             }
             let Some((held, bodies)) = shared.get(&r.num) else {
                 if let Ok(o) = reader.try_get(r) {
@@ -837,18 +838,25 @@ impl Document {
             }
         }
         let mut moved = Vec::new();
+        let mut unsettled = false;
         for (num, generations) in reached {
-            let (Some(&only), 1) = (generations.first(), generations.len()) else { continue };
+            let (Some(&only), 1) = (generations.first(), generations.len()) else {
+                unsettled = true;
+                continue;
+            };
             let Some((held, bodies)) = shared.get_mut(&num) else { continue };
             if only == *held {
                 continue;
             }
-            let (Ok(generation), Some(&offset)) = (u16::try_from(only), bodies.get(&only)) else { continue };
+            let (Ok(generation), Some(&offset)) = (u16::try_from(only), bodies.get(&only)) else {
+                unsettled = true;
+                continue;
+            };
             *held = only;
             moved.push((num, XrefEntry::InFile { offset, generation }));
         }
         if moved.is_empty() {
-            return Ok(());
+            return Ok(unsettled);
         }
         let mut index = (**entries).clone();
         {
@@ -860,7 +868,7 @@ impl Document {
         }
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(index), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
-        Ok(())
+        Ok(unsettled)
     }
 }
 
