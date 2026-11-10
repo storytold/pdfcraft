@@ -53,8 +53,9 @@ fn bytes_the_parser_cannot_read_in_a_form_under_a_mark_are_refused() {
     assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(1)));
 }
 
-/// A form the mark doesn't reach isn't walked: bytes in it can't hide anything under the mark, so
-/// the page is redacted.
+/// A form the mark doesn't reach isn't walked: bytes in it can't hide anything under the mark, and
+/// the walk doesn't refuse the page over them. This one has resources of its own, so the check after
+/// the walk doesn't read it either (it would refuse one without), and the page is redacted.
 #[test]
 fn bytes_the_parser_cannot_read_in_a_form_away_from_the_marks_are_left() {
     let form = stream(
@@ -102,6 +103,61 @@ fn hidden_text_beside_bytes_the_parser_cannot_read_is_refused() {
         let mut doc = one_page(content, "", vec![]);
         assert_eq!(sanitize(&mut doc), Err(RedactError::Unreadable(1)), "{label}");
     }
+    // In a form with resources of its own, which the walk enters on every page.
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>", alone);
+    let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", vec![form]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]), Err(RedactError::Unreadable(1)), "in a form");
+}
+
+/// Removing hidden layers alone refuses such bytes too, even in a document without
+/// `/OCProperties`: a membership dictionary (`/AllOff` of a layer that is on) still hides what it
+/// marks, for the walk as for the app's renderer. With nothing in front of `/OC`, the marked text
+/// is removed. Here a string beside a stray `}` is left in front of it, which keeps the block from
+/// the walk (it reads a `BDC`'s first operands; a string alone does so too, a matter of its own),
+/// and the stray byte has the page refused rather than the text kept.
+#[test]
+fn bytes_the_parser_cannot_read_refuse_removing_hidden_layers_alone() {
+    let marked = |before: &[u8]| {
+        let content = [before, b" /OC /MC0 BDC BT /F1 10 Tf 20 260 Td (LAYERSECRET) Tj ET EMC BT /F1 10 Tf 20 20 Td (PUBLIC) Tj ET"].concat();
+        one_page(
+            &content,
+            "/Properties << /MC0 8 0 R >>",
+            vec![b"<< /Type /OCG /Name (Layer) >>".to_vec(), b"<< /Type /OCMD /OCGs [7 0 R] /P /AllOff >>".to_vec()],
+        )
+    };
+    let mut doc = marked(b"");
+    let removed = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
+    assert!(removed.as_ref().is_ok_and(|r| r.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0)), "{removed:?}");
+    assert!(!content(&doc, 0).contains("LAYERSECRET"));
+    let mut doc = marked(b"(x) }");
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenLayers]), Err(RedactError::Unreadable(1)));
+}
+
+/// With form fields removed too, a field's appearance is flattened into page content and read the
+/// same way, though the scan, which runs before flattening, doesn't count it: hidden text in a
+/// broken `TJ` there refuses removing hidden text, and Sanitize Document, which went on and left it.
+/// Removing form fields alone doesn't read the content, and goes on.
+#[test]
+fn hidden_text_beside_bytes_the_parser_cannot_read_in_a_field_appearance_is_refused() {
+    let fresh = || {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>"
+                .to_vec(),
+            stream("", b"BT /F1 10 Tf 10 230 Td (Name:) Tj ET"),
+            FONT.replace("95 0 R", "8 0 R").into_bytes(),
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /P 3 0 R /Rect [50 225 200 240] /AP << /N 7 0 R >> >>".to_vec(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 150 15] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 3 Tr 2 3 Td [(TAIL) ) (HIDDEN)] TJ ET",
+            ),
+            widths(),
+        ])
+    };
+    assert!(remove_hidden(&mut fresh(), &[Hidden::FormFields]).is_ok());
+    assert_eq!(remove_hidden(&mut fresh(), &[Hidden::FormFields, Hidden::HiddenText]), Err(RedactError::Unreadable(1)));
+    assert_eq!(sanitize(&mut fresh()), Err(RedactError::Unreadable(1)));
 }
 
 /// An inline image whose end the parser guesses, as Apply Redactions already refuses it: what
