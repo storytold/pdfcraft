@@ -1,63 +1,70 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
-- Merge: **`origin/main` is merged into the branch** in `c15cc0f57`
-  (2026-11-10). At that moment the remote tip was `debb826f2` ("M10: preserve
-  annotation placement precision (#4995) (#5002)") and the branch had been
-  **111 commits ahead and 161 behind**; it was rebased onto `ba28458ad` in an
-  earlier pass (§4 records that rebase and its four conflict stops). The merge
-  is a true merge — no rebase and no force — and one file conflicted:
-  `crates/annot/src/tests.rs`, where both sides append tests at the end (this
-  branch's link tests, main's Apple Markup tests). Both were kept unchanged.
-  `Cargo.lock` auto-merged: `craft-print` moves to main's `0e4943cb…`,
-  `craft-web-host` keeps the branch's storytold pin `7666e2b1…`;
-  `cargo metadata --locked` exits 0. `origin/main` has since moved on to
-  `905e9abf6` ("fix(forms): ignore print requests from automatic field scripts
-  (#4166)"), so the branch is **1 behind** again; that commit is not in the
-  tree this record's gates were run on.
-- Head before this STATUS commit: `c1171d941` (fix(automation): link_list
-  names a remote go-to action in `other`) on `c15cc0f57` (the merge) on
-  `a47329154` (docs(collab): record the JWT crypto backend and the deny
-  advisory); **113 commits** not in `origin/main` (`git rev-list --count
-  origin/main..HEAD`), 0 behind `debb826f2`, and this STATUS record is the next
-  commit, so after it the count is 114. The numbers the earlier briefs named —
-  85 commits, 9 behind, 5 ahead for `199076765`, then 86/11/6 at `0c57e2271`,
-  94/48/14 at `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754` —
+- Merge: **`origin/main` is merged into the branch** twice, both true merges —
+  no rebase and no force. `c15cc0f57` (2026-11-10) merged `debb826f2` ("M10:
+  preserve annotation placement precision (#4995) (#5002)") when the branch had
+  been rebased onto `ba28458ad` (§4 records that rebase and its four conflict
+  stops); one file conflicted, `crates/annot/src/tests.rs`, where both sides
+  append tests at the end, and both were kept unchanged. `Cargo.lock`
+  auto-merged there with `craft-print` on main's `0e4943cb…` and
+  `craft-web-host` on the branch's storytold pin `7666e2b1…`.
+- The second merge, `afd28a2f9` (2026-11-10, this pass), merged `92b965dba`
+  ("M10: preserve annotation layers in vector print output (#5019)")
+  — the tip at the moment of the fetch. The brief named `8559306f7` ("Do not
+  send duplex to printers without two-sided support (#6673)"), which is 22
+  commits below the tip and is inside this merge: its eight printing/forms
+  commits are all in (forms' automatic field scripts, NoRotate appearance
+  geometry, indirect annotation metadata, booklet duplex, grayscale on a driver
+  with no grey option, the hotbar picker, the localized reset label, duplex to
+  single-sided printers), plus main's later paper-detection/page-setup work
+  (#5861), ISO CMYK group blending (#6885) and the isolated-CMYK test. The
+  merge was **clean: no conflicted file**. `crates/annot/src/tests.rs` did not
+  conflict because main never touched it after `debb826f2` (same blob,
+  `ce5a8c1`), so the branch's version — which already keeps both sides from
+  `c15cc0f57` — merged as it was; `8559306f7` carries the same blob, so the
+  brief's expected conflict would not have appeared at that tip either.
+  `Cargo.lock` auto-merged (main's print/spool dependencies) and
+  `cargo metadata --locked` exits 0 on the merged tree. 40 files,
+  +3831/−224. After it the branch is **115 commits ahead and 0 behind**
+  `92b965dba`.
+- Head before this STATUS commit: `afd28a2f9` (Merge `origin/main`
+  `92b965dba` into `feature/realtime-collaboration`) on `4f3e21245`
+  (docs(collab): the merge of origin/main and the full CI sweep green) on
+  `c15cc0f57` (the previous merge) on `a47329154` (docs(collab): record the JWT
+  crypto backend and the deny advisory); **115 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD`), 0 behind `92b965dba`, and this
+  STATUS record is the next commit, so after it the count is 116. The numbers
+  the earlier briefs named — 85 commits, 9 behind, 5 ahead for `199076765`, then
+  86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15 at `c26867e9c`,
+  110/48/30 at `f48ec4754`, 113/0 at `c1171d941` and 114/0 at `4f3e21245` —
   were right when they were measured; `origin/main` kept moving and each slice
   appended commits. Commits named below and in §4 by their pre-rebase hashes
   are mapped in the rebase sections of §4.
-- PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
-  `feature/realtime-collaboration`, 80 commits) and reports
-  `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
-  2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
-  through the Split/Combine record; the local commits above it are in
-  it only after the owner's force-push: the cabinet's HS256 tickets (`157f4d239`)
-  and their record (`3f3bbedb0`), the parts/move/geometry operation
-  (`22d29d070`) and its record (`199076765`), the pop-up operation
-  (`0c57e2271`) and its record (`38d0bf56d`), the selection operation
-  (`5bad54c40`) and its two records (`b6244142c`, `dc773c609`), the publication
-  restore (`21aaf357a`), the page labels (`c26867e9c`) and their record
-  (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, the
-  whole-document link operations (`b86c4963a`) and their record (`d2a1bcf64`),
-  the whole-outline replacement (`642dabb5b`) and its record (`1590412aa`), the
-  CI git-source fix (`158ab7fa4`), the merge of `origin/main` (`c15cc0f57`),
-  the GoToR report fix (`c1171d941`) and this record. `UNSTABLE` is
-  the CI rollup, not a
-  conflict: before the merge, `git merge-tree --write-tree origin/main HEAD`
-  (tip `debb826f2`) reported one conflicted file, `crates/annot/src/tests.rs`,
-  resolved by keeping both sides (header). Nothing was
-  pushed from these sessions: only the owner's force-push moves the PR, and
-  mergeability follows it. The PR body still describes an older push; it is not
-  re-edited in this pass (nothing is pushed).
+- PR #6622 is based on `main` and is fed by the fork `copoka/pdfcraft` branch
+  `feature/realtime-collaboration`. The merge and this STATUS record are
+  committed on that branch locally (`afd28a2f9`, then this commit), but **the
+  push did not happen**: this agent's role denies `git push*`
+  (`.opencode/agents/pdfcraft-envoy.md`), and the tool refused both the push and
+  its `--dry-run`. The fork and the PR's `headRefOid` are still `4f3e21245`, and
+  at that head GitHub reports `mergeable: MERGEABLE` /
+  `mergeStateStatus: UNSTABLE` (`updatedAt` 2026-11-10 15:40:56Z); `UNSTABLE`
+  is the CI rollup, not a conflict. The owner's one command is
+  `git -C pdfcraft/upstream push fork HEAD:refs/heads/feature/realtime-collaboration`
+  (fast-forward, no force); the merge is `afd28a2f9` and the gates below were
+  run on it. The PR body still describes an older push and is not re-edited
+  here. Nothing was pushed to `storytold/*` and `main` was not touched.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `c1171d941`** — all 10 steps, 156 test targets,
-  **9930 passed, 0 failed, 18 ignored** (§4, "The full CI sweep"). Both `test`
-  targets that stopped the earlier sweep are closed: the automation one by the
+  cargo xtask ci` exits 0 on `afd28a2f9`** — all 10 steps, 156 test targets,
+  **9986 passed, 0 failed, 18 ignored** (§4, "The merge of `origin/main`
+  `92b965dba`"). The sweep needs `CRAFT_I18N_DIR` (a craft-i18n worktree at
+  `575cfdef`, the revision `craft-i18n.rev` pins) and `CRAFT_FONTS_DIR`
+  (`b076417b`): without the catalogs the comments test panics at
+  `set_option("language", "de")` — this pass's first run did exactly that,
+  EXIT=1 — which is the documented cause, not a merge regression. Both `test`
+  targets that stopped an earlier sweep stay closed: the automation one by the
   branch reporting a remote go-to's action in `other` (`c1171d941`) and the UI
-  one because the test needs the craft-i18n catalogs embedded — with them the
-  test passes on a clean `origin/main` and here; without them it panics at
-  `set_option("language", "de")`, which is what an earlier pass mis-read as an
-  area-rect failure. The reasons CI run `42720349704` (head `b27fa89c8`) failed
+  one by those catalogs. The reasons CI run `42720349704` (head `b27fa89c8`) failed
   stay closed: the git source (§4, "The CI git-source gate") and the `deny`
   advisory RUSTSEC-2026-0387 (§4, "The JWT crypto backend") — `cargo deny
   --log-level error check` exits 0 and `crypto-bigint` 0.5.5 is out of the
@@ -65,7 +72,7 @@
   earlier gates were run at their own heads (`5bad54c40`, `157f4d239`,
   `22d29d070`, `0c57e2271`, `2b61ff80f`, `642dabb5b`, `158ab7fa4`, §4) and were
   not re-run here.
-- What is done locally, all recorded in §4 and none pushed: the web host bridge
+- What is built, all recorded in §4 and pushed to the fork in earlier passes: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
   (`999da5ec`), the commit publication outside the hub lock (`a47641fb`),
@@ -89,8 +96,10 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   link list (`2b61ff80f`, §4), and the whole-document link actions as
   `links.add_many`/`links.remove_many` over several pages at once
   (`b86c4963a`, §4). The branch carries an earlier rebase onto `origin/main`
-  `ba28458ad` (§4, first table) and now the merge of `origin/main` `debb826f2`
-  (header, §4, "The full CI sweep"). The one presence item still outside this repository is the
+  `ba28458ad` (§4, first table) and the merges of `debb826f2` and `92b965dba`
+  (header, §4, "The merge of `origin/main` `92b965dba`"); the push that would
+  make the fork carry them is blocked for this role and is named in the header.
+  The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
@@ -487,6 +496,60 @@ one real cause and ran the whole sweep.
   way they do without those tools; Windows-only checks stay CI's. The sweep ran
   on the merge plus `c1171d941`, not on the STATUS commit itself.
 
+### The merge of `origin/main` `92b965dba` (the brief's `8559306f7`, moved on) and the gate run at the merged head (2026-11-10, local; not pushed)
+
+The brief asked to merge `origin/main` `8559306f7` (eight printing/forms
+commits) into `4f3e21245` — the head of PR #6622 — keeping both sides of the
+expected `crates/annot/src/tests.rs` conflict, run `cargo xtask ci` on host
+`agents` and push the fork. The upstream tip had moved to `92b965dba` by the
+time of the fetch, so the merge takes the tip; `8559306f7` is its ancestor 22
+commits down, and its eight commits are part of it.
+
+- **The merge, `afd28a2f9`.** A true merge (`--no-ff`, no rebase, no force) with
+  **no conflicted file**: 40 files, +3831/−224. `crates/annot/src/tests.rs`
+  did not conflict because main never changed it after `debb826f2` (the blob is
+  still `ce5a8c1` at both `8559306f7` and `92b965dba`), so the branch's version,
+  which already carries both sides from the `c15cc0f57` resolution, merged as it
+  was. `Cargo.lock` auto-merged (main's print/spool dependencies) and
+  `cargo metadata --locked` exits 0. After the merge: **115 ahead / 0 behind**
+  `92b965dba`, and 116 after this record.
+- **The gate needs the i18n and font checkouts.** The first run without them
+  (`CI=1 cargo xtask ci`) went **EXIT=1** at `test` on
+  `comments::the_selection_bar_stays_inside_the_pages_area`, panicking at
+  `crates/ui-egui/tests/it/comments.rs:4374` with
+  `language must be one of auto, en` — the documented missing-catalog cause, not
+  a merge regression (no `crates/annot` or collab test failed). The second run
+  with `CRAFT_I18N_DIR=/home/markin/build/i18n-575` (craft-i18n `575cfdef`, the
+  revision `craft-i18n.rev` pins) and
+  `CRAFT_FONTS_DIR=/home/markin/craft-fonts` (`b076417b`) went **EXIT=1** at
+  `test` on `print::adding_custom_paper_overrides_pending_driver_default`, a new
+  test of main's paper-detection work, at
+  `crates/ui-egui/tests/it/print.rs:1577`: "No nodes found matching the query:
+  By { label: "Custom…" }". The whole `pdfcraft-ui-egui --test it` target then
+  passed **3/3 in isolation** (1869 tests, 34–36 s each) and the single test
+  passes in 0.11 s, so that is a flake under the workspace-wide run (the test
+  starts a paper-discovery worker and clicks as soon as the probe fires).
+- **The green sweep**, third run, same environment: **EXIT=0**, `CI: all 10
+  steps passed` — fmt, clippy, cli-no-default-features, test, i18n-report,
+  layers, wasm, license-check, deny, parity. `test`: 156 targets, **9986
+  passed, 0 failed, 18 ignored**. `layers`: 52 crates, no violation; `wasm32`:
+  44 crates ok; `assets`: 258 repository assets, 7 bundled by dependencies, 22
+  fetched at build time; `deny`: advisories, bans, licences and sources all ok;
+  `parity`: 858 features (835 counted, 23 na), 56.8% shipped / 64.1% weighted
+  (P0 90.5% shipped, 94.6% weighted); `i18n-report`: 5068 English strings, 0
+  skipped catalog rows.
+- **The push did not happen.** This agent's role denies `git push*`
+  (`.opencode/agents/pdfcraft-envoy.md`); the shell tool refused the push and
+  its `--dry-run` with `permission.rejected`. The fork `copoka/pdfcraft`
+  `feature/realtime-collaboration` is still at `4f3e21245`, so PR #6622 does not
+  yet carry `afd28a2f9` or this record. The owner's command is
+  `git -C pdfcraft/upstream push fork HEAD:refs/heads/feature/realtime-collaboration`
+  — a fast-forward, no force. `storytold/*` is not pushed to and `main` is
+  untouched.
+- **What this does not cover.** The host has no `qpdf`/`poppler`, so
+  oracle-backed tests skip there; Windows-only checks stay CI's. The sweep ran
+  on `afd28a2f9`, not on the STATUS commit above it.
+
 ### The JWT crypto backend — `deny` and RUSTSEC-2026-0387 (2026-11-10, local; not pushed)
 
 `fix(collab): verify and sign JWTs with aws-lc-rs, not RustCrypto` (`f31f00449`)
@@ -622,8 +685,8 @@ Gates at `158ab7fa4` (host `agents`, rustc 1.99.1, `-j 4`; all run by
 | Tests | `cargo test -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-outline -p pdfcraft-collab-client-pdf` | EXIT=0 — client-pdf 48, outline 9, pdf 71, server 33, ws 16 unit + 36 e2e; **213 passed, 0 failed, 0 ignored** |
 | Not a gate here | `cargo clippy -p pdfcraft-web --target wasm32-unknown-unknown --features collab --all-targets -- -D warnings` | EXIT=101 — five `-D warnings` on main's native-only code in `pdfcraft-render` under wasm (unused imports, methods and fields), pre-existing and unrelated to this change; the repository's wasm gate is `cargo check`, as the tables above use |
 
-Nothing was pushed: PR #6622 keeps the fork's head `b27fa89c8`, so its next run
-still sees the old lock until the owner force-pushes. The job was red on the
+Nothing was pushed in that pass: PR #6622 kept the fork's head `b27fa89c8`, so its
+next run still saw the old lock until the owner force-pushes. The job was red on the
 PR head, not on this tree; the branch's head is now green for that job.
 
 ### The whole outline replaced — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
@@ -718,8 +781,8 @@ nodes, 128 KiB JSON) cannot be replaced in a room, since its `before` image
 would not fit; a replacement rebuilds every bookmark object, so keys taken
 before it are invalid; a generator loses the structure link (`/SE`) a lone
 document keeps; and `outline.replace` refuses an empty tree on an empty outline
-instead of recording an epoch bump with nothing in it. Nothing was pushed: PR
-#6622 keeps the fork's head `b27fa89c8`, and this pass's two commits are local.
+instead of recording an epoch bump with nothing in it. Nothing was pushed in that pass: PR
+#6622 kept the fork's head `b27fa89c8`, and the pass's two commits stayed local.
 
 ### Whole-document link operations — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
 
