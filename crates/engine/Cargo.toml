@@ -37,6 +37,9 @@ pdfcraft-create = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-geom = { workspace = true }
 thiserror = { workspace = true }
+# AI assistant requests and answers (OpenAI-compatible JSON); no network code here.
+serde = { workspace = true }
+serde_json = { workspace = true }
 png = "0.18"
 # Already in the graph (through image and pdfcraft-create): image's TiffEncoder can't set the
 # resolution or the compression of an exported page.

@@ -130,6 +130,9 @@ impl PdfCraftApp {
             fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
             updates: updates::Updates::default(),
+            ai_provider: None,
+            ai_settings: Default::default(),
+            ai: Default::default(),
             printer_source: None,
             options_source: None,
             spooler: None,
@@ -730,6 +733,7 @@ impl PdfCraftApp {
             }
         }
         self.poll_updates();
+        self.poll_ai();
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
