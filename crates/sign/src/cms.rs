@@ -459,7 +459,8 @@ fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
     let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
     let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
     let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
-    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &der::uint(&cert.serial)])])])]);
+    let serial = der::tlv(tag::INTEGER, if cert.serial.is_empty() { &[0] } else { &cert.serial });
+    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &serial])])])]);
     let attrs =
         [attribute(CONTENT_TYPE, &der::oid(content_type)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
     let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
@@ -467,7 +468,7 @@ fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
     let signature = key.sign(alg, &set)?;
     let mut signed_attrs = set.clone();
     signed_attrs[0] = tag::ctx(0);
-    let sid = der::seq(&[&cert.issuer.raw, &der::uint(&cert.serial)]);
+    let sid = der::seq(&[&cert.issuer.raw, &serial]);
     let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &key.signature_algorithm(alg), &der::octets(&signature)]);
     let mut certs: Vec<&[u8]> = vec![&cert.raw];
     certs.extend(chain.iter().filter(|c| c.raw != cert.raw).map(|c| c.raw.as_slice()));
@@ -546,5 +547,37 @@ mod tests {
         let parsed = SignedData::parse(&with_tok2).expect("parsed SignedData");
         assert!(parsed.signer.timestamp);
         assert_eq!(parsed.signer.timestamp_token.as_deref(), Some(tok2.as_slice()));
+    }
+
+    #[test]
+    fn build_preserves_high_bit_certificate_serial_verbatim_in_sid_and_ess() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::der::Time;
+        use crate::x509::Name;
+
+        let key = PrivateKey::generate_p256()?;
+        let name = Name::build("High-Bit Serial Signer", "", "", "", "");
+        let from = Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let mut cert = Certificate::self_signed(&name, &key, from, 1, &[1])?;
+        let neg_serial = vec![0xEA, 0xE4, 0x80, 0x7F, 0xC7, 0x49, 0x4C, 0x35, 0x8D, 0x58];
+        cert.serial = neg_serial.clone();
+
+        let digest = DigestAlg::Sha256.digest(&[b"hello"]);
+        let cms_bytes = sign_detached(&key, &cert, &[], DigestAlg::Sha256, &digest)?;
+        let parsed = SignedData::parse(&cms_bytes)?;
+        assert_eq!(parsed.signer.sid, SignerId::IssuerSerial { issuer: cert.issuer.raw.clone(), serial: neg_serial.clone() });
+        assert!(parsed.verify_signature(&cert, &digest)?);
+
+        let expected_tlv = der::tlv(tag::INTEGER, &neg_serial);
+        let padded_tlv = der::uint(&neg_serial);
+        let signed_attrs = parsed.signer.signed_attrs.as_deref().ok_or("missing signed_attrs")?;
+        assert!(
+            signed_attrs.windows(expected_tlv.len()).any(|w| w == expected_tlv.as_slice()),
+            "ESSCertIDv2 must encode the certificate serial verbatim"
+        );
+        assert!(
+            !signed_attrs.windows(padded_tlv.len()).any(|w| w == padded_tlv.as_slice()),
+            "ESSCertIDv2 must not prepend a leading 0x00 to a high-bit certificate serial"
+        );
+        Ok(())
     }
 }
