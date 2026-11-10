@@ -955,10 +955,9 @@ fn an_edited_stream_length_hides_the_stream_read_before() {
     assert_eq!(data(&doc), b"short\nendstream long", "the edited length reached another clone");
 }
 
-/// An object stream whose `/DecodeParms` names a generation the file doesn't have decodes without
-/// them; a clone that sets that generation decodes with them, not by the stream another clone read.
-#[test]
-fn parameters_an_edit_makes_match_hide_the_object_stream_read_before() {
+/// A file whose object 3 sits in an object stream PNG-predicted by `/DecodeParms 6 1 R`, a
+/// generation the file doesn't have, and the parameters that make it decode.
+fn predicted_object_stream() -> (Vec<u8>, Dict) {
     let members = b"3 0 << /Hidden (yes) >>";
     // PNG Sub, one row.
     let mut rows = vec![1u8];
@@ -995,16 +994,38 @@ fn parameters_an_edit_makes_match_hide_the_object_stream_read_before() {
         out.extend_from_slice(line.as_bytes());
     }
     out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
-    let hidden =
-        |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone());
-    let doc = Document::open(Arc::new(out)).unwrap();
-    assert_eq!(hidden(&doc), None, "no object 6 1: no predictor undone");
     let mut parms = Dict::new();
     parms.set(b"Predictor".to_vec(), Object::Int(11));
     parms.set(b"Columns".to_vec(), Object::Int(members.len() as i64));
+    (out, parms)
+}
+
+fn hidden(doc: &Document) -> Option<Vec<u8>> {
+    doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone())
+}
+
+/// An object stream whose `/DecodeParms` names a generation the file doesn't have decodes without
+/// them; a clone that sets that generation decodes with them, not by the stream another clone read.
+#[test]
+fn parameters_an_edit_makes_match_hide_the_object_stream_read_before() {
+    let (file, parms) = predicted_object_stream();
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert_eq!(hidden(&doc), None, "no object 6 1: no predictor undone");
     let mut edited = doc.clone();
     edited.set(ObjRef::new(6, 1), Object::Dict(parms));
     assert_eq!(hidden(&edited), Some(b"yes".to_vec()), "another clone's stream, decoded without them");
+}
+
+/// The other way round: an object stream a clone decoded by its edited parameters stays that
+/// clone's, so the document it was cloned from still decodes by the file's.
+#[test]
+fn an_object_stream_decoded_by_edited_parameters_is_not_shared() {
+    let (file, parms) = predicted_object_stream();
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 1), Object::Dict(parms));
+    assert_eq!(hidden(&edited), Some(b"yes".to_vec()));
+    assert_eq!(hidden(&doc), None, "the clone's decoding, read from the shared streams");
 }
 
 /// What a load read is kept only up to a bound; past it the load counts as having read every

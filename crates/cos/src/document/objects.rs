@@ -761,8 +761,6 @@ impl Document {
             }
             _ => Arc::new(self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
         };
-        // A stream whose load read this document's edits (its `/Length`) is as much its own as an edited one.
-        let own = edited || overlay_reads() != edits_read;
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
@@ -780,7 +778,9 @@ impl Document {
             index.push(objstm_member(onum, off, first, data.len()));
         }
         let stm = Arc::new(ObjStm { index, data: Arc::new(data), reads: frame.reads() });
-        if own {
+        // A stream whose load or decoding read this document's edits (its `/Length`, its
+        // `/DecodeParms`) is as much its own as an edited one.
+        if edited || overlay_reads() != edits_read {
             return Ok(stm);
         }
         // Same bound as the object cache: decoded object streams can be megabytes each.
