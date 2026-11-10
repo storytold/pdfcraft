@@ -631,6 +631,8 @@ impl eframe::App for PdfCraftApp {
         self.sync_titles(ctx);
     }
 
+    /// Each drawn pass: the window check that keeps it on its monitor (here and not in `logic`, see
+    /// `WindowState::repair`), the interface language and direction, then everything on screen.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Here and not in `logic`: see `WindowState::repair`.

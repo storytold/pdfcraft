@@ -284,6 +284,8 @@ mod tests {
         assert_eq!(fit_to_monitor(nan, inner, LAPTOP), None);
     }
 
+    /// The commands from the first frame of a window with these rectangles, maximized or not, on a
+    /// `LAPTOP` monitor.
     fn started(outer: egui::Rect, inner: egui::Rect, maximized: bool) -> Vec<egui::ViewportCommand> {
         let ctx = egui::Context::default();
         let mut input = egui::RawInput::default();
