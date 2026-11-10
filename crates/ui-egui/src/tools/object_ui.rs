@@ -903,7 +903,7 @@ pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVie
         || s.generation.is_some_and(|g| g != doc.edit_generation())
         || view.line_editor.is_some()
         || view.content.draft.is_some()
-        || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| !view.viewport_rect().contains(p))
+        || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| beside_pages(view.viewport_rect(), p))
     {
         return false;
     }
@@ -916,6 +916,12 @@ pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVie
     // and a refused delete (text used as a clipping path) leaves it selected.
     view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
     true
+}
+
+/// Whether `p` is over a side panel: level with the pages but outside them. The menu bar and the
+/// toolbars above take no Delete, so a pointer left there after closing a menu keeps it the pages'.
+fn beside_pages(viewport: Rect, p: egui::Pos2) -> bool {
+    !viewport.contains(p) && (viewport.top()..=viewport.bottom()).contains(&p.y)
 }
 
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
