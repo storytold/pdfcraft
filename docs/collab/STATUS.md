@@ -12,27 +12,36 @@
   `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
   them. The branch is 0 behind and
   `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: `843a8f533` (feat: keep a split's part
-  and join Combine as ordered parts) on `a007c4256` (docs: record the rebase
-  onto `ba28458ad` and the gate run) on `5f3c6f3c2` (style: wrap the engine
-  export list after the rebase merge) on `2020fce3f` (docs: record the
+- Local head before this STATUS commit: `3f3bbedb0` (docs: record the cabinet
+  HS256 auth pass and its gates) on `157f4d239` (feat: accept the cabinet's
+  HS256 session tickets next to RS256) on `b27fa89c8` (docs: record the split
+  part and the ordered Combine confirmation) on `843a8f533` (feat: keep a
+  split's part and join Combine as ordered parts) on `a007c4256` (docs: record
+  the rebase onto `ba28458ad` and the gate run) on `5f3c6f3c2` (style: wrap the
+  engine export list after the rebase merge) on `2020fce3f` (docs: record the
   Split/Combine dialogs inside a session) on `d975ebb72` (feat: send Split and
   Combine from a session as page operations) on `8f71c37db` (feat: split/combine
   pages as server-ordered operations) on `32e94bc78` (docs: the previous rebase
   record) on `ebce0fb6b` (refactor: the `apply_edit` dispatcher, which the
-  merged `ui-egui` needed to stay under the clippy complexity limit) — 79
-  commits on `ba28458ad` (80 with this STATUS commit). Commits named below and
+  merged `ui-egui` needed to stay under the clippy complexity limit) — **82
+  commits** on `ba28458ad` (`git rev-list --count origin/main..HEAD`), 0 behind
+  and 2 ahead of the PR head. Commits named below and
   in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
-- PR #6622 on GitHub now has the pushed head `31bd4a7a2` (the owner's
-  force-push, 2026-11-09 15:27Z) and reports `mergeable: CONFLICTING` /
-  `mergeStateStatus: DIRTY` (observed 2026-11-09, 17:29Z). That head is based on
-  `b6cbf9bb3`, two rebases behind and before Split/Combine, so the PR does not
-  describe this branch. Nothing was pushed from these sessions: only the owner's
-  force-push moves the PR, and mergeability follows it. The PR body still
-  describes the older push; it is not re-edited in this pass (nothing is
-  pushed).
+- PR #6622 has the fork's head `b27fa89c8` (`copoka/pdfcraft`,
+  `feature/realtime-collaboration`, 80 commits) and reports
+  `mergeable: MERGEABLE` / `mergeStateStatus: UNSTABLE` — `updatedAt`
+  2026-11-09 23:25:38Z, observed 2026-11-10. So the PR describes the branch
+  through the Split/Combine record; the two local commits above it — the
+  cabinet's HS256 tickets (`157f4d239`) and their record (`3f3bbedb0`) — are not
+  in it, which is exactly the 2-commit gap. `UNSTABLE` is the CI rollup, not a
+  conflict: the branch is 0 behind `origin/main` and
+  `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was pushed
+  from these sessions: only the owner's force-push moves the PR, and
+  mergeability follows it. The PR body still describes an older push; it is not
+  re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at `843a8f533`, the head this session produced.
+  §4 are green at the local head `3f3bbedb0` (the HS256 crates' gates were run
+  at `157f4d239`, whose only child is the docs record).
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -43,7 +52,8 @@
   replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
   page split/combine (`362f9c72b`), the Split/Combine dialogs sending them
   inside a session (this session, §4), and the split part kept as a document
-  plus one Combine confirmation as ordered parts (`843a8f533`, §4). The whole
+  plus one Combine confirmation as ordered parts (`843a8f533`, §4), and the
+  cabinet's HS256 session tickets next to RS256 (`157f4d239`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
   (§4, first table).
 - Known gaps before production are listed in §5, the plan in §6. The one this
@@ -406,6 +416,25 @@ test result: ok. 1 passed; 0 failed       (each; the real binary still starts wi
 
 `cargo xtask ci` (the workspace sweep) is CI's job and was not run here.
 
+**The cabinet's container was built from this head.** `agents` produced
+`pdfcraft-collab-server:0.18.1-collab.3f3bbedb038e` (binary `ac37e4d581ff…`,
+image `3085e9710bfb…`) — the tag carries the 12-character prefix of
+`3f3bbedb0`, so the image is this HEAD and not `157f4d239`. Its entrypoint
+reads `craft-sync-jwt` and selects `--jwt-secret-file`, the room starts
+`auth hs256`, and `cabinet-public.pem` is gone from the compose file. A real
+cabinet HS256 ticket was then accepted: the room answered
+`invalid/no such document session`, not `auth` — the ticket verified and only
+the dev-mode room was missing (mail-frontend, thread `meta/mail-frontend`,
+2026-11-10 00:12Z).
+
+Not verified, and the reason this is an auth gate rather than an end-to-end
+one: **no two-client WSS run for PdfCraft through the cabinet's `nginx` proxy
+was made.** GridCraft and DeckCraft were run that way in the same pass; for
+PdfCraft only the auth/lease path above is proven, so proxied upgrade,
+multiplexing, presence and the commit callback through the proxy remain
+unproven at this head. The second client and the owner role are exercised only
+over a direct socket (`tests/e2e.rs`, §4 above).
+
 ### Rebase onto `origin/main` `ba28458ad` (the brief's `d2139e58a`, moved on) and the gate run at the rebased head (2026-11-09)
 
 The pass was asked to rebase onto `origin/main` `d2139e58a` — the base the
@@ -471,10 +500,12 @@ Gates at `5f3c6f3c2` (host `agents`, rustc stable, `-j 4`):
 | Web build | `cargo check -p pdfcraft-ui-egui --features collab --target wasm32-unknown-unknown` | pass — the 10 warnings are main's native-only helpers unused on wasm (`render`, `ui-egui` save/panels/persist), none in a collab file |
 | Layering | `cargo xtask layers` | pass — 50 crates, no layering violations |
 
-Nothing was pushed, so PR #6622 still describes `31bd4a7a2` and stays
-`CONFLICTING` / `DIRTY`. The full `ui-egui` test suite was not re-run for this
-rebase: clippy with `--features collab` compiles and lints the merged
-`app.rs`/`canvas.rs`, and the last full run is §6.6 below.
+Nothing was pushed from that rebase session, so at the time of that run PR #6622
+still described `31bd4a7a2` and stayed `CONFLICTING` / `DIRTY`; it has since
+moved to the fork's `b27fa89c8` (`MERGEABLE` / `UNSTABLE` — see the header and
+the HS256 block above, which is the current state). The full `ui-egui` test
+suite was not re-run for this rebase: clippy with `--features collab` compiles
+and lints the merged `app.rs`/`canvas.rs`, and the last full run is §6.6 below.
 
 ### Split and Combine dialogs inside a room — §5 p.3 / §6.6 (2026-11-09, local; not pushed)
 
