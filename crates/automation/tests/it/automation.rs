@@ -12255,6 +12255,47 @@ fn doc_print_as_image() {
     }
 }
 
+/// #6269: color_management app prints converted pictures and says how; the profile must be an
+/// RGB or grey one, and the colour arguments need app.
+#[test]
+fn doc_print_with_app_managed_colour() {
+    let dir = workdir("print-colour");
+    std::fs::write(dir.join("wide.icc"), craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_slice()).unwrap();
+    std::fs::write(dir.join("press.icc"), craft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let args = |extra: Value| {
+        let mut v = json!({ "doc": doc, "pages": "1", "dpi": 72, "path": "managed.pdf" });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let r = ok(&mut a, "doc_print", args(json!({ "color_management": "app", "color_profile": "wide.icc", "rendering_intent": "perceptual" })));
+    assert_eq!(r["color_management"]["rendering_intent"], "perceptual", "{r}");
+    assert_eq!(r["color_management"]["black_point_compensation"], true, "{r}");
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("managed.pdf")).unwrap())).unwrap();
+    let pictures =
+        out.scan_objects().filter(|(_, o)| matches!(&**o, pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image"))).count();
+    assert_eq!(pictures, 1, "app-managed colour prints the page as a picture");
+    assert!(ok(&mut a, "doc_print", args(json!({})))["color_management"].is_null(), "the printer manages colour by default");
+    for (extra, says) in [
+        (json!({ "color_management": "app", "color_profile": "press.icc" }), "RGB or grey"),
+        (json!({ "color_management": "app" }), "color_profile"),
+        (json!({ "color_management": "app", "color_profile": "missing.icc" }), "print_color_profiles"),
+        (json!({ "color_profile": "wide.icc" }), "color_management app"),
+        (json!({ "color_management": "app", "color_profile": "wide.icc", "rendering_intent": "vivid" }), "rendering_intent"),
+        (json!({ "color_management": "app", "color_profile": "wide.icc", "as_image": false }), "as_image"),
+        (json!({ "color_management": "driver" }), "color_management"),
+    ] {
+        match a.call("doc_print", &args(extra.clone())) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{extra}: {m}"),
+            other => panic!("{extra}: {other:?}"),
+        }
+    }
+    let listed = ok(&mut a, "print_color_profiles", json!({}));
+    assert_eq!(listed["count"].as_u64(), listed["profiles"].as_array().map(|p| p.len() as u64), "{listed}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
 /// made, nothing is left beside the file, and a folder at the path is refused.
 #[test]

@@ -76,7 +76,7 @@ fn spool_job(
     title: String,
     duplex: Option<spool::Duplex>,
     paper: usize,
-    raster: Option<print::Raster>,
+    raster: Option<&print::Raster>,
     sheets: &[print::Sheet],
 ) -> Result<spool::Job> {
     let options = match a.get("options") {
@@ -260,12 +260,19 @@ impl Automation {
         let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+        // App-managed colour converts those pictures into the printer's profile, so it prints
+        // as image whether or not as_image is given.
+        let colour = self.managed_colour(a)?;
+        let as_image = match a.opt_bool("as_image")? {
+            Some(false) if colour.is_some() => return Err(bad("color_management app prints the pages as images: leave out as_image false")),
+            asked => asked.unwrap_or(false) || colour.is_some(),
+        };
+        let raster = if as_image {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
             }
-            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false) })
+            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false), colour })
         } else {
             None
         };
@@ -275,6 +282,10 @@ impl Automation {
         let sheets = laid_out.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
+        if let Some(c) = settings.raster.as_ref().and_then(|r| r.colour.as_ref()) {
+            out["color_management"] =
+                json!({ "profile": c.profile.name(), "rendering_intent": c.intent.id(), "black_point_compensation": c.black_point });
+        }
         match (a.opt_str("path")?, a.opt_str("printer")?) {
             (Some(p), None) => {
                 let path = self.resolve(p, true)?;
@@ -282,7 +293,7 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
+                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster.as_ref(), &laid_out)?;
                 let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
@@ -386,10 +397,11 @@ mod tests {
     /// grayscale, which Microsoft Print to PDF keeps no setting for and the job was refused.
     #[test]
     fn grey_pictures_dont_ask_the_driver_for_grayscale() {
-        let grey = print::Raster { dpi: 300.0, grayscale: true };
-        let colour = print::Raster { dpi: 300.0, grayscale: false };
-        let job =
-            |args: Value, raster: Option<print::Raster>| spool_job(&Args(&args), "Office", String::new(), None, 0, raster, &[]).unwrap().grayscale;
+        let grey = print::Raster { dpi: 300.0, grayscale: true, colour: None };
+        let colour = print::Raster { dpi: 300.0, grayscale: false, colour: None };
+        let job = |args: Value, raster: Option<print::Raster>| {
+            spool_job(&Args(&args), "Office", String::new(), None, 0, raster.as_ref(), &[]).unwrap().grayscale
+        };
         assert!(job(json!({ "grayscale": true }), None), "vector pages: the driver makes them grey");
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
         assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
