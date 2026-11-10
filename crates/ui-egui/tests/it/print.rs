@@ -1205,12 +1205,18 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
 fn a_booklet_decides_two_sided_itself() {
     use pdfcraft_engine::print::{BookletSubset, spool::Duplex, spool::Printer};
     let mut h = harness();
+    // Printers of its own, listed as the dialog lists them (drivers unasked, #3554), with what each
+    // driver said about two-sided: the machine's would decide what a booklet asks for, and on a
+    // machine with none the list that loads would take these away.
+    h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
+        let printer = |name: &str| Printer { name: name.into(), default: name == "Laser", two_sided: None, description: String::new() };
+        vec![printer("Laser"), printer("Inkjet")]
+    }));
+    h.state_mut().two_sided_source = None;
+    h.state_mut().print_draft.two_sided = [("Laser".to_string(), Some(true)), ("Inkjet".to_string(), Some(false))].into_iter().collect();
     assert!(h.state_mut().execute("print.dialog"));
-    h.run_steps(3);
-    // Printers of its own: the machine's would decide what a booklet asks for.
-    let printer = |name: &str, two_sided| Printer { name: name.into(), default: false, two_sided, description: String::new() };
-    h.state_mut().print_draft.printers = vec![printer("Laser", Some(true)), printer("Inkjet", Some(false))];
-    h.state_mut().print_draft.printer = Some("Laser".into());
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Laser"));
     h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
     h.run_steps(1);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
